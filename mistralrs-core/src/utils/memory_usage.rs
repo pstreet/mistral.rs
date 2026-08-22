@@ -86,7 +86,7 @@ impl MemoryUsage {
                     free: usize::try_from(sys.available_memory())?,
                 })
             }
-            #[cfg(feature = "cuda")]
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
             Device::Cuda(dev) => {
                 if super::normal::is_integrated_gpu(device) {
                     let sys = System::new_all();
@@ -108,7 +108,7 @@ impl MemoryUsage {
                     Ok(DeviceMemory::Discrete { total, free })
                 }
             }
-            #[cfg(not(feature = "cuda"))]
+            #[cfg(not(any(feature = "cuda", feature = "rocm")))]
             Device::Cuda(_) => {
                 candle_core::bail!("Cannot query memory for CUDA device")
             }
@@ -377,7 +377,7 @@ fn cuda_result(
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn igpu_memory_fraction() -> f64 {
     std::env::var("MISTRALRS_IGPU_MEMORY_FRACTION")
         .ok()

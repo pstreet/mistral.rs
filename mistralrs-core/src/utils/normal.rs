@@ -191,7 +191,7 @@ pub fn is_integrated_gpu(device: &Device) -> bool {
     match device {
         #[cfg(feature = "metal")]
         Device::Metal(_) => true,
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         Device::Cuda(dev) => {
             use candle_core::cuda::cudarc::driver::{result, sys};
             let ordinal = dev.cuda_stream().context().ordinal();

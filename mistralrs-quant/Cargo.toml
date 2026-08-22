@@ -51,6 +51,10 @@ cuda = [
     "candle-nn/cuda",
     "dep:cudaforge"
 ]
+rocm = [
+    "candle-core/rocm",
+    "candle-nn/rocm",
+]
 cutile = [
     "cuda",
     "dep:cutile",

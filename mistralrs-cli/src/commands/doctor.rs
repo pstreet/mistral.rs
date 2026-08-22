@@ -129,6 +129,9 @@ pub fn run_doctor(json: bool) -> Result<()> {
     if system.build.cuda {
         features.push("cuda");
     }
+    if system.build.rocm {
+        features.push("rocm");
+    }
     if system.build.metal {
         features.push("metal");
     }

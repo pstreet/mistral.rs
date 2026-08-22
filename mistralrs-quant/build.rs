@@ -60,6 +60,114 @@ fn cuda_kernel_builder(build_dir: &std::path::Path) -> cudaforge::KernelBuilder 
 #[cfg(feature = "metal")]
 include!("src/metal_kernels/source_set.rs");
 
+#[cfg(feature = "rocm")]
+fn rocm_root() -> String {
+    for var in ["CANDLE_ROCM_PATH", "ROCM_HOME", "ROCM_PATH"] {
+        if let Ok(p) = std::env::var(var) {
+            if !p.is_empty() {
+                return p;
+            }
+        }
+    }
+    "/opt/rocm".to_string()
+}
+
+#[cfg(feature = "rocm")]
+fn build_rocm() -> Result<(), String> {
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    let rocm = rocm_root();
+    let arch = std::env::var("CANDLE_ROCM_ARCH")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "gfx1151".to_string());
+    // CUDA compat shims (cuda_bf16.h etc.) shipped with the candle fork; override via env.
+    let compat = std::env::var("MISTRALRS_ROCM_COMPAT_INCLUDE")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "../../candle/candle-kernels/src/rocm_compat".to_string());
+
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=CANDLE_ROCM_PATH");
+    println!("cargo:rerun-if-env-changed=ROCM_HOME");
+    println!("cargo:rerun-if-env-changed=ROCM_PATH");
+    println!("cargo:rerun-if-env-changed=CANDLE_ROCM_ARCH");
+    println!("cargo:rerun-if-env-changed=MISTRALRS_ROCM_COMPAT_INCLUDE");
+    println!("cargo:rerun-if-changed=kernels/rotary/rotary.cu");
+    println!("cargo:rerun-if-changed=kernels/rotary/cuda_compat.h");
+
+    let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let hipcc = Path::new(&rocm).join("bin/hipcc");
+
+    // (source, extra force-include); ops.cu needs the thrust compat shim.
+    let kernels: &[(&str, Option<&str>)] = &[
+        ("kernels/rotary/rotary.cu", None),
+        ("kernels/ops/ops.cu", Some("cuda_thrust.h")),
+    ];
+
+    let mut objects = Vec::new();
+    for (src, force_include) in kernels {
+        println!("cargo:rerun-if-changed={src}");
+        let stem = Path::new(src)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap();
+        let obj = build_dir.join(format!("{stem}.o"));
+        let mut cmd = Command::new(&hipcc);
+        cmd.arg(src)
+            .arg(format!("-I{compat}"))
+            .arg("-include")
+            .arg("cuda_runtime.h");
+        if let Some(header) = force_include {
+            cmd.arg("-include").arg(header);
+        }
+        cmd.arg("-c")
+            .arg("-o")
+            .arg(&obj)
+            .arg(format!("--offload-arch={arch}"))
+            .arg("-DUSE_ROCM")
+            .arg("-std=c++17")
+            .arg("-O3")
+            .arg("-fPIC");
+        let status = cmd.status().map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err(format!(
+                "hipcc failed to compile {src} (is {hipcc:?} present?)"
+            ));
+        }
+        objects.push(obj);
+    }
+
+    let lib = build_dir.join("libmistralrsquant.a");
+    if lib.exists() {
+        std::fs::remove_file(&lib).expect("remove stale libmistralrsquant.a");
+    }
+    let ar = if Path::new(&rocm).join("lib/llvm/bin/llvm-ar").exists() {
+        Path::new(&rocm)
+            .join("lib/llvm/bin/llvm-ar")
+            .display()
+            .to_string()
+    } else {
+        "ar".to_string()
+    };
+    let mut ar_cmd = Command::new(&ar);
+    ar_cmd.arg("rcs").arg(&lib);
+    for obj in &objects {
+        ar_cmd.arg(obj);
+    }
+    let status = ar_cmd.status().map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err("failed to archive libmistralrsquant.a".to_string());
+    }
+
+    println!("cargo:rustc-link-search={}", build_dir.display());
+    println!("cargo:rustc-link-lib=mistralrsquant");
+    println!("cargo:rustc-link-lib=dylib=amdhip64");
+    println!("cargo:rustc-link-search=native={}/lib", rocm);
+    Ok(())
+}
+
 #[cfg(feature = "cuda")]
 #[path = "src/build_support/cuda_headers.rs"]
 mod cuda_headers;
@@ -336,6 +444,9 @@ fn main() -> Result<(), String> {
         mistralrs_metal_compile::compile_metallibs(&QUANT_METAL_SOURCE_SET)
     }
 
-    #[cfg(not(any(feature = "metal", feature = "cuda")))]
+    #[cfg(feature = "rocm")]
+    return build_rocm();
+
+    #[cfg(not(any(feature = "metal", feature = "cuda", feature = "rocm")))]
     Ok(())
 }

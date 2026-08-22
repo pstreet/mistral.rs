@@ -5,9 +5,9 @@ use hf_hub::{api::sync::ApiBuilder, Cache};
 use serde::{Deserialize, Serialize};
 use sysinfo::{Disks, System};
 
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm"))]
 use crate::MemoryUsage;
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm"))]
 use candle_core::Device;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +52,7 @@ pub struct DeviceInfo {
 pub struct BuildInfo {
     pub version: String,
     pub cuda: bool,
+    pub rocm: bool,
     pub metal: bool,
     pub cudnn: bool,
     pub flash_attn: bool,
@@ -119,6 +120,7 @@ fn build_info() -> BuildInfo {
     BuildInfo {
         version: crate::MISTRALRS_VERSION.to_string(),
         cuda: cfg!(feature = "cuda"),
+        rocm: cfg!(feature = "rocm"),
         metal: cfg!(feature = "metal"),
         cudnn: cfg!(feature = "cudnn"),
         flash_attn: cfg!(feature = "flash-attn"),
@@ -150,7 +152,7 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
         unified_memory: None,
     });
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     {
         let mut ord = 0;
         while let Ok(dev) = Device::new_cuda(ord) {
@@ -466,7 +468,7 @@ pub fn run_doctor() -> DoctorReport {
         let has_cuda_device = system.devices.iter().any(|d| d.kind == "cuda");
         let has_metal_device = system.devices.iter().any(|d| d.kind == "metal");
 
-        if has_cuda_device && !system.build.cuda {
+        if has_cuda_device && !system.build.cuda && !system.build.rocm {
             checks.push(DoctorCheck {
                 name: "binary_hardware_match".to_string(),
                 status: DoctorStatus::Error,

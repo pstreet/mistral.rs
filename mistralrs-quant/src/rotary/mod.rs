@@ -1,4 +1,4 @@
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 mod ffi;
 
 use candle_core::{
@@ -503,7 +503,7 @@ fn cpu_apply_rotary_qk(
     Ok((q_out?, k_out?))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn restore_cuda_rope_layout(
     x: Tensor,
     batch: usize,
@@ -515,7 +515,7 @@ fn restore_cuda_rope_layout(
         .transpose(1, 2)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn cuda_apply_rotary_q(
     q: &Tensor,
     cos: &Tensor,
@@ -533,7 +533,7 @@ fn cuda_apply_rotary_q(
     restore_cuda_rope_layout(q_embed, batch, heads, seq_len, head_dim)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn cuda_apply_rotary_qk(
     q: &Tensor,
     k: &Tensor,
@@ -827,7 +827,7 @@ fn apply_rotary_q_inner(
     positions: Option<&Tensor>,
     is_neox: bool,
 ) -> Result<Tensor> {
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if q.device().is_cuda() {
         return cuda_apply_rotary_q(q, cos, sin, positions, is_neox);
     }
@@ -870,7 +870,7 @@ fn apply_rotary_qk_inner(
     if q.dtype() != k.dtype() {
         candle_core::bail!("q/k dtype mismatch {:?} {:?}", q.dtype(), k.dtype());
     }
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if q.device().is_cuda() {
         return cuda_apply_rotary_qk(q, k, cos, sin, positions, is_neox);
     }
@@ -881,7 +881,7 @@ fn apply_rotary_qk_inner(
     cpu_apply_rotary_qk(q, k, cos, sin, positions, is_neox)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 mod cuda {
     use candle_core::{
         backend::{BackendDevice, BackendStorage},
@@ -1351,7 +1351,7 @@ mod cuda {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub use cuda::*;
 
 /// Apply Rotary position encoding inplace
@@ -1363,7 +1363,7 @@ pub use cuda::*;
 /// * `cos_cache` - Aligned cache of shape `(num_tokens, rot_dim)`
 /// * `sin_cache` - Aligned cache of shape `(num_tokens, rot_dim)`
 /// * `is_neox` - Use neox encoding instead of gpt-j style rotary
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 pub fn apply_rotary_inplace(
     _query: &candle_core::Tensor,
     _key: &candle_core::Tensor,
@@ -1374,7 +1374,7 @@ pub fn apply_rotary_inplace(
     candle_core::bail!("apply_rotary is only supported for cuda");
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 pub fn apply_rotary_inplace_q(
     _query: &candle_core::Tensor,
     _cos_cache: &candle_core::Tensor,
@@ -1384,7 +1384,7 @@ pub fn apply_rotary_inplace_q(
     candle_core::bail!("apply_rotary is only supported for cuda");
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 pub fn apply_rotary_inplace_positions(
     _query: &candle_core::Tensor,
     _key: &candle_core::Tensor,
@@ -1396,7 +1396,7 @@ pub fn apply_rotary_inplace_positions(
     candle_core::bail!("apply_rotary is only supported for cuda");
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 pub fn apply_rotary_inplace_q_positions(
     _query: &candle_core::Tensor,
     _cos_cache: &candle_core::Tensor,

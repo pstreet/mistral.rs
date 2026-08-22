@@ -275,6 +275,8 @@ no-default-features = true
 [features]
 # NVIDIA CUDA GPU support
 cuda = ["mistralrs-core/cuda"]
+# AMD ROCm GPU support
+rocm = ["mistralrs-core/rocm"]
 # cuDNN acceleration (requires cuda)
 cudnn = ["mistralrs-core/cudnn"]
 # Apple Metal GPU support (macOS/iOS)

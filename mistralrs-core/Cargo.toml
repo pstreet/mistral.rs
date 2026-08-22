@@ -128,6 +128,11 @@ cuda = [
     "dep:mistralrs-paged-attn",
     "mistralrs-paged-attn/cuda",
 ]
+rocm = [
+    "candle-core/rocm",
+    "candle-nn/rocm",
+    "mistralrs-quant/rocm",
+]
 cudnn = ["candle-core/cudnn"]
 cutile = ["cuda", "mistralrs-quant/cutile"]
 metal = [

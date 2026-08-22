@@ -48,6 +48,7 @@ tempfile.workspace = true
 [features]
 default = []
 cuda = ["candle-core/cuda", "mistralrs-core/cuda"]
+rocm = ["candle-core/rocm", "mistralrs-core/rocm"]
 cudnn = ["candle-core/cudnn", "mistralrs-core/cudnn"]
 metal = ["candle-core/metal", "mistralrs-core/metal"]
 flash-attn = ["cuda", "mistralrs-core/flash-attn"]

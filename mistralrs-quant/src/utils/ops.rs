@@ -11,12 +11,16 @@ use std::{
 };
 
 #[cfg(feature = "cuda")]
-use crate::utils::{ffi, slice_ptr, slice_ptr_mut_on_stream, slice_ptr_on_stream};
+use crate::utils::slice_ptr;
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+use crate::utils::{ffi, slice_ptr_mut_on_stream, slice_ptr_on_stream};
 #[cfg(feature = "cuda")]
-use candle_core::cuda::{cudarc::driver::DevicePtr, CudaStorage};
+use candle_core::cuda::cudarc::driver::DevicePtr;
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+use candle_core::cuda::CudaStorage;
 #[cfg(feature = "cuda")]
 use float8::F8E4M3;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use std::ffi::c_void;
 
 #[cfg(feature = "metal")]
@@ -2787,7 +2791,7 @@ impl CustomOp2 for FusedGlu {
         Ok((result_storage, out_shape))
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_fwd(
         &self,
         s1: &CudaStorage,

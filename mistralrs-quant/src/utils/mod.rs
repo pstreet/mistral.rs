@@ -1,4 +1,4 @@
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 mod ffi;
 pub(crate) mod isq;
 pub mod log;
@@ -25,14 +25,13 @@ pub use ops::{fused_glu, fused_split_glu, GluActivationType};
 pub use ops::{BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp};
 pub(crate) use uqff::{data_to_bytes, dtype_to_uqff_code, uqff_code_to_dtype};
 
-#[cfg(feature = "cuda")]
-use candle_core::{
-    cuda::cudarc::{
-        self,
-        driver::{CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr},
-    },
-    CudaDevice, Device, Tensor,
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+use candle_core::cuda::cudarc::{
+    self,
+    driver::{CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr},
 };
+#[cfg(feature = "cuda")]
+use candle_core::{CudaDevice, Device, Tensor};
 
 #[cfg(feature = "cuda")]
 pub(crate) fn get_cuda_device(x: &Tensor) -> candle_core::Result<&CudaDevice> {
@@ -50,7 +49,7 @@ pub fn slice_ptr<T: DeviceRepr>(
     slice_ptr_on_stream(v, lo, v.stream())
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn slice_ptr_on_stream<'a, T: DeviceRepr>(
     v: &'a CudaSlice<T>,
     lo: usize,
@@ -60,7 +59,7 @@ pub fn slice_ptr_on_stream<'a, T: DeviceRepr>(
     (ptr + (lo * std::mem::size_of::<T>()) as u64, guard)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn slice_ptr_mut_on_stream<'a, T: DeviceRepr>(
     v: &'a mut CudaSlice<T>,
     lo: usize,
