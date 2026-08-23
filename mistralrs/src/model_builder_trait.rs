@@ -947,6 +947,10 @@ pub async fn build_gguf_pipeline(
         hf_cache_path: builder.hf_cache_path.clone(),
         matformer_config_path: builder.matformer_config_path.clone(),
         matformer_slice_name: builder.matformer_slice_name.clone(),
+        mtp: builder
+            .mtp_config
+            .as_ref()
+            .is_some_and(MtpConfig::is_builtin),
     };
 
     maybe_initialize_logging(builder.with_logging);

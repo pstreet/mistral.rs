@@ -658,6 +658,7 @@ fn parse_which(
                     hf_cache_path,
                     matformer_config_path,
                     matformer_slice_name,
+                    mtp: false,
                 },
                 no_kv_cache,
                 jinja_explicit,

@@ -369,7 +369,17 @@ fn bind_text(
     );
     bind(inventory, bindings, "lm_head.weight", "output.weight");
 
-    for layer in inventory.layer_indices("blk.") {
+    let layers: Vec<usize> = inventory.layer_indices("blk.").into_iter().collect();
+    // The block shipping the built-in MTP (nextn) head maps under `mtp.*`, not the main stack.
+    let mtp_layer = layers
+        .iter()
+        .copied()
+        .find(|&layer| inventory.contains(&format!("blk.{layer}.nextn.eh_proj.weight")));
+    for layer in layers {
+        if Some(layer) == mtp_layer {
+            bind_mtp(inventory, bindings, family, layer)?;
+            continue;
+        }
         let native = format!("{model}.layers.{layer}");
         let source = format!("blk.{layer}");
         for suffix in ["weight", "bias"] {
@@ -417,6 +427,77 @@ fn bind_text(
         if let Some(gdn) = gdn {
             bind_gdn(inventory, &native, &source, gdn, bindings)?;
         }
+    }
+    Ok(())
+}
+
+fn bind_mtp(
+    inventory: &TensorInventory,
+    bindings: &mut GgufBindingMap,
+    family: QwenMultimodalFamily,
+    layer: usize,
+) -> Result<()> {
+    // llama.cpp stores the head as the last full-attention block plus `nextn.*` extras; the
+    // model reads them as `mtp.layers.0.*` and `mtp.*`.
+    let source = format!("blk.{layer}");
+    let native = format!("mtp.layers.0");
+    for suffix in ["weight", "bias"] {
+        for (target, role) in [
+            ("self_attn.q_proj", "attn_q"),
+            ("self_attn.k_proj", "attn_k"),
+            ("self_attn.v_proj", "attn_v"),
+            ("self_attn.o_proj", "attn_output"),
+            ("mlp.gate_proj", "ffn_gate"),
+            ("mlp.up_proj", "ffn_up"),
+            ("mlp.down_proj", "ffn_down"),
+        ] {
+            bind(
+                inventory,
+                bindings,
+                format!("{native}.{target}.{suffix}"),
+                format!("{source}.{role}.{suffix}"),
+            );
+        }
+    }
+    for (target, role) in [
+        ("input_layernorm.weight", "attn_norm.weight"),
+        (
+            "post_attention_layernorm.weight",
+            if family.has_gemma_norm_offsets() {
+                "post_attention_norm.weight"
+            } else {
+                "ffn_norm.weight"
+            },
+        ),
+        ("self_attn.q_norm.weight", "attn_q_norm.weight"),
+        ("self_attn.k_norm.weight", "attn_k_norm.weight"),
+    ] {
+        bind_text_norm(
+            inventory,
+            bindings,
+            family,
+            format!("{native}.{target}"),
+            format!("{source}.{role}"),
+        );
+    }
+    bind(
+        inventory,
+        bindings,
+        "mtp.fc.weight",
+        format!("{source}.nextn.eh_proj.weight"),
+    );
+    for (target, role) in [
+        ("pre_fc_norm_embedding", "enorm"),
+        ("pre_fc_norm_hidden", "hnorm"),
+        ("norm", "shared_head_norm"),
+    ] {
+        bind_text_norm(
+            inventory,
+            bindings,
+            family,
+            format!("mtp.{target}.weight"),
+            format!("{source}.nextn.{role}.weight"),
+        );
     }
     Ok(())
 }

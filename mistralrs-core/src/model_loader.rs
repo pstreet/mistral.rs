@@ -706,6 +706,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     hf_cache_path,
                     matformer_config_path,
                     matformer_slice_name,
+                    mtp: args.mtp,
                 },
                 args.no_kv_cache,
                 args.jinja_explicit,

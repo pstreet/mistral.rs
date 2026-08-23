@@ -54,6 +54,11 @@ impl GgufLoraModelBuilder {
             hf_cache_path: self.gguf_model.hf_cache_path,
             matformer_config_path: self.gguf_model.matformer_config_path,
             matformer_slice_name: self.gguf_model.matformer_slice_name,
+            mtp: self
+                .gguf_model
+                .mtp_config
+                .as_ref()
+                .is_some_and(mistralrs_core::MtpConfig::is_builtin),
         };
 
         maybe_initialize_logging(self.gguf_model.with_logging);
