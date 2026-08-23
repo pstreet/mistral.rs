@@ -78,7 +78,7 @@ fn cuda_header_hash(dir: &str, excluded_dirs: &[&str]) -> Result<u64> {
 }
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
-fn main() -> Result<()> {
+fn build_cuda() -> Result<()> {
     use std::path::PathBuf;
 
     // Declare expected cfg values for check-cfg lint
@@ -242,19 +242,130 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "metal")]
-fn main() -> Result<(), String> {
-    // Declare expected cfg values for check-cfg lint
-    println!("cargo::rustc-check-cfg=cfg(has_fp8)");
-    println!("cargo::rustc-check-cfg=cfg(has_fa3_fp8_paged)");
+// Dense-model paged-attention kernels built with hipcc. The FlashInfer
+// (ldmatrix/cp.async) and MLA kernels need tensor-core instructions RDNA
+// lacks and are excluded; FP8 KV cache is off (no ENABLE_FP8).
+#[cfg(feature = "rocm")]
+const PAGED_ATTN_ROCM_KERNELS: &[&str] = &[
+    "src/cuda/pagedattention_v1_f16.cu",
+    "src/cuda/pagedattention_v1_bf16.cu",
+    "src/cuda/pagedattention_v1_f32.cu",
+    "src/cuda/pagedattention_v2_f16.cu",
+    "src/cuda/pagedattention_v2_bf16.cu",
+    "src/cuda/pagedattention_v2_f32.cu",
+    "src/cuda/reshape_and_cache_kernel.cu",
+    "src/cuda/copy_blocks_kernel.cu",
+    "src/cuda/gather_kv_cache_kernel.cu",
+];
 
-    mistralrs_metal_compile::compile_metallibs(&PAGED_ATTENTION_METAL_SOURCE_SET)
+#[cfg(feature = "rocm")]
+fn build_rocm() -> Result<()> {
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    let root = std::env::var("CANDLE_ROCM_PATH")
+        .ok()
+        .or_else(|| std::env::var("ROCM_HOME").ok())
+        .or_else(|| std::env::var("ROCM_PATH").ok())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "/opt/rocm".to_string());
+    let arch = std::env::var("CANDLE_ROCM_ARCH")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "gfx1151".to_string());
+    // CUDA compat shims (cuda_bf16.h etc.) shipped with the candle fork.
+    let compat = std::env::var("MISTRALRS_ROCM_COMPAT_INCLUDE")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "../../candle/candle-kernels/src/rocm_compat".to_string());
+
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=CANDLE_ROCM_PATH");
+    println!("cargo:rerun-if-env-changed=ROCM_HOME");
+    println!("cargo:rerun-if-env-changed=ROCM_PATH");
+    println!("cargo:rerun-if-env-changed=CANDLE_ROCM_ARCH");
+    println!("cargo:rerun-if-env-changed=MISTRALRS_ROCM_COMPAT_INCLUDE");
+    for kernel in PAGED_ATTN_ROCM_KERNELS {
+        println!("cargo:rerun-if-changed={kernel}");
+    }
+
+    let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let objects = PAGED_ATTN_ROCM_KERNELS
+        .iter()
+        .map(|kernel| {
+            build_dir
+                .join(Path::new(kernel).file_stem().unwrap())
+                .with_extension("o")
+        })
+        .collect::<Vec<_>>();
+
+    for (kernel, object) in PAGED_ATTN_ROCM_KERNELS.iter().zip(&objects) {
+        let status = Command::new(format!("{root}/bin/hipcc"))
+            .arg(kernel)
+            .arg("-I")
+            .arg(&compat)
+            .arg("-Isrc/cuda")
+            .arg("-include")
+            .arg("cuda_runtime.h")
+            .arg(format!("--offload-arch={arch}"))
+            .arg("-DUSE_ROCM")
+            .arg("-std=c++17")
+            .arg("-O3")
+            .arg("-fPIC")
+            .arg("-c")
+            .arg("-o")
+            .arg(object)
+            .status()?;
+        anyhow::ensure!(status.success(), "hipcc failed for {kernel}");
+    }
+
+    let out_file = build_dir.join("libmistralrspagedattention.a");
+    let status = Command::new("ar")
+        .arg("crs")
+        .arg(&out_file)
+        .args(&objects)
+        .status()?;
+    anyhow::ensure!(status.success(), "ar failed");
+
+    println!("cargo:rustc-link-search={}", build_dir.display());
+    println!("cargo:rustc-link-lib=static=mistralrspagedattention");
+    // Scale tensors are always allocated (default 1.0) and only read by the FP8
+    // KV path (cache_dtype==3), which is never selected on RDNA. Marking FP8
+    // "present" lets those pointers pass through without triggering the
+    // !USE_FP8 bail; the FP8 kernel instantiations stay gated off (no ENABLE_FP8).
+    println!("cargo:rustc-cfg=has_fp8");
+    Ok(())
 }
 
-#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 fn main() -> Result<()> {
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_fp8)");
     println!("cargo::rustc-check-cfg=cfg(has_fa3_fp8_paged)");
-    Ok(())
+
+    // Exactly one backend block compiles; each yields the build result as the
+    // function's return value.
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    {
+        build_cuda()
+    }
+
+    #[cfg(feature = "rocm")]
+    {
+        build_rocm()
+    }
+
+    #[cfg(feature = "metal")]
+    {
+        mistralrs_metal_compile::compile_metallibs(&PAGED_ATTENTION_METAL_SOURCE_SET)
+    }
+
+    // No backend feature selected: nothing to build.
+    #[cfg(not(any(
+        all(feature = "cuda", target_family = "unix"),
+        feature = "rocm",
+        feature = "metal"
+    )))]
+    {
+        Ok(())
+    }
 }

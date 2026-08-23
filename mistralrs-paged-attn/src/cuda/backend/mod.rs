@@ -1,11 +1,17 @@
 mod cache;
+#[cfg(not(feature = "rocm"))]
 mod context_attention_mla;
+#[cfg(not(feature = "rocm"))]
 mod fa3;
+#[cfg(not(feature = "rocm"))]
 mod flash_attn_sinks;
+#[cfg(not(feature = "rocm"))]
 mod flashinfer;
 mod gather_kv;
+#[cfg(not(feature = "rocm"))]
 mod mla;
 mod paged_attention;
+#[cfg(not(feature = "rocm"))]
 mod scale_update;
 pub use cache::{copy_blocks, swap_blocks};
 use candle_core::cuda::cudarc::{
@@ -13,20 +19,26 @@ use candle_core::cuda::cudarc::{
     driver::{CudaSlice, CudaStream, DevicePtr, DeviceRepr},
 };
 use candle_core::{Layout, Result};
+#[cfg(not(feature = "rocm"))]
 pub use context_attention_mla::context_attention_fwd_mla;
+#[cfg(not(feature = "rocm"))]
 pub use fa3::{
     fa3_fp8_decode, fa3_prepare_decode_metadata, fa3_prepare_paged_metadata, Fa3DecodeMetadata,
     Fa3DecodeParams, Fa3DecodeSchedule, Fa3PagedMetadataLayout, FA3_DECODE_MAX_QUERY_LEN,
     USE_FA3_FP8_PAGED,
 };
+#[cfg(not(feature = "rocm"))]
 pub use flash_attn_sinks::{flash_attn_sinks, flash_attn_sinks_varlen};
+#[cfg(not(feature = "rocm"))]
 pub use flashinfer::{
     flashinfer_decode, gather_kv_cache_flashinfer, is_flashinfer_cache,
     reshape_and_cache_flashinfer, FlashInferDecodeScratch,
 };
 pub use gather_kv::gather_kv_cache;
+#[cfg(not(feature = "rocm"))]
 pub use mla::{concat_and_cache_mla, flashinfer_mla_decode, gather_mla_cache};
 pub use paged_attention::{paged_attention, reshape_and_cache};
+#[cfg(not(feature = "rocm"))]
 pub use scale_update::kv_scale_update;
 
 fn cache_input_layout(

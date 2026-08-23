@@ -132,6 +132,8 @@ rocm = [
     "candle-core/rocm",
     "candle-nn/rocm",
     "mistralrs-quant/rocm",
+    "dep:mistralrs-paged-attn",
+    "mistralrs-paged-attn/rocm",
 ]
 cudnn = ["candle-core/cudnn"]
 cutile = ["cuda", "mistralrs-quant/cutile"]

@@ -34,11 +34,9 @@
 
 #include <algorithm>
 
-#ifndef USE_ROCM
+// Must be a constant expression (used in constexpr math). RDNA targets are
+// wave32; HIP's warpSize variable is not a constant expression.
 #define WARP_SIZE 32
-#else
-#define WARP_SIZE warpSize
-#endif
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define DIVIDE_ROUND_UP(a, b) (((a) + (b) - 1) / (b))

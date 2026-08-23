@@ -1,3 +1,4 @@
+#[cfg(not(feature = "rocm"))]
 use crate::cuda::backend::flashinfer::{gather_kv_cache_flashinfer, is_flashinfer_cache};
 use crate::cuda::backend::slice_ptr;
 use crate::cuda::ffi::gather_kv_cache as ffi_gather_kv_cache;
@@ -70,6 +71,7 @@ pub fn gather_kv_cache(
         );
     }
     validate_cache_scales(cache_dtype, k_scale, v_scale)?;
+    #[cfg(not(feature = "rocm"))]
     if is_flashinfer_cache(key_cache, value_cache) {
         return gather_kv_cache_flashinfer(
             key_cache,

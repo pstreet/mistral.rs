@@ -153,6 +153,7 @@ extern "C" void gather_kv_cache(
   dim3 grid(num_tokens);
   dim3 block(std::min(num_kv_heads * head_size, 512));
 
+#ifdef ENABLE_FP8
   if (cache_dtype == 3) {
     // FP8 E4M3 cache -> dequantize to out_dtype
     if (out_dtype == 0) {
@@ -164,7 +165,9 @@ extern "C" void gather_kv_cache(
     } else if (out_dtype == 2) {
       CALL_GATHER_KV_CACHE(float, uint8_t, vllm::Fp8KVCacheDataType::kFp8E4M3);
     }
-  } else {
+  } else
+#endif
+  {
     // Non-FP8 cache: cache_t == out_t
     if (out_dtype == 0) {
       CALL_GATHER_KV_CACHE(uint16_t, uint16_t, vllm::Fp8KVCacheDataType::kAuto);

@@ -112,6 +112,7 @@ extern "C" void reshape_and_cache(
   dim3 grid(num_tokens);
   dim3 block(std::min(num_heads * head_size, 512));
 
+#ifdef ENABLE_FP8
   if (cache_dtype == 3) {
     // FP8 E4M3 cache
     if (dtype == 0) {
@@ -124,7 +125,9 @@ extern "C" void reshape_and_cache(
       CALL_RESHAPE_AND_CACHE(float, uint8_t,
                              vllm::Fp8KVCacheDataType::kFp8E4M3);
     }
-  } else {
+  } else
+#endif
+  {
     // Non-FP8 cache
     if (dtype == 0) {
       CALL_RESHAPE_AND_CACHE(uint16_t, uint16_t,

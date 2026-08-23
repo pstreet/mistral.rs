@@ -8,6 +8,7 @@ use candle::backend::BackendStorage;
 use candle::cuda_backend::cudarc::driver::{CudaSlice, DevicePtr};
 use candle::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Tensor};
 use candle_core as candle;
+#[cfg(not(feature = "rocm"))]
 use candle_core::cuda::cudarc::driver::DeviceSlice;
 use float8::F8E4M3;
 use half::{bf16, f16};

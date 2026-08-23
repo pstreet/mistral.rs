@@ -1,4 +1,6 @@
-use core::ffi::{c_int, c_long, c_uint, c_void};
+#[cfg(not(feature = "rocm"))]
+use core::ffi::c_uint;
+use core::ffi::{c_int, c_long, c_void};
 
 use candle_core::cuda::cudarc::driver::sys::CUstream;
 
@@ -121,6 +123,7 @@ extern "C" {
         v_scale: *const f32,
     );
 
+    #[cfg(not(feature = "rocm"))]
     pub fn concat_and_cache_mla(
         ckv: *const c_void,
         k_pe: *const c_void,
@@ -137,6 +140,7 @@ extern "C" {
         dtype: u32,
     );
 
+    #[cfg(not(feature = "rocm"))]
     pub fn flashinfer_mla_decode(
         q_nope: *const c_void,
         q_pe: *const c_void,
@@ -162,6 +166,7 @@ extern "C" {
         stream: CUstream,
     ) -> c_int;
 
+    #[cfg(not(feature = "rocm"))]
     pub fn reshape_and_cache_flashinfer(
         key: *const c_void,
         value: *const c_void,
@@ -181,6 +186,7 @@ extern "C" {
         stream: CUstream,
     );
 
+    #[cfg(not(feature = "rocm"))]
     pub fn flashinfer_decode(
         q: *const c_void,
         key_cache: *const c_void,
@@ -214,6 +220,7 @@ extern "C" {
         stream: CUstream,
     ) -> c_int;
 
+    #[cfg(not(feature = "rocm"))]
     pub fn gather_kv_cache_flashinfer(
         key_cache: *const c_void,
         value_cache: *const c_void,
@@ -234,6 +241,7 @@ extern "C" {
         stream: CUstream,
     );
 
+    #[cfg(not(feature = "rocm"))]
     pub fn gather_mla_cache(
         ckv_cache: *const c_void,
         kpe_cache: *const c_void,
@@ -487,6 +495,7 @@ extern "C" {
         stream: i64,
     );
 
+    #[cfg(not(feature = "rocm"))]
     pub fn update_kv_scales_f32(
         k: *const c_void,
         v: *const c_void,
@@ -496,6 +505,7 @@ extern "C" {
         stream: i64,
     );
 
+    #[cfg(not(feature = "rocm"))]
     pub fn update_kv_scales_f16(
         k: *const c_void,
         v: *const c_void,
@@ -505,6 +515,7 @@ extern "C" {
         stream: i64,
     );
 
+    #[cfg(not(feature = "rocm"))]
     pub fn update_kv_scales_bf16(
         k: *const c_void,
         v: *const c_void,
@@ -514,6 +525,7 @@ extern "C" {
         stream: i64,
     );
 
+    #[cfg(not(feature = "rocm"))]
     pub fn flash_attn_sinks_f16(
         q: *const c_void,
         k: *const c_void,
@@ -531,6 +543,7 @@ extern "C" {
         stream: CUstream,
     );
 
+    #[cfg(not(feature = "rocm"))]
     pub fn flash_attn_sinks_bf16(
         q: *const c_void,
         k: *const c_void,
@@ -548,6 +561,7 @@ extern "C" {
         stream: CUstream,
     );
 
+    #[cfg(not(feature = "rocm"))]
     pub fn flash_attn_sinks_f32(
         q: *const c_void,
         k: *const c_void,
@@ -565,6 +579,7 @@ extern "C" {
         stream: CUstream,
     );
 
+    #[cfg(not(feature = "rocm"))]
     pub fn flash_attn_sinks_varlen_f16(
         q: *const c_void,
         k: *const c_void,
@@ -583,6 +598,7 @@ extern "C" {
         stream: CUstream,
     );
 
+    #[cfg(not(feature = "rocm"))]
     pub fn flash_attn_sinks_varlen_bf16(
         q: *const c_void,
         k: *const c_void,
@@ -601,6 +617,7 @@ extern "C" {
         stream: CUstream,
     );
 
+    #[cfg(not(feature = "rocm"))]
     pub fn flash_attn_sinks_varlen_f32(
         q: *const c_void,
         k: *const c_void,

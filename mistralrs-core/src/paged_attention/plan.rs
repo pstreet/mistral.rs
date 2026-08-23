@@ -35,6 +35,7 @@ pub(crate) struct PrefixPrefillPlanInput {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 pub(crate) enum PrefixPrefillPlan {
     #[cfg(all(feature = "cuda", target_family = "unix"))]
     Fa3Fp8Paged,
@@ -654,6 +655,7 @@ pub(crate) struct DecodePlanInput {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 pub(crate) enum DecodePlan {
     #[cfg(all(feature = "cuda", target_family = "unix"))]
     FlashInfer(FlashInferDecodePlan),
