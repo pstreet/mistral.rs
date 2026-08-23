@@ -11,7 +11,7 @@ use crate::cuda::gdn::{
 use crate::kv_cache::RecurrentStateLayout;
 use crate::pipeline::RecurrentBatchKind;
 
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm"))]
 const RECURRENCE_CHUNK_THRESHOLD: usize = 64;
 const QK_NORM_EPS: f64 = 1e-6;
 const QK_NORM_EPS_F32: f32 = 1e-6;
@@ -34,7 +34,7 @@ impl From<FusedPrefillOutput> for RecurrenceOutput {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn use_warp_prefill_recurrence(dims: &GdnDims) -> bool {
     matches!(dims.head_k_dim, 64 | 128)
 }
@@ -163,7 +163,7 @@ pub fn compute_beta_g(
     dt_bias: &Tensor,
     dtype: DType,
 ) -> Result<(Tensor, Tensor)> {
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if b.device().is_cuda() {
         let b_flat = b.contiguous()?.flatten_all()?;
         let a_flat = a.contiguous()?.flatten_all()?;
@@ -235,7 +235,7 @@ pub fn apply_recurrence_from_convolved(
     cache: &mut GdnLayerCache,
     dtype: DType,
 ) -> Result<Tensor> {
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if mixed_qkv.device().is_cuda() {
         return recurrence_cuda_from_convolved(
             mixed_qkv, b, a, a_log, dt_bias, dims, batch_size, seq_len, cache, dtype,
@@ -423,7 +423,7 @@ fn softplus_f32(x: f32) -> f32 {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(clippy::too_many_arguments)]
 fn recurrence_cuda_from_convolved(
     mixed_qkv: &Tensor,
@@ -553,7 +553,10 @@ fn recurrence_cuda_from_convolved(
     finish_recurrence(output, state_flat, dims, batch_size, seq_len, cache, dtype)
 }
 
-#[cfg_attr(not(any(feature = "cuda", feature = "metal")), allow(unused_variables))]
+#[cfg_attr(
+    not(any(feature = "cuda", feature = "metal", feature = "rocm")),
+    allow(unused_variables)
+)]
 #[allow(clippy::too_many_arguments)]
 pub fn apply_recurrence(
     q: &Tensor,
@@ -567,7 +570,7 @@ pub fn apply_recurrence(
     cache: &mut GdnLayerCache,
     dtype: DType,
 ) -> Result<Tensor> {
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if q.device().is_cuda() {
         return recurrence_cuda(q, k, v, g, beta, dims, batch_size, seq_len, cache, dtype);
     }
@@ -586,7 +589,7 @@ pub fn apply_recurrence(
     gated_delta_rule_recurrence(q, k, v, g, beta, &mut cache.recurrent_state)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(clippy::too_many_arguments)]
 fn recurrence_cuda(
     q: &Tensor,
@@ -699,7 +702,7 @@ fn recurrence_metal(
     )
 }
 
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm"))]
 fn prepare_q_for_backend(
     q: &Tensor,
     dims: &GdnDims,
@@ -712,7 +715,7 @@ fn prepare_q_for_backend(
         .contiguous()
 }
 
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm"))]
 fn prepare_kv_for_backend(
     x: &Tensor,
     dims: &GdnDims,
@@ -727,7 +730,7 @@ fn prepare_kv_for_backend(
         .contiguous()
 }
 
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm"))]
 fn prepare_gate_for_backend(
     x: &Tensor,
     dims: &GdnDims,
@@ -741,7 +744,7 @@ fn prepare_gate_for_backend(
         .contiguous()
 }
 
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm"))]
 fn recurrent_physical_dims(layout: RecurrentStateLayout, dims: &GdnDims) -> Result<(usize, usize)> {
     match layout {
         RecurrentStateLayout::GdnKeyMajor => Ok((dims.head_k_dim, dims.head_v_dim)),
@@ -750,7 +753,7 @@ fn recurrent_physical_dims(layout: RecurrentStateLayout, dims: &GdnDims) -> Resu
     }
 }
 
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm"))]
 fn prepare_state_for_backend(
     cache: &GdnLayerCache,
     dims: &GdnDims,
@@ -790,7 +793,7 @@ fn prepare_state_for_backend(
         .contiguous()
 }
 
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm"))]
 fn finish_recurrence(
     output: RecurrenceOutput,
     state_flat: Tensor,
@@ -851,7 +854,7 @@ fn causal_conv1d_update(
         return causal_conv1d_update_cpu(x, conv1d_weight, dims, cache);
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if x.device().is_cuda() {
         let weight = conv1d_weight
             .squeeze(1)?
@@ -900,7 +903,9 @@ fn causal_conv1d_update(
     let total_len = hidden_new.dim(2)?;
     for i in (total_len - seq_len)..total_len {
         let window = hidden_new.narrow(2, i + 1 - dims.conv_kernel_size, dims.conv_kernel_size)?;
-        let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?;
+        let out = window
+            .broadcast_mul(&weight.unsqueeze(0)?)?
+            .sum(D::Minus1)?;
         conv_outputs.push(out);
     }
     candle_nn::ops::silu(&Tensor::stack(&conv_outputs, 2)?)?.transpose(1, 2)
@@ -974,7 +979,7 @@ fn causal_conv1d_full(
 ) -> Result<Tensor> {
     let (batch_size, seq_len, conv_dim) = x.dims3()?;
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if x.device().is_cuda() {
         let weight = conv1d_weight
             .squeeze(1)?
@@ -1039,7 +1044,9 @@ fn causal_conv1d_full(
     let mut conv_outputs = Vec::with_capacity(seq_len);
     for i in 0..seq_len {
         let window = padded_t.narrow(2, i, dims.conv_kernel_size)?;
-        let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?;
+        let out = window
+            .broadcast_mul(&weight.unsqueeze(0)?)?
+            .sum(D::Minus1)?;
         conv_outputs.push(out);
     }
     candle_nn::ops::silu(&Tensor::stack(&conv_outputs, 2)?)?.transpose(1, 2)

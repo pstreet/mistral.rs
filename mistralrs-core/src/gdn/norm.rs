@@ -36,7 +36,7 @@ impl RmsNormGated {
     }
 
     pub fn forward(&self, x: &Tensor, gate: &Tensor) -> Result<Tensor> {
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         if x.device().is_cuda()
             && (2..=4).contains(&x.rank())
             && (2..=4).contains(&gate.rank())

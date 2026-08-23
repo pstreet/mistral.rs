@@ -69,6 +69,11 @@ fn main() {
     #[cfg(feature = "cudnn")]
     add_cudnn_link_search();
 
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    {
+        build_rocm();
+    }
+
     #[cfg(feature = "cuda")]
     {
         use std::path::PathBuf;
@@ -210,6 +215,77 @@ fn main() {
             println!("cargo:rustc-link-lib=dylib=stdc++");
         }
     }
+}
+
+// GDN (Gated DeltaNet) kernels built with hipcc for hybrid SSM models. Only
+// the portable recurrence/conv/gating kernels are needed; they use standard
+// warp shuffles and fp16/bf16 math, so they compile for the target GCN/CDNA/RDNA.
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+fn build_rocm() {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    let root = std::env::var("CANDLE_ROCM_PATH")
+        .ok()
+        .or_else(|| std::env::var("ROCM_HOME").ok())
+        .or_else(|| std::env::var("ROCM_PATH").ok())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "/opt/rocm".to_string());
+    let arch = std::env::var("CANDLE_ROCM_ARCH")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "gfx1151".to_string());
+    // CUDA compat shims (cuda_bf16.h etc.) shipped with the candle fork.
+    let compat = std::env::var("MISTRALRS_ROCM_COMPAT_INCLUDE")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "../../candle/candle-kernels/src/rocm_compat".to_string());
+
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=src/cuda/gdn.cu");
+    println!("cargo:rerun-if-env-changed=CANDLE_ROCM_PATH");
+    println!("cargo:rerun-if-env-changed=ROCM_HOME");
+    println!("cargo:rerun-if-env-changed=ROCM_PATH");
+    println!("cargo:rerun-if-env-changed=CANDLE_ROCM_ARCH");
+    println!("cargo:rerun-if-env-changed=MISTRALRS_ROCM_COMPAT_INCLUDE");
+
+    let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let object = build_dir.join("gdn.o");
+
+    let status = Command::new(format!("{root}/bin/hipcc"))
+        .arg("src/cuda/gdn.cu")
+        .arg("-I")
+        .arg(&compat)
+        .arg("-include")
+        .arg("cuda_runtime.h")
+        .arg(format!("--offload-arch={arch}"))
+        .arg("-DUSE_ROCM")
+        .arg("-std=c++17")
+        .arg("-O3")
+        .arg("-fPIC")
+        .arg("-c")
+        .arg("-o")
+        .arg(&object)
+        .status()
+        .expect("failed to run hipcc");
+    if !status.success() {
+        panic!("hipcc failed for src/cuda/gdn.cu");
+    }
+
+    let out_file = build_dir.join("libmistralrscuda.a");
+    let status = Command::new("ar")
+        .arg("crs")
+        .arg(&out_file)
+        .arg(&object)
+        .status()
+        .expect("failed to run ar");
+    if !status.success() {
+        panic!("ar failed");
+    }
+
+    println!("cargo:rustc-link-search={}", build_dir.display());
+    println!("cargo:rustc-link-lib=static=mistralrscuda");
+    println!("cargo:rustc-link-lib=dylib=stdc++");
 }
 
 #[cfg(feature = "cuda")]

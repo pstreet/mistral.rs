@@ -1790,7 +1790,7 @@ pub fn causal_conv1d_cuda(
     }
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(unused)]
 pub fn causal_conv1d_cuda(
     _x: &Tensor,
@@ -1803,7 +1803,7 @@ pub fn causal_conv1d_cuda(
     candle_core::bail!("causal_conv1d_cuda requires the cuda feature")
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_recurrence_inputs_cuda(
     mixed_qkv: &Tensor,
@@ -1972,7 +1972,7 @@ pub fn prepare_recurrence_inputs_cuda(
     }
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(unused, clippy::too_many_arguments)]
 pub fn prepare_recurrence_inputs_cuda(
     _mixed_qkv: &Tensor,
@@ -5538,7 +5538,7 @@ pub fn rmsnorm_gated_cuda(
 /// a_log, dt_bias: [num_heads] in f32
 ///
 /// Returns: (beta, g) in original dtype
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn fused_gdn_gating_cuda(
     b: &Tensor,
     a: &Tensor,
@@ -5630,7 +5630,7 @@ pub fn fused_gdn_gating_cuda(
     }
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(unused)]
 pub fn fused_gdn_gating_cuda(
     _b: &Tensor,
