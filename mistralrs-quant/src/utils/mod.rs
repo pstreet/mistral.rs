@@ -41,7 +41,7 @@ pub(crate) fn get_cuda_device(x: &Tensor) -> candle_core::Result<&CudaDevice> {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn slice_ptr<T: DeviceRepr>(
     v: &CudaSlice<T>,
     lo: usize,

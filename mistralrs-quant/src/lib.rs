@@ -1920,7 +1920,7 @@ impl Module for dyn QuantMethod {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn try_fused_quantized_ffn(
     xs: &Tensor,
     gate: &dyn QuantMethod,
@@ -2026,7 +2026,7 @@ pub fn try_fused_quantized_ffn(
     )?))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn try_fused_quantized_gate_up(
     xs: &Tensor,
     gate: &dyn QuantMethod,
@@ -2136,7 +2136,7 @@ pub fn try_fused_gemv_shared_lhs_cpu(
     candle_core::quantized::QTensor::gemv_fused_shared_lhs(&refs, xs)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn try_fused_quantized_qkv(
     xs: &Tensor,
     q: &dyn QuantMethod,

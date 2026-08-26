@@ -275,19 +275,21 @@ static int ggml_cuda_highest_compiled_arch(const int arch) {
 #endif
 
 // MMA (tensor core) availability
-#if __CUDA_ARCH__ == GGML_CUDA_CC_VOLTA
+#if defined(USE_ROCM)
+// AMD has no ldmatrix/mma PTX; force the generic load/FMA paths.
+#elif __CUDA_ARCH__ == GGML_CUDA_CC_VOLTA
 #define VOLTA_MMA_AVAILABLE
 #endif
 
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
+#if __CUDA_ARCH__ >= GGML_CUDA_CC_TURING && !defined(USE_ROCM)
 #define TURING_MMA_AVAILABLE
 #endif
 
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE && !defined(USE_ROCM)
 #define AMPERE_MMA_AVAILABLE
 #endif
 
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_BLACKWELL && __CUDA_ARCH__ < GGML_CUDA_CC_RUBIN
+#if __CUDA_ARCH__ >= GGML_CUDA_CC_BLACKWELL && __CUDA_ARCH__ < GGML_CUDA_CC_RUBIN && !defined(USE_ROCM)
 #define BLACKWELL_MMA_AVAILABLE
 #endif
 

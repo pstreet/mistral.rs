@@ -104,6 +104,20 @@ fn build_rocm() -> Result<(), String> {
     let kernels: &[(&str, Option<&str>)] = &[
         ("kernels/rotary/rotary.cu", None),
         ("kernels/ops/ops.cu", Some("cuda_thrust.h")),
+        // GGUF MMQ/MMVQ family: MMA PTX paths are disabled under USE_ROCM in
+        // mmq_common.cuh so these fall back to generic load/FMA routes.
+        ("kernels/mmvq_gguf/mmvq_gguf.cu", None),
+        ("kernels/mmq_gguf/mmq_quantize.cu", None),
+        ("kernels/mmq_gguf/mmq_instance_q2_k.cu", None),
+        ("kernels/mmq_gguf/mmq_instance_q3_k.cu", None),
+        ("kernels/mmq_gguf/mmq_instance_q4_0.cu", None),
+        ("kernels/mmq_gguf/mmq_instance_q4_1.cu", None),
+        ("kernels/mmq_gguf/mmq_instance_q4_k.cu", None),
+        ("kernels/mmq_gguf/mmq_instance_q5_0.cu", None),
+        ("kernels/mmq_gguf/mmq_instance_q5_1.cu", None),
+        ("kernels/mmq_gguf/mmq_instance_q5_k.cu", None),
+        ("kernels/mmq_gguf/mmq_instance_q6_k.cu", None),
+        ("kernels/mmq_gguf/mmq_instance_q8_0.cu", None),
     ];
 
     let mut objects = Vec::new();

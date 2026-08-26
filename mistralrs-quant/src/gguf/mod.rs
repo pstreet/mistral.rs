@@ -2,11 +2,11 @@ pub mod archive;
 pub mod cpu;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub mod fast_mmq;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub mod fast_mmvq;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 mod ffi;
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
 mod packed_affine;
@@ -32,7 +32,7 @@ use crate::{
     QuantizedSerde, QuantizedSerdeType, Shard, UqffReader, UqffTensor,
 };
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) const GGUF_AFFINE_MIN_BATCH: usize = 8;
 
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
@@ -286,8 +286,8 @@ impl GgufMatMul {
             Ok(x)
         }
     }
-
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn uses_fast_mmvq(&self) -> bool {
         matches!(
             &self.w,
@@ -295,7 +295,7 @@ impl GgufMatMul {
         )
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn try_fast_forward(&self, a: &Tensor) -> Result<Option<Tensor>> {
         if !self.uses_fast_mmvq() || !matches!(a.dtype(), DType::BF16 | DType::F16 | DType::F32) {
             return Ok(None);
@@ -310,12 +310,14 @@ impl GgufMatMul {
         };
 
         // Batch 1-8: use MMVQ (decode kernel)
-        if (1..=fast_mmvq::MMVQ_MAX_BATCH).contains(&flat_batch) {
+        if (1..=fast_mmvq::MMVQ_MAX_BATCH).contains(&flat_batch)
+            && std::env::var("MRS_NO_FAST_MMVQ").is_err()
+        {
             return Ok(Some(fast_mmvq::plain(q, a)?));
         }
 
         // Batch > 8: use MMQ (prompt kernel)
-        if flat_batch > fast_mmvq::MMVQ_MAX_BATCH {
+        if flat_batch > fast_mmvq::MMVQ_MAX_BATCH && std::env::var("MRS_NO_FAST_MMQ").is_err() {
             return Ok(Some(fast_mmq::plain(q, a)?));
         }
 
@@ -445,7 +447,7 @@ impl QuantMethod for GgufMatMul {
                 return self.add_bias(out);
             }
         }
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         {
             if let Some(out) = self.try_fast_forward(a)? {
                 return self.add_bias(out);
@@ -488,7 +490,6 @@ impl QuantMethod for GgufMatMul {
         // - x: (n_tokens, 1, hidden_dim) or (n_tokens, n_experts_per_tok, hidden_dim)
         // - indices: (n_tokens, n_experts_per_tok)
         // - weights (self): (n_experts, out_features, in_features)
-        // For CPU and Metal: use dequantize-then-matmul approach
         #[cfg(feature = "cuda")]
         let res = if x.device().is_cuda() {
             cuda::qmatmul_indexed_moe_forward(&self.w, x, indices)?
@@ -541,7 +542,7 @@ impl QuantMethod for GgufMatMul {
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         {
             if self.uses_fast_mmvq() {
                 return None;
@@ -957,7 +958,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn capture_to_cuda_preserves_packed_weight() -> Result<()> {
         assert_cross_device_capture_preserves_packed_weight(Device::new_cuda(0)?)
