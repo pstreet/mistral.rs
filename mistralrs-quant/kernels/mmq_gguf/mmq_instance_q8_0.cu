@@ -34,21 +34,6 @@ static void instantiate_mmq_q8_0(float *tmp_fixup, const mmq_args &args,
   CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<GGML_TYPE_Q8_0, mmq_x, true>),
                                nbytes_shared);
 
-  {
-    static const bool dbg = getenv("MRS_MMQ_KERNEL_DEBUG") != nullptr;
-    if (dbg) {
-      const size_t nbs_re = mmq_get_nbytes_shared<GGML_TYPE_Q8_0>(
-          mmq_x, get_mmq_y_host(cc), cc, warp_size_host, nwarps);
-      fprintf(stderr,
-              "[mmqK] x=%d nty=%d ntx=%d sk=%d nrows_x=%lld b=%lld "
-              "nbs=%llu nbs_re=%llu smpbo=%llu\n",
-              mmq_x, nty, ntx, (int)args.use_stream_k,
-              (long long)args.nrows_x, (long long)args.ncols_dst,
-              (unsigned long long)nbytes_shared,
-              (unsigned long long)nbs_re, (unsigned long long)smpbo);
-    }
-  }
-
   if (!args.use_stream_k) {
     const dim3 grid(nty, ntx, ntzw);
     if (args.nrows_x % mmq_y == 0) {
@@ -244,7 +229,9 @@ extern "C" void launch_mmq_gguf_q8_0(void *tmp_fixup_ptr, const void *x,
                                      int64_t smpbo, int warp_size_host,
                                      int type_dst, void *stream) {
 
-  const bool use_stream_k = mmq_use_stream_k(cc);
+  const bool use_stream_k =
+      (GGML_CUDA_CC_IS_NVIDIA(cc) &&
+       ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA);
 
   const mmq_args args = {(const char *)x,
                          GGML_TYPE_Q8_0,

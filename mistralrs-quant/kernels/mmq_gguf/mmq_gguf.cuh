@@ -9,18 +9,6 @@
 
 using namespace ggml_cuda_mma;
 
-// gfx1151: the stream-k path traps on some shapes (hip error 719); it is an
-// NVIDIA-oriented schedule that upstream never runs on RDNA targets.
-static inline bool mmq_use_stream_k(const int cc) {
-#ifdef USE_ROCM
-  (void)cc;
-  return false;
-#else
-  return (GGML_CUDA_CC_IS_NVIDIA(cc) &&
-          ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA);
-#endif
-}
-
 #define MMQ_DP4A_MAX_BATCH_SIZE 64 // Max. batch size to use for dp4a MMQ kernels when FP16 tensor cores are available.
 #define MMQ_ITER_K 256
 #define MMQ_ITER_K_MXFP4_FP4    512
@@ -3985,7 +3973,9 @@ struct mmq_args {
       int64_t stride_row_x, int64_t stride_col_dst, int64_t num_experts,      \
       int64_t ncols_max, int cc, int nsm, int64_t smpbo,                     \
       int warp_size_host, void *stream) {                                     \
-    const bool use_stream_k = mmq_use_stream_k(cc);                           \
+    const bool use_stream_k =                                                 \
+        (GGML_CUDA_CC_IS_NVIDIA(cc) &&                                        \
+         ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA);          \
                                                                                \
     const int64_t stride_channel_x = nrows_x * stride_row_x;                  \
                                                                                \

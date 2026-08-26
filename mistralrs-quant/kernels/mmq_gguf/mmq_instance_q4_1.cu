@@ -228,7 +228,9 @@ extern "C" void launch_mmq_gguf_q4_1(void *tmp_fixup_ptr, const void *x,
                                      int64_t smpbo, int warp_size_host,
                                      int type_dst, void *stream) {
 
-  const bool use_stream_k = mmq_use_stream_k(cc);
+  const bool use_stream_k =
+      (GGML_CUDA_CC_IS_NVIDIA(cc) &&
+       ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA);
 
   const mmq_args args = {(const char *)x,
                          GGML_TYPE_Q4_1,
