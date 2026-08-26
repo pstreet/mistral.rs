@@ -305,9 +305,9 @@ impl GdnConvInput {
             Self::Direct(src) => Ok(src.clone()),
             Self::Segmented { q, k, v } => Tensor::cat(
                 &[
-                    &q.flatten_from(2)?,
-                    &k.flatten_from(2)?,
-                    &v.flatten_from(2)?,
+                    &q.flatten_from(2)?.contiguous()?,
+                    &k.flatten_from(2)?.contiguous()?,
+                    &v.flatten_from(2)?.contiguous()?,
                 ],
                 D::Minus1,
             ),
@@ -318,9 +318,15 @@ impl GdnConvInput {
         match self {
             Self::Direct(src) => Ok(src.clone()),
             Self::Segmented { q, k, v } => {
-                let q = q.reshape((batch_size, seq_len, dims.key_dim))?;
-                let k = k.reshape((batch_size, seq_len, dims.key_dim))?;
-                let v = v.reshape((batch_size, seq_len, dims.value_dim))?;
+                let q = q
+                    .reshape((batch_size, seq_len, dims.key_dim))?
+                    .contiguous()?;
+                let k = k
+                    .reshape((batch_size, seq_len, dims.key_dim))?
+                    .contiguous()?;
+                let v = v
+                    .reshape((batch_size, seq_len, dims.value_dim))?
+                    .contiguous()?;
                 Tensor::cat(&[&q, &k, &v], D::Minus1)
             }
         }
@@ -371,9 +377,10 @@ impl GdnProjection {
             b: b.reshape((batch_size, seq_len, dims.num_v_heads))?,
             a: a.reshape((batch_size, seq_len, dims.num_v_heads))?,
             conv_input: GdnConvInput::Segmented {
-                q,
-                k,
-                v: v.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_v_dim))?,
+                q: q.contiguous()?,
+                k: k.contiguous()?,
+                v: v.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_v_dim))?
+                    .contiguous()?,
             },
         })
     }
