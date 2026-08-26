@@ -17,7 +17,7 @@ pub struct CacheOptions {
 #[derive(Args, Clone, Deserialize)]
 pub struct PagedAttentionOptions {
     /// PagedAttention mode
-    /// - auto: enabled on CUDA, disabled on Metal/CPU (default)
+    /// - auto: enabled on CUDA/ROCm, disabled on Metal/CPU (default)
     /// - on: force enable (fails if unsupported)
     /// - off: force disable
     #[arg(long = "paged-attn", default_value = "auto", value_enum)]
@@ -37,7 +37,7 @@ pub struct PagedAttentionOptions {
     #[arg(long = "pa-memory-fraction", conflicts_with_all = ["context_len", "memory_mb"])]
     pub memory_fraction: Option<f32>,
 
-    /// Tokens per block (default: 32 on CUDA)
+    /// Tokens per block (default: 32 on CUDA/ROCm)
     #[arg(long = "pa-block-size")]
     pub block_size: Option<usize>,
 
@@ -64,7 +64,7 @@ impl Default for PagedAttentionOptions {
 #[derive(Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PagedAttnMode {
-    /// Automatic: enabled on CUDA, disabled on Metal/CPU
+    /// Automatic: enabled on CUDA/ROCm, disabled on Metal/CPU
     #[default]
     Auto,
     /// Force enable (error if device doesn't support it)

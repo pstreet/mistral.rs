@@ -251,27 +251,27 @@ pub struct MistralRsForServerBuilder {
     in_situ_quant: Option<String>,
 
     /// GPU memory to allocate for KV cache with PagedAttention in MBs.
-    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
+    /// PagedAttention is supported on CUDA/ROCm and Metal. It is automatically activated on CUDA/ROCm but not on Metal.
     /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
     paged_attn_gpu_mem: Option<usize>,
 
     /// Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
-    /// If this is not set and the device is CUDA, it will default to `0.9`.
-    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
+    /// If this is not set and the device is CUDA/ROCm, it will default to `0.9`.
+    /// PagedAttention is supported on CUDA/ROCm and Metal. It is automatically activated on CUDA/ROCm but not on Metal.
     /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
     paged_attn_gpu_mem_usage: Option<f32>,
 
     /// Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
-    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
+    /// PagedAttention is supported on CUDA/ROCm and Metal. It is automatically activated on CUDA/ROCm but not on Metal.
     /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
     /// This is the default setting, and it defaults to the `max-seq-len` specified in after the model type.
     paged_ctxt_len: Option<usize>,
 
-    /// Block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA, it will default to 32.
-    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
+    /// Block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA/ROCm, it will default to 32.
+    /// PagedAttention is supported on CUDA, ROCm, and Metal. It is automatically activated on CUDA/ROCm but not on Metal.
     paged_attn_block_size: Option<usize>,
 
-    /// Enables or disables PagedAttention. By default, PagedAttention is enabled on CUDA and disabled on Metal (and not supported on CPU). Use this to override the default behavior.
+    /// Enables or disables PagedAttention. By default, PagedAttention is enabled on CUDA/ROCm and disabled on Metal (and not supported on CPU). Use this to override the default behavior.
     paged_attn: Option<bool>,
 
     /// Use CPU only
@@ -623,7 +623,7 @@ impl MistralRsForServerBuilder {
     /// sets the value to whatever `Option<bool>` is passed in as `None`, `Some(true)`
     /// and `Some(false)` have different implications.
     ///
-    /// `None`: default behavior for target device (e.g. enable for CUDA, disable for Metal)
+    /// `None`: default behavior for target device (e.g. enable for CUDA/ROCm, disable for Metal)
     /// `Some(true)`: enable (if supported by target device)
     /// `Some(false)`: disable
     pub fn set_paged_attn(mut self, paged_attn: Option<bool>) -> Self {
