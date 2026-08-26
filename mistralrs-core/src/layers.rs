@@ -403,7 +403,7 @@ fn rms_norm_forward_add(
 
 impl Module for RmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         if let Some(out) =
             crate::ops::try_cuda_rms_norm_strided_4d(x, &self.weight, self.eps as f32)?
         {
@@ -421,7 +421,7 @@ fn rms_norm_forward_residual(
     eps: f64,
     scale: Option<&Tensor>,
 ) -> Result<Tensor> {
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if x.device().is_cuda()
         && residual.device().same_device(x.device())
         && weight.device().same_device(x.device())
@@ -469,7 +469,7 @@ fn rms_norm_forward_residual_then_rms_norm(
     norm_weight: &Tensor,
     norm_eps: f64,
 ) -> Result<(Tensor, Tensor)> {
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if x.device().is_cuda()
         && residual.device().same_device(x.device())
         && residual_weight.device().same_device(x.device())
@@ -2854,7 +2854,7 @@ pub fn qk_rms_norm_rope(
     is_gpt_neox: bool,
     positions: &Tensor,
 ) -> Result<(Tensor, Tensor)> {
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if let Some((q, Some(k))) = crate::ops::try_cuda_qk_rms_norm_rope_positions(
         q,
         Some(k),
@@ -2891,7 +2891,7 @@ pub fn qkv_rms_norm_rope(
     is_gpt_neox: bool,
     positions: &Tensor,
 ) -> Result<(Tensor, Tensor, Tensor)> {
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if let Some((q, k, v)) = crate::ops::try_cuda_qkv_rms_norm_rope_positions(
         q,
         k,
@@ -2927,7 +2927,7 @@ pub fn q_rms_norm_rope(
     is_gpt_neox: bool,
     positions: &Tensor,
 ) -> Result<Tensor> {
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if let Some((q, None)) = crate::ops::try_cuda_qk_rms_norm_rope_positions(
         q,
         None,
@@ -2991,7 +2991,7 @@ pub fn qk_rms_norm_mrope_layout(
     #[cfg(not(feature = "cuda"))]
     let _ = tokens_first;
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if let Some((q, Some(k))) = crate::ops::try_cuda_qk_rms_norm_rope(
         q,
         Some(k),

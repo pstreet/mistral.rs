@@ -243,6 +243,7 @@ fn build_rocm() {
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/cuda/gdn.cu");
+    println!("cargo:rerun-if-changed=src/cuda/attention_prep.cu");
     println!("cargo:rerun-if-changed=src/cuda/sort.cu");
     println!("cargo:rerun-if-changed=src/cuda/graph.cu");
     println!("cargo:rerun-if-env-changed=CANDLE_ROCM_PATH");
@@ -254,7 +255,12 @@ fn build_rocm() {
     let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
     let mut objects = Vec::new();
-    for src in ["src/cuda/gdn.cu", "src/cuda/sort.cu", "src/cuda/graph.cu"] {
+    for src in [
+        "src/cuda/gdn.cu",
+        "src/cuda/sort.cu",
+        "src/cuda/graph.cu",
+        "src/cuda/attention_prep.cu",
+    ] {
         let stem = Path::new(src)
             .file_stem()
             .unwrap()
