@@ -10,7 +10,8 @@ use core::ffi::c_int;
 use core::mem;
 use float8::F8E4M3;
 use half::{bf16, f16};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 const CUBLASLT_SMALL_WORKSPACE_BYTES: usize = 4_194_304;
 const CUBLASLT_LARGE_WORKSPACE_BYTES: usize = 33_554_432;
@@ -23,11 +24,46 @@ const CUBLASLT_LARGE_WORKSPACE_BYTES: usize = 33_554_432;
 ///
 /// Note: This maintains a instance of [`Arc<CudaStream>`], so will prevent the device
 /// from being dropped. Kernels will be launched on the device device default stream.
+/// Fingerprint of a GEMM that drives the hipBLASLt algo heuristic. The heuristic
+/// search is expensive (~tens of ms on ROCm) and purely a function of this config,
+/// so results are cached to avoid re-running it for repeated shapes (e.g. attention
+/// QK^T across every full-attention layer of a prefill).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct AlgoKey {
+    matrix_type: u32,
+    compute_type: u32,
+    transa: bool,
+    transb: bool,
+    m: u64,
+    n: u64,
+    k: u64,
+    lda: i64,
+    ldb: i64,
+    ldc: i64,
+    stride_a: Option<i64>,
+    stride_b: Option<i64>,
+    stride_c: Option<i64>,
+    stride_bias: Option<i64>,
+    batch_size: Option<c_int>,
+    has_bias: bool,
+    act: u8,
+    workspace_size: usize,
+}
+
+fn act_tag(act: Option<&Activation>) -> u8 {
+    match act {
+        None => 0,
+        Some(Activation::Relu) => 1,
+        Some(Activation::Gelu) => 2,
+    }
+}
+
 #[derive(Debug)]
 pub struct CudaBlasLT {
     handle: sys::cublasLtHandle_t,
     workspace: Workspace,
     stream: Arc<CudaStream>,
+    algo_cache: Mutex<HashMap<AlgoKey, sys::cublasLtMatmulAlgo_t>>,
 }
 
 unsafe impl Send for CudaBlasLT {}
@@ -44,7 +80,26 @@ impl CudaBlasLT {
             handle,
             workspace,
             stream,
+            algo_cache: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Return the cached algo for `key`, computing (and storing) it via `compute` on a miss.
+    fn cached_algo<F>(
+        &self,
+        key: AlgoKey,
+        compute: F,
+    ) -> Result<sys::cublasLtMatmulAlgo_t, CublasError>
+    where
+        F: FnOnce() -> Result<sys::cublasLtMatmulAlgo_t, CublasError>,
+    {
+        let mut cache = self.algo_cache.lock().unwrap();
+        if let Some(algo) = cache.get(&key) {
+            return Ok(*algo);
+        }
+        let algo = compute()?;
+        cache.insert(key, algo);
+        Ok(algo)
     }
 }
 
@@ -574,25 +629,62 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
         // Set workspace size
         matmul_pref.set_workspace_size(self.workspace().size)?;
 
-        // Get heuristic given Config, bias, act and workspace size
-        let heuristic = result::get_matmul_algo_heuristic(
-            *self.handle(),
-            matmul_desc.handle,
-            a_layout.handle,
-            b_layout.handle,
-            c_layout.handle,
-            c_layout.handle,
-            matmul_pref.handle,
-        )?;
+        // Get heuristic given Config, bias, act and workspace size (cached per shape).
+        let handle = *self.handle();
+        let key = AlgoKey {
+            matrix_type: Self::matrix_type() as u32,
+            compute_type: Self::compute_type() as u32,
+            transa: cfg.transa,
+            transb: cfg.transb,
+            m: cfg.m,
+            n: cfg.n,
+            k: cfg.k,
+            lda: cfg.lda,
+            ldb: cfg.ldb,
+            ldc: cfg.ldc,
+            stride_a: cfg.stride_a,
+            stride_b: cfg.stride_b,
+            stride_c: cfg.stride_c,
+            stride_bias: cfg.stride_bias,
+            batch_size: cfg.batch_size,
+            has_bias: bias.is_some(),
+            act: act_tag(act),
+            workspace_size: self.workspace().size,
+        };
+        let algo = self.cached_algo(key, || {
+            let heuristic = result::get_matmul_algo_heuristic(
+                handle,
+                matmul_desc.handle,
+                a_layout.handle,
+                b_layout.handle,
+                c_layout.handle,
+                c_layout.handle,
+                matmul_pref.handle,
+            )?;
+            Ok(heuristic.algo)
+        })?;
 
         let (a, _a_guard) = a.device_ptr(self.stream());
         let (b, _b_guard) = b.device_ptr(self.stream());
         let (c, _c_guard) = c.device_ptr_mut(self.stream());
         let workspace = &self.workspace().buffer;
         let (workspace, _workspace_guard) = workspace.device_ptr(self.stream());
+        // MRS_ZERO_WS=1: zero the persistent Lt workspace before each matmul to test
+        // whether stale scratch feeds split-K atomic accumulation in ROCm Tensile kernels.
+        if std::env::var("MRS_ZERO_WS").as_deref() == Ok("1") {
+            unsafe {
+                let rc = sys::hipMemsetAsync(
+                    workspace as *mut _,
+                    0,
+                    self.workspace().size,
+                    self.stream().cu_stream() as *mut _,
+                );
+                let _ = result::check(rc);
+            }
+        }
         // Launch matmul kernel
         result::matmul(
-            *self.handle(),
+            handle,
             matmul_desc.handle,
             (&cfg.alpha) as *const _ as *const _,
             (&cfg.beta) as *const _ as *const _,
@@ -604,7 +696,7 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
             c_layout.handle,
             c as *mut _,
             c_layout.handle,
-            (&heuristic.algo) as *const _,
+            (&algo) as *const _,
             workspace as *mut _,
             self.workspace().size,
             self.stream().cu_stream() as *mut _,
