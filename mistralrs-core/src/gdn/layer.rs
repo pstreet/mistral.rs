@@ -525,7 +525,6 @@ impl GatedDeltaNet {
         let _ = (checkpoint_lanes, transition_checkpoints);
         let (batch_size, seq_len, _) = x.dims3()?;
         let dtype = x.dtype();
-
         let mixed_qkv = projected.conv_input(&self.dims, batch_size, seq_len)?;
         #[cfg(feature = "cuda")]
         let accelerated = if checkpoint_lanes > 1

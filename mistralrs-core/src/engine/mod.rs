@@ -2089,6 +2089,18 @@ impl Engine {
                             .collect::<Vec<_>>();
                         let mut guards_mut =
                             guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
+
+                        if std::env::var("MRS_PROFILE").is_ok() {
+                            let profile_tokens: usize = scheduled_token_counts.iter().sum();
+                            eprintln!(
+                                "[mrs-profile] {} batch={} tokens={} step_ms={:.1}",
+                                if is_prompt { "prefill" } else { "decode" },
+                                guards_mut.len(),
+                                profile_tokens,
+                                step_exec_time.as_secs_f64() * 1000.0,
+                            );
+                        }
+
                         for ((seq, before), scheduled) in guards_mut
                             .iter_mut()
                             .zip(num_computed_before_step.iter().copied())

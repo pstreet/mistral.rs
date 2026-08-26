@@ -9,6 +9,11 @@ use std::{
 };
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
+
+// MRS_TRACE_LAYERS=1 + first-attention-layer probes: async checksums of q/k/v in, y out,
+// flushed by the end-of-forward dump to localize nondeterminism inside the attention path.
+static ATTN_PROBE: std::sync::Mutex<Vec<(&'static str, Tensor)>> =
+    std::sync::Mutex::new(Vec::new());
 use mistralrs_quant::{
     ActivationQuantizationScheme, ActivationScaleLayout, ColumnParallelLayer, PackedOutputLayout,
     QuantMethod, QuantizedActivation, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
@@ -353,6 +358,15 @@ impl FullAttention {
             tokens_first,
         )?;
 
+        let prof = std::env::var("MRS_TRACE_LAYERS").is_ok();
+        if prof {
+            if let Ok(mut qkv) = ATTN_PROBE.lock() {
+                qkv.push(("q", q.sum_all()?));
+                qkv.push(("k", k.sum_all()?));
+                qkv.push(("v", v.sum_all()?));
+            }
+        }
+
         // Standard attention
         let mut y = match &self.paged_attn {
             Some(paged_attn) => match metadata {
@@ -404,6 +418,11 @@ impl FullAttention {
         } else {
             y.reshape((b_sz, seq_len, ()))?
         };
+        if prof {
+            if let Ok(mut qkv) = ATTN_PROBE.lock() {
+                qkv.push(("y", y.sum_all()?));
+            }
+        }
 
         // Apply output gate: y = y * sigmoid(gate)
         if let Some(res) = crate::ops::try_fused_gated_projection(
@@ -624,6 +643,7 @@ impl DecoderLayer {
         kv_cache: Option<&mut KvCache>,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
+        prof_idx: i64,
     ) -> Result<Tensor> {
         self.forward_attention_output(
             x,
@@ -755,6 +775,27 @@ impl DecoderLayer {
             branch: ffn_out,
             residual: x,
         })
+    }
+}
+
+// NAN_PROBE=1: log the first tensors whose sum is NaN, to locate a bad layer/component.
+fn nan_probe(tag: &str, layer: i64, t: &candle_core::Tensor) {
+    if std::env::var("NAN_PROBE").is_err() {
+        return;
+    }
+    let Ok(s) = t.sum_all() else {
+        return;
+    };
+    let Ok(v) = s.to_vec0::<f32>() else {
+        return;
+    };
+    if v.is_nan() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        if n < 96 {
+            eprintln!("[nan-probe] layer={layer} {tag} SUM=NaN");
+        }
     }
 }
 
@@ -2275,6 +2316,7 @@ impl Qwen3_5TextModel {
         visual_pos_masks: Option<&Tensor>,
         deepstack_visual_embeds: Option<&[Tensor]>,
     ) -> Result<Tensor> {
+        nan_probe("embed", -1, &xs);
         let mut hybrid_cache = self.cache.hybrid();
         let checkpoint_lanes = hybrid_cache.checkpoint_lanes();
         let batch_size = xs.dim(0)?;

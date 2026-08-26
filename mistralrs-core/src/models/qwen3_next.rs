@@ -1051,8 +1051,21 @@ impl Model {
         };
         let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
 
+        {
+            use std::sync::Once;
+            static ONCE: Once = Once::new();
+            ONCE.call_once(|| {
+                eprintln!(
+                    "[layer-prof-init] LAYER_PROFILE={:?}",
+                    std::env::var("LAYER_PROFILE")
+                );
+            });
+        }
+        let layer_prof = std::env::var("LAYER_PROFILE").is_ok();
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             x = self.mapper.map(x, layer_idx)?;
+            let layer_is_linear = matches!(layer.layer_impl, LayerImpl::LinearAttention(_));
+            let t0 = std::time::Instant::now();
 
             match &layer.layer_impl {
                 LayerImpl::FullAttention(_) => {
@@ -1110,6 +1123,21 @@ impl Model {
                             "Hybrid cache layer {layer_idx} is not recurrent for a linear-attention layer."
                         );
                     }
+                }
+            }
+
+            if layer_prof {
+                // to_vec blocks on the stream so elapsed reflects GPU completion
+                let _ = x.sum_all()?.to_vec0::<f32>();
+                use std::sync::atomic::{AtomicUsize, Ordering};
+                static N: AtomicUsize = AtomicUsize::new(0);
+                let i = N.fetch_add(1, Ordering::Relaxed);
+                if i < 140 {
+                    eprintln!(
+                        "[layer-profile] layer={layer_idx} {} ms={:.2}",
+                        if layer_is_linear { "gdn" } else { "attn" },
+                        t0.elapsed().as_secs_f64() * 1e3
+                    );
                 }
             }
         }
