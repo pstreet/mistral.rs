@@ -8,6 +8,8 @@ use std::{
     },
 };
 
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+use candle_core::cuda_backend::cudarc::driver::CudaSlice;
 use candle_core::cuda_backend::cudarc::driver::{
     sys, CudaEvent, CudaStream, DevicePtr, PinnedHostSlice,
 };
@@ -38,8 +40,12 @@ use crate::pipeline::{
 };
 use crate::speculative::SpeculativeGraphState;
 
+#[cfg(feature = "cuda")]
 const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 =
     sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH as u64;
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+// CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH
+const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 = 0x2;
 // Matches the standard CUDA paged-attention V2 partition size.
 const PAGED_ATTENTION_PARTITION_SIZE: usize = 512;
 const TARGET_CUDA_DECODE_GRAPH_CACHE_DEFAULT_CAPACITY: usize = 64;
@@ -842,6 +848,17 @@ pub(crate) struct CudaGraphHandle {
     graph: sys::CUgraph,
     exec: sys::CUgraphExec,
     stream: Arc<CudaStream>,
+    // ROCm: capture-time allocations are carved from this arena and it must
+    // outlive the exec.
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    arena_keepalive: Option<Arc<CudaSlice<u8>>>,
+}
+
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+impl CudaGraphHandle {
+    pub(crate) fn set_arena(&mut self, arena: Option<Arc<CudaSlice<u8>>>) {
+        self.arena_keepalive = arena;
+    }
 }
 
 unsafe impl Send for CudaGraphHandle {}
@@ -851,11 +868,20 @@ impl Drop for CudaGraphHandle {
         let _ = self.stream.synchronize();
         let _ = self.stream.context().bind_to_thread();
         if !self.exec.is_null() {
+            #[cfg(feature = "cuda")]
+            #[cfg(feature = "cuda")]
             let _ = unsafe { sys::cuGraphExecDestroy(self.exec) };
+            #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+            let _ = unsafe { sys::hipGraphExecDestroy(self.exec) };
+            #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+            let _ = unsafe { sys::hipGraphExecDestroy(self.exec) };
             self.exec = std::ptr::null_mut();
         }
         if !self.graph.is_null() {
+            #[cfg(feature = "cuda")]
             let _ = unsafe { sys::cuGraphDestroy(self.graph) };
+            #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+            let _ = unsafe { sys::hipGraphDestroy(self.graph) };
             self.graph = std::ptr::null_mut();
         }
     }
@@ -864,8 +890,11 @@ impl Drop for CudaGraphHandle {
 impl CudaGraphHandle {
     pub(crate) fn end_capture(stream: &Arc<CudaStream>) -> candle_core::Result<Option<Self>> {
         let mut graph = std::ptr::null_mut();
+        #[cfg(feature = "cuda")]
         let result = unsafe { sys::cuStreamEndCapture(stream.cu_stream(), &mut graph) };
-        if result != sys::CUresult::CUDA_SUCCESS {
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        let result = unsafe { sys::hipStreamEndCapture(stream.cu_stream(), &mut graph) };
+        if graph_result_failed(result) {
             return Err(candle_core::Error::msg(format!("{result:?}"))
                 .context("CUDA graph stream end capture failed"));
         }
@@ -874,15 +903,32 @@ impl CudaGraphHandle {
         }
 
         let mut exec = std::ptr::null_mut();
+        #[cfg(feature = "cuda")]
         let result = unsafe {
             sys::cuGraphInstantiateWithFlags(&mut exec, graph, CUDA_GRAPH_INSTANTIATE_FLAGS)
         };
-        if result != sys::CUresult::CUDA_SUCCESS {
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        let result = unsafe {
+            sys::hipGraphInstantiateWithFlags(&mut exec, graph, CUDA_GRAPH_INSTANTIATE_FLAGS)
+        };
+        if graph_result_failed(result) {
+            #[cfg(feature = "cuda")]
             let _ = unsafe { sys::cuGraphDestroy(graph) };
+            #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+            let _ = unsafe { sys::hipGraphDestroy(graph) };
             return Err(candle_core::Error::msg(format!("{result:?}"))
                 .context("CUDA graph instantiate failed"));
         }
 
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        return Ok(Some(Self {
+            graph,
+            exec,
+            stream: stream.clone(),
+            arena_keepalive: None,
+        }));
+
+        #[cfg(feature = "cuda")]
         Ok(Some(Self {
             graph,
             exec,
@@ -891,8 +937,11 @@ impl CudaGraphHandle {
     }
 
     pub(crate) fn upload(&self) -> candle_core::Result<()> {
+        #[cfg(feature = "cuda")]
         let result = unsafe { sys::cuGraphUpload(self.exec, self.stream.cu_stream()) };
-        if result != sys::CUresult::CUDA_SUCCESS {
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        let result = unsafe { sys::hipGraphUpload(self.exec, self.stream.cu_stream()) };
+        if graph_result_failed(result) {
             return Err(
                 candle_core::Error::msg(format!("{result:?}")).context("CUDA graph upload failed")
             );
@@ -902,8 +951,11 @@ impl CudaGraphHandle {
     }
 
     pub(crate) fn launch(&self) -> candle_core::Result<()> {
+        #[cfg(feature = "cuda")]
         let result = unsafe { sys::cuGraphLaunch(self.exec, self.stream.cu_stream()) };
-        if result != sys::CUresult::CUDA_SUCCESS {
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        let result = unsafe { sys::hipGraphLaunch(self.exec, self.stream.cu_stream()) };
+        if graph_result_failed(result) {
             return Err(
                 candle_core::Error::msg(format!("{result:?}")).context("CUDA graph launch failed")
             );
@@ -915,6 +967,16 @@ impl CudaGraphHandle {
     pub(crate) fn stream(&self) -> &Arc<CudaStream> {
         &self.stream
     }
+}
+
+#[cfg(feature = "cuda")]
+fn graph_result_failed(result: sys::CUresult) -> bool {
+    result != sys::CUresult::CUDA_SUCCESS
+}
+
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+fn graph_result_failed(result: core::ffi::c_int) -> bool {
+    result != 0
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2295,6 +2357,15 @@ where
     let restore_event_tracking = disable_event_tracking_for_capture(&stream);
     let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
 
+    // ROCm graphs that contain mempool allocation nodes can only be launched
+    // once; carve capture-time allocations from a plain pre-allocated arena so
+    // the graph replays cleanly.
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    const DECODE_GRAPH_ARENA_BYTES: usize = 512 * 1024 * 1024;
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    let mut arena_keepalive: Option<Arc<CudaSlice<u8>>> = None;
+
+    #[cfg(feature = "cuda")]
     if let Err(err) = stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
     {
         restore_event_tracking_after_capture(&stream, restore_event_tracking);
@@ -2303,7 +2374,7 @@ where
         );
     }
 
-    if let Err(err) = prepare_fa3_decode_schedules(&metadata) {
+if let Err(err) = prepare_fa3_decode_schedules(&metadata) {
         end_cuda_capture_discard(&stream);
         restore_event_tracking_after_capture(&stream, restore_event_tracking);
         return Err(err.context("FA3 decode preparation capture failed"));
@@ -2329,7 +2400,8 @@ where
         ));
     }
 
-    let graph = match CudaGraphHandle::end_capture(&stream) {
+    #[cfg_attr(all(feature = "rocm", not(feature = "cuda")), allow(unused_mut))]
+    let mut graph = match CudaGraphHandle::end_capture(&stream) {
         Ok(Some(graph)) => graph,
         Ok(None) => {
             restore_event_tracking_after_capture(&stream, restore_event_tracking);
@@ -2343,6 +2415,9 @@ where
         }
     };
     restore_event_tracking_after_capture(&stream, restore_event_tracking);
+
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    graph.set_arena(arena_keepalive.take());
 
     graph.upload()?;
     metadata_buffers.finish_capture(&metadata);
@@ -2722,9 +2797,19 @@ pub(crate) fn end_cuda_capture_discard(stream: &Arc<CudaStream>) {
         Ok(status) if status != sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_NONE
     ) {
         let mut graph = std::ptr::null_mut();
-        let result = unsafe { sys::cuStreamEndCapture(stream.cu_stream(), &mut graph) };
-        if result == sys::CUresult::CUDA_SUCCESS && !graph.is_null() {
-            let _ = unsafe { sys::cuGraphDestroy(graph) };
+        #[cfg(feature = "cuda")]
+        {
+            let result = unsafe { sys::cuStreamEndCapture(stream.cu_stream(), &mut graph) };
+            if result == sys::CUresult::CUDA_SUCCESS && !graph.is_null() {
+                let _ = unsafe { sys::cuGraphDestroy(graph) };
+            }
+        }
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        {
+            let result = unsafe { sys::hipStreamEndCapture(stream.cu_stream(), &mut graph) };
+            if result == 0 && !graph.is_null() {
+                let _ = unsafe { sys::hipGraphDestroy(graph) };
+            }
         }
     }
 }

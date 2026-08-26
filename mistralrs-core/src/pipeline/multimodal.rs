@@ -21,15 +21,15 @@ use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::cuda::gdn::GDN_PAD_SLOT;
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::kv_cache::RecurrentCheckpointStateSnapshot;
 use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 type SeqRecurrentCheckpointSnapshots = Vec<(usize, RecurrentCheckpointStateSnapshot)>;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 type HybridStateIndicesSnapshot = (Option<Tensor>, Option<Vec<u32>>);
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct CudaDecodeGraphCaptureInputs<'a> {
     kv_cache: &'a [(Tensor, Tensor)],
     flash_meta: &'a FlashParams,
@@ -37,7 +37,7 @@ struct CudaDecodeGraphCaptureInputs<'a> {
     block_size: usize,
     speculative: bool,
 }
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct CudaDecodeGraphForwardInput<'a> {
     input_ids: &'a Tensor,
     seqlen_offsets: &'a [usize],
@@ -153,7 +153,7 @@ use crate::paged_attention::{calculate_cache_config, AttentionImplementation, Ca
 use crate::pipeline::chat_template::{
     calculate_eos_tokens, BeginEndUnkPadTok, ChatTemplateValue, GenerationConfig,
 };
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::pipeline::cuda_graph::{
     capture_cuda_decode_graph, cuda_decode_graph_batch_kind_supported,
     cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled, cuda_graph_batch_bucket,
@@ -224,7 +224,7 @@ pub struct MultimodalPipeline {
     prefixer: Arc<dyn MultimodalPromptPrefixer>,
     video_sampling: crate::VideoFrameSampling,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
     #[cfg(feature = "cuda")]
     cuda_sparse_rejection: StdMutex<Option<crate::speculative::CudaSparseRejectionWorkspace>>,
@@ -681,7 +681,7 @@ impl Loader for MultimodalLoader {
         } else {
             device_map::get_all_similar_devices(&device)?
         };
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         for device in &available_devices {
             if let Device::Cuda(dev) = device {
                 unsafe { dev.disable_event_tracking() };
@@ -1477,6 +1477,9 @@ impl Loader for MultimodalLoader {
             (None, None)
         };
 
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+        super::synchronize_cuda_contexts(&device, pipeline_mapper.as_ref())?;
+
         let max_seq_len = model.max_seq_len();
         let num_hidden_layers = match model.cache() {
             EitherCache::Full(full) => full.lock().len(),
@@ -1530,7 +1533,7 @@ impl Loader for MultimodalLoader {
             prefixer: self.inner.prefixer(&config),
             video_sampling: self.inner.video_frame_sampling(&config),
             preprocessor_config: Arc::new(preprocessor_config),
-            #[cfg(feature = "cuda")]
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
             cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),
             #[cfg(feature = "cuda")]
             cuda_sparse_rejection: StdMutex::new(None),
@@ -1585,7 +1588,7 @@ impl IsqPipelineMixin for MultimodalPipeline {
 
     fn begin_calibration(&mut self) -> Result<()> {
         super::isq_flow::begin_calibration(&self.tracked_modules)?;
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         self.cuda_decode_graph
             .lock()
             .expect("CUDA graph mutex poisoned")
@@ -1608,7 +1611,7 @@ impl IsqPipelineMixin for MultimodalPipeline {
             self.source_weight_source.as_deref(),
             save_cimatrix.as_deref(),
         );
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         if result.is_ok() || !super::isq_flow::calibration_status(&self.tracked_modules).collecting
         {
             self.cuda_decode_graph
@@ -1688,7 +1691,7 @@ impl MetadataMixin for MultimodalPipeline {
         self.model.reset_model_specific_state();
     }
     fn cleanup_cuda_graphs(&self) {
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         {
             self.cuda_decode_graph
                 .lock()
@@ -1864,7 +1867,7 @@ impl MultimodalPipeline {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl MultimodalPipeline {
     fn uses_nonmutating_recurrent_transition_log(&self, batch_kind: RecurrentBatchKind) -> bool {
         if batch_kind != RecurrentBatchKind::SpeculativeDecode
@@ -2660,7 +2663,7 @@ impl Pipeline for MultimodalPipeline {
             paged_attn_meta.as_ref().map(|(_, meta)| *meta),
             recurrent_batch_kind,
         )?;
-        if self.model.has_speculative_proposer() {
+if self.model.has_speculative_proposer() {
             *self
                 .last_prompt_attention
                 .lock()
@@ -2669,9 +2672,9 @@ impl Pipeline for MultimodalPipeline {
                 .filter(|(_, meta)| meta.is_first_prompt_chunk || meta.num_cached_tokens.is_some())
                 .map(|(_, meta)| ((*meta).clone(), flash_meta.clone()));
         }
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         let mut cuda_graph_eager_fallback = None;
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         if lora_execution.is_none() && !return_raw_logits && pixel_values.is_none() {
             match self.try_cuda_decode_graph_forward(CudaDecodeGraphForwardInput {
                 input_ids: &input_ids,

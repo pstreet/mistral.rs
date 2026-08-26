@@ -49,7 +49,7 @@ use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::pipeline::cuda_graph::{
     capture_cuda_decode_graph, cuda_decode_graph_batch_kind_supported,
     cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled, cuda_graph_batch_bucket,
@@ -68,7 +68,7 @@ use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::{AutoDeviceMapQuantization, QuantizationConfigShim};
 use crate::pipeline::sampling::{sample_and_add_toks, sample_and_add_toks_batched};
 use crate::pipeline::text_models_inputs_processor::InputMetadata;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{
     get_chat_template, hf::build_api, Modalities, ModelForwardContext, RecurrentBatchKind,
@@ -101,7 +101,7 @@ use regex_automata::meta::Regex;
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use std::sync::Mutex as StdMutex;
 use std::sync::{Arc, RwLock};
 use std::{env, fs};
@@ -117,7 +117,7 @@ pub struct NormalPipeline {
     non_granular_state: Option<NonGranularState>,
     model_id: String,
     metadata: Arc<GeneralMetadata>,
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
     #[cfg(feature = "cuda")]
     cuda_sparse_rejection: StdMutex<Option<crate::speculative::CudaSparseRejectionWorkspace>>,
@@ -287,7 +287,7 @@ pub(crate) fn build_normal_pipeline(
             },
             loaded_for_uqff_write,
         }),
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),
         #[cfg(feature = "cuda")]
         cuda_sparse_rejection: StdMutex::new(None),
@@ -694,7 +694,7 @@ impl Loader for NormalLoader {
         } else {
             device_map::get_all_similar_devices(&device)?
         };
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         for device in &available_devices {
             if let Device::Cuda(dev) = device {
                 unsafe { dev.disable_event_tracking() };
@@ -1444,7 +1444,7 @@ impl Loader for NormalLoader {
                 module.ct.resolve()?;
             }
         }
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         super::synchronize_cuda_contexts(&device, pipeline_mapper.as_ref())?;
 
         let tracked_modules = tracker.get().clone();
@@ -1516,7 +1516,7 @@ impl IsqPipelineMixin for NormalPipeline {
 
     fn begin_calibration(&mut self) -> Result<()> {
         super::isq_flow::begin_calibration(&self.tracked_modules)?;
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         self.cuda_decode_graph
             .lock()
             .expect("CUDA graph mutex poisoned")
@@ -1539,7 +1539,7 @@ impl IsqPipelineMixin for NormalPipeline {
             self.source_weight_source.as_deref(),
             save_cimatrix.as_deref(),
         );
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         if result.is_ok() || !super::isq_flow::calibration_status(&self.tracked_modules).collecting
         {
             self.cuda_decode_graph
@@ -1617,7 +1617,7 @@ impl MetadataMixin for NormalPipeline {
         }
     }
     fn cleanup_cuda_graphs(&self) {
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         {
             self.cuda_decode_graph
                 .lock()
@@ -1754,7 +1754,7 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl NormalPipeline {
     fn try_cuda_decode_graph_forward(
         &self,
@@ -2401,7 +2401,7 @@ impl Pipeline for NormalPipeline {
                     .as_ref()
                     .map(|meta| (meta.0.get_kv_cache().clone(), meta.1.clone()));
 
-                #[cfg(feature = "cuda")]
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
                 if lora_execution.is_none() && !return_raw_logits {
                     match self.try_cuda_decode_graph_forward(CudaDecodeGraphForwardInput {
                         input_ids: &input_ids,

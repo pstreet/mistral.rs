@@ -1,7 +1,7 @@
 mod amoe;
 mod auto;
 pub mod chat_template;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) mod cuda_graph;
 #[cfg(feature = "cuda")]
 #[doc(hidden)]
@@ -186,7 +186,7 @@ use self::text_models_inputs_processor::{
     FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
 };
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn synchronize_cuda_contexts(primary: &Device, mapper: &dyn DeviceMapper) -> Result<()> {
     let mut devices = mapper.get_unique_devices();
     if !devices.iter().any(|device| device.same_device(primary)) {

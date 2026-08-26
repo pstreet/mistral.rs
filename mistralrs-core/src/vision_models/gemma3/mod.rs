@@ -265,7 +265,7 @@ impl MultimodalModel for Gemma3Model {
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {
         Box::new(Gemma3SpecificArgs::default())
     }
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn supports_cuda_decode_graphs(&self) -> bool {
         true
     }

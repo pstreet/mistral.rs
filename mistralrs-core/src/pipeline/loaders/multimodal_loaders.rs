@@ -106,11 +106,11 @@ pub trait MultimodalModel:
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
         ctx: &mut ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor>;
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn supports_cuda_decode_graphs(&self) -> bool {
         false
     }
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn supports_cuda_decode_graphs_for_args(&self, _model_specific_args: &dyn Any) -> bool {
         self.supports_cuda_decode_graphs()
     }

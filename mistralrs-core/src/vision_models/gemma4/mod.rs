@@ -1010,7 +1010,7 @@ impl MultimodalModel for Gemma4Model {
         )
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn supports_cuda_decode_graphs(&self) -> bool {
         self.language_model.supports_cuda_decode_graphs()
     }

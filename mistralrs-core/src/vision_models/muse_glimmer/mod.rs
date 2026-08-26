@@ -360,7 +360,7 @@ impl MultimodalModel for MuseGlimmerModel {
         Box::new(MuseGlimmerSpecificArgs::default())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn supports_cuda_decode_graphs(&self) -> bool {
         true
     }

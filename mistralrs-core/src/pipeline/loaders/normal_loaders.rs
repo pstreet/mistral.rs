@@ -70,7 +70,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin 
     fn supports_packed_prefill(&self) -> bool {
         false
     }
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn supports_cuda_decode_graphs(&self) -> bool {
         false
     }

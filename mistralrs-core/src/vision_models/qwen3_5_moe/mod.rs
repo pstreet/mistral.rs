@@ -490,7 +490,7 @@ impl MultimodalModel for Qwen3_5MoeModel {
     fn max_seq_len(&self) -> usize {
         self.text.max_seq_len
     }
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn supports_cuda_decode_graphs(&self) -> bool {
         true
     }
