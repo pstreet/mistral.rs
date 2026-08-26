@@ -222,7 +222,7 @@ fn main() {
 // warp shuffles and fp16/bf16 math, so they compile for the target GCN/CDNA/RDNA.
 #[cfg(all(feature = "rocm", not(feature = "cuda")))]
 fn build_rocm() {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
 
     let root = std::env::var("CANDLE_ROCM_PATH")
@@ -243,6 +243,7 @@ fn build_rocm() {
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/cuda/gdn.cu");
+    println!("cargo:rerun-if-changed=src/cuda/sort.cu");
     println!("cargo:rerun-if-env-changed=CANDLE_ROCM_PATH");
     println!("cargo:rerun-if-env-changed=ROCM_HOME");
     println!("cargo:rerun-if-env-changed=ROCM_PATH");
@@ -250,33 +251,42 @@ fn build_rocm() {
     println!("cargo:rerun-if-env-changed=MISTRALRS_ROCM_COMPAT_INCLUDE");
 
     let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    let object = build_dir.join("gdn.o");
 
-    let status = Command::new(format!("{root}/bin/hipcc"))
-        .arg("src/cuda/gdn.cu")
-        .arg("-I")
-        .arg(&compat)
-        .arg("-include")
-        .arg("cuda_runtime.h")
-        .arg(format!("--offload-arch={arch}"))
-        .arg("-DUSE_ROCM")
-        .arg("-std=c++17")
-        .arg("-O3")
-        .arg("-fPIC")
-        .arg("-c")
-        .arg("-o")
-        .arg(&object)
-        .status()
-        .expect("failed to run hipcc");
-    if !status.success() {
-        panic!("hipcc failed for src/cuda/gdn.cu");
+    let mut objects = Vec::new();
+    for src in ["src/cuda/gdn.cu", "src/cuda/sort.cu"] {
+        let stem = Path::new(src)
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let object = build_dir.join(format!("{stem}.o"));
+        let status = Command::new(format!("{root}/bin/hipcc"))
+            .arg(src)
+            .arg("-I")
+            .arg(&compat)
+            .arg("-include")
+            .arg("cuda_runtime.h")
+            .arg(format!("--offload-arch={arch}"))
+            .arg("-DUSE_ROCM")
+            .arg("-std=c++17")
+            .arg("-O3")
+            .arg("-fPIC")
+            .arg("-c")
+            .arg("-o")
+            .arg(&object)
+            .status()
+            .expect("failed to run hipcc");
+        if !status.success() {
+            panic!("hipcc failed for {src}");
+        }
+        objects.push(object);
     }
 
     let out_file = build_dir.join("libmistralrscuda.a");
     let status = Command::new("ar")
         .arg("crs")
         .arg(&out_file)
-        .arg(&object)
+        .args(&objects)
         .status()
         .expect("failed to run ar");
     if !status.success() {

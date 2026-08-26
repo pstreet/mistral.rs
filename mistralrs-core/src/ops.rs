@@ -2,29 +2,29 @@ use std::sync::Arc;
 
 use candle_core::{shape::Dim, DType, Result, Tensor, D};
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::cuda::ffi;
 use crate::layers::Activation;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use candle_core::Shape;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const CUDA_TOPK_CHUNK_SIZE: usize = 2048;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) const CUDA_TOPK_MAX_EXACT_PACKED_VOCAB: usize = (1 << 24) + 1;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const CUDA_TOPK_MAX_GRID_Y: usize = 65_535;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) const CUDA_TOPK_MAX_K: usize = 128;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const CUDA_TOPK_MAX_STAGE2_CANDIDATES: usize = 47 * 1024;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) const CUDA_CATEGORICAL_PACKED_WIDTH: usize = 2;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) const CUDA_TOP1_PACKED_WIDTH: usize = 2;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) const CUDA_TOP1_INVALID_TOKEN: u32 = u32::MAX;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const CUDA_ASYNC_TOKEN_RING_SLOTS: usize = 2;
 #[cfg(feature = "cuda")]
 const CUDA_TOPK_SAMPLING_PARAM_WIDTH: usize = 5;
@@ -54,7 +54,7 @@ pub(crate) fn cuda_topk_ranked_packed_max_k(vocab: usize) -> Option<usize> {
 // Single kernel call writes both values and indices - no post-processing needed
 // ============================================================================
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(clippy::cast_possible_truncation)]
 fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
     use candle_core::backend::BackendStorage;
@@ -230,7 +230,7 @@ pub enum MoeRouterScoreFunction {
     Sigmoid,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl MoeRouterScoreFunction {
     const fn as_i32(self) -> i32 {
         match self {
@@ -249,7 +249,7 @@ pub enum MoeRouterSelectedWeight {
     Sigmoid,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl MoeRouterSelectedWeight {
     const fn as_i32(self) -> i32 {
         match self {
@@ -277,7 +277,7 @@ pub fn moe_router_topk(
     selection_bias: Option<&Tensor>,
     expert_scale: Option<&Tensor>,
 ) -> Result<TopKOutput> {
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if let Some(topk) =
         cuda_moe_router_topk_if_supported(logits, config, selection_bias, expert_scale)?
     {
@@ -343,19 +343,19 @@ pub fn moe_router_topk(
     Ok(TopKOutput { values, indices })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const MOE_ROUTER_MAX_POWER_OF_TWO_EXPERTS: usize = 512;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const MOE_ROUTER_EXTRA_EXPERT_COUNTS: &[usize] = &[576];
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn cuda_moe_router_topk_supports_experts(n_experts: usize) -> bool {
     (n_experts.is_power_of_two() && n_experts <= MOE_ROUTER_MAX_POWER_OF_TWO_EXPERTS)
         || MOE_ROUTER_EXTRA_EXPERT_COUNTS.contains(&n_experts)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn cuda_moe_router_topk_if_supported(
     logits: &Tensor,
     config: MoeRouterTopKConfig,
@@ -375,7 +375,7 @@ pub fn cuda_moe_router_topk_if_supported(
     cuda_moe_router_topk(logits, config, selection_bias, expert_scale).map(Some)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(clippy::cast_possible_truncation)]
 pub fn cuda_moe_router_topk(
     logits: &Tensor,
@@ -538,7 +538,7 @@ pub fn cuda_moe_router_topk(
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(dead_code)]
 #[allow(clippy::cast_possible_truncation)]
 pub fn cuda_topk_logits_f32(
@@ -701,7 +701,7 @@ pub fn cuda_topk_logits_f32(
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(clippy::cast_possible_truncation)]
 pub fn cuda_topk_logits_f32_packed(
     input: &Tensor,
@@ -841,7 +841,7 @@ pub fn cuda_topk_logits_f32_packed(
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaTopKLogitsPackedWorkspace {
     location: candle_core::DeviceLocation,
     stream: Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
@@ -858,7 +858,7 @@ pub(crate) struct CudaTopKLogitsPackedWorkspace {
     packed: Tensor,
 }
 
-#[cfg(all(feature = "cuda", test))]
+#[cfg(all(any(feature = "cuda", feature = "rocm"), test))]
 fn cuda_topk_logits_packed_workspace_id() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -866,7 +866,7 @@ fn cuda_topk_logits_packed_workspace_id() -> u64 {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaTopKLogitsPackedWorkspace {
     fn new(
         dev: &candle_core::CudaDevice,
@@ -936,7 +936,7 @@ impl CudaTopKLogitsPackedWorkspace {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaRankedTopKPackedWorkspace {
     location: candle_core::DeviceLocation,
     stream: Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
@@ -950,7 +950,7 @@ pub(crate) struct CudaRankedTopKPackedWorkspace {
     packed: Tensor,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaRankedTopKPackedWorkspace {
     fn new(
         dev: &candle_core::CudaDevice,
@@ -1018,7 +1018,7 @@ impl CudaRankedTopKPackedWorkspace {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_topk_logits_packed_batched(
     input: &Tensor,
     k: usize,
@@ -1028,7 +1028,7 @@ pub(crate) fn cuda_topk_logits_packed_batched(
     cuda_topk_logits_packed_batched_with_workspace(input, k, inverse_temperatures, &mut workspace)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_topk_logits_packed_batched_with_workspace(
     input: &Tensor,
     k: usize,
@@ -1262,7 +1262,7 @@ pub(crate) fn cuda_topk_logits_packed_batched_with_workspace(
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_topk_ranked_packed_batched(
     input: &Tensor,
     k: usize,
@@ -1271,7 +1271,7 @@ pub(crate) fn cuda_topk_ranked_packed_batched(
     cuda_topk_ranked_packed_batched_with_workspace(input, k, &mut workspace)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_topk_ranked_packed_batched_with_workspace(
     input: &Tensor,
     k: usize,
@@ -1469,7 +1469,7 @@ pub(crate) fn cuda_topk_ranked_packed_batched_with_workspace(
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_topk_logits_f32_packed_batched(
     input: &Tensor,
     k: usize,
@@ -1993,7 +1993,7 @@ pub(crate) fn cuda_dflash_sample_select(
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(dead_code)]
 pub(crate) fn cuda_top1_logits_f32_packed_batched(
     input: &Tensor,
@@ -2109,7 +2109,7 @@ pub(crate) fn cuda_top1_logits_f32_packed_batched(
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_categorical_logits_f32_packed_batched(
     input: &Tensor,
     inverse_temperatures: &Tensor,
@@ -2266,7 +2266,7 @@ pub(crate) fn cuda_categorical_logits_f32_packed_batched(
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub struct CudaTop1LogitsWorkspace {
     capacity_rows: usize,
     ncols: usize,
@@ -2276,7 +2276,7 @@ pub struct CudaTop1LogitsWorkspace {
     slots: Vec<CudaTop1LogitsSlot>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct CudaTop1LogitsSlot {
     block_values: candle_core::cuda_backend::cudarc::driver::CudaSlice<f32>,
     block_indices: candle_core::cuda_backend::cudarc::driver::CudaSlice<u32>,
@@ -2284,7 +2284,7 @@ struct CudaTop1LogitsSlot {
     packed_host: candle_core::cuda_backend::cudarc::driver::PinnedHostSlice<f32>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct CudaAsyncTokenRing {
     id: u64,
     next_slot: usize,
@@ -2292,7 +2292,7 @@ struct CudaAsyncTokenRing {
     slots: Vec<CudaAsyncTokenSlot>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct CudaAsyncTokenSlot {
     owned_token_ids: Tensor,
     token_ids_host: candle_core::cuda_backend::cudarc::driver::PinnedHostSlice<u32>,
@@ -2304,7 +2304,7 @@ struct CudaAsyncTokenSlot {
     pending: Option<CudaAsyncTokenPending>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct CudaAsyncTokenPending {
     generation: u64,
     nrows: usize,
@@ -2315,7 +2315,7 @@ struct CudaAsyncTokenPending {
     token_released: bool,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct CudaAsyncTokenReservation {
     workspace_id: u64,
     slot: usize,
@@ -2324,20 +2324,20 @@ struct CudaAsyncTokenReservation {
     device_tokens: Tensor,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct CudaAsyncTokenSubmission {
     reservation: CudaAsyncTokenReservation,
     device_ready: std::sync::Arc<candle_core::cuda_backend::cudarc::driver::CudaEvent>,
     host_complete: std::sync::Arc<candle_core::cuda_backend::cudarc::driver::CudaEvent>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct CudaPinnedHostPrefix<'a, T> {
     inner: &'a mut candle_core::cuda_backend::cudarc::driver::PinnedHostSlice<T>,
     len: usize,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl<T> candle_core::cuda_backend::cudarc::driver::HostSlice<T> for CudaPinnedHostPrefix<'_, T> {
     fn len(&self) -> usize {
         self.len
@@ -2366,7 +2366,7 @@ impl<T> candle_core::cuda_backend::cudarc::driver::HostSlice<T> for CudaPinnedHo
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaAsyncTokenSubmission {
     fn batch_size(&self) -> usize {
         self.reservation.nrows
@@ -2379,13 +2379,13 @@ impl CudaAsyncTokenSubmission {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaTop1Submission {
     token: CudaAsyncTokenSubmission,
     copy_packed: bool,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaTop1Submission {
     #[cfg(test)]
     pub(crate) fn device_tokens(&self) -> &Tensor {
@@ -2401,13 +2401,13 @@ impl CudaTop1Submission {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaTop1Completion<'a> {
     token_ids: &'a [u32],
     packed: Option<&'a [f32]>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl<'a> CudaTop1Completion<'a> {
     pub(crate) fn token_ids(&self) -> &'a [u32] {
         self.token_ids
@@ -2418,7 +2418,7 @@ impl<'a> CudaTop1Completion<'a> {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct CudaTop1SubmitOptions<'a> {
     nrows: usize,
     ncols: usize,
@@ -2427,7 +2427,7 @@ struct CudaTop1SubmitOptions<'a> {
     op: &'static str,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn final_logits_row(input: &Tensor) -> Result<Tensor> {
     let dims = input.dims();
     if dims.len() <= 1 {
@@ -2448,7 +2448,7 @@ fn final_logits_row(input: &Tensor) -> Result<Tensor> {
         .contiguous()
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn cuda_async_token_ring_id() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -2456,7 +2456,7 @@ fn cuda_async_token_ring_id() -> u64 {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn same_cuda_stream(
     left: &candle_core::cuda_backend::cudarc::driver::CudaStream,
     right: &candle_core::cuda_backend::cudarc::driver::CudaStream,
@@ -2464,7 +2464,7 @@ fn same_cuda_stream(
     std::sync::Arc::ptr_eq(left.context(), right.context()) && left.cu_stream() == right.cu_stream()
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn new_cuda_async_token_slot(
     dev: &candle_core::CudaDevice,
     capacity_rows: usize,
@@ -2510,7 +2510,7 @@ fn new_cuda_async_token_slot(
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn new_cuda_async_token_ring(
     dev: &candle_core::CudaDevice,
     capacity_rows: usize,
@@ -2527,7 +2527,7 @@ fn new_cuda_async_token_ring(
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaAsyncTokenRing {
     fn has_pending(&self) -> bool {
         self.slots.iter().any(|slot| slot.pending.is_some())
@@ -2821,7 +2821,7 @@ impl CudaAsyncTokenRing {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn new_cuda_top1_slot(
     dev: &candle_core::CudaDevice,
     workspace_elems: usize,
@@ -2839,7 +2839,7 @@ fn new_cuda_top1_slot(
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn new_cuda_top1_workspace(
     dev: &candle_core::CudaDevice,
     nrows: usize,
@@ -2868,7 +2868,7 @@ fn new_cuda_top1_workspace(
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn validate_cuda_top1_submission<'a>(
     workspace: &'a CudaTop1LogitsWorkspace,
     submission: &CudaTop1Submission,
@@ -2883,7 +2883,7 @@ fn validate_cuda_top1_submission<'a>(
     Ok(slot)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn cuda_top1_logits_submit_inner(
     input: &Tensor,
     cache: &mut Option<CudaTop1LogitsWorkspace>,
@@ -3077,7 +3077,7 @@ fn cuda_top1_logits_submit_inner(
     Ok(CudaTop1Submission { token, copy_packed })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_top1_logits_submit_batched(
     input: &Tensor,
     cache: &mut Option<CudaTop1LogitsWorkspace>,
@@ -3099,7 +3099,7 @@ pub(crate) fn cuda_top1_logits_submit_batched(
     )
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_top1_logits_submit_batched_packed(
     input: &Tensor,
     cache: &mut Option<CudaTop1LogitsWorkspace>,
@@ -3121,7 +3121,7 @@ pub(crate) fn cuda_top1_logits_submit_batched_packed(
     )
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_top1_logits_submit_batched_into(
     input: &Tensor,
     token_ids_dst: &Tensor,
@@ -3144,7 +3144,7 @@ pub(crate) fn cuda_top1_logits_submit_batched_into(
     )
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_top1_device_tokens_wait_on(
     workspace: &mut CudaTop1LogitsWorkspace,
     submission: &CudaTop1Submission,
@@ -3157,7 +3157,7 @@ pub(crate) fn cuda_top1_device_tokens_wait_on(
         .wait_on(&submission.token, consumer_stream, OP)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_top1_device_tokens_release_after(
     workspace: &mut CudaTop1LogitsWorkspace,
     submission: &CudaTop1Submission,
@@ -3170,7 +3170,7 @@ pub(crate) fn cuda_top1_device_tokens_release_after(
         .release_after(&submission.token, consumer_stream, OP)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_top1_submission_complete<'a>(
     workspace: &'a mut CudaTop1LogitsWorkspace,
     submission: &CudaTop1Submission,
@@ -3193,7 +3193,7 @@ pub(crate) fn cuda_top1_submission_complete<'a>(
     Ok(CudaTop1Completion { token_ids, packed })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_top1_submission_cancel(
     workspace: &mut CudaTop1LogitsWorkspace,
     submission: &CudaTop1Submission,
@@ -3203,7 +3203,7 @@ pub(crate) fn cuda_top1_submission_cancel(
     workspace.token_ring.cancel(&submission.token, OP)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn cuda_top1_logits_f32_packed_cached_inner<'a>(
     input: &Tensor,
     nrows: usize,
@@ -3233,7 +3233,7 @@ fn cuda_top1_logits_f32_packed_cached_inner<'a>(
         .expect("packed output was requested during submission"))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn cuda_top1_logits_f32_cached(
     input: &Tensor,
     cache: &mut Option<CudaTop1LogitsWorkspace>,
@@ -3639,7 +3639,7 @@ impl candle_core::CustomOp1 for ArgSort {
     }
 
     #[allow(clippy::cast_possible_truncation)]
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_fwd(
         &self,
         storage: &candle_core::CudaStorage,
@@ -3811,7 +3811,7 @@ pub struct TopKLogitsPackedOutput {
     _workspace: Vec<Tensor>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct RankedTopKPackedOutput {
     /// Each row is packed as `[values; indices_as_f32]`.
     pub(crate) packed: Tensor,
@@ -3819,14 +3819,14 @@ pub(crate) struct RankedTopKPackedOutput {
     _workspace: Vec<Tensor>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CategoricalLogitsPackedOutput {
     /// Each row is packed as `[token_index_as_f32, full_softmax_logprob]`.
     pub(crate) packed: Tensor,
     _workspace: Vec<Tensor>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(dead_code)]
 pub(crate) struct Top1LogitsPackedOutput {
     pub(crate) packed: Tensor,
@@ -3851,7 +3851,7 @@ pub(crate) struct DFlashSelectorSampleOutput {
     pub(crate) candidate_probs: Tensor,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn cuda_apply_sparse_penalties_f32(
     input: &Tensor,
     token_ids: &Tensor,
@@ -3981,7 +3981,7 @@ pub fn cuda_apply_sparse_penalties_f32(
     )))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn cuda_apply_sparse_logits_bias_f32(
     input: &Tensor,
     token_ids: &Tensor,
@@ -4105,7 +4105,7 @@ pub fn cuda_apply_sparse_logits_bias_f32(
     )))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_apply_causal_mask_f32(
     scores: &Tensor,
     q_offset: usize,
@@ -4256,7 +4256,7 @@ pub fn metal_apply_sparse_penalties(
     )))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn try_cuda_rms_norm_strided_4d(
     input: &Tensor,
     weight: &Tensor,
@@ -4383,7 +4383,7 @@ pub(crate) fn try_cuda_rms_norm_strided_4d(
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn cuda_rms_norm_residual(
     input: &Tensor,
     residual: &Tensor,
@@ -4906,7 +4906,7 @@ pub fn metal_topk_logits_packed(
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn cuda_rms_norm_residual_then_rms_norm(
     input: &Tensor,
     residual: &Tensor,
@@ -5146,14 +5146,14 @@ pub fn cuda_rms_norm_residual_then_rms_norm(
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum QkRopeOutputLayout {
     HeadsFirst,
     TokensFirst,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn try_cuda_qk_rms_norm_rope(
     q: &Tensor,
@@ -5470,7 +5470,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope(
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn try_cuda_rope_sincos_positions(
     positions: &Tensor,
     inv_freq: &Tensor,
@@ -5582,7 +5582,7 @@ pub(crate) fn try_cuda_rope_sincos_positions(
     result
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
     q: &Tensor,
@@ -5898,7 +5898,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn try_cuda_qkv_rms_norm_rope_positions(
     q: &Tensor,
@@ -6232,7 +6232,7 @@ impl TopKLastDimOp for Tensor {
     fn topk(&self, topk: usize) -> Result<TopKOutput> {
         // Use optimized parallel topk kernel on CUDA
         // Single kernel call, no post-processing overhead
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         if self.device().is_cuda() {
             return cuda_topk(self, topk);
         }
@@ -6252,7 +6252,7 @@ impl TopKLastDimOp for Tensor {
         // Sorted descending
         let TopKOutput { values, indices } = self.topk(topk)?;
         // Reorder the indices ascending
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         let reorder_indices = indices.arg_sort(true)?;
         #[cfg(not(feature = "cuda"))]
         let reorder_indices = indices.arg_sort_last_dim(true)?;
@@ -6763,14 +6763,14 @@ mod tests {
 
     use super::MergedDenseProjection;
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     const CUDA_F32_REL_TOLERANCE: f32 = 1e-5;
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     const CUDA_BF16_ABS_TOLERANCE: f32 = 2e-2;
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     const CUDA_LOGPROB_REL_TOLERANCE: f32 = 1e-4;
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn assert_close(actual: f32, expected: f32, relative_tolerance: f32) {
         let tolerance = relative_tolerance * expected.abs().max(1.0);
         assert!(
@@ -7137,7 +7137,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn packed_reference(logits: &[f32], k: usize, inverse_temperature: f32) -> Vec<f32> {
         let mut indices = (0..logits.len()).collect::<Vec<_>>();
         indices.sort_unstable_by(|&lhs, &rhs| logits[rhs].total_cmp(&logits[lhs]));
@@ -7162,7 +7162,7 @@ mod tests {
         packed
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn categorical_reference(logits: &[f32], inverse_temperature: f32, uniform: f32) -> [f32; 2] {
         let global_max = logits
             .iter()
@@ -7342,7 +7342,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn cuda_batched_topk_matches_cpu_with_offsets_and_mixed_temperatures() -> candle_core::Result<()>
     {
@@ -7374,7 +7374,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn cuda_batched_topk_rejects_nan_distribution() -> candle_core::Result<()> {
         let device = Device::new_cuda(0)?;
@@ -7386,7 +7386,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn cuda_resident_topk_sampling_matches_filtered_reference() -> candle_core::Result<()> {
         const BATCH: usize = 4;
@@ -7777,7 +7777,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn cuda_batched_topk_low_precision_inputs_match_f32() -> candle_core::Result<()> {
         const ROWS: usize = 3;
@@ -8334,7 +8334,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn cuda_batched_categorical_marks_invalid_distribution() -> candle_core::Result<()> {
         let device = Device::new_cuda(0)?;
@@ -8352,7 +8352,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn cuda_batched_categorical_selects_at_upper_boundary() -> candle_core::Result<()> {
         const VOCAB: usize = 2048;
@@ -8374,7 +8374,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn cuda_cached_top1_honors_view_offset() -> candle_core::Result<()> {
         let device = Device::new_cuda(0)?;
@@ -8390,7 +8390,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn cuda_top1_uses_first_maximum_across_lanes_and_chunks() -> candle_core::Result<()> {
         const VOCAB: usize = 4097;
@@ -8419,7 +8419,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn cuda_cached_top1_marks_nan_distribution() -> candle_core::Result<()> {
         let device = Device::new_cuda(0)?;

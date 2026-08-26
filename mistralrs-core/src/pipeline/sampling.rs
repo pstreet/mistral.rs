@@ -1,14 +1,15 @@
 use std::sync::Arc;
 
 use candle_core::{DType, IndexOp, Result, Tensor};
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use rand::distr::{Distribution, Uniform};
 use rand_isaac::Isaac64Rng;
 
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+use crate::sampler::CudaBatchSamplingKind;
 #[cfg(feature = "cuda")]
 use crate::sampler::{
-    CudaBatchSamplingKind, CudaBatchSamplingPlan, CudaTop1BatchSubmission, CudaTopKBatchSubmission,
-    Sampler,
+    CudaBatchSamplingPlan, CudaTop1BatchSubmission, CudaTopKBatchSubmission, Sampler,
 };
 use crate::{
     prefix_cacher::PrefixCacheManagerV2,
@@ -836,7 +837,7 @@ async fn sample_and_add_toks_inner(
 }
 
 pub(crate) fn can_sample_batch_cuda(seqs: &[&mut Sequence]) -> bool {
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     {
         let mut categorical = None;
         for seq in seqs {
@@ -858,7 +859,7 @@ pub(crate) fn can_sample_batch_cuda(seqs: &[&mut Sequence]) -> bool {
         }
         categorical.is_some()
     }
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
     {
         let _ = seqs;
         false
@@ -1228,7 +1229,7 @@ fn coalesce_batch_logits_to_cpu(logits: Vec<Tensor>) -> Result<Vec<Tensor>> {
         .collect()
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn try_sample_batch_cuda(
     logits: &CausalLogitsBatch,
     seqs: &[&mut Sequence],
@@ -1367,7 +1368,7 @@ fn try_sample_batch_cuda(
     }
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 fn try_sample_batch_cuda(
     _logits: &CausalLogitsBatch,
     _seqs: &[&mut Sequence],

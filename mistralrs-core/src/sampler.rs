@@ -309,13 +309,13 @@ pub struct Sampler {
     min_p: f64,
     logits_bias: HashMap<u32, f32>,
     logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     top1_cache: Arc<Mutex<Option<crate::ops::CudaTop1LogitsWorkspace>>>,
     #[cfg(feature = "cuda")]
     topk_sampling_cache: Arc<Mutex<Option<crate::ops::CudaTopKSamplingWorkspace>>>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum CudaBatchSamplingKind {
     Greedy,
@@ -323,19 +323,19 @@ pub(crate) enum CudaBatchSamplingKind {
     Categorical,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaTop1BatchCompletion {
     pub(crate) token_ids: Vec<u32>,
     pub(crate) packed: Option<Vec<[f32; crate::ops::CUDA_TOP1_PACKED_WIDTH]>>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaTop1BatchSubmission {
     cache: Arc<Mutex<Option<crate::ops::CudaTop1LogitsWorkspace>>>,
     submission: Option<crate::ops::CudaTop1Submission>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaTop1BatchSubmission {
     pub(crate) fn batch_size(&self) -> usize {
         self.submission
@@ -409,7 +409,7 @@ impl CudaTop1BatchSubmission {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl Drop for CudaTop1BatchSubmission {
     fn drop(&mut self) {
         let Some(submission) = self.submission.take() else {
@@ -512,14 +512,14 @@ impl Drop for CudaTopKBatchSubmission {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaBatchSamplingKind {
     pub(crate) fn is_argmax(self) -> bool {
         matches!(self, Self::Greedy | Self::TopK { k: 1 })
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CudaBatchSamplingPlan {
     pub(crate) kind: CudaBatchSamplingKind,
@@ -730,7 +730,7 @@ impl Sampler {
             min_p,
             logits_bias,
             logits_processors,
-            #[cfg(feature = "cuda")]
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
             top1_cache: Arc::new(Mutex::new(None)),
             #[cfg(feature = "cuda")]
             topk_sampling_cache: Arc::new(Mutex::new(None)),
@@ -745,7 +745,7 @@ impl Sampler {
         self.temperature
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn cuda_batch_sampling_plan(
         &self,
         return_logprobs: bool,
@@ -850,7 +850,7 @@ impl Sampler {
             .sample(rng)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn sample_cuda_topk_packed_row(
         &self,
         packed: &[f32],
@@ -895,7 +895,7 @@ impl Sampler {
         )
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn sample_cuda_ranked_topk_packed_row(
         &self,
         packed: &[f32],
@@ -946,7 +946,7 @@ impl Sampler {
         )
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn sample_cuda_topk_probabilities(
         &self,
         top_indices: &[u32],
@@ -995,7 +995,7 @@ impl Sampler {
         })
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn sample_cuda_categorical_row(&self, packed: &[f32]) -> Result<Logprobs> {
         if packed.len() != crate::ops::CUDA_CATEGORICAL_PACKED_WIDTH {
             candle_core::bail!(
@@ -1018,7 +1018,7 @@ impl Sampler {
         })
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn sample_cuda_top1_row(&self, packed: &[f32]) -> Result<Logprobs> {
         if packed.len() != crate::ops::CUDA_TOP1_PACKED_WIDTH {
             candle_core::bail!(
@@ -1035,7 +1035,7 @@ impl Sampler {
         })
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn sample_cuda_top1_batch(&self, logits: &Tensor) -> Result<Vec<[f32; 2]>> {
         self.submit_cuda_top1_batch(logits, true)?
             .complete()?
@@ -1043,7 +1043,7 @@ impl Sampler {
             .ok_or_else(|| candle_core::Error::Msg("missing CUDA top-1 packed output".to_string()))
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn submit_cuda_top1_batch(
         &self,
         logits: &Tensor,
@@ -1337,7 +1337,7 @@ impl Sampler {
         })
     }
 
-    #[cfg(any(feature = "cuda", feature = "metal"))]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn can_sample_topk_on_device(
         &self,
         return_logprobs: bool,
@@ -1361,7 +1361,7 @@ impl Sampler {
                 .is_none_or(|params| params.multiplier == 0.0)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn can_sample_greedy_on_device(
         &self,
         return_logprobs: bool,
@@ -1379,7 +1379,7 @@ impl Sampler {
                 .is_none_or(|params| params.multiplier == 0.0)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn apply_device_sparse_penalties_if_needed(
         &self,
         logits: Tensor,
@@ -1434,7 +1434,7 @@ impl Sampler {
         Ok(logits)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn apply_device_logits_bias_if_needed(&self, logits: Tensor) -> Result<Tensor> {
         if self.logits_bias.is_empty() {
             return Ok(logits);
@@ -1461,7 +1461,7 @@ impl Sampler {
         crate::ops::cuda_apply_sparse_logits_bias_f32(&logits, &token_ids, &biases)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn sample_topk_on_device(
         &self,
         logits: Tensor,
@@ -1564,7 +1564,7 @@ impl Sampler {
         })
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn sample_greedy_on_device(&self, logits: Tensor) -> Result<Logprobs> {
         let packed = {
             let mut cache = self.top1_cache.lock().unwrap();
@@ -1573,7 +1573,7 @@ impl Sampler {
         self.sample_cuda_top1_row(&packed)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_top1_token(packed: [f32; 2]) -> Result<u32> {
         if !packed[0].is_finite()
             || !packed[1].is_finite()
@@ -2134,7 +2134,7 @@ impl Sampler {
         sample_speculative: bool,
         multiple_sequences: bool,
     ) -> Result<Logprobs> {
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         if logits.device().is_cuda()
             && self.can_sample_greedy_on_device(
                 return_logprobs,
@@ -2148,7 +2148,7 @@ impl Sampler {
             return self.sample_greedy_on_device(logits);
         }
 
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         if logits.device().is_cuda()
             && self.can_sample_topk_on_device(
                 return_logprobs,
@@ -2560,7 +2560,7 @@ mod tests {
         assert_eq!(params.min_p, None);
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn cuda_batch_plan_covers_greedy_top_k_and_categorical() {
         use super::{CudaBatchSamplingKind, Sampler};
@@ -2676,7 +2676,7 @@ mod tests {
         assert!(filtered.cuda_batch_sampling_plan(false).is_none());
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn cuda_packed_row_uses_full_distribution_logprob() {
         use super::Sampler;
@@ -2710,7 +2710,7 @@ mod tests {
         assert!((sampled.logprob - 0.5f32.ln()).abs() < 1e-6);
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn cuda_ranked_topk_matches_packed_reference_for_fixed_seeds() {
         use super::Sampler;
@@ -2856,7 +2856,7 @@ mod tests {
             .is_err());
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn cuda_top1_parser_rejects_invalid_output() {
         use super::Sampler;
@@ -2867,7 +2867,7 @@ mod tests {
         assert!(Sampler::cuda_top1_token([3.0, 1.5]).is_err());
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn cuda_top1_row_uses_zero_logprob_and_validates_shape() {
         use super::Sampler;
