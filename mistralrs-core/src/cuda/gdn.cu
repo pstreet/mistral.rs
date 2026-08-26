@@ -1418,6 +1418,7 @@ __global__ void causal_conv1d_full_kernel(
       conv_state + (gdn_state_row(slot_indices, b, 0, 1) * conv_dim + ch) * kernel_size;
 
   float acc = 0.0f;
+  #pragma unroll
   for (int i = 0; i < kernel_size; i++) {
     int src_pos = pos - (kernel_size - 1) + i;
     float x_val = src_pos >= 0
