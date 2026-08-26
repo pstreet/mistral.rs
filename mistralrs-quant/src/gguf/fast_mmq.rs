@@ -415,6 +415,13 @@ impl DenseMmqRun<'_> {
             let (nrows, _) = weight.shape().dims2()?;
             let (weight_ptr, _weight_guard) = weight.device_ptr_with_guard(self.stream)?;
             let mut out = unsafe { self.dev.alloc::<T>(nrows * self.batch_size)? };
+            if std::env::var("MRS_MMQ_DEBUG").is_ok() {
+                let d = &self.device_info;
+                eprintln!(
+                    "[mmqq] w_rows={nrows} k={} b={} cc={} nsm={} smpbo={} warp={}",
+                    self.k, self.batch_size, d.cc, d.nsm, d.smpbo, d.warp_size
+                );
+            }
             {
                 let (out_ptr, _out_guard) = slice_ptr_mut_on_stream(&mut out, 0, self.stream);
                 unsafe {

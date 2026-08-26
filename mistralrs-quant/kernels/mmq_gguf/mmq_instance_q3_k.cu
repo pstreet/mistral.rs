@@ -130,6 +130,12 @@ static void launch_mmq_case_q3_k(float *tmp_fixup, const mmq_args &args,
   int mmq_x_best = 0;
   int ntiles_x_best = INT_MAX;
   for (int mmq_x = 8; mmq_x <= mmq_x_max && ntiles_x_best > 1; mmq_x += 8) {
+#ifdef USE_ROCM
+    // mmq_x=24 miscompiles for gfx1151 (hardware exception); batches in
+    // [9, 24] would otherwise always select it as the first single-tile X.
+    if (mmq_x == 24)
+      continue;
+#endif
     const int granularity = (turing_mma_available(cc) && mmq_x >= 48) ? 16 : 8;
     if (mmq_x % granularity != 0)
       continue;
@@ -222,9 +228,7 @@ extern "C" void launch_mmq_gguf_q3_k(void *tmp_fixup_ptr, const void *x,
                                      int64_t smpbo, int warp_size_host,
                                      int type_dst, void *stream) {
 
-  const bool use_stream_k =
-      (GGML_CUDA_CC_IS_NVIDIA(cc) &&
-       ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA);
+  const bool use_stream_k = mmq_use_stream_k(cc);
 
   const mmq_args args = {(const char *)x,
                          GGML_TYPE_Q3_K,
