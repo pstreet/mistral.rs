@@ -404,6 +404,7 @@ impl AgenticUsageAccumulator {
                 total_time_sec,
                 total_prompt_time_sec: self.total_prompt_time_sec,
                 total_completion_time_sec: self.total_completion_time_sec,
+                prompt_tokens_details: None,
             }
         })
     }

@@ -1260,6 +1260,7 @@ impl Sequence {
     /// Set the number of prefix tokens that are cached.
     pub fn set_prefix_cache_len(&mut self, len: usize) {
         self.prefix_cache_len = len;
+        get_mut_group!(self).prefix_cache_len = len;
     }
 
     pub(crate) fn record_prefix_cache_hit(&mut self) -> bool {
@@ -1285,7 +1286,7 @@ impl Sequence {
                 prefix_len = prefix_len.min((feature.offset / block_size) * block_size);
             }
         }
-        self.prefix_cache_len = prefix_len;
+        self.set_prefix_cache_len(prefix_len);
     }
 
     pub fn clip_prefix_cache_len_for_mm_features(&mut self, block_size: usize) {
@@ -1311,7 +1312,7 @@ impl Sequence {
             }
             prefix_len = next;
         }
-        self.prefix_cache_len = prefix_len;
+        self.set_prefix_cache_len(prefix_len);
     }
 
     /// Override the maximum generation length.
@@ -2242,6 +2243,7 @@ pub struct SequenceGroup {
     pub total_prompt_time: u128,
     pub total_time: u128,
     pub total_completion_time: u128,
+    pub prefix_cache_len: usize,
     choices: Vec<Choice>,
     image_choices: Vec<ImageChoice>,
     speech_pcms: Vec<(Arc<Vec<f32>>, usize, usize)>, // (pcm, rate, channels)
@@ -2277,6 +2279,7 @@ impl SequenceGroup {
             total_prompt_time: 0,
             total_time: 0,
             total_completion_time: 0,
+            prefix_cache_len: 0,
             chat_streaming_chunks: Vec::new(),
             completion_streaming_chunks: Vec::new(),
             streaming_active_choices: n_choices,
@@ -2353,6 +2356,13 @@ impl SequenceGroup {
             total_time_sec: self.total_time as f32 / 1000.,
             total_completion_time_sec: self.total_completion_time as f32 / 1000.,
             total_prompt_time_sec: self.total_prompt_time as f32 / 1000.,
+            prompt_tokens_details: if self.prefix_cache_len > 0 {
+                Some(crate::response::PromptTokensDetails {
+                    cached_tokens: self.prefix_cache_len,
+                })
+            } else {
+                None
+            },
         }
     }
 

@@ -123,6 +123,14 @@ pub struct CompletionChunkChoice {
 
 generate_repr!(CompletionChunkChoice);
 
+/// Cached prompt token details (OpenAI-compatible).
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PromptTokensDetails {
+    pub cached_tokens: usize,
+}
+
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
@@ -151,6 +159,8 @@ pub struct Usage {
     pub total_time_sec: f32,
     pub total_prompt_time_sec: f32,
     pub total_completion_time_sec: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
 }
 
 generate_repr!(Usage);
