@@ -246,6 +246,11 @@ fn build_rocm() {
     println!("cargo:rerun-if-changed=src/cuda/attention_prep.cu");
     println!("cargo:rerun-if-changed=src/cuda/sort.cu");
     println!("cargo:rerun-if-changed=src/cuda/graph.cu");
+    println!("cargo:rerun-if-changed=src/cuda/moe_gemm.cu");
+    println!("cargo:rerun-if-changed=src/cuda/moe_gemm_wmma.cu");
+    println!("cargo:rerun-if-changed=src/cuda/moe_gemv.cu");
+    println!("cargo:rerun-if-changed=src/cuda/moe_utils.h");
+    println!("cargo:rerun-if-changed=src/rocm_ck_flash_attn");
     println!("cargo:rerun-if-env-changed=CANDLE_ROCM_PATH");
     println!("cargo:rerun-if-env-changed=ROCM_HOME");
     println!("cargo:rerun-if-env-changed=ROCM_PATH");
@@ -255,24 +260,33 @@ fn build_rocm() {
     let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
     let mut objects = Vec::new();
-    for src in [
-        "src/cuda/gdn.cu",
-        "src/cuda/sort.cu",
-        "src/cuda/graph.cu",
-        "src/cuda/attention_prep.cu",
-    ] {
+    // (source, extra force-include); moe_gemm needs the thrust::cuda::par shim.
+    let kernels: &[(&str, Option<&str>)] = &[
+        ("src/cuda/gdn.cu", None),
+        ("src/cuda/sort.cu", None),
+        ("src/cuda/graph.cu", None),
+        ("src/cuda/attention_prep.cu", None),
+        ("src/cuda/moe_gemm.cu", Some("cuda_thrust.h")),
+        ("src/cuda/moe_gemm_wmma.cu", Some("cuda_thrust.h")),
+        ("src/cuda/moe_gemv.cu", Some("cuda_thrust.h")),
+    ];
+    for (src, extra_include) in kernels {
         let stem = Path::new(src)
             .file_stem()
             .unwrap()
             .to_string_lossy()
             .into_owned();
         let object = build_dir.join(format!("{stem}.o"));
-        let status = Command::new(format!("{root}/bin/hipcc"))
-            .arg(src)
+        let mut cmd = Command::new(format!("{root}/bin/hipcc"));
+        cmd.arg(src)
             .arg("-I")
             .arg(&compat)
             .arg("-include")
-            .arg("cuda_runtime.h")
+            .arg("cuda_runtime.h");
+        if let Some(header) = extra_include {
+            cmd.arg("-include").arg(header);
+        }
+        let status = cmd
             .arg(format!("--offload-arch={arch}"))
             .arg("-DUSE_ROCM")
             .arg("-std=c++17")
@@ -283,6 +297,49 @@ fn build_rocm() {
             .arg(&object)
             .status()
             .expect("failed to run hipcc");
+        if !status.success() {
+            panic!("hipcc failed for {src}");
+        }
+        objects.push(object);
+    }
+
+    // CK flash attention: compile .cpp files with -std=c++20 and CK include path.
+    let ck_dir = "src/rocm_ck_flash_attn";
+    let ck_sources: Vec<String> = std::fs::read_dir(ck_dir)
+        .expect("failed to read ck_flash_attn dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .is_some_and(|ext| ext == "cpp" || ext == "cu")
+        })
+        .map(|e| e.path().to_string_lossy().into_owned())
+        .collect();
+
+    for src in &ck_sources {
+        let stem = Path::new(src)
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let object = build_dir.join(format!("{stem}.o"));
+        let status = Command::new(format!("{root}/bin/hipcc"))
+            .arg(src)
+            .arg("-I")
+            .arg(&compat)
+            .arg("-I")
+            .arg(format!("{root}/include"))
+            .arg(format!("--offload-arch={arch}"))
+            .arg("-DUSE_ROCM")
+            .arg("-DCK_TILE_FMHA_FWD_FAST_EXP2=0")
+            .arg("-std=c++20")
+            .arg("-O3")
+            .arg("-fPIC")
+            .arg("-c")
+            .arg("-o")
+            .arg(&object)
+            .status()
+            .expect("failed to run hipcc for ck_flash_attn");
         if !status.success() {
             panic!("hipcc failed for {src}");
         }

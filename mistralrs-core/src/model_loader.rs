@@ -27,6 +27,7 @@ pub struct LoaderBuilder {
     hf_config_overrides: Option<HfConfigOverrides>,
     mtp: bool,
     encoder_cache_memory_bytes: Option<usize>,
+    prefill_chunk_size: Option<usize>,
 }
 
 impl LoaderBuilder {
@@ -40,6 +41,7 @@ impl LoaderBuilder {
             hf_config_overrides: None,
             mtp: false,
             encoder_cache_memory_bytes: None,
+            prefill_chunk_size: None,
         }
     }
 
@@ -59,6 +61,10 @@ impl LoaderBuilder {
 
     pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
         self.no_kv_cache = no_kv_cache;
+        self
+    }
+    pub fn with_prefill_chunk_size(mut self, size: Option<usize>) -> Self {
+        self.prefill_chunk_size = size;
         self
     }
     pub fn with_chat_template(mut self, chat_template: Option<String>) -> Self {

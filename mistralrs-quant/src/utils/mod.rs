@@ -7,17 +7,17 @@ mod uqff;
 
 pub use ops::flash_attn_sinks_metal;
 pub use ops::flash_attn_sinks_varlen_metal;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) use ops::fused_glu_quantized_bf16;
 #[cfg(all(
-    feature = "cuda",
+    any(feature = "cuda", feature = "rocm"),
     has_cutlass_fp8_sm90_kernels,
     has_deepgemm_fp8_sm90_provider
 ))]
 pub(crate) use ops::fused_split_glu_quantized_bf16;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub use ops::gptoss_swiglu_fused;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub use ops::gptoss_swiglu_interleaved;
 pub use ops::softcap;
 pub use ops::softmax_with_sinks;
@@ -30,10 +30,10 @@ use candle_core::cuda::cudarc::{
     self,
     driver::{CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr},
 };
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use candle_core::{CudaDevice, Device, Tensor};
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn get_cuda_device(x: &Tensor) -> candle_core::Result<&CudaDevice> {
     match x.device() {
         Device::Cuda(dev) => Ok(dev),

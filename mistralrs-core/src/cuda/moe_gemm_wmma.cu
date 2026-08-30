@@ -32,6 +32,22 @@
 #include <vector>
 using namespace nvcuda::wmma;
 
+#ifdef USE_ROCM
+// rocwmma PackTraits only has a hip_bfloat16 specialization
+using WmmaBf16T = hip_bfloat16;
+
+namespace vllm {
+__device__ inline void from_float(hip_bfloat16 &dst, float src) {
+  *reinterpret_cast<__hip_bfloat16 *>(&dst) = __float2bfloat16(src);
+}
+__device__ inline float to_float(hip_bfloat16 u) {
+  return __bfloat162float(*reinterpret_cast<const __hip_bfloat16 *>(&u));
+}
+} // namespace vllm
+#else
+using WmmaBf16T = nv_bfloat16;
+#endif
+
 #define CEILDIV(x, y) (((x) + (y) - 1) / (y))
 
 constexpr int WMMA_M = 16;
@@ -274,9 +290,9 @@ moe_gemm_wmma(const void *input,               // [size_m, size_k]
   } else if (data_type == 1) { // bfloat16
 #ifndef NO_BF16_KERNEL
     moe_gemm_grouped_kernel<<<grid, block, smem_bytes, stream>>>(
-        reinterpret_cast<const nv_bfloat16 *>(input),
-        reinterpret_cast<const nv_bfloat16 *>(weights), sorted_token_ids,
-        expert_offsets, topk_weights, reinterpret_cast<nv_bfloat16 *>(output),
+        reinterpret_cast<const WmmaBf16T *>(input),
+        reinterpret_cast<const WmmaBf16T *>(weights), sorted_token_ids,
+        expert_offsets, topk_weights, reinterpret_cast<WmmaBf16T *>(output),
         num_experts, topk, size_m, size_n, size_k);
 #endif
   }

@@ -263,7 +263,7 @@ impl Loader for SpeechLoader {
 
         let cfg: DiaConfig = serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;
 
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         if let Device::Cuda(dev) = &device {
             unsafe { dev.disable_event_tracking() };
         }
@@ -327,6 +327,7 @@ impl Loader for SpeechLoader {
                     output: vec![SupportedModality::Audio],
                 },
                 loaded_for_uqff_write: false,
+                paged_prefill_chunk_size: None,
             }),
             dummy_cache: EitherCache::Full(Cache::new(0, false)),
             cfg: self

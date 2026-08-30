@@ -21,20 +21,21 @@ use candle_core::{
 };
 use half::f16;
 
+#[cfg(feature = "cuda")]
+use crate::gptq::marlin_backend::{marlin_matmul, marlin_weight_repack};
 use crate::{
-    gptq::marlin_backend::{marlin_matmul, marlin_weight_repack},
-    has_missing_required_tensors, make_dummy_or_error,
-    utils::get_cuda_device,
-    IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
+    has_missing_required_tensors, make_dummy_or_error, utils::get_cuda_device, IsqType,
+    QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
     ShardedVarBuilder,
 };
 
-use super::{
-    ffi::{
-        gemm_half_q_half_alt, gemm_half_q_half_cuda_part, reconstruct_exllama, reconstruct_gptq,
-    },
-    marlin_ffi::HAVE_MARLIN_KERNELS,
+use super::ffi::{
+    gemm_half_q_half_alt, gemm_half_q_half_cuda_part, reconstruct_exllama, reconstruct_gptq,
 };
+#[cfg(feature = "cuda")]
+use super::marlin_ffi::HAVE_MARLIN_KERNELS;
+#[cfg(not(feature = "cuda"))]
+const HAVE_MARLIN_KERNELS: bool = false;
 
 const MAX_Q_GEMM_ROWS_8BIT: i32 = 24;
 const MAX_Q_GEMM_ROWS: i32 = 50;
@@ -378,6 +379,7 @@ impl QuantMethod for GptqLayer {
                     self.use_exllama,
                 )?
                 .reshape(out_shape)?,
+            #[cfg(feature = "cuda")]
             (_, _, true) => marlin_matmul(
                 a,
                 &self.q_weight,
@@ -387,7 +389,9 @@ impl QuantMethod for GptqLayer {
                 self.bits,
                 self.is_awq,
             )?,
-            _ => unreachable!(),
+            _ => candle_core::bail!(
+                "GPTQ forward: no available kernel for this configuration (AWQ requires CUDA marlin)"
+            ),
         };
 
         if let Some(bias) = &self.bias {
@@ -473,7 +477,7 @@ pub fn gptq_linear(
         return make_dummy_or_error("gptq_awq_linear", &vb, &required);
     }
 
-    let marlin_compatible = *bits == 4 || *bits == 8;
+    let marlin_compatible = (*bits == 4 || *bits == 8) && HAVE_MARLIN_KERNELS;
     let marlin_format = checkpoint_format
         .as_ref()
         .is_some_and(|fmt| fmt == "marlin")
@@ -581,10 +585,18 @@ pub fn gptq_linear(
                 .to_device(g_idx.device())?;
             (Some(g_idx), Some(perm))
         };
+        let _ = &perm; // only consumed by the CUDA marlin repack below
 
-        // Repack to marlin format
+        // Repack to marlin format (CUDA only; ROCm keeps the q_gemm layout)
         let qweight = if marlin_compatible {
-            marlin_weight_repack(&qweight, &perm, in_dim, *bits as i32, is_awq)?
+            #[cfg(feature = "cuda")]
+            {
+                marlin_weight_repack(&qweight, &perm, in_dim, *bits as i32, is_awq)?
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                candle_core::bail!("GPTQ marlin repack requires the CUDA feature");
+            }
         } else {
             qweight
         };

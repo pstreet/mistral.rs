@@ -135,7 +135,7 @@ impl QuantMethod for UnquantLinear {
         maybe_init_cublas_lt_wrapper(a.device().clone());
 
         // Try custom GEMV for single-token decode (batch_size=1)
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         if crate::gemv::should_use_gemv(a, &self.w) {
             return crate::gemv::gemv(a, &self.w, self.b.as_ref());
         }
@@ -795,7 +795,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn forward_cuda_flattens_large_non_contiguous_batch() -> Result<()> {
         let device = Device::new_cuda(0)?;
@@ -820,7 +820,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn forward_cuda_bf16_preserves_batched_shapes() -> Result<()> {
         const TOLERANCE: f32 = 0.05;

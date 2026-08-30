@@ -6071,7 +6071,7 @@ mod dispatch_tests {
     }
 }
 
-#[cfg(all(test, feature = "cuda"))]
+#[cfg(all(test, any(feature = "cuda", feature = "rocm")))]
 #[allow(clippy::cast_precision_loss)]
 mod tests {
     use super::*;
@@ -9282,6 +9282,102 @@ mod tests {
             &flat(&update_state.to_dtype(DType::F32)?)?,
             &flat(&full_state.to_dtype(DType::F32)?)?,
             0.0,
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn bench_recurrence_kernels_cuda() -> Result<()> {
+        let dev = Device::new_cuda(0)?;
+        let (bh, seq_len, k_dim, v_dim) = (32usize, 4096usize, 128usize, 128usize);
+        let q = tensor3(
+            patterned(bh * seq_len * k_dim, 1, 0.02, 0.0),
+            (bh, seq_len, k_dim),
+            &dev,
+        )?;
+        let k = tensor3(
+            patterned(bh * seq_len * k_dim, 2, 0.02, 0.0),
+            (bh, seq_len, k_dim),
+            &dev,
+        )?;
+        let v = tensor3(
+            patterned(bh * seq_len * v_dim, 3, 0.05, 0.0),
+            (bh, seq_len, v_dim),
+            &dev,
+        )?;
+        let g = tensor2(patterned(bh * seq_len, 4, 0.03, -0.08), (bh, seq_len), &dev)?;
+        let beta = tensor2(patterned(bh * seq_len, 5, 0.15, 0.5), (bh, seq_len), &dev)?;
+        let state = patterned(bh * k_dim * v_dim, 6, 0.01, 0.0);
+
+        let flops = (bh * seq_len * v_dim * k_dim * 3 * 2) as f64;
+        let mut s = tensor3(state.clone(), (bh, k_dim, v_dim), &dev)?;
+        dev.synchronize()?;
+        let t0 = std::time::Instant::now();
+        for _ in 0..3 {
+            warp_gated_delta_rule_recurrence_cuda(&q, &k, &v, &g, &beta, &mut s)?;
+        }
+        dev.synchronize()?;
+        let dt = t0.elapsed().as_secs_f64() / 3.0;
+        eprintln!(
+            "[bench] warp   : {dt:.4}s -> {:.1} GFLOPS",
+            flops / dt / 1e9
+        );
+
+        dev.synchronize()?;
+        let t0 = std::time::Instant::now();
+        for _ in 0..3 {
+            chunked_gated_delta_rule_recurrence_cuda(&q, &k, &v, &g, &beta, &mut s)?;
+        }
+        dev.synchronize()?;
+        let dt = t0.elapsed().as_secs_f64() / 3.0;
+        eprintln!(
+            "[bench] chunked: {dt:.4}s -> {:.1} GFLOPS",
+            flops / dt / 1e9
+        );
+
+        dev.synchronize()?;
+        let t0 = std::time::Instant::now();
+        for _ in 0..3 {
+            gated_delta_rule_recurrence_cuda(&q, &k, &v, &g, &beta, &mut s)?;
+        }
+        dev.synchronize()?;
+        let dt = t0.elapsed().as_secs_f64() / 3.0;
+        eprintln!(
+            "[bench] tiled  : {dt:.4}s -> {:.1} GFLOPS",
+            flops / dt / 1e9
+        );
+
+        let (batch_size, conv_dim, kernel_size) = (1usize, 8192usize, 4usize);
+        let x = Tensor::from_vec(
+            patterned(batch_size * conv_dim * seq_len, 30, 0.05, 0.0),
+            (batch_size, conv_dim, seq_len),
+            &dev,
+        )?
+        .to_dtype(DType::BF16)?;
+        let weight = Tensor::from_vec(
+            patterned(conv_dim * kernel_size, 31, 0.05, 0.0),
+            (conv_dim, kernel_size),
+            &dev,
+        )?
+        .to_dtype(DType::BF16)?;
+        let init_state = Tensor::from_vec(
+            patterned(batch_size * conv_dim * kernel_size, 32, 0.03, 0.0),
+            (batch_size, conv_dim, kernel_size),
+            &dev,
+        )?
+        .to_dtype(DType::BF16)?;
+        dev.synchronize()?;
+        let t0 = std::time::Instant::now();
+        for _ in 0..3 {
+            causal_conv1d_cuda(&x, &weight, &init_state, kernel_size, false)?;
+        }
+        dev.synchronize()?;
+        let dt = t0.elapsed().as_secs_f64() / 3.0;
+        let conv_flops = (batch_size * conv_dim * seq_len * kernel_size * 2) as f64;
+        eprintln!(
+            "[bench] conv   : {dt:.4}s -> {:.1} GFLOPS",
+            conv_flops / dt / 1e9
         );
         Ok(())
     }

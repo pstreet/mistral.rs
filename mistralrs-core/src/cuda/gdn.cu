@@ -599,20 +599,32 @@ __global__ __launch_bounds__(
     }
   }
 
-  for (int t = 0; t < seq_len; t++) {
-    const float *q_t = q_bh + t * BK;
-    const float *k_t = k_bh + t * BK;
+  // Software pipelining: preload t=0, then issue the t+1 load before computing t
+  // so the global-memory latency overlaps with the previous timestep's math.
+  float k_cur[ROWS_PER_LANE];
+  float q_cur[ROWS_PER_LANE];
+#pragma unroll
+  for (int r = 0; r < ROWS_PER_LANE; r++) {
+    const int row = r * WARP_SIZE + lane;
+    k_cur[r] = k_bh[row];
+    q_cur[r] = q_bh[row];
+  }
 
-    float k_reg[ROWS_PER_LANE];
-    float q_reg[ROWS_PER_LANE];
-    float kv_partial = 0.0f;
+  for (int t = 0; t < seq_len; t++) {
+    const int tt = (t + 1 < seq_len) ? t + 1 : t;
+    float k_n[ROWS_PER_LANE];
+    float q_n[ROWS_PER_LANE];
 #pragma unroll
     for (int r = 0; r < ROWS_PER_LANE; r++) {
       const int row = r * WARP_SIZE + lane;
-      const float k_val = k_t[row];
-      k_reg[r] = k_val;
-      q_reg[r] = q_t[row];
-      kv_partial = __fmaf_rn(s[r], k_val, kv_partial);
+      k_n[r] = k_bh[tt * BK + row];
+      q_n[r] = q_bh[tt * BK + row];
+    }
+
+    float kv_partial = 0.0f;
+#pragma unroll
+    for (int r = 0; r < ROWS_PER_LANE; r++) {
+      kv_partial = __fmaf_rn(s[r], k_cur[r], kv_partial);
     }
 
     const float decay = expf(g_bh[t]);
@@ -622,13 +634,19 @@ __global__ __launch_bounds__(
     float y_partial = 0.0f;
 #pragma unroll
     for (int r = 0; r < ROWS_PER_LANE; r++) {
-      s[r] = __fmaf_rn(k_reg[r], delta, decay * s[r]);
-      y_partial = __fmaf_rn(s[r], q_reg[r], y_partial);
+      s[r] = __fmaf_rn(k_cur[r], delta, decay * s[r]);
+      y_partial = __fmaf_rn(s[r], q_cur[r], y_partial);
     }
 
     const float y_col = gdn_warp_sum<WARP_SIZE>(y_partial);
     if (lane == 0) {
       out_bh[t * v_dim + v_idx] = y_col;
+    }
+
+#pragma unroll
+    for (int r = 0; r < ROWS_PER_LANE; r++) {
+      k_cur[r] = k_n[r];
+      q_cur[r] = q_n[r];
     }
   }
 

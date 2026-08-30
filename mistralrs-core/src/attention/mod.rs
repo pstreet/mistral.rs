@@ -281,6 +281,65 @@ impl Sdpa {
         // early-exit is safe to enable only when the request is known causal.
         let do_causal = flash_params.is_some_and(|p| p.causal);
 
+        // CK flash attention on ROCm: fused QK^T + softmax + @V
+        // CK handles GQA natively (nhead_q != nhead_k), so no repeat_kv needed.
+        // Placed before the Custom mask check so it can fire for causal 2D masks too.
+        #[cfg(feature = "rocm")]
+        {
+            let seq_len = q.dim(2)?;
+            let head_dim = q.dim(3)?;
+            let kv_len = k.dim(2)?;
+            let is_causal =
+                matches!(mask, AttentionMask::CausalFlash | AttentionMask::Custom(_)) || do_causal;
+            let is_custom = mask.is_custom();
+            // CK's causal mask is top-left aligned; a gathered prefix (kv_len >
+            // seq_len) needs bottom-right. The batched non-varlen kernel only matches
+            // a clean single-seq causal gather, so custom masks / multi-seq padding
+            // fall back to the eager path.
+            let mask_type = if !is_causal {
+                0
+            } else if kv_len > seq_len {
+                2
+            } else {
+                1
+            };
+            let gather_exact = kv_len <= seq_len || (!is_custom && q.dim(0)? <= 1);
+            let dbg = std::env::var("MRS_DEBUG_CK").is_ok();
+
+            if q.device().is_cuda()
+                && q.dtype() == DType::BF16
+                && k.dtype() == DType::BF16
+                && v.dtype() == DType::BF16
+                && matches!(head_dim, 128 | 256)
+                && seq_len > 1
+                && sdpa_params.softcap.is_none_or(|x| x == 1.0)
+                && sdpa_params.sliding_window.is_none()
+                && gather_exact
+            {
+                if let Some(out) = crate::rocm::ck_flash_attn(
+                    q,
+                    k,
+                    v,
+                    sdpa_params.softmax_scale as f32,
+                    mask_type,
+                )? {
+                    if dbg {
+                        eprintln!("[CK FA] dispatch: HIT, returning output");
+                    }
+                    return Ok(out);
+                } else if dbg {
+                    eprintln!("[CK FA] dispatch: ck_flash_attn returned None");
+                }
+            } else if dbg {
+                eprintln!(
+                    "[CK FA] dispatch: SKIP (device={}, dtype={}, hdim={}, seq_len={}, kv_len={}, softcap={}, sliding={}, gather_exact={})",
+                    q.device().is_cuda(), q.dtype() == DType::BF16, head_dim, seq_len,
+                    kv_len, sdpa_params.softcap.is_some(),
+                    sdpa_params.sliding_window.is_some(), gather_exact
+                );
+            }
+        }
+
         if let AttentionMask::Custom(mask_tensor) = mask {
             if q.device().is_cpu() {
                 let q = q.transpose(1, 2)?;

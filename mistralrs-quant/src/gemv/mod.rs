@@ -10,19 +10,19 @@
 //! - Static shared memory for block-level reduction
 //! - Supports batch sizes 1-8 efficiently
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 mod ffi;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use candle_core::{
     cuda::cudarc::driver::DevicePtrMut, CudaDevice, CudaStorage, DType, Result, Shape, Storage,
     Tensor,
 };
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::utils::{get_cuda_device, slice_ptr};
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use half::{bf16, f16};
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -131,7 +131,7 @@ pub static GEMV_CONTROLLER: LazyLock<GemvController> = LazyLock::new(|| GemvCont
 /// - The shape and device favor GEMV over a split-K GEMM
 /// - Data type is supported (BF16, F16, F32)
 /// - K dimension is even (required for vectorized loads)
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
     // Check if enabled
     if !GEMV_CONTROLLER.is_enabled() {
@@ -186,7 +186,7 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
 }
 
 /// Fallback for non-CUDA builds
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 pub fn should_use_gemv(_x: &candle_core::Tensor, _w: &candle_core::Tensor) -> bool {
     false
 }
@@ -200,7 +200,7 @@ pub fn should_use_gemv(_x: &candle_core::Tensor, _w: &candle_core::Tensor) -> bo
 ///
 /// # Returns
 /// * Output tensor [B, M]
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn gemv(x: &Tensor, w: &Tensor, bias: Option<&Tensor>) -> Result<Tensor> {
     let dev = get_cuda_device(x)?;
 
@@ -256,7 +256,7 @@ pub fn gemv(x: &Tensor, w: &Tensor, bias: Option<&Tensor>) -> Result<Tensor> {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(clippy::too_many_arguments)]
 fn gemv_bf16(
     dev: &CudaDevice,
@@ -327,7 +327,7 @@ fn gemv_bf16(
     Ok(y)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(clippy::too_many_arguments)]
 fn gemv_f16(
     dev: &CudaDevice,
@@ -395,7 +395,7 @@ fn gemv_f16(
     Ok(y)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(clippy::too_many_arguments)]
 fn gemv_f32(
     dev: &CudaDevice,
@@ -464,7 +464,7 @@ fn gemv_f32(
 }
 
 /// Fallback for non-CUDA builds
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 pub fn gemv(
     _x: &candle_core::Tensor,
     _w: &candle_core::Tensor,

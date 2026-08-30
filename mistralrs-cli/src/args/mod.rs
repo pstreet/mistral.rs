@@ -610,6 +610,11 @@ pub struct RuntimeOptions {
     #[serde(default = "default_prefix_cache_n")]
     pub prefix_cache_n: usize,
 
+    /// Prefill chunk size in tokens for paged attention (0 to use default of 4096)
+    #[arg(long, default_value_t = 0)]
+    #[serde(default)]
+    pub prefill_chunk_size: usize,
+
     /// Custom chat template file (.json or .jinja)
     #[arg(long, short)]
     #[serde(default)]
@@ -992,6 +997,7 @@ impl Default for RuntimeOptions {
             max_decode_steps_before_prefill: default_max_decode_steps_before_prefill(),
             no_kv_cache: false,
             prefix_cache_n: 16,
+            prefill_chunk_size: 0,
             chat_template: None,
             jinja_explicit: None,
             matformer_config_path: None,

@@ -1,6 +1,6 @@
 use candle_core::{Result, Tensor};
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn moe_gemm(
     input: &Tensor,
     weights: &Tensor,
@@ -109,7 +109,14 @@ pub fn moe_gemm(
         // - Decode with small M (<=8): use GEMV kernel optimized for warp reductions
         // - Decode with larger M: use standard moe_gemm kernel
         let moe_func = if is_prefill {
-            crate::cuda::ffi::moe_gemm_wmma
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
+            {
+                crate::cuda::ffi::moe_gemm_wmma
+            }
+            #[cfg(not(any(feature = "cuda", feature = "rocm")))]
+            {
+                crate::cuda::ffi::moe_gemm
+            }
         } else if size_m_i32 <= GEMV_THRESHOLD {
             crate::cuda::ffi::moe_gemv
         } else {
@@ -174,7 +181,7 @@ pub fn moe_gemm(
     }
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(unused)]
 pub fn moe_gemm(
     _: &Tensor,

@@ -157,7 +157,7 @@ pub use speech::{SpeechLoader, SpeechPipeline};
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -186,6 +186,22 @@ use self::text_models_inputs_processor::{
     FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
 };
 
+pub(crate) const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 4096;
+
+static OVERRIDE_PREFILL_CHUNK_SIZE: AtomicUsize = AtomicUsize::new(0);
+
+pub fn set_override_prefill_chunk_size(size: usize) {
+    OVERRIDE_PREFILL_CHUNK_SIZE.store(size, Ordering::Relaxed);
+}
+
+pub fn override_prefill_chunk_size() -> Option<usize> {
+    let v = OVERRIDE_PREFILL_CHUNK_SIZE.load(Ordering::Relaxed);
+    if v == 0 {
+        None
+    } else {
+        Some(v)
+    }
+}
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn synchronize_cuda_contexts(primary: &Device, mapper: &dyn DeviceMapper) -> Result<()> {
     let mut devices = mapper.get_unique_devices();
@@ -1284,6 +1300,8 @@ pub struct GeneralMetadata {
     pub modalities: Modalities,
     // UQFF writes force the whole model onto CPU, so the pipeline is not servable afterwards.
     pub loaded_for_uqff_write: bool,
+    /// Prefill chunk size in tokens for paged attention. None = use DEFAULT_PAGED_PREFILL_CHUNK_SIZE.
+    pub paged_prefill_chunk_size: Option<usize>,
 }
 
 impl GeneralMetadata {
@@ -2273,7 +2291,11 @@ pub trait Pipeline:
                     && !self.get_metadata().is_xlora
                     && self.device().is_cuda()
                 {
-                    metadata.prompt_chunk_size
+Some(
+                        override_prefill_chunk_size()
+                            .or(self.get_metadata().paged_prefill_chunk_size)
+                            .unwrap_or(DEFAULT_PAGED_PREFILL_CHUNK_SIZE),
+                    )
                 } else {
                     None
                 };

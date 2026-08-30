@@ -111,7 +111,7 @@ impl GptOssRotaryEmbeddingVariant {
 /// With clamping: gate max=limit, up [-limit, limit]
 #[allow(dead_code)]
 fn gptoss_swiglu(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -> Result<Tensor> {
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if gate.device().is_cuda() {
         return mistralrs_quant::gptoss_swiglu_fused(gate, up, alpha, limit);
     }
@@ -1027,7 +1027,7 @@ impl NormalModel for Model {
         sinks_backend_supports(self.dtype, self.device.location(), self.cfg.head_dim())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn supports_cuda_decode_graphs(&self) -> bool {
         true
     }

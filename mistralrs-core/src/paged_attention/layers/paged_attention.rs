@@ -1010,6 +1010,16 @@ impl PagedAttention {
         value_cache: &mut Option<Tensor>,
         write_cache: bool,
     ) -> Result<Option<Tensor>> {
+        let dbg = std::env::var("MRS_DEBUG_PA").is_ok();
+        if dbg {
+            eprintln!(
+                "[PA] try_prefix_gather_prefill: seq_len={}, is_first={}, has_cached={}, mask={:?}",
+                ctx.dims.seq_len,
+                ctx.input_metadata.is_first_prompt_chunk,
+                ctx.input_metadata.num_cached_tokens.is_some(),
+                tensors.attention_mask
+            );
+        }
         let dev = tensors.query.device().location();
         let block_tables = ctx.block_tables(&dev);
         let mm_prefix_ranges = ctx.mm_prefix_ranges(&dev);
@@ -1024,6 +1034,9 @@ impl PagedAttention {
             );
         }
         if !ctx.use_gather_path(tensors.attention_mask, write_cache) {
+            if dbg {
+                eprintln!("[PA] try_prefix_gather_prefill: SKIP (use_gather_path=false)");
+            }
             return Ok(None);
         }
 
@@ -1324,7 +1337,9 @@ impl PagedAttention {
         }
         let adjusted_mask = match tensors.attention_mask {
             AttentionMask::Custom(t) => AttentionMask::Custom(adjust_kv_mask(t, max_kv)?),
-            AttentionMask::CausalFlash if simple_full_causal => AttentionMask::None,
+            // keep CausalFlash so backends without a packed varlen fast path (ROCm)
+            // still see the causality; CUDA's packed branch ignores this and uses None
+            AttentionMask::CausalFlash if simple_full_causal => AttentionMask::CausalFlash,
             AttentionMask::CausalFlash if dense_flash_causal => AttentionMask::CausalFlash,
             AttentionMask::CausalFlash => prefix_gather_causal_mask(
                 &query_lens,
@@ -1589,6 +1604,7 @@ impl PagedAttention {
         value_cache: &mut Option<Tensor>,
         write_cache: bool,
     ) -> Result<Option<Tensor>> {
+        let dbg = std::env::var("MRS_DEBUG_PA").is_ok();
         let single_token_first_prompt =
             write_cache && ctx.input_metadata.is_first_prompt_chunk && ctx.dims.seq_len == 1;
         let custom_decode = tensors.attention_mask.is_custom()
@@ -1597,7 +1613,19 @@ impl PagedAttention {
         if custom_decode
             || matches!(tensors.attention_mask, AttentionMask::None) && !single_token_first_prompt
         {
+            if dbg {
+                eprintln!(
+                    "[PA] try_regular_prompt: SKIP (custom_decode={}, mask=None={}, single_token={})",
+                    custom_decode,
+                    matches!(tensors.attention_mask, AttentionMask::None),
+                    single_token_first_prompt
+                );
+            }
             return Ok(None);
+        }
+        if dbg {
+            eprintln!("[PA] try_regular_prompt: CALLING Sdpa.run_attention (seq_len={}, mask={:?}, packed={})",
+                ctx.dims.seq_len, tensors.attention_mask, ctx.flash_params.is_some_and(|p| p.packed));
         }
 
         let att = if ctx.flash_params.is_some_and(|params| params.packed)
@@ -2133,6 +2161,12 @@ impl PagedAttention {
             self.try_regular_prompt(&ctx, tensors, &mut key_cache, &mut value_cache, write_cache)?
         {
             return Ok(out);
+        }
+        if std::env::var("MRS_DEBUG_PA").is_ok() {
+            eprintln!(
+                "[PA] forward_impl: falling through to run_decode (seq_len={})",
+                ctx.dims.seq_len
+            );
         }
         self.run_decode(&ctx, tensors, &mut key_cache, &mut value_cache, write_cache)
     }

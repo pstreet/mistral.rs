@@ -412,6 +412,7 @@ pub(crate) fn build_engine_config(
         no_kv_cache,
         no_prefix_cache: prefix_cache_n.is_none(),
         prefix_cache_n: prefix_cache_n.unwrap_or(16),
+        prefill_chunk_size: None,
         disable_eos_stop: false,
     }
 }

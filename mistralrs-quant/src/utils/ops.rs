@@ -10,11 +10,11 @@ use std::{
     ops::{BitAnd, BitOr, BitXor, Not, Shl},
 };
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::utils::slice_ptr;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::utils::{ffi, slice_ptr_mut_on_stream, slice_ptr_on_stream};
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use candle_core::cuda::cudarc::driver::DevicePtr;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use candle_core::cuda::CudaStorage;
@@ -96,7 +96,7 @@ impl CustomOp1 for Leftshift {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_fwd(&self, s1: &CudaStorage, l1: &Layout) -> Result<(CudaStorage, Shape)> {
         if !l1.is_contiguous() {
             candle_core::bail!("Input tensor s1 must be contiguous");
@@ -365,7 +365,7 @@ impl CustomOp2 for BitWise {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_fwd(
         &self,
         s1: &CudaStorage,
@@ -746,7 +746,7 @@ impl CustomOp1 for BitWiseUnary {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
         candle_core::bail!("bitwise unary operations are not supported on CUDA")
     }
@@ -845,7 +845,7 @@ impl CustomOp1 for ArgSort {
     }
 
     // -------- CUDA -----------------------------------------------------------
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
         candle_core::bail!("ArgSort is not implemented for the CUDA backend");
     }
@@ -952,7 +952,7 @@ impl CustomOp1 for Sort {
     }
 
     // -------- CUDA -----------------------------------------------------------
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
         candle_core::bail!("Sort is not implemented for the CUDA backend");
     }
@@ -1095,7 +1095,7 @@ impl NonZero {
     }
 }
 
-#[cfg(all(feature = "cuda", not(cuda_ge_13000)))]
+#[cfg(all(any(feature = "cuda", feature = "rocm"), not(cuda_ge_13000)))]
 mod cuda_ops_cccl2 {
     use super::*;
 
@@ -1239,7 +1239,7 @@ mod cuda_ops_cccl3 {
     }
 }
 
-#[cfg(all(feature = "cuda", not(cuda_ge_13000)))]
+#[cfg(all(any(feature = "cuda", feature = "rocm"), not(cuda_ge_13000)))]
 use cuda_ops_cccl2::{count_nonzero_cuda, nonzero_cuda};
 #[cfg(all(feature = "cuda", cuda_ge_13000))]
 use cuda_ops_cccl3::{count_nonzero_cuda, nonzero_cuda};
@@ -1272,7 +1272,7 @@ impl CustomOp1 for NonZero {
         Ok((result, shape))
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_fwd(
         &self,
         storage: &candle_core::CudaStorage,
@@ -1511,7 +1511,7 @@ impl CustomOp1 for CumSum {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
         candle_core::bail!("cumulative sum is not supported on CUDA")
     }
@@ -1591,7 +1591,7 @@ impl CumSumOp for Tensor {
 /// Fused GPT-OSS SwiGLU activation
 /// Formula: output = (clamp(up, -limit, limit) + 1) * gate_clamped * sigmoid(gate_clamped * alpha)
 /// where gate_clamped = min(gate, limit)
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn gptoss_swiglu_fused(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -> Result<Tensor> {
     use half::{bf16, f16};
 
@@ -1728,7 +1728,7 @@ pub fn gptoss_swiglu_fused(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -
 ///   limit: SwiGLU limit parameter
 ///
 /// Returns: [N, intermediate_size] - activated output
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn gptoss_swiglu_interleaved(
     gate_up: &Tensor,
     intermediate_size: usize,
@@ -2001,7 +2001,7 @@ impl CustomOp1 for SoftmaxWithSinks {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_fwd(&self, storage: &CudaStorage, layout: &Layout) -> Result<(CudaStorage, Shape)> {
         use half::{bf16, f16};
 
@@ -2980,7 +2980,7 @@ pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resul
     a.apply_op2_no_bwd(&b, &FusedGlu(activation))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn fused_glu_quantized_bf16(
     gate: &Tensor,
     value: &Tensor,
@@ -3091,13 +3091,13 @@ pub(crate) fn fused_glu_quantized_bf16(
     Ok(Some((output, scales)))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct FusedSplitGlu {
     split_size: usize,
     activation: GluActivationType,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CustomOp1 for FusedSplitGlu {
     fn name(&self) -> &'static str {
         "fused-split-glu"
@@ -3206,7 +3206,7 @@ pub fn fused_split_glu(
         candle_core::bail!("fused split GLU expected last dimension {expected}");
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if input.device().is_cuda() && matches!(input.dtype(), DType::F16 | DType::BF16 | DType::F32) {
         return input.contiguous()?.apply_op1_no_bwd(&FusedSplitGlu {
             split_size,
@@ -3346,7 +3346,7 @@ impl CustomOp1 for Softcap {
         Ok((CpuStorage::F32(result), out_shape))
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_fwd(&self, s1: &CudaStorage, l1: &Layout) -> Result<(CudaStorage, Shape)> {
         let device = s1.device();
         let n_elements = l1.shape().elem_count();
@@ -3530,7 +3530,7 @@ mod tests {
         assert!(actual.iter().all(|value| value.is_finite()));
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn test_fused_split_glu_cuda_scalar_and_vector_paths() {
         use super::{fused_glu, fused_split_glu, GluActivationType};
@@ -3872,7 +3872,7 @@ mod tests {
         assert_close(&output, &expected, 1e-6);
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn test_softcap_cuda_f32() {
         use super::softcap;
@@ -4057,7 +4057,7 @@ mod tests {
         assert_eq!(b, [[0, 0], [0, 2], [1, 0], [1, 2]]);
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn test_nonzero_cuda() {
         use crate::utils::ops::NonZeroOp;
@@ -4086,7 +4086,7 @@ mod tests {
         assert_eq!(c, [[1, 2], [3, -1], [1, -1], [-1, 4], [5, 7]]);
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn test_bitwise_and_cuda() {
         use crate::utils::ops::BitWiseOp;
@@ -4112,7 +4112,7 @@ mod tests {
         assert_eq!(c, [[-1, 2], [3, -1], [-1, -1], [-1, 4], [5, 15]]);
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn test_bitwise_or_cuda() {
         use crate::utils::ops::BitWiseOp;
@@ -4137,7 +4137,7 @@ mod tests {
         assert_eq!(c, [[-2, 2], [3, -1], [-1, -1], [-1, 4], [5, 15]]);
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn test_bitwise_xor_cuda() {
         use crate::utils::ops::BitWiseOp;
@@ -4265,7 +4265,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn nonzero_and_cuda() {
         use crate::utils::ops::{BitWiseOp, NonZeroOp};
@@ -4317,7 +4317,7 @@ mod tests {
         assert_eq!(c, [[1, 2], [3, 4], [255, 0]]);
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn test_bitpack_8bit_cuda() {
         use crate::HqqBits;
@@ -4363,7 +4363,7 @@ mod tests {
         assert_eq!(c, [[19, 36]]);
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn test_bitpack_4bit_cuda() {
         use crate::HqqBits;
@@ -4665,7 +4665,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn test_fused_glu_cuda_silu_f32() {
         use super::{fused_glu, GluActivationType};
@@ -4704,7 +4704,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn test_fused_glu_cuda_silu_f16() {
         use super::{fused_glu, GluActivationType};
@@ -4757,7 +4757,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn test_fused_glu_cuda_all_activations() {
         use super::{fused_glu, GluActivationType};
@@ -4802,7 +4802,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn test_fused_glu_matches_candle_fallback_bf16_cuda() {
         use super::{fused_glu, GluActivationType};

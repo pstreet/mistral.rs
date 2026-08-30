@@ -7,7 +7,7 @@ use crate::{
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, ShardedVarBuilder,
 };
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 mod ffi;
 
 mod op;

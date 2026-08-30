@@ -5,7 +5,7 @@ use candle_core::{backend::BackendStorage, DType, Result, Shape, Storage, Tensor
 #[cfg(feature = "metal")]
 use candle_core::MetalStorage;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use candle_core::{
     cuda::{cudarc::driver::DevicePtr, CudaStorageSlice},
     CudaStorage,
@@ -13,7 +13,7 @@ use candle_core::{
 
 use super::{AfqBits, AfqGroupSize};
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::utils::get_cuda_device;
 
 pub(crate) fn can_quantize(w: &Tensor, group_size: AfqGroupSize) -> Result<bool> {
@@ -115,7 +115,7 @@ pub(crate) fn afq_quantize_op(
 
         return Ok((output, scales, biases));
     }
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if w.device().is_cuda() {
         return cuda_backend::afq_quantize_op(w, group_size, bits);
     }
@@ -210,7 +210,7 @@ pub(crate) fn afq_dequantize_op(
 
         return Ok(output);
     }
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if w_q.device().is_cuda() {
         return cuda_backend::afq_dequantize_op(w_q, scales, biases, group_size, bits);
     }
@@ -308,7 +308,7 @@ pub(crate) fn afq_embedding_op(
         )));
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if w_q.device().is_cuda() {
         return cuda_backend::afq_embedding_op(ids, w_q, scales, biases, group_size, bits);
     }
@@ -600,7 +600,7 @@ pub(crate) fn afq_mm_op(
 
         return Ok(output);
     }
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if x.device().is_cuda() {
         return cuda_backend::afq_mm_op(
             x,
@@ -1769,7 +1769,7 @@ mod cpu_backend {
 // ============================================================
 //                    CUDA backend
 // ============================================================
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 mod cuda_backend {
     use super::*;
     use crate::afq::ffi;

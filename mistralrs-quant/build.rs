@@ -107,6 +107,14 @@ fn build_rocm() -> Result<(), String> {
         // GGUF MMQ/MMVQ family: MMA PTX paths are disabled under USE_ROCM in
         // mmq_common.cuh so these fall back to generic load/FMA routes.
         ("kernels/mmvq_gguf/mmvq_gguf.cu", None),
+        ("kernels/gemv/gemv.cu", None),
+        ("kernels/hqq/hqq.cu", None),
+        ("kernels/hqq/hqq_bitpack.cu", None),
+        ("kernels/afq/afq.cu", None),
+        ("kernels/afq/afq_gemm.cu", None),
+        ("kernels/gptq/q_gemm.cu", None),
+        ("kernels/moe/moe_align.cu", None),
+        ("kernels/moe/gelu_tanh_and_mul.cu", None),
         ("kernels/mmq_gguf/mmq_quantize.cu", None),
         ("kernels/mmq_gguf/mmq_instance_q2_k.cu", None),
         ("kernels/mmq_gguf/mmq_instance_q3_k.cu", None),
@@ -118,6 +126,13 @@ fn build_rocm() -> Result<(), String> {
         ("kernels/mmq_gguf/mmq_instance_q5_k.cu", None),
         ("kernels/mmq_gguf/mmq_instance_q6_k.cu", None),
         ("kernels/mmq_gguf/mmq_instance_q8_0.cu", None),
+        // FP8 dequant/quant + blockwise GEMM; portable FMA routes, no tensor-core PTX.
+        ("kernels/scalar_fp8/scalar_fp8.cu", None),
+        ("kernels/vector_fp8/vector_fp8.cu", None),
+        ("kernels/blockwise_fp8/blockwise_fp8.cu", None),
+        ("kernels/blockwise_fp8/blockwise_fp8_gemm.cu", None),
+        // bitsandbytes (BNB) int8/fp4/nf4 blockwise dequant; CUB block load/store.
+        ("kernels/bitsandbytes/dequant.cu", None),
     ];
 
     let mut objects = Vec::new();
@@ -174,6 +189,12 @@ fn build_rocm() -> Result<(), String> {
     if !status.success() {
         return Err("failed to archive libmistralrsquant.a".to_string());
     }
+
+    // FP8 kernels are portable FMA routes (no tensor-core PTX), so all three
+    // families are available on every ROCm target.
+    println!("cargo:rustc-cfg=has_scalar_fp8_kernels");
+    println!("cargo:rustc-cfg=has_vector_fp8_kernels");
+    println!("cargo:rustc-cfg=has_blockwise_fp8_kernels");
 
     println!("cargo:rustc-link-search={}", build_dir.display());
     println!("cargo:rustc-link-lib=mistralrsquant");

@@ -11,7 +11,7 @@ use crate::{
 
 pub mod ops;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) mod ffi;
 
 #[repr(u8)]

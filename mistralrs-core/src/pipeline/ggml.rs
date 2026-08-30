@@ -271,7 +271,7 @@ impl Loader for GGMLLoader {
             device.device_pretty_repr()
         );
 
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         if let Device::Cuda(dev) = &device {
             unsafe { dev.disable_event_tracking() };
         }
@@ -397,6 +397,7 @@ impl Loader for GGMLLoader {
                     output: vec![SupportedModality::Text],
                 },
                 loaded_for_uqff_write: false,
+                paged_prefill_chunk_size: None,
             }),
             generation_defaults,
         })))

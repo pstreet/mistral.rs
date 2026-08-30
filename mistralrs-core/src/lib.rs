@@ -54,6 +54,8 @@ mod device_map;
 mod engine;
 mod lora;
 mod metal;
+#[cfg(feature = "rocm")]
+mod rocm;
 pub use metal::warmup_metal_kernels;
 mod model_loader;
 mod moe;
@@ -93,6 +95,7 @@ mod models;
 mod paged_attention;
 mod perf_flags;
 mod pipeline;
+pub use pipeline::set_override_prefill_chunk_size;
 mod prefix_cacher;
 pub mod reasoning_parsers;
 mod request;
@@ -243,6 +246,7 @@ pub struct EngineConfig {
     pub no_kv_cache: bool,
     pub no_prefix_cache: bool,
     pub prefix_cache_n: usize,
+    pub prefill_chunk_size: Option<usize>,
     pub disable_eos_stop: bool,
     pub throughput_logging_enabled: bool,
     pub search_embedding_model: Option<SearchEmbeddingModel>,
@@ -256,6 +260,7 @@ impl Default for EngineConfig {
             no_kv_cache: false,
             no_prefix_cache: false,
             prefix_cache_n: 16,
+            prefill_chunk_size: None,
             disable_eos_stop: false,
             throughput_logging_enabled: true,
             search_embedding_model: None,
@@ -704,12 +709,17 @@ impl MistralRsBuilder {
 
 impl Drop for MistralRs {
     fn drop(&mut self) {
-        // Terminate all engines
-        if let Ok(engines) = self.engines.read() {
-            for engine in engines.values() {
-                // Use try_send instead of blocking_send to avoid runtime panics
-                engine.terminate();
-            }
+        let Ok(engines) = self.engines.get_mut() else {
+            return;
+        };
+        // Use try_send instead of blocking_send to avoid runtime panics
+        for engine in engines.values() {
+            engine.terminate();
+        }
+        // Join so each engine thread finishes dropping its device before process
+        // exit; otherwise atexit can finalize the HIP runtime mid-drop and segfault.
+        for engine in engines.values_mut() {
+            engine.join();
         }
     }
 }
@@ -1575,6 +1585,7 @@ impl MistralRs {
             no_kv_cache,
             no_prefix_cache,
             prefix_cache_n,
+            prefill_chunk_size: None,
             disable_eos_stop,
             throughput_logging_enabled,
             search_embedding_model,
@@ -1735,6 +1746,7 @@ impl MistralRs {
                 no_kv_cache: reboot_state.no_kv_cache,
                 no_prefix_cache: reboot_state.no_prefix_cache,
                 prefix_cache_n: reboot_state.prefix_cache_n,
+                prefill_chunk_size: None,
                 disable_eos_stop: reboot_state.disable_eos_stop,
                 throughput_logging_enabled: reboot_state.throughput_logging_enabled,
                 search_embedding_model: reboot_state.search_embedding_model,
@@ -2621,6 +2633,7 @@ impl MistralRs {
                 no_kv_cache: engine_instance.reboot_state.no_kv_cache,
                 no_prefix_cache: engine_instance.reboot_state.no_prefix_cache,
                 prefix_cache_n: engine_instance.reboot_state.prefix_cache_n,
+                prefill_chunk_size: None,
                 disable_eos_stop: engine_instance.reboot_state.disable_eos_stop,
                 throughput_logging_enabled: engine_instance.reboot_state.throughput_logging_enabled,
                 search_embedding_model: engine_instance.reboot_state.search_embedding_model,

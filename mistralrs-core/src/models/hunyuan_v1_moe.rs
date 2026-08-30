@@ -560,7 +560,7 @@ fn hunyuan_moe_apply_capacity_mask(
     num_experts: usize,
     top_k: usize,
 ) -> Result<Tensor> {
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     if topk_ids.device().is_cuda() && topk_weights.device().is_cuda() {
         return mistralrs_quant::moe::cuda::hunyuan_moe_apply_capacity_mask(
             topk_ids,

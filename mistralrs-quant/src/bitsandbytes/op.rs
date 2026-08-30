@@ -2,7 +2,7 @@
 
 use std::fmt::Debug;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use candle_core::cuda::{
     cudarc::driver::{sys::CUstream, CudaSlice, DeviceRepr, ValidAsZeroBits},
     CudaDevice,
@@ -12,7 +12,7 @@ use candle_core::{
     backend::BackendStorage, CpuStorage, CustomOp3, Result, Shape, Tensor, WithDType,
 };
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::bitsandbytes::ffi;
 
 use super::{BnbDType, BnbQuantType};
@@ -199,7 +199,7 @@ impl DequantizeOp {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn dispatch_cuda_kernel<T: WithDType + DeviceRepr + ValidAsZeroBits>(
         &self,
         input: &CudaSlice<u8>,
@@ -290,7 +290,7 @@ impl CustomOp3 for DequantizeOp {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_fwd(
         &self,
         input_s: &candle_core::CudaStorage,

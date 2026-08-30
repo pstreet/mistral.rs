@@ -161,7 +161,7 @@ impl Loader for DiffusionLoader {
             .map(std::fs::read_to_string)
             .collect::<io::Result<Vec<_>>>()?;
 
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         if let Device::Cuda(dev) = &device {
             unsafe { dev.disable_event_tracking() };
         }
@@ -249,6 +249,7 @@ impl Loader for DiffusionLoader {
                     output: vec![SupportedModality::Vision],
                 },
                 loaded_for_uqff_write: false,
+                paged_prefill_chunk_size: None,
             }),
             dummy_cache: EitherCache::Full(Cache::new(0, false)),
         })))

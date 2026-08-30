@@ -1,6 +1,6 @@
 use candle_core::{DType, Device, Result, Shape, Tensor};
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use candle_core::{
     cuda::{cudarc::driver::DevicePtr, CudaStorageSlice},
     CudaStorage, Storage,
@@ -10,7 +10,7 @@ use candle_core::{
 use candle_core::Storage;
 
 use candle_nn::Linear;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use half::{bf16, f16};
 use safetensors::tensor::Dtype;
 use std::{
@@ -25,19 +25,19 @@ use crate::{
     Shard, UnquantLinear, UqffReader, UqffTensor,
 };
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::utils::get_cuda_device;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use ffi::{eight_bit, four_bit, one_bit, three_bit, two_bit};
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 mod ffi;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 mod bitpack_ffi;
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 mod hqq_op;
 
 mod optimize;
@@ -53,7 +53,7 @@ const HQQ4_LOW_MASK: u8 = 0x0f;
 const HQQ4_HIGH_MULTIPLIER: f32 = 1.0 / 16.0;
 const HQQ4_LOW_MULTIPLIER: f32 = 1.0;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 macro_rules! dequant_for_dtype {
     ($this:expr, w=$wq_t:ty, sz=$scale_t:ty, $dtype:ident, pack=$pack:expr, $dev:expr, $bit_thing:ident, $postfix:tt) => {{
         paste::paste! {
@@ -155,7 +155,7 @@ impl HqqBits {
                 #[allow(unused_variables)]
                 let device = wq.device();
 
-                #[cfg(feature = "cuda")]
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
                 if device.is_cuda() {
                     // Use CUDA kernel for 8-bit (which is essentially a copy)
                     let dev = get_cuda_device(&wq)?;
@@ -238,7 +238,7 @@ impl HqqBits {
                 #[allow(unused_variables)]
                 let device = wq_in.device();
 
-                #[cfg(feature = "cuda")]
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
                 if device.is_cuda() {
                     // Use CUDA kernel for 4-bit packing
                     let dev = get_cuda_device(&wq_in)?;
@@ -332,7 +332,7 @@ impl HqqBits {
                 #[allow(unused_variables)]
                 let device = wq_in.device();
 
-                #[cfg(feature = "cuda")]
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
                 if device.is_cuda() {
                     // Use CUDA kernel for 2-bit packing
                     let dev = get_cuda_device(&wq_in)?;
@@ -382,7 +382,7 @@ impl HqqBits {
                         .bitwise_or(&c.leftshift(2)?)?
                         .bitwise_or(&d)
                 }
-                #[cfg(not(feature = "cuda"))]
+                #[cfg(not(any(feature = "cuda", feature = "rocm")))]
                 {
                     let wq = wq_in.to_dtype(DType::U8)?;
                     let step = (wq.dims()[0] as f64 / 4.) as usize;
@@ -409,7 +409,7 @@ impl HqqBits {
                     &wq_in.to_dtype(DType::U32)?,
                 )?;
 
-                #[cfg(feature = "cuda")]
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
                 if device.is_cuda() {
                     // Use CUDA kernel for efficient 3-bit packing
                     let dev = get_cuda_device(&wq)?;
@@ -481,7 +481,7 @@ impl HqqBits {
                 #[allow(unused_variables)]
                 let device = wq_in.device();
 
-                #[cfg(feature = "cuda")]
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
                 if device.is_cuda() {
                     // Use CUDA kernel for 1-bit packing
                     let dev = get_cuda_device(&wq_in)?;
@@ -539,7 +539,7 @@ impl HqqBits {
                         .bitwise_or(&g.leftshift(1)?)?
                         .bitwise_or(&h)
                 }
-                #[cfg(not(feature = "cuda"))]
+                #[cfg(not(any(feature = "cuda", feature = "rocm")))]
                 {
                     let wq = wq_in.to_dtype(DType::U8)?;
                     let step = (wq.dims()[0] as f64 / 8.) as usize;
@@ -822,7 +822,7 @@ impl HqqLayer {
     }
 
     /// Dequantize `self` into a tensor of shape `scales` or `zeros`.
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
     fn dequantize(&self) -> Result<Tensor> {
         use crate::hqq::hqq_op::{Dequant1Bit, Dequant2Bit, Dequant3Bit, Dequant4Bit, Dequant8Bit};
 
@@ -870,7 +870,7 @@ impl HqqLayer {
     }
 
     /// Dequantize `self` into a tensor of shape `scales` or `zeros`.
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn dequantize(&self) -> Result<Tensor> {
         match (self.scales.dtype(), self.zeros.dtype()) {
             (DType::F16, DType::F16) | (DType::BF16, DType::BF16) | (DType::F32, DType::F32) => (),

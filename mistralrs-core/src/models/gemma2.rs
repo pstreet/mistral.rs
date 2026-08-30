@@ -668,7 +668,7 @@ impl NormalModel for Model {
                 .map(|layer| layer.self_attn.sdpa_params.softcap.is_some()),
         )
     }
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn supports_cuda_decode_graphs(&self) -> bool {
         true
     }

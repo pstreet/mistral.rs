@@ -105,7 +105,12 @@ pub async fn run_interactive(
         .with_mtp_config_optional(runtime.mtp_config())
         .with_max_model_len_optional(max_model_len)
         .with_hf_config_overrides_optional(hf_config_overrides)
-        .with_paged_attn_cache_type(paged_cache_type);
+        .with_paged_attn_cache_type(paged_cache_type)
+        .with_prefill_chunk_size_optional(if runtime.prefill_chunk_size == 0 {
+            None
+        } else {
+            Some(runtime.prefill_chunk_size)
+        });
 
     if let Some(max_bytes) = encoder_cache_memory_bytes {
         builder = builder.with_encoder_cache_memory_bytes(max_bytes);

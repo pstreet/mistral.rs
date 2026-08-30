@@ -39,6 +39,33 @@ fn use_warp_prefill_recurrence(dims: &GdnDims) -> bool {
     matches!(dims.head_k_dim, 64 | 128)
 }
 
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[derive(Clone, Copy, PartialEq)]
+enum PrefillRecurrenceKernel {
+    Warp,
+    Chunked,
+    Tiled,
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+fn select_prefill_recurrence_kernel(dims: &GdnDims, seq_len: usize) -> PrefillRecurrenceKernel {
+    // MRS_GDN_KERNEL=warp|chunked|tiled overrides auto dispatch for tuning
+    match std::env::var("MRS_GDN_KERNEL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .as_deref()
+    {
+        Some("warp") => PrefillRecurrenceKernel::Warp,
+        Some("chunked") => PrefillRecurrenceKernel::Chunked,
+        Some("tiled") => PrefillRecurrenceKernel::Tiled,
+        _ if seq_len >= RECURRENCE_CHUNK_THRESHOLD && use_warp_prefill_recurrence(dims) => {
+            PrefillRecurrenceKernel::Warp
+        }
+        _ if seq_len >= RECURRENCE_CHUNK_THRESHOLD => PrefillRecurrenceKernel::Chunked,
+        _ => PrefillRecurrenceKernel::Tiled,
+    }
+}
+
 pub fn l2_norm(x: &Tensor, eps: f64) -> Result<Tensor> {
     let inv_norm = x
         .sqr()?

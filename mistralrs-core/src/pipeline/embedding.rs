@@ -263,7 +263,7 @@ impl Loader for EmbeddingLoader {
         } else {
             device_map::get_all_similar_devices(device)?
         };
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         for device in &available_devices {
             if let Device::Cuda(dev) = device {
                 unsafe { dev.disable_event_tracking() };
@@ -700,6 +700,7 @@ impl Loader for EmbeddingLoader {
                     output: vec![SupportedModality::Embedding],
                 },
                 loaded_for_uqff_write: self.config.write_uqff.is_some(),
+                paged_prefill_chunk_size: None,
             }),
             mapper: pipeline_mapper,
             modules,

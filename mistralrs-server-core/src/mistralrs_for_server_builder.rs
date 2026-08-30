@@ -128,6 +128,7 @@ pub mod defaults {
     pub const JINJA_EXPLICIT: Option<String> = None;
     pub const INTERACTIVE_MODE: bool = false;
     pub const PREFIX_CACHE_N: usize = 16;
+    pub const PREFILL_CHUNK_SIZE: usize = 0; // 0 = use DEFAULT_PAGED_PREFILL_CHUNK_SIZE
     pub const NUM_DEVICE_LAYERS: Option<Vec<String>> = None;
     pub const IN_SITU_QUANT: Option<String> = None;
     pub const PAGED_ATTN_GPU_MEM: Option<usize> = None;
@@ -296,6 +297,9 @@ pub struct MistralRsForServerBuilder {
     mtp_config: Option<MtpConfig>,
     encoder_cache_memory_bytes: Option<usize>,
 
+    /// Prefill chunk size in tokens for paged attention. 0 = use default (4096).
+    prefill_chunk_size: usize,
+
     /// Disable EOS token stopping (generate until max_len regardless of EOS)
     disable_eos_stop: bool,
 
@@ -346,7 +350,8 @@ impl Default for MistralRsForServerBuilder {
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
             mtp_config: defaults::MTP_CONFIG,
-            encoder_cache_memory_bytes: None,
+encoder_cache_memory_bytes: None,
+            prefill_chunk_size: defaults::PREFILL_CHUNK_SIZE,
             disable_eos_stop: false,
             code_exec_config: None,
             shell_config: None,
@@ -702,6 +707,20 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Set prefill chunk size in tokens for paged attention.
+    pub fn with_prefill_chunk_size(mut self, size: usize) -> Self {
+        self.prefill_chunk_size = size;
+        self
+    }
+
+    /// Set prefill chunk size if provided.
+    pub fn with_prefill_chunk_size_optional(mut self, size: Option<usize>) -> Self {
+        if let Some(size) = size {
+            self.prefill_chunk_size = size;
+        }
+        self
+    }
+
     /// Disable EOS token stopping (generate until max_len regardless of EOS).
     pub fn with_disable_eos_stop(mut self, disable: bool) -> Self {
         self.disable_eos_stop = disable;
@@ -873,6 +892,10 @@ impl MistralRsForServerBuilder {
 
         mistralrs_instance_info(&*loader);
 
+        if self.prefill_chunk_size > 0 {
+            mistralrs_core::set_override_prefill_chunk_size(self.prefill_chunk_size);
+        }
+
         let isq = self
             .in_situ_quant
             .as_ref()
@@ -1020,6 +1043,10 @@ impl MistralRsForServerBuilder {
             .build()?;
 
         mistralrs_instance_info(&*loader);
+
+        if self.prefill_chunk_size > 0 {
+            mistralrs_core::set_override_prefill_chunk_size(self.prefill_chunk_size);
+        }
 
         let mapper = init_mapper(
             &first_model
@@ -1283,6 +1310,11 @@ impl MistralRsForServerBuilder {
                 no_kv_cache: self.no_kv_cache,
                 no_prefix_cache: false,
                 prefix_cache_n: self.prefix_cache_n,
+                prefill_chunk_size: if self.prefill_chunk_size == 0 {
+                    None
+                } else {
+                    Some(self.prefill_chunk_size)
+                },
                 disable_eos_stop: self.disable_eos_stop,
                 throughput_logging_enabled: !self.interactive_mode,
                 search_embedding_model,

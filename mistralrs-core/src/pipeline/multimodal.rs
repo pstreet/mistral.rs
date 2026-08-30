@@ -1528,6 +1528,7 @@ impl Loader for MultimodalLoader {
                 model_metadata: Some(model_metadata),
                 modalities,
                 loaded_for_uqff_write: self.config.write_uqff.is_some(),
+                paged_prefill_chunk_size: None,
             }),
             processor,
             prefixer: self.inner.prefixer(&config),

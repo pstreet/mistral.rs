@@ -144,7 +144,7 @@ pub(super) fn gated_act(act: Activation) -> Result<mistralrs_quant::moe::cuda::G
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn validate_raw_weights(c: &BackendChoice, backend: &str) -> Result<()> {
     if c.quantized || c.loading_isq || c.immediate_isq {
         candle_core::bail!(
@@ -154,7 +154,7 @@ fn validate_raw_weights(c: &BackendChoice, backend: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn validate_fused(c: &BackendChoice) -> Result<()> {
     validate_raw_weights(c, "fused")?;
     if !matches!(c.dtype, DType::F16 | DType::BF16) {
@@ -200,13 +200,13 @@ impl MoEExpertsBackend {
             match forced {
                 Self::Fast => return Ok(Self::Fast),
                 Self::Fused => {
-                    #[cfg(feature = "cuda")]
+                    #[cfg(any(feature = "cuda", feature = "rocm"))]
                     {
                         validate_fused(c)?;
                         return Ok(Self::Fused);
                     }
-                    #[cfg(not(feature = "cuda"))]
-                    candle_core::bail!("MISTRALRS_MOE_BACKEND=fused requires a CUDA build");
+                    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
+                    candle_core::bail!("MISTRALRS_MOE_BACKEND=fused requires a CUDA or ROCm build");
                 }
                 #[cfg(feature = "cutile")]
                 Self::Cutile => {

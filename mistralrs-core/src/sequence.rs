@@ -6,8 +6,7 @@ use crate::{
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
     speculative::{SpeculativeProposalDistribution, SpeculativeTokens},
-    AdapterGenerationId, AdapterLease, AudioInput, ChatCompletionResponse, PromptTokensDetails,
-    Usage, VideoInput,
+    AdapterGenerationId, AdapterLease, AudioInput, ChatCompletionResponse, Usage, VideoInput,
 };
 use crate::{
     pipeline::{DiffusionGenerationParams, KvCache},
@@ -2329,13 +2328,6 @@ impl SequenceGroup {
             completion_tokens: self.total_toks.saturating_sub(self.total_prompt_toks),
             prompt_tokens: self.total_prompt_toks,
             total_tokens: self.total_toks,
-            prompt_tokens_details: if self.total_cached_toks > 0 {
-                Some(PromptTokensDetails {
-                    cached_tokens: self.total_cached_toks,
-                })
-            } else {
-                None
-            },
             avg_tok_per_sec: if self.total_time > 0 {
                 (self.total_toks as f32 / self.total_time as f32) * 1000.
             } else {

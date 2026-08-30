@@ -36,7 +36,7 @@ mod hqq;
 mod imatrix;
 mod isq_executor;
 mod lora;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub mod moe;
 mod mxfp4;
 mod pending_layer;
@@ -213,7 +213,7 @@ pub use pertensor_fp8::PerTensorFP8Linear;
 pub use unquantized::UnquantLinear;
 pub use utils::flash_attn_sinks_metal;
 pub use utils::flash_attn_sinks_varlen_metal;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub use utils::gptoss_swiglu_fused;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_interleaved;
