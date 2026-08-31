@@ -907,6 +907,22 @@ impl CudaGraphHandle {
             return Err(candle_core::Error::msg(format!("{result:?}"))
                 .context("CUDA graph stream end capture failed"));
         }
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        eprintln!(
+            "[cudarc] END raw: is_capturing={} arena_active={} consumed={} (before reset)",
+            stream.is_capturing(),
+            stream.capture_arena_active(),
+            stream.capture_arena_consumed()
+        );
+        // Raw end-capture leaves the fork's capturing flag / arena pointer set,
+        // which would route later eager allocs into the stale arena and OOM.
+        stream.reset_capture_bookkeeping();
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        eprintln!(
+            "[cudarc] END raw: is_capturing={} arena_active={} (after reset)",
+            stream.is_capturing(),
+            stream.capture_arena_active()
+        );
         if graph.is_null() {
             return Ok(None);
         }
@@ -2870,6 +2886,7 @@ pub(crate) fn end_cuda_capture_discard(stream: &Arc<CudaStream>) {
                 let _ = unsafe { sys::hipGraphDestroy(graph) };
             }
         }
+        stream.reset_capture_bookkeeping();
     }
 }
 

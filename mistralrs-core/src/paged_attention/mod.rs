@@ -485,6 +485,14 @@ pub fn calculate_cache_config(
                     None => MemoryUsage.query(device)?,
                 };
                 let total = memory.total() as f32 / SIZE_IN_MB as f32;
+                eprintln!(
+                    "[cache] total={}MB avail={}MB f={} model_weight={}MB post_load={}",
+                    total,
+                    memory.available() as f32 / SIZE_IN_MB as f32,
+                    f,
+                    model_weight_per_device_mb,
+                    post_load_memory.is_some()
+                );
                 if model_weight_size_in_bytes.is_some() {
                     // Pre-loading: compute budget from total memory and known model size.
                     (total * f - model_weight_per_device_mb as f32).max(0.0) as usize
