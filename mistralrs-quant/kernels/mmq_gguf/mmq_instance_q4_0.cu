@@ -136,7 +136,13 @@ static void launch_mmq_case_q4_0(float *tmp_fixup, const mmq_args &args,
     if (mmq_x == 24)
       continue;
 #endif
+    // AMD device tiles 16-wide (32 at mmq_x>=128) for both MFMA and WMMA;
+    // host must match or it picks an mmq_x the device rejects (e.g. 40).
+    #ifdef USE_ROCM
+    const int granularity = (mmq_x >= 128 ? 32 : 16);
+    #else
     const int granularity = (turing_mma_available(cc) && mmq_x >= 48) ? 16 : 8;
+    #endif
     if (mmq_x % granularity != 0)
       continue;
     const size_t nbs = mmq_get_nbytes_shared<GGML_TYPE_Q4_0>(
