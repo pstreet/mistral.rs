@@ -82,6 +82,14 @@ fn build_rocm() -> Result<(), String> {
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "gfx1151".to_string());
+    // AMD-encoded host cc (0x1000000 | gfxNNNN) so the MMQ host launch decisions
+    // (use_stream_k, mmq_x, granularity) track the RDNA WMMA device path. Without
+    // it the host sees a small cc (1030), assumes NVIDIA/turing (8-wide granularity,
+    // stream-k) and can pick an mmq_x (e.g. 40) the 16-wide device path rejects.
+    let amd_host_cc: Option<String> = arch
+        .strip_prefix("gfx")
+        .and_then(|num| u32::from_str_radix(num, 16).ok())
+        .map(|gfx| format!("{:#x}", 0x0100_0000 | gfx));
     // CUDA compat shims (cuda_bf16.h etc.) shipped with the candle fork; override via env.
     let compat = std::env::var("MISTRALRS_ROCM_COMPAT_INCLUDE")
         .ok()
@@ -150,6 +158,11 @@ fn build_rocm() -> Result<(), String> {
             .arg("cuda_runtime.h");
         if let Some(header) = force_include {
             cmd.arg("-include").arg(header);
+        }
+        if src.contains("mmq_gguf/") {
+            if let Some(cc) = &amd_host_cc {
+                cmd.arg(format!("-DCANDLE_ROCM_HOST_CC={cc}"));
+            }
         }
         cmd.arg("-c")
             .arg("-o")
