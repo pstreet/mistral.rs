@@ -40,12 +40,20 @@ use crate::pipeline::{
 };
 use crate::speculative::SpeculativeGraphState;
 
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+fn dbg_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
 #[cfg(feature = "cuda")]
 const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 =
     sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH as u64;
 #[cfg(all(feature = "rocm", not(feature = "cuda")))]
-// CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH
-const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 = 0x2;
+// hipGraphInstantiateFlagAutoFreeOnLaunch (value 1, not 2 which is Upload)
+const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 = 0x1;
 // Matches the standard CUDA paged-attention V2 partition size.
 const PAGED_ATTENTION_PARTITION_SIZE: usize = 512;
 const TARGET_CUDA_DECODE_GRAPH_CACHE_DEFAULT_CAPACITY: usize = 64;
@@ -859,6 +867,10 @@ impl CudaGraphHandle {
     pub(crate) fn set_arena(&mut self, arena: Option<Arc<CudaSlice<u8>>>) {
         self.arena_keepalive = arena;
     }
+
+    pub(crate) fn arena_bytes(&self) -> usize {
+        self.arena_keepalive.as_ref().map_or(0, |arena| arena.len())
+    }
 }
 
 unsafe impl Send for CudaGraphHandle {}
@@ -869,10 +881,7 @@ impl Drop for CudaGraphHandle {
         let _ = self.stream.context().bind_to_thread();
         if !self.exec.is_null() {
             #[cfg(feature = "cuda")]
-            #[cfg(feature = "cuda")]
             let _ = unsafe { sys::cuGraphExecDestroy(self.exec) };
-            #[cfg(all(feature = "rocm", not(feature = "cuda")))]
-            let _ = unsafe { sys::hipGraphExecDestroy(self.exec) };
             #[cfg(all(feature = "rocm", not(feature = "cuda")))]
             let _ = unsafe { sys::hipGraphExecDestroy(self.exec) };
             self.exec = std::ptr::null_mut();
@@ -2314,7 +2323,7 @@ pub(crate) fn capture_cuda_decode_graph<F>(
     forward: F,
 ) -> candle_core::Result<CudaDecodeGraphEntry>
 where
-    F: FnOnce(&Tensor, &PagedAttentionInputMetadata) -> candle_core::Result<Tensor>,
+    F: Fn(&Tensor, &PagedAttentionInputMetadata) -> candle_core::Result<Tensor>,
 {
     let CudaDecodeGraphCaptureCtx {
         key,
@@ -2359,9 +2368,23 @@ where
 
     // ROCm graphs that contain mempool allocation nodes can only be launched
     // once; carve capture-time allocations from a plain pre-allocated arena so
-    // the graph replays cleanly.
+    // the graph replays cleanly. Size it from the warmup's allocation sum.
+    tracing::debug!("CUDA decode graph arena is {arena_bytes} bytes");
     #[cfg(all(feature = "rocm", not(feature = "cuda")))]
-    const DECODE_GRAPH_ARENA_BYTES: usize = 512 * 1024 * 1024;
+    // Capture records everything the dry run allocates plus the recorded buffer
+    // copies kept live in the graph; the dry run reuses pool memory so it
+    // under-measures, and the true need is found by re-capturing on overflow.
+    let warmup_bytes = arena_bytes;
+    let arena_bytes = warmup_bytes * 6 + DECODE_GRAPH_MIN_ARENA_BYTES;
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    let arena_bytes = std::env::var("MRS_DECODE_ARENA_OVERRIDE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(arena_bytes);
+    eprintln!(
+        "[cudarc] CAPTURE begin warmup={warmup_bytes} arena={arena_bytes} t={}",
+        dbg_nanos()
+    );
     #[cfg(all(feature = "rocm", not(feature = "cuda")))]
     let mut arena_keepalive: Option<Arc<CudaSlice<u8>>> = None;
 
@@ -2380,12 +2403,48 @@ if let Err(err) = prepare_fa3_decode_schedules(&metadata) {
         return Err(err.context("FA3 decode preparation capture failed"));
     }
 
-    let logits = match forward(&graph_input_ids, &metadata) {
-        Ok(logits) => logits,
-        Err(err) => {
+    let mut logits = None;
+    for attempt in 0..2 {
+        eprintln!("[cudarc] CAPTURE forward attempt={attempt}");
+        let result = forward(&graph_input_ids, &metadata);
+        // The dry run under-measures what capture records (recorded buffers
+        // outlive the step plus graph-only copies). Overflowed arena allocs are
+        // non-fatal to the forward, so a successful forward can still leave a
+        // corrupted graph; check the arena after the fact, not just on error.
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        let overflowed = stream.capture_arena_overflowed();
+        #[cfg(not(all(feature = "rocm", not(feature = "cuda"))))]
+        let overflowed = false;
+        eprintln!(
+            "[cudarc] CAPTURE forward done attempt={attempt} ok={} overflowed={} consumed={} t={}",
+            result.is_ok(),
+            overflowed,
+            stream.capture_arena_consumed(),
+            dbg_nanos()
+        );
+        if overflowed {
             end_cuda_capture_discard(&stream);
+            if attempt == 0 {
+                graph_input_ids.device().synchronize()?;
+                let consumed = stream.capture_arena_consumed();
+                let new_bytes = consumed + consumed / 8 + DECODE_GRAPH_MIN_ARENA_BYTES;
+                eprintln!("[cudarc] CAPTURE grew arena -> {new_bytes}");
+                tracing::debug!("CUDA decode graph arena grew {arena_bytes} -> {new_bytes} bytes");
+                let arena: Arc<CudaSlice<u8>> = Arc::new(
+                    unsafe { cuda_device.alloc::<u8>(new_bytes) }
+                        .map_err(candle_core::Error::wrap)?,
+                );
+                stream
+                    .begin_capture_arena(arena.clone())
+                    .map_err(candle_core::Error::wrap)?;
+                arena_keepalive = Some(arena);
+                continue;
+            }
             restore_event_tracking_after_capture(&stream, restore_event_tracking);
-            return Err(err.context("CUDA graph captured forward failed"));
+            return Err(
+                candle_core::Error::msg("CUDA graph capture arena overflowed on retry")
+                    .context("CUDA graph captured forward failed"),
+            );
         }
     };
     if logits.shape() != warmup_logits.shape()
