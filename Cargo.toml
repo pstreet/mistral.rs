@@ -207,15 +207,15 @@ mistralrs-macros = { path = "mistralrs-macros", version = "0.9.2" }
 mistralrs-code-exec = { path = "mistralrs-code-exec", version = "0.9.2" }
 mistralrs-sandbox = { path = "mistralrs-sandbox", version = "0.9.2" }
 
+[profile.release]
+# Max-performance server build.
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
 [profile.release-with-debug]
 inherits = "release"
 debug = true
-
-# Makes release profiler faster to build
-# The improvement is negligible with it.
-# [profile.release]
-# lto = true
-# opt-level = 3
 
 [profile.dev]
 debug = true
