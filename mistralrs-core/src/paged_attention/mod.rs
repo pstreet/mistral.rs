@@ -376,10 +376,9 @@ fn fit_post_load_cache_budget(
 /// remain after the weights are loaded. Post-loading callers should pass `None` since
 /// `get_memory_available()` already reflects the loaded model.
 ///
-/// `max_num_tokens`: on Metal (unified memory), caps the KV cache to this many tokens.
-/// Unlike CUDA with dedicated VRAM where unused memory is wasted, Metal's wired buffers
-/// compete with the OS and CPU for the same physical RAM. On CUDA this is ignored.
-/// If `None` on Metal, falls back to `config.max_seq_len()`.
+/// `max_num_tokens`: on unified-memory devices (Metal, integrated GPUs), caps the KV cache
+/// to this many tokens. A value of 0 or `None` falls back to `config.max_seq_len()`.
+/// On dedicated-VRAM devices this is ignored.
 #[allow(clippy::too_many_arguments)]
 pub fn calculate_cache_config(
     mem_gpu: MemoryGpuConfig,
@@ -529,20 +528,20 @@ pub fn calculate_cache_config(
         );
     }
 
-    // On Metal (unified memory), cap KV cache to what the model can actually use.
-    // Unlike CUDA with dedicated VRAM where unused memory is wasted, Metal's wired
-    // buffers compete with the OS and CPU for the same physical RAM.
-    // On CUDA, all available memory is used for maximum request concurrency (vLLM approach).
+    // Unified-memory devices share RAM with the OS and CPU, so cap the cache to what the model can use.
     #[allow(unused_mut, unused_variables)]
     let mut mem_gpu = min_mem_gpu;
-    if device.is_metal() {
-        let max_tokens = max_num_tokens.unwrap_or(config.max_seq_len());
+    let cap_to_model_context = device.is_metal() || crate::utils::normal::is_integrated_gpu(device);
+    if cap_to_model_context {
+        let max_tokens = max_num_tokens
+            .filter(|&n| n > 0)
+            .unwrap_or(config.max_seq_len());
         let mem_for_tokens =
             ctxt_to_blocks!(max_tokens, dtype_size, block_size, config) / SIZE_IN_MB;
         if mem_for_tokens < mem_gpu {
             if !silent {
                 info!(
-                    "Metal: capping KV cache from {} MB to {} MB ({} tokens).",
+                    "Unified memory: capping KV cache from {} MB to {} MB ({} tokens).",
                     mem_gpu, mem_for_tokens, max_tokens
                 );
             }
