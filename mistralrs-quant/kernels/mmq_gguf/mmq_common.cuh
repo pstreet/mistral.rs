@@ -306,8 +306,24 @@ static bool fp16_mma_hardware_available(const int cc) {
     return GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_VOLTA;
 }
 
-static bool amd_mfma_available(const int /*cc*/) { return false; } // NVIDIA only
-static bool amd_wmma_available(const int /*cc*/) { return false; } // NVIDIA only
+// ROCm: the runtime cc is NVIDIA-encoded (e.g. 1150 for gfx1151), so host arch
+// decisions use the cc the kernels were compiled for (CANDLE_ROCM_HOST_CC).
+static int ggml_cuda_host_arch_cc(const int cc) {
+#ifdef CANDLE_MMq_HOST_CC
+    return CANDLE_MMq_HOST_CC;
+#else
+    return cc;
+#endif
+}
+
+static bool amd_mfma_available(const int cc) {
+    return GGML_CUDA_CC_IS_CDNA(ggml_cuda_host_arch_cc(cc));
+}
+
+static bool amd_wmma_available(const int cc) {
+    const int c = ggml_cuda_host_arch_cc(cc);
+    return GGML_CUDA_CC_IS_RDNA3(c) || GGML_CUDA_CC_IS_RDNA4(c);
+}
 
 static bool turing_mma_available(const int cc) {
     return GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_TURING;

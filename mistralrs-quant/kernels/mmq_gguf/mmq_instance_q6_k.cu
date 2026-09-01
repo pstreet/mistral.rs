@@ -7,10 +7,7 @@ static void instantiate_mmq_q6_k(float *tmp_fixup, const mmq_args &args,
                                  cudaStream_t stream, int cc, int nsm,
                                  size_t smpbo, int warp_size_host) {
 
-  const int mmq_y = (GGML_CUDA_CC_IS_NVIDIA(cc) &&
-                     ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA)
-                        ? 128
-                        : 64;
+  const int mmq_y = get_mmq_y_host(cc);
   const int nwarps = 256 / warp_size_host;
   const int nbytes_shared = mmq_get_nbytes_shared<GGML_TYPE_Q6_K>(
       mmq_x, mmq_y, cc, warp_size_host, nwarps);
@@ -115,16 +112,8 @@ static void launch_mmq_case_q6_k(float *tmp_fixup, const mmq_args &args,
                                  cudaStream_t stream, int cc, int nsm,
                                  size_t smpbo, int warp_size_host) {
 
-  const int mmq_x_max =
-      (turing_mma_available(cc)) ? 128
-      : (GGML_CUDA_CC_IS_NVIDIA(cc) &&
-         ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA)
-          ? 64
-          : 64;
-  const int mmq_y = (GGML_CUDA_CC_IS_NVIDIA(cc) &&
-                     ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA)
-                        ? 128
-                        : 64;
+  const int mmq_x_max = get_mmq_x_max_host(cc);
+  const int mmq_y = get_mmq_y_host(cc);
   const int nwarps = 256 / warp_size_host;
 
   int mmq_x_best = 0;
@@ -136,13 +125,7 @@ static void launch_mmq_case_q6_k(float *tmp_fixup, const mmq_args &args,
     if (mmq_x == 24)
       continue;
 #endif
-    // AMD device tiles 16-wide (32 at mmq_x>=128) for both MFMA and WMMA;
-    // host must match or it picks an mmq_x the device rejects (e.g. 40).
-    #ifdef USE_ROCM
-    const int granularity = (mmq_x >= 128 ? 32 : 16);
-    #else
-    const int granularity = (turing_mma_available(cc) && mmq_x >= 48) ? 16 : 8;
-    #endif
+    const int granularity = mmq_get_granularity_host(mmq_x, cc);
     if (mmq_x % granularity != 0)
       continue;
     const size_t nbs = mmq_get_nbytes_shared<GGML_TYPE_Q6_K>(
@@ -234,6 +217,7 @@ extern "C" void launch_mmq_gguf_q6_k(void *tmp_fixup_ptr, const void *x,
                                      int64_t smpbo, int warp_size_host,
                                      int type_dst, void *stream) {
 
+  cc = ggml_cuda_host_arch_cc(cc);
   const bool use_stream_k =
       (GGML_CUDA_CC_IS_NVIDIA(cc) &&
        ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA);

@@ -112,8 +112,9 @@ fn build_rocm() -> Result<(), String> {
     let kernels: &[(&str, Option<&str>)] = &[
         ("kernels/rotary/rotary.cu", None),
         ("kernels/ops/ops.cu", Some("cuda_thrust.h")),
-        // GGUF MMQ/MMVQ family: MMA PTX paths are disabled under USE_ROCM in
-        // mmq_common.cuh so these fall back to generic load/FMA routes.
+        // GGUF MMQ/MMVQ family: NVIDIA MMA PTX is disabled under USE_ROCM in
+        // mmq_common.cuh; RDNA3/RDNA4 use WMMA intrinsics, other targets fall
+        // back to generic load/FMA routes.
         ("kernels/mmvq_gguf/mmvq_gguf.cu", None),
         ("kernels/gemv/gemv.cu", None),
         ("kernels/hqq/hqq.cu", None),

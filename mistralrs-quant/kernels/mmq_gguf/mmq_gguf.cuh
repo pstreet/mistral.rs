@@ -3973,6 +3973,7 @@ struct mmq_args {
       int64_t stride_row_x, int64_t stride_col_dst, int64_t num_experts,      \
       int64_t ncols_max, int cc, int nsm, int64_t smpbo,                     \
       int warp_size_host, void *stream) {                                     \
+    cc = ggml_cuda_host_arch_cc(cc);                                          \
     const bool use_stream_k =                                                 \
         (GGML_CUDA_CC_IS_NVIDIA(cc) &&                                        \
          ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA);          \
