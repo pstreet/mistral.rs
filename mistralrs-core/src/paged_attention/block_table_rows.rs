@@ -33,7 +33,7 @@ pub(crate) struct BlockTableSnapshot {
 }
 
 impl BlockTableSnapshot {
-    #[cfg(any(feature = "cuda", test))]
+    #[cfg(any(feature = "cuda", feature = "rocm", test))]
     pub(crate) fn from_owned_sequence_tables(
         tables: Vec<Vec<usize>>,
         rows_per_sequence: usize,
@@ -76,7 +76,7 @@ impl BlockTableSnapshot {
         &self.tables[table_idx]
     }
 
-    #[cfg(any(feature = "cuda", test))]
+    #[cfg(any(feature = "cuda", feature = "rocm", test))]
     pub(crate) fn table_arc(&self, table_idx: usize) -> Arc<[usize]> {
         self.tables[table_idx].clone()
     }

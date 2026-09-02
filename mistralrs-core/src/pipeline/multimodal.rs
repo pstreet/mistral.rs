@@ -17,7 +17,7 @@ use super::{
     Phi3VLoader, Qwen2_5VLLoader, VoxtralLoader,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::cuda::gdn::GDN_PAD_SLOT;
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
@@ -48,7 +48,7 @@ struct CudaDecodeGraphForwardInput<'a> {
     model_specific_args: &'a dyn Any,
     recurrent_batch_kind: RecurrentBatchKind,
 }
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SpeculativeGraphTensorMetadata {
     shape: Vec<usize>,
@@ -58,7 +58,7 @@ struct SpeculativeGraphTensorMetadata {
     device: candle_core::DeviceLocation,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn speculative_graph_tensor_metadata(
     state: &dyn crate::speculative::SpeculativeGraphState,
 ) -> Vec<SpeculativeGraphTensorMetadata> {
@@ -78,7 +78,7 @@ fn speculative_graph_tensor_metadata(
         .collect()
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 fn validate_speculative_graph_tensor_metadata(
     expected: &[SpeculativeGraphTensorMetadata],
     actual: &[SpeculativeGraphTensorMetadata],
@@ -2361,6 +2361,7 @@ impl MultimodalPipeline {
             )
             .with_recurrent_batch_kind(recurrent_batch_kind)
             .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
+            cuda_device.reset_alloc_counter();
             let warmup_logits = self.model.forward(
                 &step.input_ids,
                 None,
@@ -2380,6 +2381,7 @@ impl MultimodalPipeline {
                     .transpose()?;
             }
             step.input_ids.device().synchronize()?;
+            let arena_bytes = cuda_device.alloc_counter();
             let live_logits = step.narrow_rows(&warmup_logits)?;
 
             let spec_state_usage = warm_spec_state
@@ -2404,6 +2406,7 @@ impl MultimodalPipeline {
                     warmup_logits: &warmup_logits,
                     state_indices: state_index_buffers,
                     real_batch: step.real_batch,
+                    arena_bytes,
                 },
                 |graph_input_ids, graph_metadata| {
                     let mut ctx = ModelForwardContext::new(

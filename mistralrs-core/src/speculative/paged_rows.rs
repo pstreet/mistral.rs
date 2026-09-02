@@ -189,7 +189,7 @@ pub(crate) fn make_paged_rows_metadata(
         decode_tmp_v: None,
         decode_tmp_s: None,
         fa3_decode: None,
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         decode_tile_plan_used: None,
     });
 

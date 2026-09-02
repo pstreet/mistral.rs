@@ -663,7 +663,7 @@ fn weighted_index_from_unit_f32(weights: &[f32], unit: f32) -> Result<usize> {
     Ok(last_positive.expect("positive sampling mass was checked above"))
 }
 
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm"))]
 fn sparse_token_counts(
     context: &[u32],
     vocab_size: usize,

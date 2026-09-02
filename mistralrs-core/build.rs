@@ -244,6 +244,13 @@ fn build_rocm() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/cuda/gdn.cu");
     println!("cargo:rerun-if-changed=src/cuda/attention_prep.cu");
+    println!("cargo:rerun-if-changed=src/cuda/input_packing.cu");
+    println!("cargo:rerun-if-changed=src/cuda/indexed_copy.cu");
+    println!("cargo:rerun-if-changed=src/cuda/dflash_context.cu");
+    println!("cargo:rerun-if-changed=src/cuda/dflash_selector.cu");
+    println!("cargo:rerun-if-changed=src/cuda/dynamic_conv.cu");
+    println!("cargo:rerun-if-changed=src/cuda/speculative_rejection.cu");
+    println!("cargo:rerun-if-changed=src/cuda/ssm.cu");
     println!("cargo:rerun-if-changed=src/cuda/sort.cu");
     println!("cargo:rerun-if-changed=src/cuda/graph.cu");
     println!("cargo:rerun-if-changed=src/cuda/moe_gemm.cu");
@@ -266,6 +273,13 @@ fn build_rocm() {
         ("src/cuda/sort.cu", None),
         ("src/cuda/graph.cu", None),
         ("src/cuda/attention_prep.cu", None),
+        ("src/cuda/input_packing.cu", None),
+        ("src/cuda/indexed_copy.cu", None),
+        ("src/cuda/dflash_context.cu", None),
+        ("src/cuda/dflash_selector.cu", None),
+        ("src/cuda/dynamic_conv.cu", None),
+        ("src/cuda/speculative_rejection.cu", None),
+        ("src/cuda/ssm.cu", None),
         ("src/cuda/moe_gemm.cu", Some("cuda_thrust.h")),
         ("src/cuda/moe_gemm_wmma.cu", Some("cuda_thrust.h")),
         ("src/cuda/moe_gemv.cu", Some("cuda_thrust.h")),

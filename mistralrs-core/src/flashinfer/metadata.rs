@@ -1,7 +1,7 @@
 use anyhow::Result;
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use candle_core::cuda_backend::cudarc::driver::{CudaEvent, CudaStream};
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use candle_core::DType;
 use candle_core::{Device, Tensor};
 #[cfg(all(feature = "cuda", target_family = "unix"))]
@@ -12,7 +12,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock, Weak},
 };
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use super::Fa3DecodeState;
 use super::{
     DeviceTensorMap, FlashInferMetadata, FlashInferPagedAttentionView,
@@ -23,7 +23,7 @@ use super::{Fa3DecodeBuffers, Fa3DecodeScheduleKey, Fa3DecodeView, Fa3PagedSched
 use crate::paged_attention::block_table_rows::BlockTableRows;
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::paged_attention::AttentionBackendKind;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::paged_attention::ModelConfigLike;
 
 // Split-KV decode chunks each (sequence, kv head) context so the grid reaches about this many
@@ -313,7 +313,7 @@ pub(crate) fn flashinfer_metadata(
         decode_tmp_v: None,
         decode_tmp_s: None,
         fa3_decode: None,
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         decode_tile_plan_used: None,
     }
 }
@@ -390,6 +390,18 @@ pub(crate) fn make_fa3_decode_state(
 }
 
 #[cfg(all(feature = "cuda", not(target_family = "unix")))]
+pub(crate) fn make_fa3_decode_state(
+    _metadata: &FlashInferMetadata,
+    _batch: usize,
+    _query_len: usize,
+    _kv_cache: &[(Tensor, Tensor)],
+    _model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
+    _activation_dtype: DType,
+) -> candle_core::Result<Option<Fa3DecodeState>> {
+    Ok(None)
+}
+
+#[cfg(feature = "rocm")]
 pub(crate) fn make_fa3_decode_state(
     _metadata: &FlashInferMetadata,
     _batch: usize,

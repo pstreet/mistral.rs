@@ -571,7 +571,7 @@ pub mod text_models_inputs_processor {
                         decode_tmp_v: None,
                         decode_tmp_s: None,
                         fa3_decode: None,
-                        #[cfg(feature = "cuda")]
+                        #[cfg(any(feature = "cuda", feature = "rocm"))]
                         decode_tile_plan_used: None,
                     }
                 });
@@ -1769,7 +1769,7 @@ pub mod text_models_inputs_processor {
             }
         }
 
-        #[cfg(any(feature = "cuda", test))]
+        #[cfg(any(feature = "cuda", feature = "rocm", test))]
         pub(crate) fn graph(
             block_tables: bool,
             context_lens: bool,
@@ -1785,7 +1785,7 @@ pub mod text_models_inputs_processor {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub(crate) struct DecodePagedRowsGraphKey {
         batch_size: usize,
@@ -1908,7 +1908,7 @@ pub mod text_models_inputs_processor {
             BlockTableRanges::new(&self.block_tables, ranges)
         }
 
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         pub(crate) fn full_block_table(&self, row: usize) -> &[usize] {
             self.block_tables.row(row)
         }
@@ -1938,7 +1938,7 @@ pub mod text_models_inputs_processor {
             rows
         }
 
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         pub(crate) fn graph_key(&self) -> DecodePagedRowsGraphKey {
             let batch_size = self.batch_size();
             assert!(self
@@ -2009,7 +2009,7 @@ pub mod text_models_inputs_processor {
             self.build_inner(false, PagedDecodeMetadataRequirements::conservative(self))
         }
 
-        #[cfg(any(feature = "cuda", test))]
+        #[cfg(any(feature = "cuda", feature = "rocm", test))]
         pub(crate) fn build_graph_update(
             self: &Arc<Self>,
             requirements: PagedDecodeMetadataRequirements,

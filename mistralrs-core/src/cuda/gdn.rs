@@ -1,49 +1,49 @@
 #![allow(clippy::cast_possible_truncation)]
 
 use candle_core::{DType, Device, Result, Tensor};
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use mistralrs_quant::QuantizedActivation;
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 use mistralrs_quant::{ActivationQuantizationScheme, ActivationScaleLayout};
 
 use crate::kv_cache::RecurrentStateLayout;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::kv_cache::GDN_PENDING_KEY_BANK_COUNT;
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 pub(crate) const GDN_PAD_SLOT: u32 = u32::MAX;
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 const GDN_DECODE_MIN_COMPUTE_MAJOR: i32 = 9;
 #[cfg_attr(not(any(feature = "cuda", test)), allow(dead_code))]
 const GDN_DECODE_TUNED_COMPUTE_MAJOR: i32 = 9;
 pub(crate) const GDN_DECODE_K_DIM: usize = 128;
 pub(crate) const GDN_DECODE_V_DIM: usize = 128;
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 const GDN_FP8_GROUP_SIZE: usize = 128;
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 const GDN_FP8_SCALE_ROW_MAJOR: i32 = 0;
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 const GDN_FP8_SCALE_GROUP_MAJOR: i32 = 1;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const GDN_DECODE_FALLBACK_MAX_K: usize = 256;
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 const GDN_DECODE_V_MAJOR_LARGE_TILE: usize = 32;
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 const GDN_DECODE_V_MAJOR_LARGE_CTA_WAVES: usize = 8;
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 const GDN_DECODE_COOPERATIVE_V_TILE: usize = 16;
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 const GDN_DECODE_PIPELINED_V_TILE: usize = 32;
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 const GDN_DECODE_COOPERATIVE_STATE_WAVES: usize = 2;
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 const GDN_DECODE_PIPELINED_OCCUPANCY_WAVES: usize = 4;
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 const GDN_DECODE_PIPELINED_AMORTIZED_WAVES: usize = 8;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const GDN_DECODE_VECTOR_ALIGNMENT: usize = 16;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const GDN_DECODE_INPUT_ALIGNMENT: usize = 8;
 pub(crate) const GDN_SPEC_COMMIT_MAX_K: usize = 256;
 pub(crate) const GDN_SPEC_CHECKPOINT_MAX_CONV_WIDTH: usize = 16;
@@ -52,27 +52,27 @@ pub(crate) const GDN_SPEC_FUSED_MAX_TOKENS: usize = 8;
 pub(crate) const GDN_CHANNEL_BLOCK_SIZE: usize = 256;
 pub(crate) const GDN_DEFERRED_DECODE_MIN_BATCH: usize = 8;
 pub(crate) const GDN_DEFERRED_STATE_DEPTH: usize = 4;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(dead_code)]
 const GDN_TRANSITION_STAGE_POINTER_SEGMENTS: usize = 10;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const GDN_TRANSITION_PUBLISH_POINTER_SEGMENTS: usize = 3;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const GDN_TRANSITION_APPLY_POINTER_SEGMENTS: usize = 11;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const GDN_DECODE_KERNEL_ENV: &str = "MISTRALRS_GDN_DECODE_KERNEL";
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const GDN_PREFILL_KERNEL_ENV: &str = "MISTRALRS_GDN_PREFILL_KERNEL";
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const GDN_STATE_DTYPE_F16: i32 = 0;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const GDN_STATE_DTYPE_BF16: i32 = 1;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const GDN_STATE_DTYPE_F32: i32 = 2;
 #[cfg(all(feature = "cuda", has_flashinfer_gdn_sm90_kernel))]
 const FLASHINFER_GDN_MIN_SEQ_LEN: usize = 32;
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 #[derive(Clone, Debug)]
 pub(crate) struct GdnFp8OutputSpec {
     source_shape: [usize; 3],
@@ -80,7 +80,7 @@ pub(crate) struct GdnFp8OutputSpec {
     scale_layout: ActivationScaleLayout,
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct GdnFp8OutputLayout {
     rows: usize,
@@ -91,7 +91,7 @@ struct GdnFp8OutputLayout {
     scale_layout_code: i32,
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 impl GdnFp8OutputSpec {
     pub(crate) fn new(
         source_shape: [usize; 3],
@@ -149,13 +149,13 @@ impl GdnFp8OutputSpec {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) enum GdnPostOpOutput {
     Tensor(Tensor),
     Quantized(QuantizedActivation),
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl GdnPostOpOutput {
     #[cfg(test)]
     fn into_tensor(self) -> Result<Tensor> {
@@ -262,7 +262,7 @@ pub(crate) fn deferred_decode_batch_supported(batch_size: usize) -> bool {
     batch_size >= GDN_DEFERRED_DECODE_MIN_BATCH
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
 enum GdnDecodeKernel {
@@ -273,7 +273,7 @@ enum GdnDecodeKernel {
     ValueMajor32 = 4,
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GdnPrefillKernel {
     FlashInferSm90,
@@ -284,7 +284,7 @@ enum GdnPrefillKernel {
     LegacyChunked,
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 #[derive(Clone, Copy)]
 struct GdnPrefillPolicy {
     compute_major: i32,
@@ -297,7 +297,7 @@ struct GdnPrefillPolicy {
     state_layout: RecurrentStateLayout,
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 fn prefill_kernel_supported(kernel: GdnPrefillKernel, policy: GdnPrefillPolicy) -> bool {
     kernel != GdnPrefillKernel::FlashInferSm90
         && policy.state_layout == RecurrentStateLayout::GdnValueMajor
@@ -310,7 +310,7 @@ fn prefill_kernel_supported(kernel: GdnPrefillKernel, policy: GdnPrefillPolicy) 
         && policy.head_v_dim == GDN_DECODE_V_DIM
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 fn automatic_prefill_kernel(policy: GdnPrefillPolicy) -> GdnPrefillKernel {
     if policy.state_blocks <= policy.multiprocessor_count {
         GdnPrefillKernel::ValueMajor2
@@ -321,7 +321,7 @@ fn automatic_prefill_kernel(policy: GdnPrefillPolicy) -> GdnPrefillKernel {
     }
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 fn select_prefill_kernel(
     policy: GdnPrefillPolicy,
     requested: Option<GdnPrefillKernel>,
@@ -332,7 +332,7 @@ fn select_prefill_kernel(
         .ok_or(kernel)
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 fn parse_prefill_kernel(value: &str) -> std::result::Result<Option<GdnPrefillKernel>, String> {
     match value.trim().to_ascii_lowercase().as_str() {
         "auto" => Ok(None),
@@ -348,7 +348,7 @@ fn parse_prefill_kernel(value: &str) -> std::result::Result<Option<GdnPrefillKer
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn prefill_kernel_override() -> Result<Option<GdnPrefillKernel>> {
     use std::sync::OnceLock;
 
@@ -362,7 +362,7 @@ fn prefill_kernel_override() -> Result<Option<GdnPrefillKernel>> {
     }
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 #[derive(Clone, Copy)]
 struct GdnDecodePolicy {
     compute_major: i32,
@@ -375,7 +375,7 @@ struct GdnDecodePolicy {
     state_layout: RecurrentStateLayout,
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 fn decode_kernel_supported(kernel: GdnDecodeKernel, policy: GdnDecodePolicy) -> bool {
     match kernel {
         GdnDecodeKernel::Baseline => policy.state_layout == RecurrentStateLayout::GdnKeyMajor,
@@ -409,7 +409,7 @@ fn decode_kernel_supported(kernel: GdnDecodeKernel, policy: GdnDecodePolicy) -> 
     }
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 fn automatic_decode_kernel(policy: GdnDecodePolicy) -> GdnDecodeKernel {
     if policy.state_layout == RecurrentStateLayout::GdnValueMajor {
         let large_tile_blocks = policy
@@ -457,7 +457,7 @@ fn automatic_decode_kernel(policy: GdnDecodePolicy) -> GdnDecodeKernel {
     }
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 fn select_decode_kernel(
     policy: GdnDecodePolicy,
     requested: Option<GdnDecodeKernel>,
@@ -474,7 +474,7 @@ fn select_decode_kernel(
     }
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 fn parse_decode_kernel(value: &str) -> std::result::Result<Option<GdnDecodeKernel>, String> {
     match value.trim().to_ascii_lowercase().as_str() {
         "auto" => Ok(None),
@@ -489,7 +489,7 @@ fn parse_decode_kernel(value: &str) -> std::result::Result<Option<GdnDecodeKerne
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn decode_kernel_override() -> Result<Option<GdnDecodeKernel>> {
     use std::sync::OnceLock;
 
@@ -503,14 +503,14 @@ fn decode_kernel_override() -> Result<Option<GdnDecodeKernel>> {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[derive(Clone, Copy)]
 struct GdnCudaDeviceProperties {
     compute_major: i32,
     multiprocessor_count: usize,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn gdn_cuda_device_properties(dev: &candle_core::CudaDevice) -> Result<GdnCudaDeviceProperties> {
     use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
     use std::collections::HashMap;
@@ -559,7 +559,7 @@ pub(crate) fn v_major_state_supported(
     if input_dtype != DType::BF16 || key_dim != GDN_DECODE_K_DIM || value_dim != GDN_DECODE_V_DIM {
         return Ok(false);
     }
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     {
         if !device.is_cuda() {
             return Ok(false);
@@ -567,14 +567,14 @@ pub(crate) fn v_major_state_supported(
         let properties = gdn_cuda_device_properties(device.as_cuda_device()?)?;
         Ok(properties.compute_major == GDN_DECODE_TUNED_COMPUTE_MAJOR)
     }
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
     {
         let _ = device;
         Ok(false)
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn cuda_recurrent_state_ptr(tensor: &Tensor, name: &str) -> Result<(*mut core::ffi::c_void, i32)> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
@@ -617,7 +617,7 @@ fn cuda_recurrent_state_ptr(tensor: &Tensor, name: &str) -> Result<(*mut core::f
     Ok((pointer as *mut core::ffi::c_void, dtype))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn cuda_read_ptr_with_guard<'a, T: candle_core::cuda_backend::CudaDType + 'a>(
     storage: &'a candle_core::Storage,
     layout: &candle_core::Layout,
@@ -638,7 +638,7 @@ fn cuda_read_ptr_with_guard<'a, T: candle_core::cuda_backend::CudaDType + 'a>(
     Ok((pointer, guard))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct CudaWritePtrOp<'a, T, F> {
     stream: &'a std::sync::Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
     name: &'static str,
@@ -646,7 +646,7 @@ struct CudaWritePtrOp<'a, T, F> {
     marker: std::marker::PhantomData<T>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl<T, F> candle_core::InplaceOp1 for CudaWritePtrOp<'_, T, F>
 where
     T: candle_core::cuda_backend::CudaDType,
@@ -688,7 +688,7 @@ where
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn with_cuda_write_ptr<T, F>(
     tensor: &Tensor,
     stream: &std::sync::Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
@@ -707,7 +707,7 @@ where
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn cuda_inplace_ptr_with_guard<'a, T: candle_core::cuda_backend::CudaDType + 'a>(
     storage: &'a candle_core::Storage,
     layout: &candle_core::Layout,
@@ -727,7 +727,7 @@ fn cuda_inplace_ptr_with_guard<'a, T: candle_core::cuda_backend::CudaDType + 'a>
     cuda_read_ptr_with_guard::<T>(storage, layout, stream, name)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn cuda_recurrent_state_inplace_ptr_with_guard<'a>(
     dtype: DType,
     storage: &'a candle_core::Storage,
@@ -761,7 +761,7 @@ fn cuda_recurrent_state_inplace_ptr_with_guard<'a>(
 }
 
 #[derive(Clone, Copy)]
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 pub(crate) struct GdnPackedToPadded<'a> {
     pub source: &'a Tensor,
     pub cu_seqlens: &'a Tensor,
@@ -772,7 +772,7 @@ pub(crate) struct GdnPackedToPadded<'a> {
 }
 
 #[derive(Clone, Copy)]
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 pub(crate) struct GdnPaddedToPacked<'a> {
     pub source: &'a Tensor,
     pub cu_seqlens: &'a Tensor,
@@ -781,7 +781,7 @@ pub(crate) struct GdnPaddedToPacked<'a> {
 }
 
 #[derive(Clone, Copy)]
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 pub(crate) struct GdnRaggedConvState<'a> {
     pub padded_input: &'a Tensor,
     pub initial_state: &'a Tensor,
@@ -789,7 +789,7 @@ pub(crate) struct GdnRaggedConvState<'a> {
     pub batch_size: usize,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn gdn_ragged_dense_suffix(source: &Tensor) -> Option<(usize, usize)> {
     let dims = source.dims();
     let strides = source.stride();
@@ -806,7 +806,7 @@ fn gdn_ragged_dense_suffix(source: &Tensor) -> Option<(usize, usize)> {
     (strides[1] >= width).then_some((width, strides[1]))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[derive(Clone, Copy)]
 struct GdnPaddedToPackedGeometry {
     width: usize,
@@ -816,7 +816,7 @@ struct GdnPaddedToPackedGeometry {
     feature_inner_width: usize,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn gdn_padded_to_packed_geometry(source: &Tensor) -> Option<GdnPaddedToPackedGeometry> {
     let dims = source.dims();
     let strides = source.stride();
@@ -841,7 +841,7 @@ fn gdn_padded_to_packed_geometry(source: &Tensor) -> Option<GdnPaddedToPackedGeo
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn validate_gdn_ragged_metadata(
     source: &Tensor,
     cu_seqlens: &Tensor,
@@ -858,7 +858,7 @@ fn validate_gdn_ragged_metadata(
     Ok(())
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn try_gdn_packed_to_padded_cuda(
     context: GdnPackedToPadded<'_>,
 ) -> Result<Option<Tensor>> {
@@ -971,14 +971,14 @@ pub(crate) fn try_gdn_packed_to_padded_cuda(
     .map(Some)
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 pub(crate) fn try_gdn_packed_to_padded_cuda(
     _context: GdnPackedToPadded<'_>,
 ) -> Result<Option<Tensor>> {
     Ok(None)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn try_gdn_padded_to_packed_cuda(
     context: GdnPaddedToPacked<'_>,
 ) -> Result<Option<Tensor>> {
@@ -1083,14 +1083,14 @@ pub(crate) fn try_gdn_padded_to_packed_cuda(
     .map(Some)
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 pub(crate) fn try_gdn_padded_to_packed_cuda(
     _context: GdnPaddedToPacked<'_>,
 ) -> Result<Option<Tensor>> {
     Ok(None)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn try_gdn_extract_ragged_conv_state_cuda(
     context: GdnRaggedConvState<'_>,
 ) -> Result<Option<Tensor>> {
@@ -1217,7 +1217,7 @@ pub(crate) fn try_gdn_extract_ragged_conv_state_cuda(
     .map(Some)
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 pub(crate) fn try_gdn_extract_ragged_conv_state_cuda(
     _context: GdnRaggedConvState<'_>,
 ) -> Result<Option<Tensor>> {
@@ -1228,14 +1228,14 @@ pub(crate) fn try_gdn_extract_ragged_conv_state_cuda(
 /// `[B*H, ...]` copy addressed by batch row; `Pooled` addresses the whole pool `[cap, H, ...]`
 /// through a `[B]` u32 slot table, so the kernels update it in place without gather/scatter copies.
 /// A pooled slot of `u32::MAX` is padding: kernels emit zeros and leave the state pool untouched.
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 #[derive(Clone, Copy)]
 pub enum GdnStateSlots<'a> {
     Gathered,
     Pooled(&'a Tensor),
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 impl<'a> GdnStateSlots<'a> {
     pub fn from_option(slots: Option<&'a Tensor>) -> Self {
         match slots {
@@ -1245,7 +1245,7 @@ impl<'a> GdnStateSlots<'a> {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn with_slot_indices<T>(
     slots: GdnStateSlots<'_>,
     f: impl FnOnce(*const i32, usize) -> Result<T>,
@@ -1267,7 +1267,7 @@ fn with_slot_indices<T>(
 }
 
 /// Contiguous f32 recurrence inputs: q, k `[BH, S, K]`, v `[BH, S, V]`, g, beta `[BH, S]`.
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 #[derive(Clone, Copy)]
 pub struct RecurrenceInputs<'a> {
     pub q: &'a Tensor,
@@ -1277,7 +1277,7 @@ pub struct RecurrenceInputs<'a> {
     pub beta: &'a Tensor,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[derive(Clone, Copy, Debug)]
 enum RecurrenceKernel {
     Scalar,
@@ -1293,7 +1293,7 @@ enum RecurrenceKernel {
 
 /// `state` is `[BH, K, V]` or `[BH, V, K]` (gathered), or the matching pooled layout, mutated in place.
 /// Returns output `[BH, S, V]`.
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn launch_recurrence(
     kernel: RecurrenceKernel,
     inputs: RecurrenceInputs<'_>,
@@ -1446,7 +1446,7 @@ fn launch_recurrence(
 }
 
 /// Sequential (one token at a time) gated delta rule recurrence; see `launch_recurrence`.
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn gated_delta_rule_recurrence_cuda(
     inputs: RecurrenceInputs<'_>,
     state: &mut Tensor,
@@ -1456,7 +1456,7 @@ pub fn gated_delta_rule_recurrence_cuda(
 }
 
 /// Prefill recurrence in 64-token chunks; see `launch_recurrence`.
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn chunked_gated_delta_rule_recurrence_cuda(
     inputs: RecurrenceInputs<'_>,
     state: &mut Tensor,
@@ -1466,7 +1466,7 @@ pub fn chunked_gated_delta_rule_recurrence_cuda(
 }
 
 /// Warp-per-value-column prefill recurrence; see `launch_recurrence`.
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn warp_gated_delta_rule_recurrence_cuda(
     inputs: RecurrenceInputs<'_>,
     state: &mut Tensor,
@@ -1475,7 +1475,7 @@ pub fn warp_gated_delta_rule_recurrence_cuda(
     launch_recurrence(RecurrenceKernel::Warp, inputs, state, slots)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(dead_code)]
 pub fn vmajor_warp_gated_delta_rule_recurrence_cuda(
     inputs: RecurrenceInputs<'_>,
@@ -1485,7 +1485,7 @@ pub fn vmajor_warp_gated_delta_rule_recurrence_cuda(
     launch_recurrence(RecurrenceKernel::ValueMajorWarp, inputs, state, slots)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn vmajor_prefill_gated_delta_rule_recurrence_cuda_impl(
     inputs: RecurrenceInputs<'_>,
     state: &mut Tensor,
@@ -1525,7 +1525,7 @@ fn vmajor_prefill_gated_delta_rule_recurrence_cuda_impl(
     launch_recurrence(recurrence_kernel, inputs, state, slots)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn vmajor_prefill_gated_delta_rule_recurrence_cuda(
     inputs: RecurrenceInputs<'_>,
     state: &mut Tensor,
@@ -1544,7 +1544,7 @@ pub fn vmajor_prefill_gated_delta_rule_recurrence_cuda(
 }
 
 /// Runs chunked prefill against value-major K=V=128 state.
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(dead_code)]
 pub fn vmajor_chunked_gated_delta_rule_recurrence_cuda(
     inputs: RecurrenceInputs<'_>,
@@ -1554,7 +1554,7 @@ pub fn vmajor_chunked_gated_delta_rule_recurrence_cuda(
     launch_recurrence(RecurrenceKernel::ValueMajorChunked, inputs, state, slots)
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(unused)]
 pub fn gated_delta_rule_recurrence_cuda(
     _inputs: RecurrenceInputs<'_>,
@@ -1564,7 +1564,7 @@ pub fn gated_delta_rule_recurrence_cuda(
     candle_core::bail!("gated_delta_rule_recurrence_cuda requires the cuda feature")
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(unused)]
 pub fn chunked_gated_delta_rule_recurrence_cuda(
     _inputs: RecurrenceInputs<'_>,
@@ -1574,7 +1574,7 @@ pub fn chunked_gated_delta_rule_recurrence_cuda(
     candle_core::bail!("chunked_gated_delta_rule_recurrence_cuda requires the cuda feature")
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(unused)]
 pub fn warp_gated_delta_rule_recurrence_cuda(
     _inputs: RecurrenceInputs<'_>,
@@ -1584,7 +1584,7 @@ pub fn warp_gated_delta_rule_recurrence_cuda(
     candle_core::bail!("warp_gated_delta_rule_recurrence_cuda requires the cuda feature")
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(unused)]
 pub fn vmajor_warp_gated_delta_rule_recurrence_cuda(
     _inputs: RecurrenceInputs<'_>,
@@ -1594,7 +1594,7 @@ pub fn vmajor_warp_gated_delta_rule_recurrence_cuda(
     candle_core::bail!("vmajor_warp_gated_delta_rule_recurrence_cuda requires the cuda feature")
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(unused)]
 pub fn vmajor_prefill_gated_delta_rule_recurrence_cuda(
     _inputs: RecurrenceInputs<'_>,
@@ -1605,7 +1605,7 @@ pub fn vmajor_prefill_gated_delta_rule_recurrence_cuda(
     candle_core::bail!("vmajor_prefill_gated_delta_rule_recurrence_cuda requires the cuda feature")
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(unused)]
 pub fn vmajor_chunked_gated_delta_rule_recurrence_cuda(
     _inputs: RecurrenceInputs<'_>,
@@ -1621,7 +1621,7 @@ pub fn vmajor_chunked_gated_delta_rule_recurrence_cuda(
 /// conv_state: [B, conv_dim, kernel_size], or the [cap, conv_dim, kernel_size] pool with `Pooled` slots.
 /// Update mutates `conv_state` in place; full writes a fresh state (gathered) or the pool rows (pooled).
 /// Returns (output [B, S, conv_dim], conv_state after the step).
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn causal_conv1d_cuda(
     x: &Tensor,
     weight: &Tensor,
@@ -2207,7 +2207,7 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn flashinfer_sm90_prefill_supported(launch: &FusedPrefillRecurrence<'_>) -> Result<bool> {
     #[cfg(not(has_flashinfer_gdn_sm90_kernel))]
     {
@@ -2396,7 +2396,7 @@ fn flashinfer_sm90_prefill(launch: FusedPrefillRecurrence<'_>) -> Result<FusedPr
     ))))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn try_fused_vmajor_prefill_recurrence_cuda(
     launch: FusedPrefillRecurrence<'_>,
 ) -> Result<Option<FusedPrefillOutput>> {
@@ -2416,7 +2416,7 @@ pub fn try_fused_vmajor_prefill_recurrence_cuda(
     Ok(None)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn flashinfer_sm90_prefill_dispatch(
     launch: FusedPrefillRecurrence<'_>,
 ) -> Result<FusedPrefillOutput> {
@@ -2429,7 +2429,7 @@ fn flashinfer_sm90_prefill_dispatch(
     }
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(unused)]
 pub fn try_fused_vmajor_prefill_recurrence_cuda(
     _launch: FusedPrefillRecurrence<'_>,
@@ -2437,7 +2437,7 @@ pub fn try_fused_vmajor_prefill_recurrence_cuda(
     candle_core::bail!("try_fused_vmajor_prefill_recurrence_cuda requires the cuda feature")
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct GdnDecodeLaunch<'a> {
     mixed_qkv: &'a Tensor,
     b: &'a Tensor,
@@ -2456,7 +2456,7 @@ struct GdnDecodeLaunch<'a> {
     requested_kernel: Option<GdnDecodeKernel>,
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 pub struct FusedDecodeRecurrence<'a> {
     pub mixed_qkv: &'a Tensor,
     pub b: &'a Tensor,
@@ -2474,7 +2474,7 @@ pub struct FusedDecodeRecurrence<'a> {
     pub slots: GdnStateSlots<'a>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn fused_decode_recurrence_cuda(launch: FusedDecodeRecurrence<'_>) -> Result<Tensor> {
     fused_decode_recurrence_cuda_impl(GdnDecodeLaunch {
         mixed_qkv: launch.mixed_qkv,
@@ -2495,7 +2495,7 @@ pub fn fused_decode_recurrence_cuda(launch: FusedDecodeRecurrence<'_>) -> Result
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tensor> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
@@ -2652,13 +2652,13 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
     }
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(unused)]
 pub fn fused_decode_recurrence_cuda(_launch: FusedDecodeRecurrence<'_>) -> Result<Tensor> {
     candle_core::bail!("fused_decode_recurrence_cuda requires the cuda feature")
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 pub struct GdnSpeculativeStateCommit<'a> {
     pub mixed_qkv: &'a Tensor,
     pub convolved_qkv: &'a Tensor,
@@ -2680,7 +2680,7 @@ pub struct GdnSpeculativeStateCommit<'a> {
     pub state_layout: RecurrentStateLayout,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn speculative_state_commit_cuda(commit: GdnSpeculativeStateCommit<'_>) -> Result<()> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
@@ -2856,7 +2856,7 @@ pub fn speculative_state_commit_cuda(commit: GdnSpeculativeStateCommit<'_>) -> R
     }
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(unused)]
 pub fn speculative_state_commit_cuda(_commit: GdnSpeculativeStateCommit<'_>) -> Result<()> {
     candle_core::bail!("speculative_state_commit_cuda requires the cuda feature")
@@ -2881,7 +2881,7 @@ pub struct GdnSpeculativeConvCheckpoints<'a> {
     pub pending: Option<GdnPendingSpeculativeConv<'a>>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(dead_code)]
 pub fn speculative_conv_checkpoints_cuda(
     context: GdnSpeculativeConvCheckpoints<'_>,
@@ -3117,7 +3117,7 @@ pub fn speculative_conv_checkpoints_cuda(
     }
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(unused)]
 pub fn speculative_conv_checkpoints_cuda(
     _context: GdnSpeculativeConvCheckpoints<'_>,
@@ -3141,7 +3141,7 @@ pub struct GdnSpeculativeRmsNormGate<'a> {
     pub gate: &'a Tensor,
     pub weight: &'a Tensor,
     pub eps: f64,
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub quantization: Option<GdnFp8OutputSpec>,
 }
 
@@ -3176,14 +3176,14 @@ pub struct GdnSpeculativeTransitions {
 
 #[allow(dead_code)]
 pub struct GdnSpeculativeRecurrenceOutput {
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub output: GdnPostOpOutput,
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
     pub output: Tensor,
     pub transitions: Option<GdnSpeculativeTransitions>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(dead_code)]
 pub fn speculative_recurrence_checkpoints_cuda(
     context: GdnSpeculativeRecurrenceCheckpoints<'_>,
@@ -3701,7 +3701,7 @@ pub fn speculative_recurrence_checkpoints_cuda(
     }
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(unused)]
 pub fn speculative_recurrence_checkpoints_cuda(
     _context: GdnSpeculativeRecurrenceCheckpoints<'_>,
@@ -3709,7 +3709,7 @@ pub fn speculative_recurrence_checkpoints_cuda(
     candle_core::bail!("speculative_recurrence_checkpoints_cuda requires the cuda feature")
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 pub struct GdnDeferredRecurrence<'a> {
     pub mixed_qkv: &'a Tensor,
     pub b: &'a Tensor,
@@ -3731,11 +3731,11 @@ pub struct GdnDeferredRecurrence<'a> {
     pub head_v_dim: usize,
     pub tiled_v_heads: bool,
     pub state_layout: RecurrentStateLayout,
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub quantization: Option<GdnFp8OutputSpec>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn deferred_recurrence_rmsnorm_gate_cuda(
     context: GdnDeferredRecurrence<'_>,
 ) -> Result<GdnPostOpOutput> {
@@ -4120,7 +4120,7 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(
     ))))
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(dead_code)]
 pub fn deferred_recurrence_rmsnorm_gate_cuda(
     _context: GdnDeferredRecurrence<'_>,
@@ -4128,7 +4128,7 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(
     candle_core::bail!("deferred_recurrence_rmsnorm_gate_cuda requires the cuda feature")
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 pub struct GdnDeferredStateFlush<'a> {
     pub state_pool: &'a Tensor,
     pub active_slots: &'a Tensor,
@@ -4144,7 +4144,7 @@ pub struct GdnDeferredStateFlush<'a> {
     pub state_layout: RecurrentStateLayout,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn launch_deferred_state_cuda(
     context: GdnDeferredStateFlush<'_>,
     stream: &std::sync::Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
@@ -4300,19 +4300,19 @@ fn launch_deferred_state_cuda(
     Ok(())
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn flush_deferred_state_cuda(context: GdnDeferredStateFlush<'_>) -> Result<()> {
     let stream = context.state_pool.device().as_cuda_device()?.cuda_stream();
     launch_deferred_state_cuda(context, &stream)
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(dead_code)]
 pub fn flush_deferred_state_cuda(_context: GdnDeferredStateFlush<'_>) -> Result<()> {
     candle_core::bail!("flush_deferred_state_cuda requires the cuda feature")
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 pub struct GdnSpeculativeTransitionLayer<'a> {
     pub conv_input: &'a Tensor,
     pub key: &'a Tensor,
@@ -4322,7 +4322,7 @@ pub struct GdnSpeculativeTransitionLayer<'a> {
     pub recurrent_state: &'a Tensor,
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 pub struct GdnSpeculativeTransitionCommit<'a> {
     pub layers: &'a [GdnSpeculativeTransitionLayer<'a>],
     pub keep_rows: &'a Tensor,
@@ -4337,7 +4337,7 @@ pub struct GdnSpeculativeTransitionCommit<'a> {
     pub state_layout: RecurrentStateLayout,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(dead_code)]
 pub fn speculative_transition_commit_batched_cuda(
     commit: GdnSpeculativeTransitionCommit<'_>,
@@ -4556,7 +4556,7 @@ pub fn speculative_transition_commit_batched_cuda(
     }
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(dead_code)]
 pub fn speculative_transition_commit_batched_cuda(
     _commit: GdnSpeculativeTransitionCommit<'_>,
@@ -4590,7 +4590,7 @@ pub struct GdnSpeculativeTransitionStage<'a> {
     pub conv_dim: usize,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(dead_code)]
 pub fn speculative_transition_stage_batched_cuda(
     stage: GdnSpeculativeTransitionStage<'_>,
@@ -4833,7 +4833,7 @@ pub fn speculative_transition_stage_batched_cuda(
     }
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(dead_code)]
 pub fn speculative_transition_stage_batched_cuda(
     _stage: GdnSpeculativeTransitionStage<'_>,
@@ -4841,14 +4841,14 @@ pub fn speculative_transition_stage_batched_cuda(
     candle_core::bail!("speculative_transition_stage_batched_cuda requires the cuda feature")
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 pub struct GdnPendingTransitionPublishLayer<'a> {
     pub pending_keep_rows: &'a Tensor,
     pub pending_epochs: &'a Tensor,
     pub pending_key_bank: &'a Tensor,
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 pub struct GdnPendingTransitionPublish<'a> {
     pub layers: &'a [GdnPendingTransitionPublishLayer<'a>],
     pub keep_rows: &'a Tensor,
@@ -4857,7 +4857,7 @@ pub struct GdnPendingTransitionPublish<'a> {
     pub destination_capacity: usize,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn pending_transition_publish_batched_cuda(
     publish: GdnPendingTransitionPublish<'_>,
 ) -> Result<()> {
@@ -4988,7 +4988,7 @@ pub fn pending_transition_publish_batched_cuda(
     Ok(())
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(dead_code)]
 pub fn pending_transition_publish_batched_cuda(
     _publish: GdnPendingTransitionPublish<'_>,
@@ -4996,7 +4996,7 @@ pub fn pending_transition_publish_batched_cuda(
     candle_core::bail!("pending_transition_publish_batched_cuda requires the cuda feature")
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 pub struct GdnPendingTransitionApplyLayer<'a> {
     pub pending_conv_input: &'a Tensor,
     pub pending_key_banks: &'a Tensor,
@@ -5011,7 +5011,7 @@ pub struct GdnPendingTransitionApplyLayer<'a> {
     pub recurrent_state: &'a Tensor,
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 pub struct GdnPendingTransitionApply<'a> {
     pub layers: &'a [GdnPendingTransitionApplyLayer<'a>],
     pub active_slots: &'a Tensor,
@@ -5025,7 +5025,7 @@ pub struct GdnPendingTransitionApply<'a> {
     pub state_layout: RecurrentStateLayout,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn pending_transition_apply_batched_cuda(apply: GdnPendingTransitionApply<'_>) -> Result<()> {
     use candle_core as candle;
 
@@ -5275,13 +5275,13 @@ pub fn pending_transition_apply_batched_cuda(apply: GdnPendingTransitionApply<'_
     }
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(dead_code)]
 pub fn pending_transition_apply_batched_cuda(_apply: GdnPendingTransitionApply<'_>) -> Result<()> {
     candle_core::bail!("pending_transition_apply_batched_cuda requires the cuda feature")
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn normalize_gdn_rmsnorm_layout(
     dims: &[usize],
     strides: &[usize],
@@ -5306,7 +5306,7 @@ fn normalize_gdn_rmsnorm_layout(
 }
 
 /// CUDA RMSNorm with a SiLU gate; packed final dimensions are split by the norm weight width.
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
@@ -5397,7 +5397,7 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn rmsnorm_gated_quantized_cuda(
     x: &Tensor,
     gate: &Tensor,
@@ -5523,7 +5523,7 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
     )
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 #[allow(unused)]
 pub fn rmsnorm_gated_cuda(
     _x: &Tensor,

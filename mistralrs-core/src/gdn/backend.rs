@@ -3,7 +3,7 @@ use rayon::prelude::*;
 
 use super::cache::GdnLayerCache;
 use super::config::{GdnDims, GdnVHeadLayout};
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::cuda::gdn::{
     FusedDecodeRecurrence, FusedPrefillOutput, FusedPrefillRecurrence, GdnStateSlots,
     RecurrenceInputs,
@@ -18,14 +18,14 @@ const QK_NORM_EPS_F32: f32 = 1e-6;
 const SOFTPLUS_LINEAR_THRESHOLD: f32 = 20.0;
 const DECODE_STACK_HEAD_K_DIM: usize = 256;
 
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(any(feature = "cuda", feature = "metal", feature = "rocm"))]
 enum RecurrenceOutput {
     BatchHeadMajor(Tensor),
     #[allow(dead_code)]
     TokenMajor(Tensor),
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl From<FusedPrefillOutput> for RecurrenceOutput {
     fn from(output: FusedPrefillOutput) -> Self {
         match output {

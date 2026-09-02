@@ -74,6 +74,8 @@ const CUDA_GRAPH_EVENTS_METRIC: &str = "mistralrs_cuda_graph_events_total";
 const CUDA_GRAPH_DISPATCH_METRIC: &str = "mistralrs_cuda_graph_dispatch_total";
 const CUDA_GRAPH_EVICTIONS_METRIC: &str = "mistralrs_cuda_graph_evictions_total";
 const CUDA_GRAPH_RESIDENT_ENTRIES_METRIC: &str = "mistralrs_cuda_graph_resident_entries";
+// A few capture-time allocations (metadata graph vars) the warmup did not make.
+const DECODE_GRAPH_MIN_ARENA_BYTES: usize = 32 * 1024 * 1024;
 static NEXT_CUDA_DECODE_GRAPH_GENERATION: AtomicU64 = AtomicU64::new(1);
 static CUDA_GRAPH_MEMORY_POOL_SCOPES: OnceLock<Mutex<HashMap<usize, MemoryPoolScopeState>>> =
     OnceLock::new();
@@ -473,6 +475,7 @@ pub(crate) fn cuda_graph_startup_capture_allowed(q_len: usize) -> bool {
     q_len > 0
 }
 
+#[cfg(not(feature = "rocm"))]
 pub(crate) fn prepare_fa3_decode_schedules(
     metadata: &PagedAttentionInputMetadata,
 ) -> candle_core::Result<()> {
@@ -493,6 +496,13 @@ pub(crate) fn prepare_fa3_decode_schedules(
             prepare.buffers.schedule(prepare.key)?,
         )
     })
+}
+
+#[cfg(feature = "rocm")]
+pub(crate) fn prepare_fa3_decode_schedules(
+    _metadata: &PagedAttentionInputMetadata,
+) -> candle_core::Result<()> {
+    Ok(())
 }
 
 /// One decode step, padded up to its graph batch bucket. Pad rows alias row 0 for reads and skip
@@ -1106,6 +1116,7 @@ pub(crate) struct CudaDecodeGraphCaptureCtx<'a> {
     pub(crate) warmup_logits: &'a Tensor,
     pub(crate) state_indices: Option<CudaGraphVarMap>,
     pub(crate) real_batch: usize,
+    pub(crate) arena_bytes: usize,
 }
 
 struct CudaDecodeGraphMetadataInput<'a> {
@@ -2336,10 +2347,10 @@ fn release_cuda_graph_entries(entries: Vec<CudaDecodeGraphEntry>) {
 
 pub(crate) fn capture_cuda_decode_graph<F>(
     ctx: CudaDecodeGraphCaptureCtx<'_>,
-    forward: F,
+    mut forward: F,
 ) -> candle_core::Result<CudaDecodeGraphEntry>
 where
-    F: Fn(&Tensor, &PagedAttentionInputMetadata) -> candle_core::Result<Tensor>,
+    F: FnMut(&Tensor, &PagedAttentionInputMetadata) -> candle_core::Result<Tensor>,
 {
     let CudaDecodeGraphCaptureCtx {
         key,
@@ -2354,6 +2365,7 @@ where
         warmup_logits,
         state_indices,
         real_batch,
+        arena_bytes,
     } = ctx;
     let materialized_metadata = metadata
         .materialize_decode_tensors()
@@ -2413,7 +2425,24 @@ where
         );
     }
 
-if let Err(err) = prepare_fa3_decode_schedules(&metadata) {
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    if let Err(err) = (|| -> Result<(), candle_core::Error> {
+        let arena: Arc<CudaSlice<u8>> = Arc::new(
+            unsafe { cuda_device.alloc::<u8>(arena_bytes) }.map_err(candle_core::Error::wrap)?,
+        );
+        stream
+            .begin_capture_arena(arena.clone())
+            .map_err(candle_core::Error::wrap)?;
+        arena_keepalive = Some(arena);
+        Ok(())
+    })() {
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+        return Err(
+            candle_core::Error::msg(err.to_string()).context("CUDA graph begin capture failed")
+        );
+    }
+
+    if let Err(err) = prepare_fa3_decode_schedules(&metadata) {
         end_cuda_capture_discard(&stream);
         restore_event_tracking_after_capture(&stream, restore_event_tracking);
         return Err(err.context("FA3 decode preparation capture failed"));
@@ -2462,7 +2491,18 @@ if let Err(err) = prepare_fa3_decode_schedules(&metadata) {
                     .context("CUDA graph captured forward failed"),
             );
         }
-    };
+        match result {
+            Ok(logits_out) => {
+                logits = Some(logits_out);
+                break;
+            }
+            Err(err) => {
+                restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(err.context("CUDA graph captured forward failed"));
+            }
+        }
+    }
+    let logits = logits.expect("capture forward attempted");
     if logits.shape() != warmup_logits.shape()
         || logits.dtype() != warmup_logits.dtype()
         || logits.device().location() != warmup_logits.device().location()
@@ -4782,6 +4822,7 @@ mod tests {
                 warmup_logits: &warmup_logits,
                 state_indices: None,
                 real_batch: 1,
+                arena_bytes: 0,
             },
             |input_ids, _| input_ids.to_dtype(DType::F32),
         )?;

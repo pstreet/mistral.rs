@@ -3,6 +3,37 @@ use std::ffi::c_void;
 #[allow(dead_code)]
 extern "C" {
 
+    #[cfg(feature = "rocm")]
+    pub(crate) fn ck_flash_attn_fwd(
+        q: *const c_void,
+        k: *const c_void,
+        v: *const c_void,
+        o: *mut c_void,
+        lse: *mut c_void,
+        batch: i32,
+        nhead_q: i32,
+        nhead_k: i32,
+        seqlen_q: i32,
+        seqlen_k: i32,
+        hdim_q: i32,
+        hdim_v: i32,
+        stride_q: i64,
+        stride_k: i64,
+        stride_v: i64,
+        stride_o: i64,
+        nhead_stride_q: i64,
+        nhead_stride_k: i64,
+        nhead_stride_v: i64,
+        nhead_stride_o: i64,
+        batch_stride_q: i64,
+        batch_stride_k: i64,
+        batch_stride_v: i64,
+        batch_stride_o: i64,
+        scale_s: f32,
+        mask_type: i32,
+        stream: i64,
+    ) -> f32;
+
     pub(crate) fn cuda_graph_copy_bytes(
         src: *const c_void,
         dst: *mut c_void,

@@ -1206,7 +1206,7 @@ fn stack_final_logits(logits: &[Tensor]) -> Result<Tensor> {
         .to_dtype(DType::F32)
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 fn final_batched_logits(logits: &Tensor) -> Result<Tensor> {
     let dims = logits.dims();
     if dims.len() < 2 || dims[1..dims.len() - 1].iter().any(|&dim| dim != 1) {

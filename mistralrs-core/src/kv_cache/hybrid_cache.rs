@@ -3901,7 +3901,7 @@ pub struct RecurrentStateSnapshot {
     pub state_layout: RecurrentStateLayout,
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 #[derive(Clone, Debug)]
 pub(crate) struct RecurrentCheckpointStateSnapshot {
     states: Vec<RecurrentStateSnapshot>,
@@ -4008,7 +4008,7 @@ impl HybridCache {
         self.refresh_current_batch_mapping()
     }
 
-    #[cfg(any(feature = "cuda", test))]
+    #[cfg(any(feature = "cuda", feature = "rocm", test))]
     pub(crate) fn snapshot_recurrent_checkpoint_state(
         &self,
         slot_idx: usize,
@@ -4044,7 +4044,7 @@ impl HybridCache {
         })
     }
 
-    #[cfg(any(feature = "cuda", test))]
+    #[cfg(any(feature = "cuda", feature = "rocm", test))]
     pub(crate) fn restore_recurrent_checkpoint_state(
         &mut self,
         slot_idx: usize,

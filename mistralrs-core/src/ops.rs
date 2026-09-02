@@ -2338,7 +2338,10 @@ struct CudaPinnedHostPrefix<'a, T> {
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-impl<T> candle_core::cuda_backend::cudarc::driver::HostSlice<T> for CudaPinnedHostPrefix<'_, T> {
+impl<T> candle_core::cuda_backend::cudarc::driver::HostSlice<T> for CudaPinnedHostPrefix<'_, T>
+where
+    T: candle_core::cuda_backend::cudarc::driver::ValidAsZeroBits,
+{
     fn len(&self) -> usize {
         self.len
     }
@@ -2363,6 +2366,28 @@ impl<T> candle_core::cuda_backend::cudarc::driver::HostSlice<T> for CudaPinnedHo
     ) {
         let (slice, guard) = unsafe { self.inner.stream_synced_mut_slice(stream) };
         (&mut slice[..self.len], guard)
+    }
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+impl<T> AsRef<[T]> for CudaPinnedHostPrefix<'_, T>
+where
+    T: candle_core::cuda_backend::cudarc::driver::ValidAsZeroBits,
+{
+    fn as_ref(&self) -> &[T] {
+        let full = self.inner.as_slice().expect("pinned host slice");
+        &full[..self.len]
+    }
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+impl<T> AsMut<[T]> for CudaPinnedHostPrefix<'_, T>
+where
+    T: candle_core::cuda_backend::cudarc::driver::ValidAsZeroBits,
+{
+    fn as_mut(&mut self) -> &mut [T] {
+        let full = self.inner.as_mut_slice().expect("pinned host slice");
+        &mut full[..self.len]
     }
 }
 

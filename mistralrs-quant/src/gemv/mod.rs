@@ -27,26 +27,26 @@ use half::{bf16, f16};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use std::{collections::HashMap, sync::Mutex};
 
 /// Maximum batch size supported by the GEMV kernel
 pub const MAX_GEMV_BATCH_SIZE: usize = 8;
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 const MAX_GEMV_OUTPUT_ELEMENTS: usize = 4_096;
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 const SM90_SPLIT_K_MIN_BATCH_REDUCTION: usize = 32_768;
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 const SM90_SPLIT_K_MAX_GEMV_CTA_WAVES: usize = 4;
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 #[derive(Clone, Copy)]
 struct GemvDeviceInfo {
     compute_major: i32,
     multiprocessor_count: usize,
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 fn should_use_gemv_shape(
     batch_size: usize,
     output_dim: usize,
@@ -71,11 +71,11 @@ fn should_use_gemv_shape(
     !sm90_split_k
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 static GEMV_DEVICE_INFO: LazyLock<Mutex<HashMap<candle_core::cuda::DeviceId, GemvDeviceInfo>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn gemv_device_info(device: &CudaDevice) -> Option<GemvDeviceInfo> {
     use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
 

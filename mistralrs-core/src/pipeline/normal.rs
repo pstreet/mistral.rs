@@ -18,24 +18,24 @@ use super::{
 };
 use crate::amoe::AnyMoeExpertType;
 use crate::attention::ATTENTION_CHUNK_SIZE;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::cuda::gdn::GDN_PAD_SLOT;
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::kv_cache::RecurrentCheckpointStateSnapshot;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 type SeqRecurrentCheckpointSnapshots = Vec<(usize, RecurrentCheckpointStateSnapshot)>;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 type HybridStateIndicesSnapshot = (Option<Tensor>, Option<Vec<u32>>);
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct CudaDecodeGraphCaptureInputs<'a> {
     kv_cache: &'a [(Tensor, Tensor)],
     flash_meta: &'a FlashParams,
     block_size: usize,
     recurrent_batch_kind: RecurrentBatchKind,
 }
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct CudaDecodeGraphForwardInput<'a> {
     input_ids: &'a Tensor,
     seqlen_offsets: &'a [usize],
@@ -2097,8 +2097,10 @@ impl NormalPipeline {
             )
             .with_recurrent_batch_kind(recurrent_batch_kind)
             .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
+            cuda_device.reset_alloc_counter();
             let warmup_logits = self.model.forward(&step.input_ids, &mut ctx)?;
             step.input_ids.device().synchronize()?;
+            let arena_bytes = cuda_device.alloc_counter();
             let live_logits = step.narrow_rows(&warmup_logits)?;
 
             // CUDA stream capture records recurrent writes without executing them.
@@ -2116,6 +2118,7 @@ impl NormalPipeline {
                     warmup_logits: &warmup_logits,
                     state_indices: state_index_buffers,
                     real_batch: step.real_batch,
+                    arena_bytes,
                 },
                 |graph_input_ids, graph_metadata| {
                     let mut ctx = ModelForwardContext::new(
@@ -2399,7 +2402,7 @@ impl Pipeline for NormalPipeline {
         };
         let logits = match self.model.is_xlora() {
             false => {
-                #[cfg(feature = "cuda")]
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
                 let mut cuda_graph_eager_fallback = None;
                 let paged_attn_meta = paged_attn_meta
                     .as_ref()
@@ -2460,7 +2463,7 @@ impl Pipeline for NormalPipeline {
                 let eager_result = mistralrs_quant::with_lora_execution(lora_execution, || {
                     self.model.forward(&input_ids, &mut ctx)
                 });
-                #[cfg(feature = "cuda")]
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
                 if eager_result.is_ok() {
                     if let Some(graph_event) = cuda_graph_eager_fallback.take() {
                         graph_event.success();

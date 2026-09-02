@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -15,7 +15,7 @@ use crate::paged_attention::attention_backend::{
 };
 
 mod metadata;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) use metadata::make_fa3_decode_state;
 pub(crate) use metadata::{
     decode_split_capacity_pages, decode_split_pages, flashinfer_metadata, flashinfer_paged_kv,
@@ -471,7 +471,7 @@ pub struct FlashInferMetadata {
     pub decode_tmp_s: Option<DeviceTensorMap>,
     #[cfg_attr(not(all(feature = "cuda", target_family = "unix")), allow(dead_code))]
     pub(crate) fa3_decode: Option<Fa3DecodeState>,
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) decode_tile_plan_used: Option<Arc<AtomicBool>>,
 }
 
@@ -568,13 +568,13 @@ impl FlashInferPagedAttentionViews {
 }
 
 impl FlashInferMetadata {
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn track_decode_tile_plan(mut self) -> Self {
         self.decode_tile_plan_used = Some(Arc::new(AtomicBool::new(false)));
         self
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn decode_tile_plan_was_used(&self) -> bool {
         self.decode_tile_plan_used
             .as_ref()

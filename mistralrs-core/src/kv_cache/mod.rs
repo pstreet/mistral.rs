@@ -15,9 +15,9 @@ mod rotating_cache;
 mod single_cache;
 
 pub use full_cache::{EitherCache, LayerCaches};
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) use hybrid_cache::RecurrentCheckpointStateSnapshot;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) use hybrid_cache::GDN_PENDING_KEY_BANK_COUNT;
 pub(crate) use hybrid_cache::{
     GdnDeferredStatePool, GdnDeferredStateSpec, GdnPendingTransitionPool, GdnPendingTransitionSpec,

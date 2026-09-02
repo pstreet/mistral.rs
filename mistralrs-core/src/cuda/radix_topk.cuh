@@ -124,7 +124,9 @@ inline constexpr size_t workspace_words_per_row() {
 
 __device__ __forceinline__ int load_acquire(int *ptr) {
   int value;
-#if __CUDA_ARCH__ >= 700
+#if defined(USE_ROCM)
+  value = *(volatile int *)ptr;
+#elif __CUDA_ARCH__ >= 700
   asm volatile("ld.global.acquire.gpu.b32 %0, [%1];\n"
                : "=r"(value)
                : "l"(ptr));
@@ -135,7 +137,7 @@ __device__ __forceinline__ int load_acquire(int *ptr) {
 }
 
 __device__ __forceinline__ void add_release(int *ptr, int value) {
-#if __CUDA_ARCH__ >= 700
+#if !defined(USE_ROCM) && __CUDA_ARCH__ >= 700
   asm volatile("fence.acq_rel.gpu;\n" ::: "memory");
   asm volatile("red.relaxed.gpu.global.add.s32 [%0], %1;\n"
                :
@@ -149,7 +151,7 @@ __device__ __forceinline__ void add_release(int *ptr, int value) {
 
 __device__ __forceinline__ int atomic_add_release(int *ptr, int value) {
   int old;
-#if __CUDA_ARCH__ >= 700
+#if !defined(USE_ROCM) && __CUDA_ARCH__ >= 700
   asm volatile("fence.acq_rel.gpu;\n" ::: "memory");
   asm volatile("atom.relaxed.gpu.global.add.s32 %0, [%1], %2;\n"
                : "=r"(old)
@@ -163,7 +165,7 @@ __device__ __forceinline__ int atomic_add_release(int *ptr, int value) {
 }
 
 __device__ __forceinline__ void store_release(int *ptr, int value) {
-#if __CUDA_ARCH__ >= 700
+#if !defined(USE_ROCM) && __CUDA_ARCH__ >= 700
   asm volatile("fence.acq_rel.gpu;\n" ::: "memory");
   asm volatile("st.release.gpu.b32 [%0], %1;\n"
                :

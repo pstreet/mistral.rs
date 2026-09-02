@@ -1643,7 +1643,7 @@ impl ForwardInputsResult {
 #[doc(hidden)]
 pub struct ForwardStepResult {
     pub output: ForwardInputsResult,
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) cuda_decode: Option<cuda_graph::CudaDecodeGraphLaunch>,
 }
 
@@ -1651,12 +1651,12 @@ impl ForwardStepResult {
     pub fn eager(output: ForwardInputsResult) -> Self {
         Self {
             output,
-            #[cfg(feature = "cuda")]
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
             cuda_decode: None,
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn cuda_decode(
         output: ForwardInputsResult,
         launch: Option<cuda_graph::CudaDecodeGraphLaunch>,

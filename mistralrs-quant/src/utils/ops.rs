@@ -18,7 +18,7 @@ use crate::utils::{ffi, slice_ptr_mut_on_stream, slice_ptr_on_stream};
 use candle_core::cuda::cudarc::driver::DevicePtr;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use candle_core::cuda::CudaStorage;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use float8::F8E4M3;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use std::ffi::c_void;
@@ -2651,7 +2651,7 @@ fn apply_cpu_activation(x: f32, activation: GluActivationType) -> f32 {
 
 struct FusedGlu(GluActivationType);
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[derive(Clone, Copy)]
 struct DenseLastDimLayout {
     rows: usize,
@@ -2659,7 +2659,7 @@ struct DenseLastDimLayout {
     row_stride: usize,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn dense_last_dim_layout(layout: &Layout) -> Option<DenseLastDimLayout> {
     let dims = layout.dims();
     if dims.is_empty() {
