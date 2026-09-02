@@ -2,8 +2,8 @@
 mod ffi;
 
 use candle_core::{
-    backend::BackendStorage, CpuStorage, CustomOp3, Layout, Result, Shape, Storage, Tensor,
-    WithDType,
+    backend::BackendStorage, CpuStorage, CustomOp3, Layout, Result, Shape, Storage, StorageRef,
+    Tensor, WithDType,
 };
 use rayon::prelude::*;
 
@@ -283,7 +283,7 @@ fn typed_slice<'a, T>(xs: &'a [T], layout: &Layout, name: &'static str) -> Resul
 }
 
 fn cpu_positions<'a>(
-    storage_and_layout: &'a Option<(std::sync::RwLockReadGuard<'a, Storage>, &'a Layout)>,
+    storage_and_layout: &'a Option<(StorageRef<'a>, &'a Layout)>,
 ) -> Result<Option<&'a [u32]>> {
     let Some((storage, layout)) = storage_and_layout else {
         return Ok(None);
