@@ -1004,7 +1004,7 @@ impl Sequence {
         });
         self.set_state(SequenceState::RunningPrefillPrompt);
         self.token_offset = offset;
-        self.prefix_cache_len = offset;
+        self.set_prefix_cache_len(offset);
         self
     }
 
@@ -1336,7 +1336,7 @@ impl Sequence {
         self.bump_block_hash_revision();
 
         if let Some(metadata) = paged_attn_metadata {
-            self.prefix_cache_len = 0;
+            self.set_prefix_cache_len(0);
             // Free and then reallocate with the new token count
             let seq_id = *self.id();
             let num_tokens = self.tokens.len();
@@ -1884,7 +1884,6 @@ impl Sequence {
         group.total_completion_time = completion_time_ms;
         group.total_time = prompt_time_ms.saturating_add(completion_time_ms);
         group.total_prompt_toks = self.prompt_len;
-        group.total_cached_toks = self.prefix_cache_len();
         group.total_toks = self.len();
     }
 
@@ -2237,7 +2236,6 @@ pub struct SequenceGroup {
     n_choices: usize, // The target number of choices to return. Can be decreased if an error is thrown.
     best_of: Option<usize>, // Top n seqs based on cumulative logprobs.
     pub total_prompt_toks: usize,
-    pub total_cached_toks: usize,
     pub total_toks: usize,
     pub total_prompt_time: u128,
     pub total_time: u128,
@@ -2273,7 +2271,6 @@ impl SequenceGroup {
             completion_choices: Vec::new(),
             n_choices,
             total_prompt_toks: 0,
-            total_cached_toks: 0,
             total_toks: 0,
             total_prompt_time: 0,
             total_time: 0,

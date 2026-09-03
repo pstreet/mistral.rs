@@ -184,7 +184,6 @@ impl Qwen3_5MtpHead {
             None,
             Some((attention.kv_cache, attention.metadata)),
             attention.flash_params,
-            -2,
         )?;
         self.norm.forward(&xs)
     }

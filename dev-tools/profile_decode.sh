@@ -40,8 +40,8 @@ def worker():
     t=ask(base*90, 48)
     with lock: res.append(t)
 t0=time.perf_counter()
-ths=[threading.Thread(target=worker) for _ in range(16)]
-[t.start() for t in ths]; [t.join() for t in ths]
+ts=[threading.Thread(target=worker) for _ in range(16)]
+[t.start() for t in ts]; [t.join() for t in ts]
 wall=time.perf_counter()-t0
 print(f"N=16 x48tok: wall={wall:.2f}s agg={16*48/wall:.1f} tok/s", flush=True)
 PY

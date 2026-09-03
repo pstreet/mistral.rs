@@ -643,7 +643,6 @@ impl DecoderLayer {
         kv_cache: Option<&mut KvCache>,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-        prof_idx: i64,
     ) -> Result<Tensor> {
         self.forward_attention_output(
             x,

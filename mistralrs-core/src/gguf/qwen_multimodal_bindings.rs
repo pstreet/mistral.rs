@@ -440,7 +440,7 @@ fn bind_mtp(
     // llama.cpp stores the head as the last full-attention block plus `nextn.*` extras; the
     // model reads them as `mtp.layers.0.*` and `mtp.*`.
     let source = format!("blk.{layer}");
-    let native = format!("mtp.layers.0");
+    let native = "mtp.layers.0";
     for suffix in ["weight", "bias"] {
         for (target, role) in [
             ("self_attn.q_proj", "attn_q"),
