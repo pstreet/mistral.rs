@@ -244,7 +244,8 @@ fn build_cuda() -> Result<()> {
 
 // Dense-model paged-attention kernels built with hipcc. The FlashInfer
 // (ldmatrix/cp.async) and MLA kernels need tensor-core instructions RDNA
-// lacks and are excluded; FP8 KV cache is off (no ENABLE_FP8).
+// lacks and are excluded; FP8 KV cache is enabled via the AMD quantization
+// path (ENABLE_FP8) so the f8e4m3 cache_dtype branch compiles on RDNA.
 #[cfg(feature = "rocm")]
 const PAGED_ATTN_ROCM_KERNELS: &[&str] = &[
     "src/cuda/pagedattention_v1_f16.cu",
@@ -288,6 +289,15 @@ fn build_rocm() -> Result<()> {
     for kernel in PAGED_ATTN_ROCM_KERNELS {
         println!("cargo:rerun-if-changed={kernel}");
     }
+    // Shared headers the kernels include.
+    for header in [
+        "src/cuda/pagedattention.cuh",
+        "src/cuda/attention/attention_dtypes.h",
+        "src/cuda/attention/attention_utils.cuh",
+        "src/cuda/quantization/fp8/amd/quant_utils.cuh",
+    ] {
+        println!("cargo:rerun-if-changed={header}");
+    }
 
     let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let objects = PAGED_ATTN_ROCM_KERNELS
@@ -309,6 +319,7 @@ fn build_rocm() -> Result<()> {
             .arg("cuda_runtime.h")
             .arg(format!("--offload-arch={arch}"))
             .arg("-DUSE_ROCM")
+            .arg("-DENABLE_FP8")
             .arg("-std=c++17")
             .arg("-O3")
             .arg("-fPIC")
@@ -329,10 +340,9 @@ fn build_rocm() -> Result<()> {
 
     println!("cargo:rustc-link-search={}", build_dir.display());
     println!("cargo:rustc-link-lib=static=mistralrspagedattention");
-    // Scale tensors are always allocated (default 1.0) and only read by the FP8
-    // KV path (cache_dtype==3), which is never selected on RDNA. Marking FP8
-    // "present" lets those pointers pass through without triggering the
-    // !USE_FP8 bail; the FP8 kernel instantiations stay gated off (no ENABLE_FP8).
+    // FP8 is enabled (ENABLE_FP8), so the f8e4m3 KV path (cache_dtype==3) is
+    // selected on RDNA when the config requests FP8 KV. Scales default to 1.0
+    // unless the model ships explicit k_scale/v_scale tensors.
     println!("cargo:rustc-cfg=has_fp8");
     Ok(())
 }

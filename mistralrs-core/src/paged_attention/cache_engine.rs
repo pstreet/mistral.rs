@@ -10,27 +10,35 @@ use super::config::{KvCacheLayout, ModelConfigLike};
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::flashinfer::{register_fa3_prefill_caches, Fa3PrefillWorkspaceRegistration};
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(all(any(feature = "cuda", feature = "rocm"), target_family = "unix"))]
 fn cuda_supports_fp8(device: &Device) -> bool {
-    use candle_core::cuda::cudarc::driver::{result, sys};
-
-    if !mistralrs_paged_attn::USE_FP8 {
+    if !device.is_cuda() || !mistralrs_paged_attn::USE_FP8 {
         return false;
     }
-    let Device::Cuda(cuda) = device else {
-        return false;
-    };
-    let ordinal = cuda.cuda_stream().context().ordinal();
-    #[allow(clippy::cast_possible_truncation)]
-    let Ok(device) = result::device::get(ordinal as i32) else {
-        return false;
-    };
-    unsafe {
-        result::device::get_attribute(
-            device,
-            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
-        )
-        .is_ok_and(|major| major >= 8)
+    #[cfg(feature = "rocm")]
+    {
+        // RDNA3+ handles FP8 KV through the AMD paged-attention path; the ROCm
+        // build compiles the FP8 kernels, so no compute-capability gate applies.
+        return true;
+    }
+    #[cfg(not(feature = "rocm"))]
+    {
+        use candle_core::cuda::cudarc::driver::{result, sys};
+        let Device::Cuda(cuda) = device else {
+            return false;
+        };
+        let ordinal = cuda.cuda_stream().context().ordinal();
+        #[allow(clippy::cast_possible_truncation)]
+        let Ok(device) = result::device::get(ordinal as i32) else {
+            return false;
+        };
+        unsafe {
+            result::device::get_attribute(
+                device,
+                sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+            )
+            .is_ok_and(|major| major >= 8)
+        }
     }
 }
 
@@ -83,15 +91,20 @@ impl PagedCacheType {
                 .and_then(Option::as_ref)
                 .unwrap_or(device);
             if layer_device.is_cuda() {
-                #[cfg(all(feature = "cuda", target_family = "unix"))]
+                #[cfg(all(any(feature = "cuda", feature = "rocm"), target_family = "unix"))]
                 if !cuda_supports_fp8(layer_device) {
                     return Err(
-                        "FP8 KV cache requires CUDA compute capability 8.0 or newer and a matching CUDA build"
+                        "FP8 KV cache requires a CUDA build with compute capability 8.0 or newer, or a ROCm build with FP8 paged attention"
                             .to_string(),
                     );
                 }
-                #[cfg(not(all(feature = "cuda", target_family = "unix")))]
-                return Err("FP8 KV cache requires the CUDA paged-attention backend".to_string());
+                #[cfg(not(all(
+                    any(feature = "cuda", feature = "rocm"),
+                    target_family = "unix"
+                )))]
+                return Err(
+                    "FP8 KV cache requires the CUDA/ROCm paged-attention backend".to_string(),
+                );
             } else if layer_device.is_metal() {
                 #[cfg(not(feature = "metal"))]
                 return Err("FP8 KV cache requires the Metal paged-attention backend".to_string());
