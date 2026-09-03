@@ -2291,7 +2291,7 @@ pub trait Pipeline:
                     && !self.get_metadata().is_xlora
                     && self.device().is_cuda()
                 {
-Some(
+                    Some(
                         override_prefill_chunk_size()
                             .or(self.get_metadata().paged_prefill_chunk_size)
                             .unwrap_or(DEFAULT_PAGED_PREFILL_CHUNK_SIZE),

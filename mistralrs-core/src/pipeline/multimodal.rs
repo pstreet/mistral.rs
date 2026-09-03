@@ -1477,7 +1477,7 @@ impl Loader for MultimodalLoader {
             (None, None)
         };
 
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         super::synchronize_cuda_contexts(&device, pipeline_mapper.as_ref())?;
 
         let max_seq_len = model.max_seq_len();
@@ -2667,7 +2667,7 @@ impl Pipeline for MultimodalPipeline {
             paged_attn_meta.as_ref().map(|(_, meta)| *meta),
             recurrent_batch_kind,
         )?;
-if self.model.has_speculative_proposer() {
+        if self.model.has_speculative_proposer() {
             *self
                 .last_prompt_attention
                 .lock()

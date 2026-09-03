@@ -350,7 +350,7 @@ impl Default for MistralRsForServerBuilder {
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
             mtp_config: defaults::MTP_CONFIG,
-encoder_cache_memory_bytes: None,
+            encoder_cache_memory_bytes: None,
             prefill_chunk_size: defaults::PREFILL_CHUNK_SIZE,
             disable_eos_stop: false,
             code_exec_config: None,
