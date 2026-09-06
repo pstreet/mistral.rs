@@ -182,6 +182,16 @@ fn build_rocm() -> Result<(), String> {
         objects.push(obj);
     }
 
+    // Headers shared across the kernel TUs: a header edit must retrigger hipcc.
+    for h in [
+        "mmq_common.cuh",
+        "mmq_gguf.cuh",
+        "mmq_mma.cuh",
+        "mmq_vecdotq.cuh",
+    ] {
+        println!("cargo:rerun-if-changed=kernels/mmq_gguf/{h}");
+    }
+
     let lib = build_dir.join("libmistralrsquant.a");
     if lib.exists() {
         std::fs::remove_file(&lib).expect("remove stale libmistralrsquant.a");
