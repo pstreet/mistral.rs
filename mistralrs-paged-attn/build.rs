@@ -90,6 +90,7 @@ fn build_cuda() -> Result<()> {
     println!("cargo:rerun-if-changed=src/cuda/pagedattention.cuh");
     println!("cargo:rerun-if-changed=src/cuda/copy_blocks_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/reshape_and_cache_kernel.cu");
+    println!("cargo:rerun-if-changed=src/cuda/quantization/q8/q8_utils.cuh");
     println!("cargo:rerun-if-changed=src/cuda/concat_and_cache_mla_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/gather_mla_cache_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/gather_kv_cache_kernel.cu");

@@ -37,7 +37,7 @@ pub use flashinfer::{
 pub use gather_kv::gather_kv_cache;
 #[cfg(not(feature = "rocm"))]
 pub use mla::{concat_and_cache_mla, flashinfer_mla_decode, gather_mla_cache};
-pub use paged_attention::{paged_attention, reshape_and_cache};
+pub use paged_attention::{paged_attention, reshape_and_cache, reshape_and_cache_q8};
 #[cfg(not(feature = "rocm"))]
 pub use scale_update::kv_scale_update;
 
@@ -104,5 +104,51 @@ mod tests {
         let decode = Layout::new((8, 1, 2, 4).into(), vec![24, 8, 4, 1], 5);
         assert_eq!(cache_input_layout(&decode, "value", "test")?, (8, 2, 4, 24));
         Ok(())
+    }
+
+    /// CPU mirror of the Q8_0 block math in `quantization/q8/q8_utils.cuh`
+    /// (llama.cpp `block_q8_0`): scale = amax/127, round-half-away, symmetric
+    /// clamp. The HIP kernel must bit-match this on exact halves.
+    fn quantize_block_q8_0_cpu(vals: &[f32; 32]) -> ([i8; 32], f32) {
+        let amax = vals.iter().fold(0f32, |m, &v| m.max(v.abs()));
+        let d = if amax != 0. { amax / 127. } else { 1. };
+        let id = if d != 0. { 1. / d } else { 0. };
+        let mut out = [0i8; 32];
+        for (i, &v) in vals.iter().enumerate() {
+            let q = (v * id).clamp(-127., 127.);
+            out[i] = (if q >= 0. { q + 0.5 } else { q - 0.5 }) as i8;
+        }
+        (out, d)
+    }
+
+    #[test]
+    fn q8_block_math_matches_llama_reference_vectors() {
+        // All-ones: amax 1 -> d = 1/127, every qs = 127.
+        let (qs, d) = quantize_block_q8_0_cpu(&[1.; 32]);
+        assert_eq!(d, 1. / 127.);
+        assert!(qs.iter().all(|&q| q == 127));
+        // Zero block: scale 1, all-zero output (no div-by-zero).
+        let (qs, d) = quantize_block_q8_0_cpu(&[0.; 32]);
+        assert_eq!((d, qs), (1., [0; 32]));
+        // Ramp: max error from 7-bit steps stays under half a step.
+        let mut ramp = [0f32; 32];
+        for (i, v) in ramp.iter_mut().enumerate() {
+            *v = -3. + 6. * i as f32 / 31.;
+        }
+        let (qs, d) = quantize_block_q8_0_cpu(&ramp);
+        assert_eq!(d, 3. / 127.);
+        for (i, &q) in qs.iter().enumerate() {
+            assert!((q as f32 * d - ramp[i]).abs() <= d / 2. + 1e-6);
+        }
+        // Outlier: single large value sets the scale, small values survive.
+        let mut outlier = [0.01f32; 32];
+        outlier[7] = 100.;
+        let (qs, d) = quantize_block_q8_0_cpu(&outlier);
+        assert_eq!(d, 100. / 127.);
+        assert_eq!(qs[7], 127);
+        assert!(qs
+            .iter()
+            .enumerate()
+            .all(|(i, &q)| i == 7 || q == 0 || q == 1));
     }
 }

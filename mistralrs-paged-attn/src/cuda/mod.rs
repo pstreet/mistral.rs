@@ -12,4 +12,7 @@ pub use backend::{
     Fa3DecodeSchedule, Fa3PagedMetadataLayout, FlashInferDecodeScratch, FA3_DECODE_MAX_QUERY_LEN,
     USE_FA3_FP8_PAGED,
 };
-pub use backend::{copy_blocks, gather_kv_cache, paged_attention, reshape_and_cache, swap_blocks};
+pub use backend::{
+    copy_blocks, gather_kv_cache, paged_attention, reshape_and_cache, reshape_and_cache_q8,
+    swap_blocks,
+};

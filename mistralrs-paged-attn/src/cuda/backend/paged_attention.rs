@@ -682,6 +682,201 @@ fn update_cache<
     Ok(())
 }
 
+/// Insert key and values with Q8_0 block quantization (llama.cpp Q8_0: int8 +
+/// fp32 scale per 32 elems) inside the paged cache.
+///
+/// * `key_cache`/`value_cache` - int8 (U8) paged tensors with the same blocked
+///   shapes as the unquantized path and `x = 16`.
+/// * `k_scales`/`v_scales` - fp32 sidecars shaped
+///   `(num_blocks, num_heads, block_size, head_size / 32)`, written by the
+///   kernel. Must be zero-initialized (padding slots are skipped, never read).
+pub fn reshape_and_cache_q8(
+    key: &Tensor,
+    value: &Tensor,
+    key_cache: &Tensor,
+    value_cache: &Tensor,
+    k_scales: &Tensor,
+    v_scales: &Tensor,
+    slot_mapping: &Tensor,
+) -> Result<()> {
+    const Q8_BLOCK: usize = 32;
+    const Q8_MAX_HEAD: usize = 512;
+    const Q8_X: usize = 16;
+
+    let dtype = key.dtype();
+    let internal_type = match dtype {
+        DType::F16 => 0,
+        DType::BF16 => 1,
+        DType::F32 => 2,
+        dtype => candle::bail!("dtype {dtype:?} is not supported"),
+    };
+    if key_cache.dtype() != DType::U8 || value_cache.dtype() != DType::U8 {
+        candle::bail!(
+            "reshape_and_cache_q8 requires int8 (U8) caches, got {:?} and {:?}",
+            key_cache.dtype(),
+            value_cache.dtype()
+        );
+    }
+    for (name, t) in [("k_scales", k_scales), ("v_scales", v_scales)] {
+        if t.dtype() != DType::F32 {
+            candle::bail!(
+                "reshape_and_cache_q8 requires f32 {name}, got {:?}",
+                t.dtype()
+            );
+        }
+    }
+
+    let (k, k_l) = key.storage_and_layout();
+    let k = match &*k {
+        Storage::Cuda(k) => k,
+        _ => candle::bail!("key must be a cuda tensor"),
+    };
+    let (v, v_l) = value.storage_and_layout();
+    let v = match &*v {
+        Storage::Cuda(v) => v,
+        _ => candle::bail!("value must be a cuda tensor"),
+    };
+    let (kc, kc_l) = key_cache.storage_and_layout();
+    let kc = match &*kc {
+        Storage::Cuda(kc) => kc,
+        _ => candle::bail!("key_cache must be a cuda tensor"),
+    };
+    let (vc, vc_l) = value_cache.storage_and_layout();
+    let vc = match &*vc {
+        Storage::Cuda(vc) => vc,
+        _ => candle::bail!("value_cache must be a cuda tensor"),
+    };
+    let (s, s_l) = slot_mapping.storage_and_layout();
+    let s = match &*s {
+        Storage::Cuda(s) => s,
+        _ => candle::bail!("slot_mapping must be a cuda tensor"),
+    };
+    let (ks_st, ks_l) = k_scales.storage_and_layout();
+    let ks_cuda = match &*ks_st {
+        Storage::Cuda(s) => s,
+        _ => candle::bail!("Q8 k_scales must be a cuda tensor"),
+    };
+    let (vs_st, vs_l) = v_scales.storage_and_layout();
+    let vs_cuda = match &*vs_st {
+        Storage::Cuda(s) => s,
+        _ => candle::bail!("Q8 v_scales must be a cuda tensor"),
+    };
+
+    let (num_tokens, num_heads, head_size, key_stride) =
+        cache_input_layout(k_l, "key", "reshape_and_cache_q8")?;
+    let (value_tokens, value_heads, value_head_size, value_stride) =
+        cache_input_layout(v_l, "value", "reshape_and_cache_q8")?;
+    if (num_tokens, num_heads, head_size) != (value_tokens, value_heads, value_head_size) {
+        candle::bail!("shape mismatch k {:?} and v {:?}", k_l.shape(), v_l.shape())
+    }
+    if head_size % Q8_BLOCK != 0 || head_size > Q8_MAX_HEAD {
+        candle::bail!(
+            "reshape_and_cache_q8 requires head_size % 32 == 0 and <= 512, got {head_size}"
+        );
+    }
+    let groups = head_size / Q8_BLOCK;
+
+    let (num_blocks, num_heads_kc, head_size_kc, block_size, x) = kc_l.shape().dims5()?;
+    if x != Q8_X {
+        candle::bail!("reshape_and_cache_q8 requires x = 16 packing, got {x}");
+    }
+    if num_heads_kc != num_heads || head_size_kc != head_size / x {
+        candle::bail!(
+            "shape mismatch value_cache {:?}, expected {:?}",
+            vc_l.shape(),
+            (num_blocks, num_heads, head_size / x, block_size, x)
+        )
+    }
+    if (num_blocks, num_heads, head_size, block_size) != vc_l.shape().dims4()? {
+        candle::bail!(
+            "shape mismatch key_cache {:?} and value_cache {:?}",
+            kc_l.shape(),
+            vc_l.shape()
+        )
+    }
+    let expected_scales = [num_blocks, num_heads, block_size, groups];
+    for (name, t) in [("k_scales", k_scales), ("v_scales", v_scales)] {
+        if t.shape().dims() != expected_scales {
+            candle::bail!(
+                "shape mismatch {name} {:?}, expected {:?}",
+                t.shape(),
+                expected_scales
+            );
+        }
+    }
+    if num_tokens != s_l.shape().dims1()? {
+        candle::bail!(
+            "shape mismatch slot_mapping {:?}, expected {:?}",
+            s_l.shape(),
+            num_tokens
+        )
+    }
+
+    let dev = k.device();
+
+    let kc_u8 = kc.as_cuda_slice::<u8>()?;
+    let vc_u8 = vc.as_cuda_slice::<u8>()?;
+    let (kc_ptr, _kc_guard) = slice_ptr(kc_u8, kc_l.start_offset());
+    let (vc_ptr, _vc_guard) = slice_ptr(vc_u8, vc_l.start_offset());
+    let s_i64 = s.as_cuda_slice::<i64>()?;
+    let (s_ptr, _s_guard) = slice_ptr(s_i64, s_l.start_offset());
+
+    let ks_f32 = ks_cuda.as_cuda_slice::<f32>()?;
+    let (ks_ptr, _ks_guard) = slice_ptr(ks_f32, ks_l.start_offset());
+    let vs_f32 = vs_cuda.as_cuda_slice::<f32>()?;
+    let (vs_ptr, _vs_guard) = slice_ptr(vs_f32, vs_l.start_offset());
+
+    let key_stride = c_int::try_from(key_stride).map_err(candle::Error::wrap)?;
+    let value_stride = c_int::try_from(value_stride).map_err(candle::Error::wrap)?;
+
+    // Typed input pointers for the FFI call (k/v are &CudaStorage from above).
+    let (k_in_ptr, _k_in_guard, v_in_ptr, _v_in_guard): (u64, _, u64, _) = match dtype {
+        DType::F16 => {
+            let kk = k.as_cuda_slice::<f16>()?;
+            let vv = v.as_cuda_slice::<f16>()?;
+            let (a, ag) = slice_ptr(kk, k_l.start_offset());
+            let (b, bg) = slice_ptr(vv, v_l.start_offset());
+            (a, ag, b, bg)
+        }
+        DType::BF16 => {
+            let kk = k.as_cuda_slice::<bf16>()?;
+            let vv = v.as_cuda_slice::<bf16>()?;
+            let (a, ag) = slice_ptr(kk, k_l.start_offset());
+            let (b, bg) = slice_ptr(vv, v_l.start_offset());
+            (a, ag, b, bg)
+        }
+        DType::F32 => {
+            let kk = k.as_cuda_slice::<f32>()?;
+            let vv = v.as_cuda_slice::<f32>()?;
+            let (a, ag) = slice_ptr(kk, k_l.start_offset());
+            let (b, bg) = slice_ptr(vv, v_l.start_offset());
+            (a, ag, b, bg)
+        }
+        _ => unreachable!("dtype checked above"),
+    };
+
+    unsafe {
+        ffi::reshape_and_cache_q8(
+            k_in_ptr as *const core::ffi::c_void,
+            v_in_ptr as *const core::ffi::c_void,
+            kc_ptr as *const core::ffi::c_void,
+            vc_ptr as *const core::ffi::c_void,
+            ks_ptr as *mut f32,
+            vs_ptr as *mut f32,
+            s_ptr as *const core::ffi::c_long,
+            num_tokens as c_int,
+            num_heads as c_int,
+            head_size as c_int,
+            block_size as c_int,
+            x as c_int,
+            key_stride,
+            value_stride,
+            dev.cuda_stream().cu_stream(),
+            internal_type,
+        )
+    }
+    Ok(())
+}
 /// Insert key and values at the provided slot mapping inside the key value paged cache
 ///
 /// # Arguments

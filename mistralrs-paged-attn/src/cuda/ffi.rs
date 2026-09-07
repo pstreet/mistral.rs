@@ -123,6 +123,30 @@ extern "C" {
         v_scale: *const f32,
     );
 
+    /// Q8_0 block-quantize write path (llama.cpp Q8_0: int8 + fp32 scale per
+    /// 32 elems). Payload caches are int8 with x = 16 packing; scales are
+    /// fp32 sidecars shaped [num_blocks, num_heads, block_size, head_size/32].
+    pub fn reshape_and_cache_q8(
+        key: *const c_void,
+        value: *const c_void,
+        key_cache: *const c_void,
+        value_cache: *const c_void,
+        k_scales: *mut f32,
+        v_scales: *mut f32,
+        slot_mapping: *const c_long,
+
+        num_tokens: c_int,
+        num_heads: c_int,
+        head_size: c_int,
+        block_size: c_int,
+        x: c_int,
+        key_stride: c_int,
+        value_stride: c_int,
+        stream: CUstream,
+
+        dtype: u32,
+    );
+
     #[cfg(not(feature = "rocm"))]
     pub fn concat_and_cache_mla(
         ckv: *const c_void,
