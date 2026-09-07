@@ -464,15 +464,13 @@ impl QuantMethod for GgufMatMul {
             }
         }
 
-        // Fallback: Candle QMatMul requires F32
+        // Fallback: pass the native activation dtype through. The quantized matmul
+        // dequantizes weights to a matching GEMM dtype (F16/BF16) for large batches
+        // with no input cast; only the small-batch Q8_1 kernel needs F32 and casts
+        // internally. This avoids the old bf16->f32->f16->bf16 cast round-trip.
         let original_dtype = a.dtype();
-        let a_f32 = if original_dtype == DType::F32 {
-            a.clone()
-        } else {
-            a.to_dtype(DType::F32)?
-        };
-        let x = self.w.forward(&a_f32)?;
-        let x = if original_dtype == DType::F32 {
+        let x = self.w.forward(a)?;
+        let x = if x.dtype() == original_dtype {
             x
         } else {
             x.to_dtype(original_dtype)?
