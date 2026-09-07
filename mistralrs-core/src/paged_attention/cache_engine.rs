@@ -48,12 +48,16 @@ pub enum PagedCacheType {
     #[default]
     Auto,
     F8E4M3,
+    /// Block-int8 KV (llama.cpp Q8_0: int8 + fp16 scale per 32 elems).
+    /// Payload dtype is U8; per-block scales ride in sidecar tensors (Phase 1).
+    Q8_0,
 }
 
 impl PagedCacheType {
     pub fn to_dtype(&self, act_dtype: DType) -> DType {
         match self {
             PagedCacheType::F8E4M3 => DType::F8E4M3,
+            PagedCacheType::Q8_0 => DType::U8,
             PagedCacheType::Auto => act_dtype,
         }
     }
@@ -68,9 +72,15 @@ impl PagedCacheType {
         if *self == Self::Auto {
             return Ok(());
         }
+        // Skeleton (Phase 0): Q8_0 parses and sizes payload as U8, but block
+        // quant/dequant kernels land in Phase 1. Fail fast so a Q8_0 config
+        // can never silently run unquantized attention on U8 bytes.
+        if *self == Self::Q8_0 {
+            return Err("Q8_0 KV cache kernels are not yet implemented (Phase 1)".to_string());
+        }
         if !matches!(act_dtype, DType::F16 | DType::BF16 | DType::F32) {
             return Err(format!(
-                "FP8 KV cache requires f16, bf16, or f32 activations, got {act_dtype:?}"
+                "Quantized KV cache requires f16, bf16, or f32 activations, got {act_dtype:?}"
             ));
         }
 
@@ -83,7 +93,7 @@ impl PagedCacheType {
                 KvCacheLayout::Mla { .. }
             ) {
                 return Err(format!(
-                    "FP8 KV cache is not supported for MLA layer {layer_idx}"
+                    "Quantized KV cache is not supported for MLA layer {layer_idx}"
                 ));
             }
             let layer_device = layer_devices
@@ -107,10 +117,12 @@ impl PagedCacheType {
                 );
             } else if layer_device.is_metal() {
                 #[cfg(not(feature = "metal"))]
-                return Err("FP8 KV cache requires the Metal paged-attention backend".to_string());
+                return Err(
+                    "Quantized KV cache requires the Metal paged-attention backend".to_string(),
+                );
             } else {
                 return Err(format!(
-                    "FP8 KV cache is only supported on CUDA or Metal, got {layer_device:?} for layer {layer_idx}"
+                    "Quantized KV cache is only supported on CUDA or Metal, got {layer_device:?} for layer {layer_idx}"
                 ));
             }
         }
@@ -124,8 +136,9 @@ impl FromStr for PagedCacheType {
         match s {
             "auto" => Ok(Self::Auto),
             "f8e4m3" => Ok(Self::F8E4M3),
+            "q8_0" => Ok(Self::Q8_0),
             other => Err(format!(
-                "Unexpected `PagedCacheType`, got `{other}` but expected `auto` and `f8e4m3`."
+                "Unexpected `PagedCacheType`, got `{other}` but expected `auto`, `f8e4m3`, and `q8_0`."
             )),
         }
     }
@@ -593,6 +606,24 @@ mod tests {
             v_head_dim: 128,
             kv_cache_layout: layout,
         }
+    }
+
+    #[test]
+    fn q8_0_parses_and_reports_unimplemented() {
+        assert_eq!(
+            "q8_0".parse(),
+            Ok::<PagedCacheType, String>(PagedCacheType::Q8_0)
+        );
+        assert_eq!(PagedCacheType::Q8_0.to_dtype(DType::BF16), DType::U8);
+        let err = PagedCacheType::Q8_0
+            .validate(
+                DType::BF16,
+                &model_config(KvCacheLayout::Standard),
+                &Device::Cpu,
+                &[],
+            )
+            .unwrap_err();
+        assert!(err.contains("not yet implemented"));
     }
 
     #[test]
