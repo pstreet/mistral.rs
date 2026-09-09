@@ -21,6 +21,7 @@ pub(crate) mod mm_prefix;
     feature = "metal"
 ))]
 pub(crate) mod plan;
+mod q8_registry;
 mod scales;
 mod scheduler;
 #[cfg(any(

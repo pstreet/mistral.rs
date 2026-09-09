@@ -526,6 +526,12 @@ impl GatedDeltaNet {
         let (batch_size, seq_len, _) = x.dims3()?;
         let dtype = x.dtype();
         let mixed_qkv = projected.conv_input(&self.dims, batch_size, seq_len)?;
+        crate::cuda::gdn::probe_tensors_debug("gdn-mixed", seq_len, &[&mixed_qkv]);
+        crate::cuda::gdn::probe_tensors_debug(
+            "gdn-ba",
+            seq_len,
+            &[&projected.b, &projected.a, &projected.z],
+        );
         #[cfg(feature = "cuda")]
         let accelerated = if checkpoint_lanes > 1
             && batch_kind == RecurrentBatchKind::SpeculativeDecode
@@ -603,6 +609,7 @@ impl GatedDeltaNet {
             cache,
             ctx.batch_kind,
         )?;
+        crate::cuda::gdn::probe_tensors_debug("gdn-conv", ctx.seq_len, &[&convolved_qkv]);
         let y = backend::apply_recurrence_from_convolved(
             &convolved_qkv,
             &projected.b,
@@ -1055,6 +1062,7 @@ impl GatedDeltaNet {
         #[cfg(feature = "cuda")]
         let y = match output {
             GdnCoreOutput::Recurrent(y) => {
+                crate::cuda::gdn::probe_tensors_debug("rec-y", seq_len, &[&y]);
                 if let Some(spec) = self.fp8_output_spec(&z, batch_size, seq_len) {
                     let activation = self.norm.forward_quantized(
                         &y,

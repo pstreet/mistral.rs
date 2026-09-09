@@ -4,7 +4,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
     },
 };
 
@@ -105,6 +105,25 @@ pub(super) struct FullAttention {
 enum AttentionInput<'a> {
     Dense(&'a Tensor),
     Quantized(&'a QuantizedActivation),
+}
+
+fn trace_layer_nan(xs: &Tensor, layer: usize, tag: &'static str, query_len: usize) {
+    crate::cuda::gdn::probe_tensors_debug(&format!("layer-{layer}-{tag}"), query_len, &[xs]);
+}
+
+fn trace_state_indices(indices: &Tensor, layer: usize, query_len: usize) {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    if !*ENABLED.get_or_init(|| std::env::var("MRS_NAN_TRACE").is_ok()) {
+        return;
+    }
+    match indices.to_vec1::<u32>() {
+        Ok(vals) => {
+            tracing::error!(target: "mistralrs_core::engine", "nan-trace qlen={query_len} layer={layer} kind=slots vals={vals:?}");
+        }
+        Err(e) => {
+            tracing::error!(target: "mistralrs_core::engine", "nan-trace qlen={query_len} layer={layer} kind=slots read failed: {e:?}");
+        }
+    }
 }
 
 impl FullAttention {
@@ -276,6 +295,7 @@ impl FullAttention {
         kv_cache: Option<&mut KvCache>,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
+        trace: Option<(usize, usize)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = match input {
             AttentionInput::Dense(x) => x.dims3()?,
@@ -366,6 +386,11 @@ impl FullAttention {
                 qkv.push(("v", v.sum_all()?));
             }
         }
+        if let Some((layer, qlen)) = trace {
+            trace_layer_nan(&q, layer, "attn-q", qlen);
+            trace_layer_nan(&k, layer, "attn-k", qlen);
+            trace_layer_nan(&v, layer, "attn-v", qlen);
+        }
 
         // Standard attention
         let mut y = match &self.paged_attn {
@@ -423,6 +448,9 @@ impl FullAttention {
                 qkv.push(("y", y.sum_all()?));
             }
         }
+        if let Some((layer, qlen)) = trace {
+            trace_layer_nan(&y, layer, "attn-y", qlen);
+        }
 
         // Apply output gate: y = y * sigmoid(gate)
         if let Some(res) = crate::ops::try_fused_gated_projection(
@@ -431,11 +459,17 @@ impl FullAttention {
             layers::Activation::Sigmoid,
             &*self.o_proj,
         )? {
+            if let Some((layer, qlen)) = trace {
+                trace_layer_nan(&res, layer, "attn-o", qlen);
+            }
             return Ok(res);
         }
         y = crate::ops::mul_and_act(&gate.to_dtype(y.dtype())?, &y, layers::Activation::Sigmoid)?;
 
         let res = self.o_proj.forward(&y)?;
+        if let Some((layer, qlen)) = trace {
+            trace_layer_nan(&res, layer, "attn-o", qlen);
+        }
         Ok(res)
     }
 }
@@ -559,6 +593,10 @@ impl DecoderLayerOutput {
 
 impl DecoderLayer {
     fn input_quantization_plan(&self, input: &Tensor) -> Option<LayerInputQuantizationPlan> {
+        static DISABLED: OnceLock<bool> = OnceLock::new();
+        if *DISABLED.get_or_init(|| std::env::var("MRS_NO_ACT_QUANT").is_ok()) {
+            return None;
+        }
         if input.dtype() != DType::BF16 || !input.device().is_cuda() {
             return None;
         }
@@ -652,6 +690,7 @@ impl DecoderLayer {
             kv_cache,
             metadata,
             flash_params,
+            None,
         )?
         .add()
     }
@@ -666,6 +705,7 @@ impl DecoderLayer {
         kv_cache: Option<&mut KvCache>,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
+        trace: Option<(usize, usize)>,
     ) -> Result<DecoderLayerOutput> {
         let attn = match &self.layer_impl {
             LayerImpl::FullAttention(attn) => attn,
@@ -690,12 +730,17 @@ impl DecoderLayer {
             kv_cache,
             metadata,
             flash_params,
+            trace,
         )?;
         let (x, ffn_out) = self.mlp.forward_with_add_rms_norm(
             &attn_out,
             residual,
             &self.post_attention_layernorm,
         )?;
+        if let Some((layer, qlen)) = trace {
+            trace_layer_nan(&ffn_out, layer, "mlp-b", qlen);
+            trace_layer_nan(&x, layer, "mlp-r", qlen);
+        }
         Ok(DecoderLayerOutput {
             branch: ffn_out,
             residual: x,
@@ -2460,6 +2505,15 @@ impl Qwen3_5TextModel {
         let forward_result = (|| -> Result<Tensor> {
             let mut normalized_x = None;
             for (i, layer) in self.layers.iter().enumerate() {
+                match normalized_x.as_ref() {
+                    Some(PreparedLayerInput::Dense(t)) => trace_layer_nan(t, i, "prep", query_len),
+                    Some(PreparedLayerInput::Quantized { normalized, .. }) => {
+                        if let Some(t) = normalized {
+                            trace_layer_nan(t, i, "prep", query_len);
+                        }
+                    }
+                    None => {}
+                }
                 xs = self.mapper.map(xs, i)?;
                 if normalized_x
                     .as_ref()
@@ -2486,6 +2540,7 @@ impl Qwen3_5TextModel {
                             Some(kv_cache),
                             ctx.paged_layer(i),
                             ctx.flash_params(),
+                            Some((i, query_len)),
                         )?
                     }
                     LayerType::LinearAttention => {
@@ -2498,6 +2553,7 @@ impl Qwen3_5TextModel {
                                     "Hybrid cache layer {i} is missing recurrent state indices"
                                 ))
                             })?;
+                        trace_state_indices(&indices, i, query_len);
                         let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i)
                         else {
                             candle_core::bail!(
@@ -2605,6 +2661,15 @@ impl Qwen3_5TextModel {
                         normalized_x = None;
                     }
                 }
+                trace_layer_nan(
+                    &xs,
+                    i,
+                    match &self.layer_types[i] {
+                        LayerType::FullAttention => "full",
+                        LayerType::LinearAttention => "gdn",
+                    },
+                    query_len,
+                );
                 if capture_taps && tap_layers.contains(&i) {
                     taps_all.push(xs.to_device(&self.device)?);
                 }
@@ -2667,7 +2732,9 @@ impl Qwen3_5TextModel {
                     taps,
                 });
             }
-            self.lm_head.forward(&xs)
+            self.lm_head.forward(&xs).inspect(|logits| {
+                trace_layer_nan(logits, self.layers.len(), "lm_head", query_len);
+            })
         })();
         forward_result
     }

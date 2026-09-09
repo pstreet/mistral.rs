@@ -234,6 +234,25 @@ fn write_kv_cache(
             .reshape(cache_input_shape(value)?)?;
         &value_packed
     };
+    // Q8_0 block-quantized write: scales resolve from the engine registry by
+    // cache identity, so no model call-site changes are needed.
+    if key_cache.dtype() == DType::U8 {
+        let scales =
+            crate::paged_attention::q8_registry::lookup_q8_scales(key_cache)?.ok_or_else(|| {
+                candle_core::Error::msg(
+                    "Q8_0 KV cache has no registered scale tensors for this layer",
+                )
+            })?;
+        return mistralrs_paged_attn::reshape_and_cache_q8(
+            key,
+            value,
+            key_cache,
+            value_cache,
+            &scales.k,
+            &scales.v,
+            slot_mapping,
+        );
+    }
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
         AttentionBackendKind::FlashInfer => {
             #[cfg(all(feature = "cuda", target_family = "unix"))]

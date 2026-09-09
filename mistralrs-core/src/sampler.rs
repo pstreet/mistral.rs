@@ -1284,8 +1284,10 @@ impl Sampler {
                     .enumerate()
                     .find(|(_, prob)| !prob.is_finite() || **prob < 0.0)
                 {
+                    let (n_nan, n_inf, lo, hi) = Self::finite_stats(sampling_probs);
                     return Err(Error::Msg(format!(
-                        "Invalid sampling probability at index {idx}: {prob}. The model likely produced NaN/Inf logits."
+                        "Invalid sampling probability at index {idx}: {prob} (n={} nan={n_nan} inf={n_inf} min={lo:?} max={hi:?}). The model likely produced NaN/Inf logits.",
+                        sampling_probs.len(),
                     )));
                 }
 
@@ -1772,6 +1774,24 @@ impl Sampler {
         }
     }
 
+    fn finite_stats(xs: &[f32]) -> (usize, usize, Option<f32>, Option<f32>) {
+        let mut n_nan = 0usize;
+        let mut n_inf = 0usize;
+        let mut lo: Option<f32> = None;
+        let mut hi: Option<f32> = None;
+        for &x in xs {
+            if x.is_nan() {
+                n_nan += 1;
+            } else if x.is_infinite() {
+                n_inf += 1;
+            } else {
+                lo = Some(lo.map_or(x, |m: f32| m.min(x)));
+                hi = Some(hi.map_or(x, |m: f32| m.max(x)));
+            }
+        }
+        (n_nan, n_inf, lo, hi)
+    }
+
     fn normalize_probs(probs: &mut [f32]) -> Result<()> {
         let sum: f32 = probs
             .iter()
@@ -1797,7 +1817,7 @@ impl Sampler {
         context: &[u32],
         prompt_len: usize,
     ) -> Result<SpeculativeProbs> {
-        self.speculative_probs(logits, context, prompt_len)
+        self.speculative_probs(logits, context, prompt_len, "target")
     }
 
     pub(crate) fn speculative_candidate_probs(
@@ -1807,7 +1827,7 @@ impl Sampler {
         prompt_len: usize,
     ) -> Result<Vec<f32>> {
         Ok(self
-            .speculative_probs(logits, context, prompt_len)?
+            .speculative_probs(logits, context, prompt_len, "candidate")?
             .sampling)
     }
 
@@ -1816,9 +1836,10 @@ impl Sampler {
         logits: Tensor,
         context: &[u32],
         prompt_len: usize,
+        side: &'static str,
     ) -> Result<SpeculativeProbs> {
-        let logits = logits.to_vec1()?;
-        let mut logits = self.apply_penalties(logits, context, prompt_len)?;
+        let raw_logits = logits.to_vec1()?;
+        let mut logits = self.apply_penalties(raw_logits.clone(), context, prompt_len)?;
         for processor in &self.logits_processors {
             logits = processor.apply(&logits, context)?;
         }
@@ -1843,7 +1864,16 @@ impl Sampler {
             Some(_) => reporting.clone(),
         };
         self.filter_top_kp_min_p(&mut sampling);
-        Self::normalize_probs(&mut sampling)?;
+        if let Err(e) = Self::normalize_probs(&mut sampling) {
+            let (n_nan, n_inf, lo, hi) = Self::finite_stats(&raw_logits);
+            let (r_nan, r_inf, r_lo, r_hi) = Self::finite_stats(&reporting);
+            return Err(candle_core::Error::msg(format!(
+                "all probabilities are zero in speculative sampling (side={side}, {e}; \
+                 raw_logits: n={} nan={n_nan} inf={n_inf} min={lo:?} max={hi:?}; \
+                 reporting: nan={r_nan} inf={r_inf} min={r_lo:?} max={r_hi:?})",
+                raw_logits.len(),
+            )));
+        }
         Ok(SpeculativeProbs {
             sampling,
             reporting,

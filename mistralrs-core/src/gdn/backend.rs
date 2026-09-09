@@ -533,6 +533,11 @@ fn recurrence_cuda_from_convolved(
                     dims.head_v_dim,
                     dims.v_head_layout == GdnVHeadLayout::Tiled,
                 )?;
+            crate::cuda::gdn::probe_tensors_debug(
+                "prep-out",
+                seq_len,
+                &[&q_bh, &k_bh, &v_bh, &g_bh, &beta_bh],
+            );
             let inputs = RecurrenceInputs {
                 q: &q_bh,
                 k: &k_bh,

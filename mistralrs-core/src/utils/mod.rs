@@ -90,6 +90,7 @@ macro_rules! handle_seq_error_stateaware_ok {
             Err(e) => {
                 use $crate::response::Response;
                 use $crate::sequence::SequenceState;
+                tracing::error!(target: "mistralrs_core::engine", "seq-level error swallowed as InternalError: {e:?}");
                 if let Err(_) = $seq
                     .responder()
                     .send(Response::InternalError(e.into()))
