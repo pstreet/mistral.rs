@@ -20,6 +20,7 @@ extern "C" void paged_attention_v2_f32(
     int32_t kv_head_stride, cudaStream_t stream,
 
     uint32_t cache_dtype, // 0 => f16; 1 => bf16; 2 => f32; 3 => fp8_e4m3
+                             // 4 => q8_0 block-int8
     float *k_scale, float *v_scale, const float *sinks) {
 
 #ifdef ENABLE_FP8
@@ -29,6 +30,11 @@ extern "C" void paged_attention_v2_f32(
                                 vllm::Fp8KVCacheDataType::kFp8E4M3);
   } else
 #endif
+  if (cache_dtype == 4) {
+    // Q8_0 cache: int8 payload, fp32 per-32 scales via k_scale/v_scale.
+    CALL_V2_LAUNCHER_BLOCK_SIZE(float, int8_t,
+                                vllm::Fp8KVCacheDataType::kQ8_0);
+  } else
   {
     // Non-FP8 cache
     CALL_V2_LAUNCHER_BLOCK_SIZE(float, float, vllm::Fp8KVCacheDataType::kAuto);

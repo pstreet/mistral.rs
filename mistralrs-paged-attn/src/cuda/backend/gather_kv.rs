@@ -28,6 +28,19 @@ fn validate_cache_scales(
         (DType::F8E4M3, _, _) => {
             candle_core::bail!("gather_kv_cache requires explicit K/V scales for an f8e4m3 cache")
         }
+        (DType::U8, Some(k_scale), Some(v_scale)) => {
+            // Q8_0 block-int8: fp32 per-32 scale sidecars, not scalars.
+            if k_scale.dtype() != DType::F32 || v_scale.dtype() != DType::F32 {
+                candle_core::bail!(
+                    "gather_kv_cache requires f32 K/V scale sidecars for a q8_0 cache"
+                );
+            }
+        }
+        (DType::U8, _, _) => {
+            candle_core::bail!(
+                "gather_kv_cache requires explicit K/V scale sidecars for a q8_0 cache"
+            )
+        }
         (_, None, None) => {}
         (_, _, _) => {
             candle_core::bail!("gather_kv_cache only accepts K/V scales for an f8e4m3 cache")
@@ -47,6 +60,9 @@ fn flashinfer_cache_scales(
             v: v_scale.to_dtype(DType::F32)?.to_scalar::<f32>()?,
         }),
         (_, None, None) => Ok(DEFAULT_FP8_KV_CACHE_SCALES),
+        (DType::U8, _, _) => {
+            candle_core::bail!("q8_0 caches have no scalar flashinfer scales")
+        }
         _ => unreachable!(),
     }
 }
@@ -147,8 +163,9 @@ pub fn gather_kv_cache(
         DType::BF16 => 1,
         DType::F32 => 2,
         DType::F8E4M3 => 3,
+        DType::U8 => 4,
         other => candle_core::bail!(
-            "gather_kv_cache only supports f16, bf16, f32, f8e4m3 cache (got {other:?})"
+            "gather_kv_cache only supports f16, bf16, f32, f8e4m3, q8_0 cache (got {other:?})"
         ),
     };
 
@@ -165,9 +182,11 @@ pub fn gather_kv_cache(
             _ => candle_core::bail!("value_cache must be a cuda tensor"),
         };
 
-        // Get cache pointers - handle FP8 vs regular dtype
+        // Get cache pointers - handle FP8/Q8 vs regular dtype
         let (kc_ptr, _kc_guard) = if cache_dtype_code == 3 {
             slice_ptr(kc_s.as_cuda_slice::<F8E4M3>()?, kc_l.start_offset())
+        } else if cache_dtype_code == 4 {
+            slice_ptr(kc_s.as_cuda_slice::<u8>()?, kc_l.start_offset())
         } else {
             match cache_dtype {
                 DType::F16 => slice_ptr(kc_s.as_cuda_slice::<half::f16>()?, kc_l.start_offset()),
@@ -178,6 +197,8 @@ pub fn gather_kv_cache(
         };
         let (vc_ptr, _vc_guard) = if cache_dtype_code == 3 {
             slice_ptr(vc_s.as_cuda_slice::<F8E4M3>()?, vc_l.start_offset())
+        } else if cache_dtype_code == 4 {
+            slice_ptr(vc_s.as_cuda_slice::<u8>()?, vc_l.start_offset())
         } else {
             match cache_dtype {
                 DType::F16 => slice_ptr(vc_s.as_cuda_slice::<half::f16>()?, vc_l.start_offset()),

@@ -210,6 +210,22 @@ fn cache_input_can_write_directly(tensor: &Tensor) -> Result<bool> {
         && row_stride >= heads.saturating_mul(head_size))
 }
 
+// Q8_0 block-int8 read support: per-layer scale sidecars resolve from the
+// engine registry by cache identity (mirrors write_kv_cache). `None` unless
+// the cache payload is U8.
+fn q8_layer_scales(
+    key_cache: &Tensor,
+) -> Result<Option<crate::paged_attention::q8_registry::Q8LayerScales>> {
+    if key_cache.dtype() != DType::U8 {
+        return Ok(None);
+    }
+    Ok(Some(
+        crate::paged_attention::q8_registry::lookup_q8_scales(key_cache)?.ok_or_else(|| {
+            candle_core::Error::msg("Q8_0 KV cache has no registered scale tensors for this layer")
+        })?,
+    ))
+}
+
 fn write_kv_cache(
     key: &Tensor,
     value: &Tensor,
@@ -311,16 +327,24 @@ fn gather_kv_cache_for_layout(
                 unreachable!("FlashInfer cache is only available with CUDA")
             }
         }
-        AttentionBackendKind::Standard => mistralrs_paged_attn::gather_kv_cache(
-            key_cache,
-            value_cache,
-            scales.k,
-            scales.v,
-            block_tables,
-            cu_kv,
-            num_tokens,
-            dtype,
-        ),
+        AttentionBackendKind::Standard => {
+            // Q8_0 sidecars ride the scale args into the dequantizing gather.
+            let q8_scales = q8_layer_scales(key_cache)?;
+            let (k, v) = match q8_scales.as_ref() {
+                Some(q8) => (Some(&q8.k), Some(&q8.v)),
+                None => (scales.k, scales.v),
+            };
+            mistralrs_paged_attn::gather_kv_cache(
+                key_cache,
+                value_cache,
+                k,
+                v,
+                block_tables,
+                cu_kv,
+                num_tokens,
+                dtype,
+            )
+        }
     }
 }
 
@@ -2054,10 +2078,16 @@ impl PagedAttention {
         dev: &DeviceLocation,
     ) -> Result<Tensor> {
         let scales = self.cache_scales(key_cache);
+        // Q8_0 sidecars ride the scale args into the native int8 decode kernel.
+        let q8_scales = q8_layer_scales(key_cache)?;
+        let (k, v) = match q8_scales.as_ref() {
+            Some(q8) => (Some(&q8.k), Some(&q8.v)),
+            None => (scales.k, scales.v),
+        };
         paged_attention(
             query,
-            scales.k,
-            scales.v,
+            k,
+            v,
             key_cache,
             value_cache,
             ctx.block_tables(dev).unwrap(),

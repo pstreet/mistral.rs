@@ -54,8 +54,17 @@ fn validate_kv_cache_scales(
         (DType::F8E4M3, _, _) => {
             candle::bail!("{op} requires explicit K/V scales for an f8e4m3 cache");
         }
+        (DType::U8, Some(k_scale), Some(v_scale)) => {
+            // Q8_0 block-int8: fp32 per-32 scale sidecars, not scalars.
+            if k_scale.dtype() != DType::F32 || v_scale.dtype() != DType::F32 {
+                candle::bail!("{op} requires f32 K/V scale sidecars for a q8_0 cache");
+            }
+        }
+        (DType::U8, _, _) => {
+            candle::bail!("{op} requires explicit K/V scale sidecars for a q8_0 cache");
+        }
         (_, None, None) => {}
-        (_, _, _) => candle::bail!("{op} only accepts K/V scales for an f8e4m3 cache"),
+        (_, _, _) => candle::bail!("{op} only accepts K/V scales for an f8e4m3 or q8_0 cache"),
     }
     Ok(())
 }
@@ -126,6 +135,7 @@ impl PagedAttention {
             DType::BF16 => 1,
             DType::F32 => 2,
             DType::F8E4M3 => 3,
+            DType::U8 => 4,
             dtype => candle::bail!("cache dtype {dtype:?} is not supported"),
         };
 
@@ -185,11 +195,15 @@ impl PagedAttention {
         let q = q.as_cuda_slice::<T>()?;
         let (kc_ptr, _kc_guard) = if cache_dtype == 3 {
             slice_ptr(kc.as_cuda_slice::<F8E4M3>()?, kc_l.start_offset())
+        } else if cache_dtype == 4 {
+            slice_ptr(kc.as_cuda_slice::<u8>()?, kc_l.start_offset())
         } else {
             slice_ptr(kc.as_cuda_slice::<T>()?, kc_l.start_offset())
         };
         let (vc_ptr, _vc_guard) = if cache_dtype == 3 {
             slice_ptr(vc.as_cuda_slice::<F8E4M3>()?, vc_l.start_offset())
+        } else if cache_dtype == 4 {
+            slice_ptr(vc.as_cuda_slice::<u8>()?, vc_l.start_offset())
         } else {
             slice_ptr(vc.as_cuda_slice::<T>()?, vc_l.start_offset())
         };
@@ -216,7 +230,9 @@ impl PagedAttention {
 
         let (k_scale_ptr, v_scale_ptr) =
             if let (Some(k_scale), Some(v_scale)) = (&self.k_scale, &self.v_scale) {
-                if !crate::cuda::USE_FP8 {
+                // FP8 global scales need FP8 kernel support; Q8_0 sidecars ride
+                // the same pointers into the Q8 kernel branches.
+                if cache_dtype != 4 && !crate::cuda::USE_FP8 {
                     candle::bail!("FP8 is not supported on this system.");
                 }
 

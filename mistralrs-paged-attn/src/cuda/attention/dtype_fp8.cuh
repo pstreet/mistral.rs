@@ -15,6 +15,10 @@ enum class Fp8KVCacheDataType {
   kAuto = 0,
   kFp8E4M3 = 1,
   kFp8E5M2 = 2,
+  // Block-int8 (llama.cpp Q8_0): int8 payload plus fp32 per-32 scale
+  // sidecars. Shares this enum (and the k_scale/v_scale kernel args, which
+  // carry the sidecar bases) to avoid re-templating every launcher.
+  kQ8_0 = 3,
 };
 
 // fp8 vector types for quantization of kv cache

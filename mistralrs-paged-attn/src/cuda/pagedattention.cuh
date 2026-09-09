@@ -32,6 +32,8 @@
 #include "quantization/fp8/nvidia/quant_utils.cuh"
 #endif
 
+#include "quantization/q8/q8_utils.cuh"
+
 #include <algorithm>
 
 // Must be a constant expression (used in constexpr math). RDNA targets are
@@ -218,6 +220,10 @@ __device__ void paged_attention_kernel(
   // x == THREAD_GROUP_SIZE * VEC_SIZE
   // Each thread group fetches x elements from the key at a time.
   constexpr int x = 16 / sizeof(cache_t);
+  // Q8_0 block-int8: one fp32 scale per 32 head-dim elems. Scale sidecars are
+  // [num_blocks, num_kv_heads, BLOCK_SIZE, HEAD_SIZE / 32]; k_scale/v_scale
+  // carry the sidecar bases when kv_dt == kQ8_0.
+  constexpr int Q8_GROUPS = HEAD_SIZE / 32;
   float qk_max = -FLT_MAX;
 
   // Iterate over the key blocks.
@@ -244,6 +250,21 @@ __device__ void paged_attention_kernel(
       const int token_idx = block_idx * BLOCK_SIZE + physical_block_offset;
       K_vec k_vecs[NUM_VECS_PER_THREAD];
 
+      // Q8_0 scales for this token, hoisted so each of the HEAD_SIZE / 32
+      // sidecar scales loads once no matter how the vecs below span groups.
+      // Dead in non-Q8 instantiations (never referenced).
+      float q8_k_scales[Q8_GROUPS];
+      if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kQ8_0) {
+        const int64_t q8_scale_row =
+            (physical_block_number * num_kv_heads + kv_head_idx) * BLOCK_SIZE +
+            physical_block_offset;
+        const float *q8_ks = k_scale + q8_scale_row * Q8_GROUPS;
+#pragma unroll
+        for (int g = 0; g < Q8_GROUPS; ++g) {
+          q8_k_scales[g] = q8_ks[g];
+        }
+      }
+
 #pragma unroll
       for (int j = 0; j < NUM_VECS_PER_THREAD; j++) {
         const cache_t *k_ptr =
@@ -256,6 +277,28 @@ __device__ void paged_attention_kernel(
         if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kAuto) {
           k_vecs[j] = *reinterpret_cast<const K_vec *>(
               k_ptr + offset1 * BLOCK_SIZE * x + offset2);
+        } else if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kQ8_0) {
+          using Cache_K_vec = typename vllm::Vec<uint8_t, VEC_SIZE>::Type;
+          Cache_K_vec q8_k_packed = *reinterpret_cast<const Cache_K_vec *>(
+              k_ptr + offset1 * BLOCK_SIZE * x + offset2);
+          const int8_t *q8_k_bytes =
+              reinterpret_cast<const int8_t *>(&q8_k_packed);
+          scalar_t *q8_k_dst = reinterpret_cast<scalar_t *>(&k_vecs[j]);
+          // Head-dim base of this vec; it holds VEC_SIZE (<= 8) elems, so it
+          // crosses a 32-elem scale group at most once.
+          const int q8_base = vec_idx * VEC_SIZE;
+          int q8_group = q8_base / 32;
+          int q8_group_end = (q8_group + 1) * 32;
+#pragma unroll
+          for (int e = 0; e < VEC_SIZE; ++e) {
+            const int q8_d = q8_base + e;
+            if (q8_d >= q8_group_end) {
+              ++q8_group;
+              q8_group_end += 32;
+            }
+            from_float(q8_k_dst[e], vllm::q8::dequantize_q8_0(
+                                        q8_k_bytes[e], q8_k_scales[q8_group]));
+          }
         } else {
           using Cache_K_vec = typename vllm::Vec<cache_t, VEC_SIZE>::Type;
           Cache_K_vec fp8_k_vec = *reinterpret_cast<const Cache_K_vec *>(
@@ -395,6 +438,26 @@ __device__ void paged_attention_kernel(
 
         if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kAuto) {
           v_vec = *reinterpret_cast<const V_vec *>(v_ptr + offset);
+        } else if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kQ8_0) {
+          using Cache_V_vec = typename vllm::Vec<uint8_t, V_VEC_SIZE>::Type;
+          Cache_V_vec q8_v_packed =
+              *reinterpret_cast<const Cache_V_vec *>(v_ptr + offset);
+          const int8_t *q8_v_bytes =
+              reinterpret_cast<const int8_t *>(&q8_v_packed);
+          scalar_t *q8_v_dst = reinterpret_cast<scalar_t *>(&v_vec);
+          // This row's scale group is fixed; the vec spans consecutive tokens.
+          const int q8_group = row_idx / 32;
+          const int64_t q8_v_row =
+              (physical_block_number * num_kv_heads + kv_head_idx) *
+                  BLOCK_SIZE +
+              physical_block_offset;
+#pragma unroll
+          for (int e = 0; e < V_VEC_SIZE; ++e) {
+            const float q8_scale =
+                v_scale[(q8_v_row + e) * Q8_GROUPS + q8_group];
+            from_float(q8_v_dst[e],
+                       vllm::q8::dequantize_q8_0(q8_v_bytes[e], q8_scale));
+          }
         } else {
           using Cache_V_vec = typename vllm::Vec<cache_t, V_VEC_SIZE>::Type;
           Cache_V_vec fp8_v_vec =

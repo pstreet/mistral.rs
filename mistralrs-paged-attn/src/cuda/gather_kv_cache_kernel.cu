@@ -11,6 +11,8 @@
 #include "quantization/fp8/nvidia/quant_utils.cuh"
 #endif
 
+#include "quantization/q8/q8_utils.cuh"
+
 #include <algorithm>
 
 #define CUDA_CHECK(call)                                                       \
@@ -24,6 +26,24 @@
   } while (0)
 
 namespace vllm {
+
+// Q8_0 dequantized float -> output scalar. Uses the same ROCm-safe
+// conversions as the fp8 utils (float_to_half, __float2bfloat16).
+template <typename out_t>
+__device__ __forceinline__ out_t q8_out_cast(float v);
+template <>
+__device__ __forceinline__ uint16_t q8_out_cast<uint16_t>(float v) {
+  return float_to_half(v);
+}
+template <>
+__device__ __forceinline__ __nv_bfloat16
+q8_out_cast<__nv_bfloat16>(float v) {
+  return __float2bfloat16(v);
+}
+template <>
+__device__ __forceinline__ float q8_out_cast<float>(float v) {
+  return v;
+}
 
 /// Gather K and V from paged KV cache into contiguous output tensors.
 ///
@@ -92,6 +112,10 @@ __global__ void gather_kv_cache_kernel(
       static_cast<int64_t>(num_kv_heads) * head_size * block_size;
   const int64_t v_head_stride = static_cast<int64_t>(head_size) * block_size;
 
+  // Q8_0 scale groups per head-dim row. Pure arithmetic: safe to compute even
+  // when the sidecar pointers are null (only dereferenced in the Q8 branch).
+  const int32_t q8_groups = head_size / vllm::q8::kQ8BlockSize;
+
   for (int i = threadIdx.x; i < n; i += blockDim.x) {
     const int head_idx = i / head_size;
     const int d = i % head_size;
@@ -110,6 +134,22 @@ __global__ void gather_kv_cache_kernel(
     if constexpr (kv_dt == Fp8KVCacheDataType::kAuto) {
       k_out[out_base + i] = key_cache[k_src_idx];
       v_out[out_base + i] = value_cache[v_src_idx];
+    } else if constexpr (kv_dt == Fp8KVCacheDataType::kQ8_0) {
+      // Q8_0 block-int8: int8 payload, fp32 per-32 scales in sidecars
+      // [num_blocks, num_kv_heads, block_size, head_size/32]. k_scale/v_scale
+      // carry the sidecar bases.
+      const int64_t scale_row = (static_cast<int64_t>(block_id) * num_kv_heads +
+                                 head_idx) *
+                                    block_size +
+                                slot;
+      const float k_deq = vllm::q8::dequantize_q8_0(
+          key_cache[k_src_idx],
+          k_scale[scale_row * q8_groups + d / vllm::q8::kQ8BlockSize]);
+      const float v_deq = vllm::q8::dequantize_q8_0(
+          value_cache[v_src_idx],
+          v_scale[scale_row * q8_groups + d / vllm::q8::kQ8BlockSize]);
+      k_out[out_base + i] = q8_out_cast<out_t>(k_deq);
+      v_out[out_base + i] = q8_out_cast<out_t>(v_deq);
     } else {
       k_out[out_base + i] = fp8::scaled_convert<out_t, cache_t, kv_dt>(
           key_cache[k_src_idx], *k_scale);
@@ -146,6 +186,7 @@ extern "C" void gather_kv_cache(
     int32_t x, cudaStream_t stream,
     uint32_t out_dtype,  // 0 => f16; 1 => bf16; 2 => f32
     uint32_t cache_dtype // 0 => f16; 1 => bf16; 2 => f32; 3 => fp8_e4m3
+                         // 4 => q8_0 block-int8
 ) {
   if (num_tokens <= 0) {
     return;
@@ -167,6 +208,17 @@ extern "C" void gather_kv_cache(
     }
   } else
 #endif
+  if (cache_dtype == 4) {
+    // Q8_0 cache -> dequantize to out_dtype
+    if (out_dtype == 0) {
+      CALL_GATHER_KV_CACHE(uint16_t, int8_t, vllm::Fp8KVCacheDataType::kQ8_0);
+    } else if (out_dtype == 1) {
+      CALL_GATHER_KV_CACHE(__nv_bfloat16, int8_t,
+                           vllm::Fp8KVCacheDataType::kQ8_0);
+    } else if (out_dtype == 2) {
+      CALL_GATHER_KV_CACHE(float, int8_t, vllm::Fp8KVCacheDataType::kQ8_0);
+    }
+  } else
   {
     // Non-FP8 cache: cache_t == out_t
     if (out_dtype == 0) {

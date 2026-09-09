@@ -7,7 +7,7 @@ use candle_core::{DType, Device, Result, Tensor};
 use serde::{Deserialize, Serialize};
 
 use super::config::{KvCacheLayout, ModelConfigLike};
-use super::q8_registry::{register_q8_scales, unregister_q8_scales, Q8LayerScales};
+use super::q8_registry::{register_q8_scales, Q8LayerScales};
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::flashinfer::{register_fa3_prefill_caches, Fa3PrefillWorkspaceRegistration};
 
@@ -91,12 +91,6 @@ impl PagedCacheType {
         if *self == Self::Auto {
             return Ok(());
         }
-        // Skeleton (Phase 0): Q8_0 parses and sizes payload as U8, but block
-        // quant/dequant kernels land in Phase 1. Fail fast so a Q8_0 config
-        // can never silently run unquantized attention on U8 bytes.
-        if *self == Self::Q8_0 {
-            return Err("Q8_0 KV cache kernels are not yet implemented (Phase 1)".to_string());
-        }
         if !matches!(act_dtype, DType::F16 | DType::BF16 | DType::F32) {
             return Err(format!(
                 "Quantized KV cache requires f16, bf16, or f32 activations, got {act_dtype:?}"
@@ -121,7 +115,7 @@ impl PagedCacheType {
                 .unwrap_or(device);
             if layer_device.is_cuda() {
                 #[cfg(all(any(feature = "cuda", feature = "rocm"), target_family = "unix"))]
-                if !cuda_supports_fp8(layer_device) {
+                if *self == Self::F8E4M3 && !cuda_supports_fp8(layer_device) {
                     return Err(
                         "FP8 KV cache requires a CUDA build with compute capability 8.0 or newer, or a ROCm build with FP8 paged attention"
                             .to_string(),
@@ -135,6 +129,10 @@ impl PagedCacheType {
                     "FP8 KV cache requires the CUDA/ROCm paged-attention backend".to_string(),
                 );
             } else if layer_device.is_metal() {
+                // Q8_0 block kernels only exist for CUDA/ROCm.
+                if *self == Self::Q8_0 {
+                    return Err("Q8_0 KV cache is only supported on CUDA/ROCm".to_string());
+                }
                 #[cfg(not(feature = "metal"))]
                 return Err(
                     "Quantized KV cache requires the Metal paged-attention backend".to_string(),
@@ -712,12 +710,13 @@ mod tests {
     }
 
     #[test]
-    fn q8_0_parses_and_reports_unimplemented() {
+    fn q8_0_parses_and_validates() {
         assert_eq!(
             "q8_0".parse(),
             Ok::<PagedCacheType, String>(PagedCacheType::Q8_0)
         );
         assert_eq!(PagedCacheType::Q8_0.to_dtype(DType::BF16), DType::U8);
+        // Off-device: Q8_0 must fail on device support, not missing kernels.
         let err = PagedCacheType::Q8_0
             .validate(
                 DType::BF16,
@@ -726,7 +725,23 @@ mod tests {
                 &[],
             )
             .unwrap_err();
-        assert!(err.contains("not yet implemented"));
+        assert!(err.contains("only supported on CUDA"), "{err}");
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[test]
+    fn q8_0_validates_standard_layout_on_cuda() -> Result<()> {
+        let Ok(device) = Device::new_cuda(0) else {
+            return Ok(());
+        };
+        PagedCacheType::Q8_0
+            .validate(
+                DType::BF16,
+                &model_config(KvCacheLayout::Standard),
+                &device,
+                &[],
+            )
+            .map_err(candle_core::Error::msg)
     }
 
     #[test]
