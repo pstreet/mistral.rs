@@ -14,5 +14,5 @@ pub use backend::{
 };
 pub use backend::{
     copy_blocks, gather_kv_cache, paged_attention, reshape_and_cache, reshape_and_cache_q8,
-    swap_blocks,
+    swap_blocks, PAGED_ATTENTION_V2_PARTITION_SIZE,
 };

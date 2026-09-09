@@ -152,6 +152,23 @@ pub mod text_models_inputs_processor {
             .max(1)
     }
 
+    // Mirror of the vLLM v2 launcher's partition math
+    // (ceil(min(table_tokens, ceil512(context)) / 512)): the recorded grid and
+    // reduce stride only stay valid while this is unchanged.
+    fn cuda_graph_decode_partitions(
+        table_blocks: usize,
+        block_size: usize,
+        context_len: usize,
+    ) -> usize {
+        let partition = mistralrs_paged_attn::PAGED_ATTENTION_V2_PARTITION_SIZE;
+        let width_tokens = table_blocks.saturating_mul(block_size);
+        let bucketed = context_len
+            .div_ceil(partition)
+            .max(1)
+            .saturating_mul(partition);
+        width_tokens.min(bucketed).div_ceil(partition)
+    }
+
     fn _make_tensor_with_pad<D: WithDType>(
         x: Vec<Vec<D>>,
         max_len: usize,
@@ -1798,6 +1815,8 @@ pub mod text_models_inputs_processor {
         num_kv_heads: usize,
         paged_block_table_len: usize,
         full_block_table_len: usize,
+        paged_partitions: usize,
+        full_partitions: usize,
     }
 
     struct DecodeViewHostTensors {
@@ -1981,6 +2000,20 @@ pub mod text_models_inputs_processor {
                 full_max_context_len,
                 graph_capacity,
             );
+            // The vLLM v2 paged kernel freezes its partition grid and reduce
+            // stride from ceil(effective_max / 512) at capture. Replaying past
+            // that boundary overruns the reduce workspace, so the partition
+            // counts are part of the graph identity.
+            let paged_partitions = cuda_graph_decode_partitions(
+                paged_block_table_len,
+                self.block_size,
+                max_context_len,
+            );
+            let full_partitions = cuda_graph_decode_partitions(
+                full_block_table_len,
+                self.block_size,
+                full_max_context_len,
+            );
             DecodePagedRowsGraphKey {
                 batch_size,
                 query_len: self.query_len,
@@ -1992,6 +2025,8 @@ pub mod text_models_inputs_processor {
                 num_kv_heads: self.num_kv_heads,
                 paged_block_table_len,
                 full_block_table_len,
+                paged_partitions,
+                full_partitions,
             }
         }
 

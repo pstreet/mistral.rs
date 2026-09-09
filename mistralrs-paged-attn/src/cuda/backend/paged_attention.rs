@@ -29,6 +29,12 @@ fn align_up(value: usize, alignment: usize) -> usize {
     value.div_ceil(alignment) * alignment
 }
 
+// Tokens per vLLM v2 attention partition. Must match PARTITION_SIZE in
+// pagedattention.cuh. The v2 grid and reduce stride derive from
+// ceil(max_context_len / PARTITION_SIZE), so any host code that keys cached
+// launches (e.g. CUDA graphs) must treat this as part of the launch shape.
+pub const PAGED_ATTENTION_V2_PARTITION_SIZE: usize = 512;
+
 fn validate_kv_cache_scales(
     cache_dtype: DType,
     k_scale: Option<&Tensor>,
@@ -300,7 +306,7 @@ impl PagedAttention {
         let kv_block_stride = kc_l.stride()[0];
         let kv_head_stride = kc_l.stride()[1];
 
-        let partition_size = 512;
+        let partition_size = PAGED_ATTENTION_V2_PARTITION_SIZE;
         let effective_max_context_len =
             (max_num_blocks_per_seq * block_size).min(self.max_context_len);
         let max_num_partitions = effective_max_context_len.div_ceil(partition_size);

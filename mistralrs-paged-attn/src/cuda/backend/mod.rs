@@ -37,7 +37,9 @@ pub use flashinfer::{
 pub use gather_kv::gather_kv_cache;
 #[cfg(not(feature = "rocm"))]
 pub use mla::{concat_and_cache_mla, flashinfer_mla_decode, gather_mla_cache};
-pub use paged_attention::{paged_attention, reshape_and_cache, reshape_and_cache_q8};
+pub use paged_attention::{
+    paged_attention, reshape_and_cache, reshape_and_cache_q8, PAGED_ATTENTION_V2_PARTITION_SIZE,
+};
 #[cfg(not(feature = "rocm"))]
 pub use scale_update::kv_scale_update;
 
