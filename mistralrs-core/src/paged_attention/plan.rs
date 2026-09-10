@@ -1079,11 +1079,16 @@ mod tests {
         let model = workspace_model(Some(PrefixPrefillAttentionFeatures::default()));
         let query_lens = [129, 129];
         let context_lens = [1_000, 8_000];
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        let expected_bytes = 38_977_536;
+        // FA3 paged prefill is cuda-only, so other builds take GatherSdpa here.
+        #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+        let expected_bytes = 742_821_536;
         assert_eq!(
             prompt_prefill_workspace(Some(&model), workspace_input(&query_lens, &context_lens))
                 .unwrap()
                 .bytes,
-            38_977_536
+            expected_bytes
         );
 
         let model = workspace_model(Some(PrefixPrefillAttentionFeatures {
