@@ -279,7 +279,10 @@ impl Sdpa {
 
         // The mask carries causality already; the kernel-level do_causal
         // early-exit is safe to enable only when the request is known causal.
-        let do_causal = flash_params.is_some_and(|p| p.causal);
+        // A CausalFlash mask declares causality even when flash_params is absent
+        // (the F32/no-flash gather-prefill fallback), so treat it as causal too.
+        let do_causal =
+            flash_params.is_some_and(|p| p.causal) || matches!(mask, AttentionMask::CausalFlash);
 
         // CK flash attention on ROCm: fused QK^T + softmax + @V
         // CK handles GQA natively (nhead_q != nhead_k), so no repeat_kv needed.

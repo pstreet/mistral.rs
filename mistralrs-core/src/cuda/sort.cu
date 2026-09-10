@@ -117,15 +117,15 @@ __global__ void apply_causal_mask_f32_kernel(float *__restrict__ scores,
                                              const int kv_len,
                                              const int q_offset,
                                              const int prefix_len) {
-  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  const int total = batch_heads * q_len * kv_len;
+  const long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+  const long long total = (long long)batch_heads * q_len * kv_len;
   if (idx >= total) {
     return;
   }
 
-  const int kv_idx = idx % kv_len;
-  const int q_idx = (idx / kv_len) % q_len;
-  const int q_pos = prefix_len + q_offset + q_idx;
+  const long long kv_idx = idx % kv_len;
+  const long long q_idx = (idx / kv_len) % q_len;
+  const long long q_pos = prefix_len + q_offset + q_idx;
   if (kv_idx > q_pos) {
     scores[idx] = -std::numeric_limits<float>::infinity();
   }
@@ -140,8 +140,8 @@ extern "C" void apply_causal_mask_f32(void *scores, const int batch_heads,
   }
   const cudaStream_t custream = (cudaStream_t)stream;
   const int block = 256;
-  const int total = batch_heads * q_len * kv_len;
-  const int grid = (total + block - 1) / block;
+  const long long total = (long long)batch_heads * q_len * kv_len;
+  const unsigned grid = (unsigned)((total + block - 1) / block);
   apply_causal_mask_f32_kernel<<<grid, block, 0, custream>>>(
       reinterpret_cast<float *>(scores), batch_heads, q_len, kv_len, q_offset,
       prefix_len);

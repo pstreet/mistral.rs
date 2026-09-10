@@ -6804,6 +6804,46 @@ mod tests {
         );
     }
 
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[test]
+    fn causal_mask_f32_survives_int32_index_overflow() -> candle_core::Result<()> {
+        // 24 * 1024 * 87382 = 2_147_514_880 > 2^31: the old int32 `idx`/`total`
+        // wrapped negative for the tail, writing -inf into the wrong slots.
+        let (batch_heads, q_len, kv_len) = (24usize, 1024usize, 87382usize);
+        let total = (batch_heads as u64) * (q_len as u64) * (kv_len as u64);
+        assert!(total > i32::MAX as u64);
+        let device = Device::new_cuda(0)?;
+        let mut scores = Tensor::full(1.0f32, (batch_heads, q_len, kv_len), &device)?;
+        super::cuda_apply_causal_mask_f32(&scores, 0, 0)?;
+        let v = scores.to_vec3::<f32>()?;
+        // q_offset=0, prefix_len=0: mask kv_idx > q_idx.
+        assert_eq!(v[0][0][0], 1.0);
+        assert!(v[0][0][1].is_infinite());
+        assert_eq!(v[0][5][5], 1.0);
+        assert!(v[0][5][6].is_infinite());
+        // tail element: the exact slot the int32 wrap corrupted before the fix.
+        assert!(v[batch_heads - 1][q_len - 1][kv_len - 1].is_infinite());
+        Ok(())
+    }
+
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[test]
+    fn softmax_last_dim_f32_survives_int32_index_overflow() -> candle_core::Result<()> {
+        // (24576, 87382) = 2_147_514_880 > 2^31 elements: the old int32
+        // `i = row*ncols + col` in softmax_f32 wrapped and indexed out of bounds.
+        let (n_rows, n_cols) = (24576usize, 87382usize);
+        assert!((n_rows as u64) * (n_cols as u64) > i32::MAX as u64);
+        let device = Device::new_cuda(0)?;
+        let x = Tensor::full(0.5f32, (n_rows, n_cols), &device)?;
+        let out = candle_nn::ops::softmax_last_dim(&x)?;
+        let expect = 1.0f32 / n_cols as f32;
+        let v = out.to_vec2::<f32>()?;
+        assert!((v[0][0] - expect).abs() < 1e-6);
+        assert!((v[n_rows - 1][0] - expect).abs() < 1e-6);
+        assert!((v[n_rows - 1][n_cols - 1] - expect).abs() < 1e-6);
+        Ok(())
+    }
+
     #[cfg(feature = "cuda")]
     fn topk_sampling_reference(
         logits: &[f32],
