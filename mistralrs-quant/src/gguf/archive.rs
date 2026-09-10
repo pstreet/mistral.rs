@@ -2,9 +2,11 @@ use std::{
     borrow::Cow,
     collections::{hash_map::Entry, HashMap, HashSet},
     fs::File,
+    io::Read,
     mem::{align_of, size_of},
     ops::Range,
     path::{Path, PathBuf},
+    sync::{RwLock, RwLockReadGuard},
 };
 
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
@@ -35,6 +37,9 @@ const GENERAL_TYPE: &str = "general.type";
 const GENERAL_PREFIX: &str = "general.";
 const SPLIT_PREFIX: &str = "split.";
 const MMPROJ_TYPE: &str = "mmproj";
+const ENV_GGUF_NO_MMAP: &str = "MISTRALRS_GGUF_NO_MMAP";
+const ENV_GGUF_DROP_HOST_AFTER_LOAD: &str = "MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD";
+const ENV_MANAGED_WEIGHTS: &str = "MISTRALRS_MANAGED_WEIGHTS";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GgufEndian {
@@ -287,26 +292,45 @@ impl GgufTensorInfo {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct GgufTensorData<'a> {
     info: &'a GgufTensorInfo,
-    bytes: &'a [u8],
+    storage: RwLockReadGuard<'a, ShardStorage>,
+    range: Range<usize>,
 }
 
 impl<'a> GgufTensorData<'a> {
-    pub const fn info(self) -> &'a GgufTensorInfo {
+    pub const fn info(&self) -> &'a GgufTensorInfo {
         self.info
     }
 
-    pub const fn bytes(self) -> &'a [u8] {
-        self.bytes
+    pub fn bytes(&self) -> &[u8] {
+        // The guard rules out a concurrent release, so this cannot observe Released.
+        &self.storage.as_bytes()[self.range.clone()]
     }
 }
 
 impl AsRef<[u8]> for GgufTensorData<'_> {
     fn as_ref(&self) -> &[u8] {
-        self.bytes
+        self.bytes()
     }
+}
+
+fn load_shard_storage(mut file: File, path: &Path) -> Result<ShardStorage> {
+    if std::env::var(ENV_GGUF_NO_MMAP).is_ok_and(|x| x == "1") {
+        let len = file
+            .metadata()
+            .map_err(|err| Error::wrap(err).with_path(path))?
+            .len();
+        let mut data = Vec::with_capacity(len as usize);
+        file.read_to_end(&mut data)
+            .map_err(|err| Error::wrap(err).with_path(path))?;
+        return Ok(ShardStorage::Owned(data.into_boxed_slice()));
+    }
+    // The mapping is read-only and remains owned by the archive.
+    let mmap =
+        unsafe { MmapOptions::new().map(&file) }.map_err(|err| Error::wrap(err).with_path(path))?;
+    Ok(ShardStorage::Mmap(mmap))
 }
 
 fn parse_shards<I, P>(paths: I) -> Result<Vec<ParsedShard>>
@@ -321,17 +345,32 @@ where
             let file = File::open(&path)
                 .map_err(Error::wrap)
                 .map_err(|err| err.with_path(&path))?;
-            // The mapping is read-only and remains owned by the archive.
-            let mmap = unsafe { MmapOptions::new().map(&file) }
-                .map_err(Error::wrap)
-                .map_err(|err| err.with_path(&path))?;
-            ParsedShard::parse(path.clone(), mmap).map_err(|err| err.with_path(&path))
+            let storage = load_shard_storage(file, &path)?;
+            ParsedShard::parse(path.clone(), storage).map_err(|err| err.with_path(&path))
         })
         .collect()
 }
 
+#[derive(Debug)]
+enum ShardStorage {
+    Mmap(Mmap),
+    Owned(Box<[u8]>),
+    Released,
+}
+
+impl ShardStorage {
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            ShardStorage::Mmap(mmap) => mmap,
+            ShardStorage::Owned(bytes) => bytes,
+            // Readers bail on Released before mapping, so this is unreachable.
+            ShardStorage::Released => panic!("GGUF shard host storage was already released"),
+        }
+    }
+}
+
 pub struct GgufArchive {
-    mappings: Vec<Mmap>,
+    shard_storage: Vec<RwLock<ShardStorage>>,
     shards: Vec<GgufShardInfo>,
     metadata: HashMap<String, Value>,
     tensors: HashMap<String, GgufTensorInfo>,
@@ -404,7 +443,7 @@ impl GgufArchive {
         validate_and_order_splits(&mut parsed)?;
         let alignment = archive_alignment(&parsed)?;
         let declared_total = declared_tensor_count(&parsed)?;
-        let mut mappings = Vec::with_capacity(parsed.len());
+        let mut shard_storage = Vec::with_capacity(parsed.len());
         let mut shards = Vec::with_capacity(parsed.len());
         let mut metadata = HashMap::new();
         let mut tensors = HashMap::new();
@@ -415,7 +454,7 @@ impl GgufArchive {
                 std::mem::take(&mut shard.metadata),
                 shard_index,
             )?;
-            let (mmap, shard_info, shard_tensors) = shard.finish(shard_index, alignment)?;
+            let (storage, shard_info, shard_tensors) = shard.finish(shard_index, alignment)?;
             for tensor in shard_tensors {
                 let name = tensor.name.clone();
                 match tensors.entry(name.clone()) {
@@ -427,7 +466,7 @@ impl GgufArchive {
                     }
                 }
             }
-            mappings.push(mmap);
+            shard_storage.push(RwLock::new(storage));
             shards.push(shard_info);
         }
 
@@ -441,7 +480,7 @@ impl GgufArchive {
         }
 
         Ok(Self {
-            mappings,
+            shard_storage,
             shards,
             metadata,
             tensors,
@@ -495,7 +534,7 @@ impl GgufArchive {
         for component in components {
             let shard_offset = self.shards.len();
             let Self {
-                mappings,
+                shard_storage,
                 shards,
                 tensors,
                 ..
@@ -504,7 +543,7 @@ impl GgufArchive {
                 tensor.shard_index += shard_offset;
                 self.tensors.insert(name, tensor);
             }
-            self.mappings.extend(mappings);
+            self.shard_storage.extend(shard_storage);
             self.shards.extend(shards);
         }
         Ok(())
@@ -544,18 +583,53 @@ impl GgufArchive {
                 info.dtype.raw()
             ))
         })?;
-        Ok(GgufTensorData {
-            info,
-            bytes: &self.mappings[info.shard_index][range.clone()],
-        })
+        let (start, end) = (range.start, range.end);
+        self.shard_data(info.shard_index, name, start..end, info)
     }
 
     pub fn tensor_storage_data(&self, name: &str) -> Result<GgufTensorData<'_>> {
         let info = self.tensor_info(name)?;
+        self.shard_data(info.shard_index, name, info.storage_range.clone(), info)
+    }
+
+    fn shard_data<'a>(
+        &'a self,
+        shard_index: usize,
+        name: &str,
+        range: Range<usize>,
+        info: &'a GgufTensorInfo,
+    ) -> Result<GgufTensorData<'a>> {
+        let storage = self.shard_storage[shard_index].read().unwrap();
+        if matches!(*storage, ShardStorage::Released) {
+            candle_core::bail!(
+                "GGUF tensor `{name}` is unavailable: host shard storage was released"
+            );
+        }
         Ok(GgufTensorData {
             info,
-            bytes: &self.mappings[info.shard_index][info.storage_range.clone()],
+            storage,
+            range,
         })
+    }
+
+    pub fn drop_host_after_load_enabled() -> bool {
+        std::env::var(ENV_GGUF_DROP_HOST_AFTER_LOAD).is_ok_and(|value| value == "1")
+    }
+
+    pub fn managed_weights_enabled() -> bool {
+        std::env::var(ENV_MANAGED_WEIGHTS).is_ok_and(|value| value == "1")
+    }
+
+    pub fn release_host_shard(&self, shard_index: usize) {
+        if let Some(storage) = self.shard_storage.get(shard_index) {
+            *storage.write().unwrap() = ShardStorage::Released;
+        }
+    }
+
+    pub fn release_host_shards(&self) {
+        for index in 0..self.shard_storage.len() {
+            self.release_host_shard(index);
+        }
     }
 
     pub fn load_qtensor(&self, name: &str, device: &Device) -> Result<QTensor> {
@@ -570,6 +644,14 @@ impl GgufArchive {
             info.shape.clone(),
             device,
         )
+    }
+}
+
+fn qstorage_from_data(data: &[u8], device: &Device, dtype: GgmlDType) -> Result<QStorage> {
+    if GgufArchive::managed_weights_enabled() {
+        QStorage::from_data_managed(Cow::Borrowed(data), device, dtype)
+    } else {
+        QStorage::from_data(Cow::Borrowed(data), device, dtype)
     }
 }
 
@@ -600,12 +682,12 @@ pub(super) fn qtensor_from_gguf_data(
         );
     }
     let storage = if data.as_ptr().align_offset(ggml_dtype_alignment(dtype)) == 0 {
-        QStorage::from_data(Cow::Borrowed(data), device, dtype)?
+        qstorage_from_data(data, device, dtype)?
     } else {
         let mut aligned = vec![0u128; data.len().div_ceil(size_of::<u128>())];
         let bytes = bytemuck::cast_slice_mut(&mut aligned);
         bytes[..data.len()].copy_from_slice(data);
-        QStorage::from_data(Cow::Borrowed(&bytes[..data.len()]), device, dtype)?
+        qstorage_from_data(&bytes[..data.len()], device, dtype)?
     };
     QTensor::new(storage, dims)
 }
@@ -640,7 +722,7 @@ struct RawTensorInfo {
 
 struct ParsedShard {
     path: PathBuf,
-    mmap: Mmap,
+    storage: ShardStorage,
     version: GgufVersion,
     endian: GgufEndian,
     metadata: HashMap<String, Value>,
@@ -649,9 +731,10 @@ struct ParsedShard {
 }
 
 impl ParsedShard {
-    fn parse(path: PathBuf, mmap: Mmap) -> Result<Self> {
-        let (endian, initial_offset) = parse_magic(&mmap)?;
-        let mut reader = SliceReader::new(&mmap, initial_offset, endian);
+    fn parse(path: PathBuf, storage: ShardStorage) -> Result<Self> {
+        let bytes = storage.as_bytes();
+        let (endian, initial_offset) = parse_magic(bytes)?;
+        let mut reader = SliceReader::new(bytes, initial_offset, endian);
         let version = match reader.read_u32()? {
             1 => GgufVersion::V1,
             2 => GgufVersion::V2,
@@ -718,7 +801,7 @@ impl ParsedShard {
         let header_end = reader.position();
         Ok(Self {
             path,
-            mmap,
+            storage,
             version,
             endian,
             metadata,
@@ -731,12 +814,12 @@ impl ParsedShard {
         self,
         shard_index: usize,
         alignment: usize,
-    ) -> Result<(Mmap, GgufShardInfo, Vec<GgufTensorInfo>)> {
+    ) -> Result<(ShardStorage, GgufShardInfo, Vec<GgufTensorInfo>)> {
+        let file_len = self.storage.as_bytes().len();
         let tensor_data_offset = align_up(self.header_end, alignment)?;
-        if !self.tensors.is_empty() && tensor_data_offset > self.mmap.len() {
+        if !self.tensors.is_empty() && tensor_data_offset > file_len {
             candle_core::bail!(
-                "GGUF tensor data begins at byte {tensor_data_offset}, beyond file length {}",
-                self.mmap.len()
+                "GGUF tensor data begins at byte {tensor_data_offset}, beyond file length {file_len}"
             );
         }
 
@@ -776,13 +859,13 @@ impl ParsedShard {
                 Some(next) => tensor_data_offset.checked_add(next).ok_or_else(|| {
                     Error::msg(format!("offset overflow for GGUF tensor `{}`", raw.name))
                 })?,
-                None => self.mmap.len(),
+                None => file_len,
             };
-            if absolute_start > available_end || available_end > self.mmap.len() {
+            if absolute_start > available_end || available_end > file_len {
                 candle_core::bail!(
                     "GGUF tensor `{}` range begins at {absolute_start} with storage ending at {available_end}, outside file length {}",
                     raw.name,
-                    self.mmap.len()
+                    file_len
                 );
             }
 
@@ -822,11 +905,11 @@ impl ParsedShard {
                             raw.name
                         ))
                     })?;
-                    if storage_end > self.mmap.len() {
+                    if storage_end > file_len {
                         candle_core::bail!(
                             "padded storage for GGUF tensor `{}` ends at byte {storage_end}, beyond file length {}",
                             raw.name,
-                            self.mmap.len()
+                            file_len
                         );
                     }
                     (Some(absolute_start..exact_end), storage_end)
@@ -851,9 +934,9 @@ impl ParsedShard {
             endian: self.endian,
             alignment,
             tensor_data_offset,
-            file_len: self.mmap.len(),
+            file_len,
         };
-        Ok((self.mmap, info, tensors))
+        Ok((self.storage, info, tensors))
     }
 }
 
@@ -2123,5 +2206,106 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+
+    #[test]
+    fn release_host_shards_fails_later_reads_clearly() -> Result<()> {
+        let file = write_test_gguf(
+            &base_metadata(),
+            &[TestTensor {
+                name: "blk.0.weight",
+                shape: vec![8],
+                dtype: 0,
+                data: vec![4; 32],
+                offset: None,
+            }],
+            DEFAULT_ALIGNMENT,
+        );
+        let archive = GgufArchive::open_file(file.path())?;
+        let expected = vec![4; 32];
+        assert_eq!(archive.tensor_data("blk.0.weight")?.bytes(), expected);
+        assert_eq!(
+            archive.load_qtensor("blk.0.weight", &Device::Cpu)?.dtype(),
+            GgmlDType::F32
+        );
+
+        archive.release_host_shard(99);
+        archive.release_host_shards();
+        archive.release_host_shards();
+
+        for result in [
+            archive.tensor_data("blk.0.weight").map(|_| ()),
+            archive.tensor_storage_data("blk.0.weight").map(|_| ()),
+            archive
+                .load_qtensor("blk.0.weight", &Device::Cpu)
+                .map(|_| ()),
+        ] {
+            let error = result.unwrap_err();
+            assert!(
+                error.to_string().contains("storage was released"),
+                "{error}"
+            );
+        }
+        assert!(archive.tensor_info("blk.0.weight").is_ok());
+        assert!(archive.metadata_value("general.architecture").is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn drop_host_after_load_follows_env() {
+        std::env::remove_var(ENV_GGUF_DROP_HOST_AFTER_LOAD);
+        assert!(!GgufArchive::drop_host_after_load_enabled());
+        std::env::set_var(ENV_GGUF_DROP_HOST_AFTER_LOAD, "1");
+        assert!(GgufArchive::drop_host_after_load_enabled());
+        std::env::set_var(ENV_GGUF_DROP_HOST_AFTER_LOAD, "true");
+        assert!(!GgufArchive::drop_host_after_load_enabled());
+        std::env::remove_var(ENV_GGUF_DROP_HOST_AFTER_LOAD);
+    }
+
+    #[test]
+    fn managed_weights_follows_env() {
+        std::env::remove_var(ENV_MANAGED_WEIGHTS);
+        assert!(!GgufArchive::managed_weights_enabled());
+        std::env::set_var(ENV_MANAGED_WEIGHTS, "1");
+        assert!(GgufArchive::managed_weights_enabled());
+        std::env::set_var(ENV_MANAGED_WEIGHTS, "true");
+        assert!(!GgufArchive::managed_weights_enabled());
+        std::env::remove_var(ENV_MANAGED_WEIGHTS);
+    }
+
+    #[cfg(feature = "rocm")]
+    #[test]
+    fn managed_upload_survives_host_release() -> Result<()> {
+        let file = write_test_gguf(
+            &base_metadata(),
+            &[TestTensor {
+                name: "blk.0.weight",
+                shape: vec![8],
+                dtype: 0,
+                data: vec![4; 32],
+                offset: None,
+            }],
+            DEFAULT_ALIGNMENT,
+        );
+        let archive = GgufArchive::open_file(file.path())?;
+        let device = Device::new_cuda(0)?;
+        let qtensor = {
+            let data = archive.tensor_data("blk.0.weight")?;
+            let storage =
+                QStorage::from_data_managed(Cow::Borrowed(data.bytes()), &device, GgmlDType::F32)?;
+            QTensor::new(storage, vec![8])?
+        };
+        archive.release_host_shards();
+        assert!(archive.load_qtensor("blk.0.weight", &Device::Cpu).is_err());
+        let got = qtensor
+            .dequantize(&Device::Cpu)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let reference: Vec<f32> = vec![4u8; 32]
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .collect();
+        assert_eq!(got, reference);
+        Ok(())
     }
 }

@@ -720,7 +720,7 @@ impl GGUFLoader {
             loader = loader.with_lora(dynamic_lora.adapters.clone(), dynamic_lora.runtime);
         }
         let loader = loader.build_with_source(loader_type, source, self.kind.clone())?;
-        loader.load_model_from_path(
+        let pipeline = loader.load_model_from_path(
             paths,
             dtype,
             device,
@@ -728,7 +728,11 @@ impl GGUFLoader {
             mapper,
             in_situ_quant,
             paged_attn_config,
-        )
+        )?;
+        if mistralrs_quant::GgufArchive::drop_host_after_load_enabled() {
+            archive.release_host_shards();
+        }
+        Ok(pipeline)
     }
 
     fn load_native_gemma3_text(
@@ -802,7 +806,7 @@ impl GGUFLoader {
         }
         let loader =
             loader.build_with_source(MultimodalLoaderType::Gemma3, source, self.kind.clone());
-        loader.load_model_from_path(
+        let pipeline = loader.load_model_from_path(
             paths,
             dtype,
             device,
@@ -810,7 +814,11 @@ impl GGUFLoader {
             mapper,
             in_situ_quant,
             paged_attn_config,
-        )
+        )?;
+        if mistralrs_quant::GgufArchive::drop_host_after_load_enabled() {
+            archive.release_host_shards();
+        }
+        Ok(pipeline)
     }
 
     fn load_native_multimodal(
@@ -934,7 +942,7 @@ impl GGUFLoader {
             loader = loader.with_lora(dynamic_lora.adapters.clone(), dynamic_lora.runtime);
         }
         let loader = loader.build_with_source(loader_type, source, self.kind.clone());
-        loader.load_model_from_path(
+        let pipeline = loader.load_model_from_path(
             paths,
             dtype,
             device,
@@ -942,7 +950,11 @@ impl GGUFLoader {
             mapper,
             in_situ_quant,
             paged_attn_config,
-        )
+        )?;
+        if mistralrs_quant::GgufArchive::drop_host_after_load_enabled() {
+            archive.release_host_shards();
+        }
+        Ok(pipeline)
     }
 
     fn infer_multimodal_asset_paths(

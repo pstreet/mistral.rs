@@ -133,7 +133,11 @@ impl GgufMatMul {
         if q.device().same_device(device) {
             return Ok(q.clone());
         }
-        let storage = QStorage::from_data(q.data()?, device, q.dtype())?;
+        let storage = if archive::GgufArchive::managed_weights_enabled() {
+            QStorage::from_data_managed(q.data()?, device, q.dtype())?
+        } else {
+            QStorage::from_data(q.data()?, device, q.dtype())?
+        };
         Ok(Arc::new(QTensor::new(storage, q.shape())?))
     }
 
@@ -929,7 +933,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(any(feature = "cuda", feature = "metal"))]
+    #[cfg(any(feature = "cuda", feature = "rocm", feature = "metal"))]
     fn assert_cross_device_capture_preserves_packed_weight(device: Device) -> Result<()> {
         let weight = Tensor::ones((4, 256), DType::F32, &Device::Cpu)?;
         let layer = Arc::new(GgufMatMul::from_qtensor(
