@@ -20,6 +20,8 @@ pub struct IntervalLogger {
     tokens_processed: Arc<AtomicUsize>,
     prefill_tokens_processed: Arc<AtomicUsize>,
     decode_tokens_processed: Arc<AtomicUsize>,
+    cumulative_prefill_tokens: Arc<AtomicUsize>,
+    cumulative_decode_tokens: Arc<AtomicUsize>,
     num_running: Arc<AtomicUsize>,
     num_waiting: Arc<AtomicUsize>,
     sequence_capacity: Arc<AtomicUsize>,
@@ -44,6 +46,8 @@ impl IntervalLogger {
         let tokens_processed = Arc::new(AtomicUsize::new(0));
         let prefill_tokens_processed = Arc::new(AtomicUsize::new(0));
         let decode_tokens_processed = Arc::new(AtomicUsize::new(0));
+        let cumulative_prefill_tokens = Arc::new(AtomicUsize::new(0));
+        let cumulative_decode_tokens = Arc::new(AtomicUsize::new(0));
         let enable_logging = Arc::new(AtomicBool::new(false));
         let num_running = Arc::new(AtomicUsize::new(0));
         let num_waiting = Arc::new(AtomicUsize::new(0));
@@ -56,6 +60,8 @@ impl IntervalLogger {
         let t_tokens_processed = tokens_processed.clone();
         let t_prefill_tokens_processed = prefill_tokens_processed.clone();
         let t_decode_tokens_processed = decode_tokens_processed.clone();
+        let t_cumulative_prefill_tokens = cumulative_prefill_tokens.clone();
+        let t_cumulative_decode_tokens = cumulative_decode_tokens.clone();
         let t_enable_logging = enable_logging.clone();
         let t_num_running = num_running.clone();
         let t_num_waiting = num_waiting.clone();
@@ -135,10 +141,13 @@ impl IntervalLogger {
                     };
 
                     // Throughput = tokens processed during this interval / interval duration.
-                    // The counter is atomically swapped to 0 each interval, so the metric
-                    // reflects only the current window and is not cumulative.
+                    // The window counters are atomically swapped to 0 each interval, so the
+                    // rates reflect only the current window; the cumulative totals below
+                    // only grow (reset() zeroes them along with everything else).
+                    let cumulative_prefill = t_cumulative_prefill_tokens.load(Ordering::Relaxed);
+                    let cumulative_decode = t_cumulative_decode_tokens.load(Ordering::Relaxed);
                     info!(
-                        "Throughput (T/s) {:.2} (prefill {:.2}, decode {:.2}), Prefix cache hitrate {:.2}%{enc_cache_info}{spec_info}, {num_running} running, {num_waiting} waiting",
+                        "Throughput (T/s) {:.2} (prefill {:.2}, decode {:.2}), cumulative prefill {cumulative_prefill}, decode {cumulative_decode}, Prefix cache hitrate {:.2}%{enc_cache_info}{spec_info}, {num_running} running, {num_waiting} waiting",
                         tokens_processed as f64 / interval.as_secs_f64(),
                         prefill_tokens_processed as f64 / interval.as_secs_f64(),
                         decode_tokens_processed as f64 / interval.as_secs_f64(),
@@ -155,6 +164,8 @@ impl IntervalLogger {
             tokens_processed,
             prefill_tokens_processed,
             decode_tokens_processed,
+            cumulative_prefill_tokens,
+            cumulative_decode_tokens,
             enable_logging,
             num_running,
             num_waiting,
@@ -181,6 +192,8 @@ impl IntervalLogger {
         self.tokens_processed.store(0, Ordering::Relaxed);
         self.prefill_tokens_processed.store(0, Ordering::Relaxed);
         self.decode_tokens_processed.store(0, Ordering::Relaxed);
+        self.cumulative_prefill_tokens.store(0, Ordering::Relaxed);
+        self.cumulative_decode_tokens.store(0, Ordering::Relaxed);
         self.num_running.store(0, Ordering::Relaxed);
         self.num_waiting.store(0, Ordering::Relaxed);
         if let Some(ref hits) = self.encoder_cache_hits {
@@ -202,6 +215,8 @@ impl IntervalLogger {
             .fetch_add(num_tokens, Ordering::Relaxed);
         self.prefill_tokens_processed
             .fetch_add(num_tokens, Ordering::Relaxed);
+        self.cumulative_prefill_tokens
+            .fetch_add(num_tokens, Ordering::Relaxed);
         metrics::counter!("mistralrs_tokens_processed_total").increment(num_tokens as u64);
         metrics::counter!("mistralrs_prefill_tokens_processed_total").increment(num_tokens as u64);
     }
@@ -213,6 +228,8 @@ impl IntervalLogger {
         self.tokens_processed
             .fetch_add(num_tokens, Ordering::Relaxed);
         self.decode_tokens_processed
+            .fetch_add(num_tokens, Ordering::Relaxed);
+        self.cumulative_decode_tokens
             .fetch_add(num_tokens, Ordering::Relaxed);
         metrics::counter!("mistralrs_tokens_processed_total").increment(num_tokens as u64);
         metrics::counter!("mistralrs_decode_tokens_processed_total").increment(num_tokens as u64);
@@ -316,6 +333,25 @@ mod tests {
             logger.sequence_capacity.load(Ordering::Relaxed),
             TEST_SEQUENCE_CAPACITY
         );
+    }
+
+    #[test]
+    fn cumulative_tokens_survive_interval_and_reset() {
+        let logger = IntervalLogger::new(INACTIVE_LOGGER_INTERVAL, None);
+
+        logger.add_prefill_tokens_processed(100);
+        logger.add_decode_tokens_processed(7);
+
+        assert_eq!(
+            logger.cumulative_prefill_tokens.load(Ordering::Relaxed),
+            100
+        );
+        assert_eq!(logger.cumulative_decode_tokens.load(Ordering::Relaxed), 7);
+
+        logger.reset();
+
+        assert_eq!(logger.cumulative_prefill_tokens.load(Ordering::Relaxed), 0);
+        assert_eq!(logger.cumulative_decode_tokens.load(Ordering::Relaxed), 0);
     }
 
     #[test]
