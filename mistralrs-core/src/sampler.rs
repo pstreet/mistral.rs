@@ -2613,8 +2613,12 @@ mod tests {
         let greedy_plan = greedy.cuda_batch_sampling_plan(false).unwrap();
         assert!(matches!(greedy_plan.kind, CudaBatchSamplingKind::Greedy));
         assert_eq!(greedy_plan.inverse_temperature, 1.0);
-        assert!(greedy.cuda_resident_sampling_plan(false).is_some());
-        assert!(greedy.cuda_speculative_sampling_plan(false).is_none());
+        // cudarc-hip has no resident sampling API
+        #[cfg(feature = "cuda")]
+        {
+            assert!(greedy.cuda_resident_sampling_plan(false).is_some());
+            assert!(greedy.cuda_speculative_sampling_plan(false).is_none());
+        }
 
         let mut penalized = greedy.clone();
         penalized.repetition_penalty = Some(1.1);
@@ -2649,13 +2653,21 @@ mod tests {
             CudaBatchSamplingKind::TopK { k: 64 }
         ));
         assert_eq!(top_k_plan.inverse_temperature, 2.0);
-        assert!(top_k.cuda_resident_sampling_plan(false).is_some());
+        // cudarc-hip has no resident sampling API
+        #[cfg(feature = "cuda")]
+        {
+            assert!(top_k.cuda_resident_sampling_plan(false).is_some());
+        }
         assert!(top_k.cuda_batch_sampling_plan(true).is_none());
-        let speculative_top_k = top_k.cuda_speculative_sampling_plan(false).unwrap();
-        assert_eq!(speculative_top_k.inverse_temperature, 2.0);
-        assert_eq!(speculative_top_k.top_k, 64);
-        assert_eq!(speculative_top_k.top_p, 0.9);
-        assert_eq!(speculative_top_k.min_p, 0.05);
+        // cudarc-hip has no speculative sampling API
+        #[cfg(feature = "cuda")]
+        {
+            let speculative_top_k = top_k.cuda_speculative_sampling_plan(false).unwrap();
+            assert_eq!(speculative_top_k.inverse_temperature, 2.0);
+            assert_eq!(speculative_top_k.top_k, 64);
+            assert_eq!(speculative_top_k.top_p, 0.9);
+            assert_eq!(speculative_top_k.min_p, 0.05);
+        }
 
         let top_one = Sampler::new(
             Some(1.0),
@@ -2695,11 +2707,15 @@ mod tests {
             unbounded_plan.kind,
             CudaBatchSamplingKind::Categorical
         ));
-        assert!(unbounded.cuda_resident_sampling_plan(false).is_none());
-        let speculative_unbounded = unbounded.cuda_speculative_sampling_plan(false).unwrap();
-        assert_eq!(speculative_unbounded.top_k, 0);
-        assert_eq!(speculative_unbounded.top_p, 1.0);
-        assert_eq!(speculative_unbounded.min_p, 0.0);
+        // cudarc-hip has no resident sampling API
+        #[cfg(feature = "cuda")]
+        {
+            assert!(unbounded.cuda_resident_sampling_plan(false).is_none());
+            let speculative_unbounded = unbounded.cuda_speculative_sampling_plan(false).unwrap();
+            assert_eq!(speculative_unbounded.top_k, 0);
+            assert_eq!(speculative_unbounded.top_p, 1.0);
+            assert_eq!(speculative_unbounded.min_p, 0.0);
+        }
 
         let mut filtered = unbounded;
         filtered.top_p = 0.9;

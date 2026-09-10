@@ -7411,7 +7411,8 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    // cudarc-hip has no resident top-k sampling API
+    #[cfg(feature = "cuda")]
     #[test]
     fn cuda_resident_topk_sampling_matches_filtered_reference() -> candle_core::Result<()> {
         const BATCH: usize = 4;

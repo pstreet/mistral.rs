@@ -9354,7 +9354,17 @@ mod tests {
         dev.synchronize()?;
         let t0 = std::time::Instant::now();
         for _ in 0..3 {
-            warp_gated_delta_rule_recurrence_cuda(&q, &k, &v, &g, &beta, &mut s)?;
+            warp_gated_delta_rule_recurrence_cuda(
+                RecurrenceInputs {
+                    q: &q,
+                    k: &k,
+                    v: &v,
+                    g: &g,
+                    beta: &beta,
+                },
+                &mut s,
+                GdnStateSlots::Gathered,
+            )?;
         }
         dev.synchronize()?;
         let dt = t0.elapsed().as_secs_f64() / 3.0;
@@ -9366,7 +9376,17 @@ mod tests {
         dev.synchronize()?;
         let t0 = std::time::Instant::now();
         for _ in 0..3 {
-            chunked_gated_delta_rule_recurrence_cuda(&q, &k, &v, &g, &beta, &mut s)?;
+            chunked_gated_delta_rule_recurrence_cuda(
+                RecurrenceInputs {
+                    q: &q,
+                    k: &k,
+                    v: &v,
+                    g: &g,
+                    beta: &beta,
+                },
+                &mut s,
+                GdnStateSlots::Gathered,
+            )?;
         }
         dev.synchronize()?;
         let dt = t0.elapsed().as_secs_f64() / 3.0;
@@ -9378,7 +9398,17 @@ mod tests {
         dev.synchronize()?;
         let t0 = std::time::Instant::now();
         for _ in 0..3 {
-            gated_delta_rule_recurrence_cuda(&q, &k, &v, &g, &beta, &mut s)?;
+            gated_delta_rule_recurrence_cuda(
+                RecurrenceInputs {
+                    q: &q,
+                    k: &k,
+                    v: &v,
+                    g: &g,
+                    beta: &beta,
+                },
+                &mut s,
+                GdnStateSlots::Gathered,
+            )?;
         }
         dev.synchronize()?;
         let dt = t0.elapsed().as_secs_f64() / 3.0;
@@ -9409,7 +9439,14 @@ mod tests {
         dev.synchronize()?;
         let t0 = std::time::Instant::now();
         for _ in 0..3 {
-            causal_conv1d_cuda(&x, &weight, &init_state, kernel_size, false)?;
+            causal_conv1d_cuda(
+                &x,
+                &weight,
+                &init_state,
+                kernel_size,
+                false,
+                GdnStateSlots::Gathered,
+            )?;
         }
         dev.synchronize()?;
         let dt = t0.elapsed().as_secs_f64() / 3.0;

@@ -4361,6 +4361,8 @@ mod tests {
         Ok(())
     }
 
+    // cudarc-hip takes no capture mode argument
+    #[cfg(feature = "cuda")]
     #[test]
     #[ignore = "requires a CUDA device"]
     fn graph_memory_cleanup_returns_allocator_to_baseline() -> anyhow::Result<()> {
@@ -4400,6 +4402,8 @@ mod tests {
         Ok(())
     }
 
+    // cudarc-hip takes no capture mode argument
+    #[cfg(feature = "cuda")]
     #[test]
     #[ignore = "requires a CUDA device"]
     fn unlaunched_graph_cleanup_returns_allocator_to_baseline() -> anyhow::Result<()> {
@@ -4439,6 +4443,8 @@ mod tests {
         Ok(())
     }
 
+    // cudarc-hip takes no capture mode argument
+    #[cfg(feature = "cuda")]
     #[test]
     #[ignore = "requires a CUDA device"]
     fn graph_replay_retains_captured_output_storage() -> anyhow::Result<()> {
@@ -4476,6 +4482,8 @@ mod tests {
         Ok(())
     }
 
+    // cudarc-hip takes no capture mode argument
+    #[cfg(feature = "cuda")]
     #[test]
     #[ignore = "requires a CUDA device"]
     fn replayed_graph_output_releases_without_driver_error() -> anyhow::Result<()> {
@@ -4501,6 +4509,8 @@ mod tests {
         Ok(())
     }
 
+    // cudarc-hip takes no capture mode argument
+    #[cfg(feature = "cuda")]
     #[test]
     #[ignore = "requires a CUDA device"]
     fn graph_copy_supports_dense_row_source() -> anyhow::Result<()> {
