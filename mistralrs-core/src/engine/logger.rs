@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tracing::info;
 
@@ -81,6 +81,17 @@ impl IntervalLogger {
         let t_worker_exited = worker_exited.clone();
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
         let worker = thread::spawn(move || {
+            // Wall clock of the previous PRINTED window (None before the first
+            // print). Rates divide by the actual elapsed time, not the nominal
+            // interval, for two reasons: the thread can fire late under load,
+            // and tokens arrive in per-step bursts (a 4096-token chunk lands at
+            // once after ~20s of GPU work). Dividing a burst by 5s would report
+            // ~819 T/s for ~200 T/s of real work. Only print-firings move the
+            // clock; mid-step zero-token firings must not, or the window
+            // shrinks back to 5s. Idle firings refresh it, so the first window
+            // after idle measures from ~request start (within one interval)
+            // instead of boot.
+            let mut last_log: Option<Instant> = None;
             // Start the actual logging
             while let Err(RecvTimeoutError::Timeout) = shutdown_rx.recv_timeout(interval) {
                 let num_running = t_num_running.load(Ordering::Relaxed);
@@ -91,6 +102,7 @@ impl IntervalLogger {
                     .set(t_sequence_capacity.load(Ordering::Relaxed) as f64);
 
                 if !t_enable_logging.load(Ordering::Relaxed) {
+                    last_log = None;
                     continue;
                 }
 
@@ -113,6 +125,12 @@ impl IntervalLogger {
                 let spec_accepted_tokens = t_spec_accepted_tokens.swap(0, Ordering::Relaxed);
 
                 if total_new_seqs != 0 && tokens_processed != 0 {
+                    let now = Instant::now();
+                    let elapsed_secs = last_log
+                        .map(|t| now.duration_since(t).max(Duration::from_millis(1)))
+                        .unwrap_or(interval)
+                        .as_secs_f64();
+                    last_log = Some(now);
                     let enc_cache_info =
                         if let (Some(ref hits), Some(ref misses)) = (&t_enc_hits, &t_enc_misses) {
                             let h = hits.load(Ordering::Relaxed);
@@ -140,19 +158,25 @@ impl IntervalLogger {
                         String::new()
                     };
 
-                    // Throughput = tokens processed during this interval / interval duration.
-                    // The window counters are atomically swapped to 0 each interval, so the
-                    // rates reflect only the current window; the cumulative totals below
-                    // only grow (reset() zeroes them along with everything else).
+                    // Throughput = tokens processed during this window / actual elapsed
+                    // wall time. The window counters are atomically swapped to 0 each
+                    // firing, so the rates reflect only the current window; the
+                    // cumulative totals below only grow (reset() zeroes them along
+                    // with everything else).
                     let cumulative_prefill = t_cumulative_prefill_tokens.load(Ordering::Relaxed);
                     let cumulative_decode = t_cumulative_decode_tokens.load(Ordering::Relaxed);
                     info!(
                         "Throughput (T/s) {:.2} (prefill {:.2}, decode {:.2}), cumulative prefill {cumulative_prefill}, decode {cumulative_decode}, Prefix cache hitrate {:.2}%{enc_cache_info}{spec_info}, {num_running} running, {num_waiting} waiting",
-                        tokens_processed as f64 / interval.as_secs_f64(),
-                        prefill_tokens_processed as f64 / interval.as_secs_f64(),
-                        decode_tokens_processed as f64 / interval.as_secs_f64(),
+                        tokens_processed as f64 / elapsed_secs,
+                        prefill_tokens_processed as f64 / elapsed_secs,
+                        decode_tokens_processed as f64 / elapsed_secs,
                         100. * prefix_cache_hits as f64 / total_new_seqs as f64,
                     );
+                } else if num_running == 0 && num_waiting == 0 {
+                    // Fully idle: nothing is accumulating, so keep the clock
+                    // fresh. The first window after idle then spans roughly
+                    // the request itself instead of stretching back to boot.
+                    last_log = Some(Instant::now());
                 }
             }
             #[cfg(test)]
