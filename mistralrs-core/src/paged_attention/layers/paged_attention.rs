@@ -1475,6 +1475,23 @@ impl PagedAttention {
             return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
         }
 
+        // Without the flash-attn feature the masker materializes CausalFlash as
+        // a Custom tensor, which blocks the fused CK path in run_attention
+        // (gather_exact fails) and forces the eager 9 GB score fallback. When
+        // the request is provably single-seq full-causal, pass CausalFlash so
+        // CK mask_type=2 fires; anything else keeps the Custom tensor route.
+        let fused_causal = prefix_causal
+            && query_lens.len() == 1
+            && ctx.sdpa_params.sliding_window.is_none()
+            && mm_prefix_ranges.is_none()
+            && ctx.sdpa_params.sinks.is_none()
+            && matches!(adjusted_mask, AttentionMask::Custom(_));
+        let fallback_causal = AttentionMask::CausalFlash;
+        let fallback_mask = if fused_causal {
+            &fallback_causal
+        } else {
+            &adjusted_mask
+        };
         let k_batched = unpack_gathered_kv(
             &k_gathered,
             &kv_lens,
@@ -1493,7 +1510,7 @@ impl PagedAttention {
             tensors.query,
             &k_batched,
             &v_batched,
-            &adjusted_mask,
+            fallback_mask,
             None,
             ctx.sdpa_params,
         )?;
