@@ -78,7 +78,7 @@ When none are set, the pool defaults to 90% of available VRAM.
 Two more flags tune the cache itself:
 
 - `--pa-block-size <n>`: block size (default 32).
-- `--pa-cache-type`: KV cache quantization (`auto` or `f8e4m3`). This is separate from model-weight quantization (`--quant`/`--isq`); the two are chosen independently.
+- `--pa-cache-type`: KV cache quantization (`auto`, `f8e4m3`, or `q8_0`). This is separate from model-weight quantization (`--quant`/`--isq`); the two are chosen independently.
 
 Scheduler memory and latency are controlled independently:
 
@@ -118,6 +118,14 @@ converts at cache-write time; FlashInfer decode applies the K scale to logits an
 outputs without gathering a full-precision cache. Scales are immutable for the cache lifetime, so
 previously written entries are never reinterpreted. The default scale is 1.0, matching the common
 vLLM and SGLang serving configuration. FP8 cache is not currently supported for MLA layouts.
+ROCm builds with FP8 paged-attention support accept the same `f8e4m3` cache type; note E4M3
+clips at 448, so uncalibrated models can produce out-of-range scales.
+
+`q8_0` also halves KV bytes but uses block-int8 instead of float: int8 values plus an FP16 scale
+per 32 elements (llama.cpp Q8_0 layout), with a native dequantizing read path on both CUDA and
+ROCm. It needs no calibration and has no FP8-style clipping range. Constraints: CUDA or ROCm
+only, FP16/BF16/FP32 activations, per-layer head dims divisible by 32 and at most 512, and no
+MLA layouts.
 
 To compare with the non-FlashInfer paged decode path, disable the FlashInfer cache layout:
 
@@ -146,6 +154,13 @@ MISTRALRS_CUDA_GRAPHS=0 mistralrs serve --paged-attn on -m <model>
 
 They require a CUDA build and a CUDA device, and they apply to decode, not prompt prefill.
 
+ROCm builds support decode graphs on the same terms: capture-once, replay per single-token
+decode step, disabled with `MISTRALRS_CUDA_GRAPHS=0`. Two knobs tune the ROCm path (see the
+[environment reference](/reference/environment-variables/)): `MRS_DECODE_ARENA_OVERRIDE`
+overrides the capture arena size when capture fails with an arena overflow, and
+`MISTRALRS_CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES` caps how many captured entries stay resident
+before the least-recently-used ones are evicted and recaptured.
+
 ### Replay preconditions
 
 Graph replay is attempted only when all of these are true:
@@ -156,7 +171,7 @@ Graph replay is attempted only when all of these are true:
 - The request is not using a speculative proposer path.
 - The graph key matches the input shape, dtype, cache metadata shapes, and context bucket.
 
-If any condition is not met, mistral.rs runs the normal CUDA path.
+If any condition is not met, mistral.rs runs the normal (non-graph) path.
 
 <details>
 <summary>Capture and replay internals</summary>
@@ -165,7 +180,7 @@ The first time a decode shape is seen, mistral.rs runs a normal warmup forward, 
 
 The decode graph cache holds a small number of recent graph entries. New batch sizes, tensor shapes, or metadata layouts can trigger another capture.
 
-If capture or replay fails, CUDA graphs are disabled for that loaded pipeline and a warning is logged. Generation then continues through the normal CUDA path.
+If capture or replay fails, CUDA graphs are disabled for that loaded pipeline and a warning is logged. Generation then continues through the normal path.
 
 </details>
 
