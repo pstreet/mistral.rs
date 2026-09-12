@@ -41,6 +41,26 @@ const ENV_GGUF_NO_MMAP: &str = "MISTRALRS_GGUF_NO_MMAP";
 const ENV_GGUF_DROP_HOST_AFTER_LOAD: &str = "MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD";
 const ENV_MANAGED_WEIGHTS: &str = "MISTRALRS_MANAGED_WEIGHTS";
 
+// Tell the kernel the shard file pages are no longer needed. Weights live in
+// device/managed memory by the time this runs, so dropping clean file pages
+// only frees reclaimable cache. Errors are ignored by design.
+fn evict_path_from_page_cache(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let Ok(file) = File::open(path) else {
+            return;
+        };
+        unsafe {
+            libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GgufEndian {
     Little,
@@ -629,6 +649,11 @@ impl GgufArchive {
     pub fn release_host_shards(&self) {
         for index in 0..self.shard_storage.len() {
             self.release_host_shard(index);
+        }
+        // Weights are already uploaded, so drop the file pages the load pulled
+        // into page cache. Best effort: eviction failure must not fail serving.
+        for shard in &self.shards {
+            evict_path_from_page_cache(&shard.path);
         }
     }
 
