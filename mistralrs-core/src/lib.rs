@@ -85,6 +85,7 @@ pub mod distributed;
 pub mod files;
 mod gdn;
 mod gguf;
+mod host_alloc;
 pub mod layers;
 mod layers_masker;
 mod layers_utils;

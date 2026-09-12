@@ -708,6 +708,8 @@ impl Engine {
         if let Some(retention) = paged_block_retention {
             prefix_cacher.attach_paged_block_retention(retention);
         }
+        // Load staging (tokenizer buffers, shard reads, graph capture) is done.
+        crate::host_alloc::collect();
 
         Ok(Self {
             tx,
@@ -774,6 +776,7 @@ impl Engine {
                     recurrent_release_errors.join("; ")
                 );
             }
+            crate::host_alloc::collect();
         }
         scheduler.free_finished_sequence_groups();
         self.logger.set_num_running(scheduler.running_len());
