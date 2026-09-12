@@ -1921,6 +1921,11 @@ impl Module for dyn QuantMethod {
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+fn fast_mmq_allowed() -> bool {
+    std::env::var("MRS_NO_FAST_MMQ").is_err() && std::env::var("CANDLE_NO_FAST_MMQ").is_err()
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn try_fused_quantized_ffn(
     xs: &Tensor,
     gate: &dyn QuantMethod,
@@ -2014,6 +2019,9 @@ pub fn try_fused_quantized_ffn(
     if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
         return Ok(None);
     }
+    if !fast_mmq_allowed() {
+        return Ok(None);
+    }
     if gate_q.dtype() != up_q.dtype()
         || !gguf::fast_mmq::supports(gate_q.dtype())
         || !gguf::fast_mmq::supports(down_q.dtype())
@@ -2104,6 +2112,9 @@ pub fn try_fused_quantized_gate_up(
             &gate_q, &up_q, xs, activation,
         )?))
     } else {
+        if !fast_mmq_allowed() {
+            return Ok(None);
+        }
         if !gguf::fast_mmq::supports(gate_q.dtype()) {
             return Ok(None);
         }
@@ -2220,6 +2231,9 @@ pub fn try_fused_quantized_qkv(
         }
         Ok(Some(gguf::fast_mmvq::fused_qkv(&q_q, &k_q, &v_q, xs)?))
     } else {
+        if !fast_mmq_allowed() {
+            return Ok(None);
+        }
         if !gguf::fast_mmq::supports(dtype) {
             return Ok(None);
         }
