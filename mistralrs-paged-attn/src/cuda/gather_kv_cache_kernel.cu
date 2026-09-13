@@ -135,9 +135,10 @@ __global__ void gather_kv_cache_kernel(
       k_out[out_base + i] = key_cache[k_src_idx];
       v_out[out_base + i] = value_cache[v_src_idx];
     } else if constexpr (kv_dt == Fp8KVCacheDataType::kQ8_0) {
-      // Q8_0 block-int8: int8 payload, fp32 per-32 scales in sidecars
-      // [num_blocks, num_kv_heads, block_size, head_size/32]. k_scale/v_scale
-      // carry the sidecar bases.
+      // Q8_0 block-int8: int8 payload, fp32 per-32 scales in sidecars. k is
+      // token-major [blocks, heads, block_size, groups]; v is transposed to
+      // [blocks, heads, groups, block_size], so the v lookup strides here
+      // (prefill-only path; decode reads v scales as one sector).
       const int64_t scale_row = (static_cast<int64_t>(block_id) * num_kv_heads +
                                  head_idx) *
                                     block_size +
@@ -145,9 +146,14 @@ __global__ void gather_kv_cache_kernel(
       const float k_deq = vllm::q8::dequantize_q8_0(
           key_cache[k_src_idx],
           k_scale[scale_row * q8_groups + d / vllm::q8::kQ8BlockSize]);
-      const float v_deq = vllm::q8::dequantize_q8_0(
-          value_cache[v_src_idx],
-          v_scale[scale_row * q8_groups + d / vllm::q8::kQ8BlockSize]);
+      const int64_t v_scale_idx =
+          ((static_cast<int64_t>(block_id) * num_kv_heads + head_idx) *
+               q8_groups +
+           d / vllm::q8::kQ8BlockSize) *
+              block_size +
+          slot;
+      const float v_deq = vllm::q8::dequantize_q8_0(value_cache[v_src_idx],
+                                                   v_scale[v_scale_idx]);
       k_out[out_base + i] = q8_out_cast<out_t>(k_deq);
       v_out[out_base + i] = q8_out_cast<out_t>(v_deq);
     } else {

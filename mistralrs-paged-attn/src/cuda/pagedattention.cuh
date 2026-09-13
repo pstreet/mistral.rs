@@ -220,9 +220,12 @@ __device__ void paged_attention_kernel(
   // x == THREAD_GROUP_SIZE * VEC_SIZE
   // Each thread group fetches x elements from the key at a time.
   constexpr int x = 16 / sizeof(cache_t);
-  // Q8_0 block-int8: one fp32 scale per 32 head-dim elems. Scale sidecars are
-  // [num_blocks, num_kv_heads, BLOCK_SIZE, HEAD_SIZE / 32]; k_scale/v_scale
-  // carry the sidecar bases when kv_dt == kQ8_0.
+  // Q8_0 block-int8: one fp32 scale per 32 head-dim elems. k sidecar is
+  // [num_blocks, num_kv_heads, BLOCK_SIZE, HEAD_SIZE / 32] (token-major: one
+  // token's scales are contiguous); v sidecar is transposed to
+  // [num_blocks, num_kv_heads, HEAD_SIZE / 32, BLOCK_SIZE] so the decode
+  // vec's per-token scales load as one sector. k_scale/v_scale carry the
+  // sidecar bases when kv_dt == kQ8_0.
   constexpr int Q8_GROUPS = HEAD_SIZE / 32;
   float qk_max = -FLT_MAX;
 
@@ -250,20 +253,12 @@ __device__ void paged_attention_kernel(
       const int token_idx = block_idx * BLOCK_SIZE + physical_block_offset;
       K_vec k_vecs[NUM_VECS_PER_THREAD];
 
-      // Q8_0 scales for this token, hoisted so each of the HEAD_SIZE / 32
-      // sidecar scales loads once no matter how the vecs below span groups.
-      // Dead in non-Q8 instantiations (never referenced).
-      float q8_k_scales[Q8_GROUPS];
-      if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kQ8_0) {
-        const int64_t q8_scale_row =
-            (physical_block_number * num_kv_heads + kv_head_idx) * BLOCK_SIZE +
-            physical_block_offset;
-        const float *q8_ks = k_scale + q8_scale_row * Q8_GROUPS;
-#pragma unroll
-        for (int g = 0; g < Q8_GROUPS; ++g) {
-          q8_k_scales[g] = q8_ks[g];
-        }
-      }
+      // Q8_0 scale row base for this token; the address math is loop-invariant
+      // so LICM keeps it in one register, while the scale loads ride L1 across
+      // the vec loop instead of occupying 8 registers per thread.
+      const int64_t q8_scale_base =
+          (physical_block_number * num_kv_heads + kv_head_idx) * BLOCK_SIZE +
+          physical_block_offset;
 
 #pragma unroll
       for (int j = 0; j < NUM_VECS_PER_THREAD; j++) {
@@ -284,20 +279,17 @@ __device__ void paged_attention_kernel(
           const int8_t *q8_k_bytes =
               reinterpret_cast<const int8_t *>(&q8_k_packed);
           scalar_t *q8_k_dst = reinterpret_cast<scalar_t *>(&k_vecs[j]);
-          // Head-dim base of this vec; it holds VEC_SIZE (<= 8) elems, so it
-          // crosses a 32-elem scale group at most once.
+          // Head-dim base of this vec. The group index is a branchless shift:
+          // the old walking compare diverged across threads and chained the
+          // unrolled iterations through a loop-carried dependency.
           const int q8_base = vec_idx * VEC_SIZE;
-          int q8_group = q8_base / 32;
-          int q8_group_end = (q8_group + 1) * 32;
 #pragma unroll
           for (int e = 0; e < VEC_SIZE; ++e) {
-            const int q8_d = q8_base + e;
-            if (q8_d >= q8_group_end) {
-              ++q8_group;
-              q8_group_end += 32;
-            }
-            from_float(q8_k_dst[e], vllm::q8::dequantize_q8_0(
-                                        q8_k_bytes[e], q8_k_scales[q8_group]));
+            from_float(q8_k_dst[e],
+                       vllm::q8::dequantize_q8_0(
+                           q8_k_bytes[e],
+                           k_scale[q8_scale_base * Q8_GROUPS +
+                                   ((q8_base + e) >> 5)]));
           }
         } else {
           using Cache_K_vec = typename vllm::Vec<cache_t, VEC_SIZE>::Type;
@@ -445,18 +437,18 @@ __device__ void paged_attention_kernel(
           const int8_t *q8_v_bytes =
               reinterpret_cast<const int8_t *>(&q8_v_packed);
           scalar_t *q8_v_dst = reinterpret_cast<scalar_t *>(&v_vec);
-          // This row's scale group is fixed; the vec spans consecutive tokens.
-          const int q8_group = row_idx / 32;
-          const int64_t q8_v_row =
-              (physical_block_number * num_kv_heads + kv_head_idx) *
+          // v scales are group-major, so this (block, head, group) row holds
+          // one scale per token and the vec's scales load as one sector.
+          const int64_t q8_v_base =
+              ((physical_block_number * num_kv_heads + kv_head_idx) *
+                   Q8_GROUPS +
+               row_idx / 32) *
                   BLOCK_SIZE +
               physical_block_offset;
 #pragma unroll
           for (int e = 0; e < V_VEC_SIZE; ++e) {
-            const float q8_scale =
-                v_scale[(q8_v_row + e) * Q8_GROUPS + q8_group];
-            from_float(q8_v_dst[e],
-                       vllm::q8::dequantize_q8_0(q8_v_bytes[e], q8_scale));
+            from_float(q8_v_dst[e], vllm::q8::dequantize_q8_0(
+                                        q8_v_bytes[e], v_scale[q8_v_base + e]));
           }
         } else {
           using Cache_V_vec = typename vllm::Vec<cache_t, V_VEC_SIZE>::Type;

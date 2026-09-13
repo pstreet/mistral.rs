@@ -99,7 +99,10 @@ __global__ void reshape_and_cache_kernel(
 
 // Q8_0 block quantize + blocked write. One CUDA block per (token, head);
 // threads cooperatively reduce per-32 amax in shared memory, then quantize.
-// Scales go to sidecars [num_blocks, num_heads, block_size, head_size/32].
+  // Scales go to sidecars: k token-major
+  // [num_blocks, num_heads, block_size, head_size/32], v transposed to
+  // [num_blocks, num_heads, head_size/32, block_size] so paged decode loads
+  // one token-vec's scales as a single sector.
 template <typename scalar_t>
 __global__ void reshape_and_cache_q8_kernel(
     const scalar_t *__restrict__ key,   // [num_tokens, num_heads, head_size]
@@ -110,7 +113,8 @@ __global__ void reshape_and_cache_q8_kernel(
                                         // block_size]
     float *__restrict__ k_scales,       // [num_blocks, num_heads, block_size,
                                         // head_size/32]
-    float *__restrict__ v_scales,       // same layout as k_scales
+    float *__restrict__ v_scales,       // [num_blocks, num_heads,
+                                         // head_size/32, block_size]
     const int64_t *__restrict__ slot_mapping, // [num_tokens]
     const int key_stride, const int value_stride, const int num_heads,
     const int head_size, const int block_size, const int x) {
@@ -165,7 +169,10 @@ __global__ void reshape_and_cache_q8_kernel(
         ((block_idx * num_heads + head_idx) * block_size + block_offset) * G +
         threadIdx.x;
     k_scales[scale_idx] = dk != 0.f ? dk : 1.f;
-    v_scales[scale_idx] = dv != 0.f ? dv : 1.f;
+    const int64_t v_scale_idx =
+        ((block_idx * num_heads + head_idx) * G + threadIdx.x) * block_size +
+        block_offset;
+    v_scales[v_scale_idx] = dv != 0.f ? dv : 1.f;
   }
   __syncthreads();
 
@@ -176,7 +183,9 @@ __global__ void reshape_and_cache_q8_kernel(
         ((block_idx * num_heads + head_idx) * block_size + block_offset) * G +
         c;
     float dk = k_scales[scale_idx];
-    float dv = v_scales[scale_idx];
+    float dv = v_scales[((block_idx * num_heads + head_idx) * G + c) *
+                            block_size +
+                        block_offset];
     float fk = to_float(key[key_base + d]);
     float fv = to_float(value[value_base + d]);
     float qk = fk / dk;
