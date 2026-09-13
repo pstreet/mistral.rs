@@ -13,6 +13,10 @@ use crate::pipeline::RecurrentBatchKind;
 
 #[cfg(any(feature = "cuda", feature = "metal", feature = "rocm"))]
 const RECURRENCE_CHUNK_THRESHOLD: usize = 64;
+// Short multi-row forwards (MTP verify) step through the fused single-row
+// kernel instead of the prefill path: same recurrence, no prepare permutes.
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+const RECURRENCE_STEP_THRESHOLD: usize = 8;
 const QK_NORM_EPS: f64 = 1e-6;
 const QK_NORM_EPS_F32: f32 = 1e-6;
 const SOFTPLUS_LINEAR_THRESHOLD: f32 = 20.0;
@@ -464,6 +468,24 @@ fn recurrence_cuda_from_convolved(
     cache: &mut GdnLayerCache,
     dtype: DType,
 ) -> Result<Tensor> {
+    if seq_len > 1 && seq_len <= RECURRENCE_STEP_THRESHOLD {
+        let mut rows = Vec::with_capacity(seq_len);
+        for t in 0..seq_len {
+            rows.push(recurrence_cuda_from_convolved(
+                &mixed_qkv.narrow(1, t, 1)?,
+                &b.narrow(1, t, 1)?,
+                &a.narrow(1, t, 1)?,
+                a_log,
+                dt_bias,
+                dims,
+                batch_size,
+                1,
+                cache,
+                dtype,
+            )?);
+        }
+        return Tensor::cat(&rows, 1);
+    }
     let mixed_qkv = mixed_qkv.contiguous()?;
     let (b, a) = if seq_len == 1 {
         (b.clone(), a.clone())
