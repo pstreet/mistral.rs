@@ -6,8 +6,8 @@ use std::{
 use candle_core::{DType, Device, Result, Tensor};
 use serde::{Deserialize, Serialize};
 
+use super::block_scales::{register_block_scales, BlockQuantScales};
 use super::config::{KvCacheLayout, ModelConfigLike};
-use super::q8_registry::{register_q8_scales, Q8LayerScales};
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::flashinfer::{register_fa3_prefill_caches, Fa3PrefillWorkspaceRegistration};
 
@@ -70,9 +70,12 @@ pub enum PagedCacheType {
     /// else instead of silently following the activation dtype).
     BF16,
     F8E4M3,
-    /// Block-int8 KV (llama.cpp Q8_0: int8 + fp16 scale per 32 elems).
-    /// Payload dtype is U8; per-block scales ride in sidecar tensors (Phase 1).
+    /// Block-int8 KV (llama.cpp Q8_0: int8 + fp32 scale per 32 elems).
+    /// Payload dtype is U8; per-block scales ride in sidecar tensors.
     Q8_0,
+    /// Block-int4 KV (nibbles + fp32 scale per 32 elems). Payload dtype is
+    /// U8 (2 elems per byte); scales share the Q8_0 sidecar scheme.
+    Q4_0,
 }
 
 impl PagedCacheType {
@@ -80,7 +83,7 @@ impl PagedCacheType {
         match self {
             PagedCacheType::BF16 => DType::BF16,
             PagedCacheType::F8E4M3 => DType::F8E4M3,
-            PagedCacheType::Q8_0 => DType::U8,
+            PagedCacheType::Q8_0 | PagedCacheType::Q4_0 => DType::U8,
             PagedCacheType::Auto => act_dtype,
         }
     }
@@ -142,9 +145,11 @@ impl PagedCacheType {
                     "FP8 KV cache requires the CUDA/ROCm paged-attention backend".to_string(),
                 );
             } else if layer_device.is_metal() {
-                // Q8_0 block kernels only exist for CUDA/ROCm.
-                if *self == Self::Q8_0 {
-                    return Err("Q8_0 KV cache is only supported on CUDA/ROCm".to_string());
+                // Block-quantized kernels only exist for CUDA/ROCm.
+                if matches!(*self, Self::Q8_0 | Self::Q4_0) {
+                    return Err(
+                        "Block-quantized KV cache is only supported on CUDA/ROCm".to_string()
+                    );
                 }
                 #[cfg(not(feature = "metal"))]
                 return Err(
@@ -168,8 +173,9 @@ impl FromStr for PagedCacheType {
             "bf16" => Ok(Self::BF16),
             "f8e4m3" => Ok(Self::F8E4M3),
             "q8_0" => Ok(Self::Q8_0),
+            "q4_0" => Ok(Self::Q4_0),
             other => Err(format!(
-                "Unexpected `PagedCacheType`, got `{other}` but expected `auto`, `bf16`, `f8e4m3`, and `q8_0`."
+                "Unexpected `PagedCacheType`, got `{other}` but expected `auto`, `bf16`, `f8e4m3`, `q8_0`, and `q4_0`."
             )),
         }
     }
@@ -207,14 +213,19 @@ impl CacheEngine {
         let dtype = cache_config.cache_type.to_dtype(dtype);
         let (gpu_cache, q8_scales) =
             Self::allocate_gpu_cache(model_config, cache_config, dtype, device, layer_devices)?;
-        if cache_config.cache_type == PagedCacheType::Q8_0 {
+        if let Some(kind) = match cache_config.cache_type {
+            PagedCacheType::Q8_0 => Some(mistralrs_paged_attn::BlockQuantKind::Q8_0),
+            PagedCacheType::Q4_0 => Some(mistralrs_paged_attn::BlockQuantKind::Q4_0),
+            _ => None,
+        } {
             for ((key_cache, _), scales) in gpu_cache.iter().zip(q8_scales.iter()) {
                 if let Some((k, v)) = scales {
-                    register_q8_scales(
+                    register_block_scales(
                         key_cache,
-                        Q8LayerScales {
+                        BlockQuantScales {
                             k: k.clone(),
                             v: v.clone(),
+                            kind,
                         },
                     )?;
                 }
@@ -245,10 +256,12 @@ impl CacheEngine {
         self.gpu_cache.lock().expect("KV cache mutex was poisoned")
     }
 
-    /// Q8_0 per-layer fp32 scale sidecars `[blocks, kv_heads, block_size,
-    /// head_dim/32]`, zero-initialized (the write kernel skips padding slots).
-    /// `None` for layers without paged cache. Allocated on top of `memory_mb`
-    /// (~12.5% overhead); folded into the block budget in a follow-up.
+    /// Block-quantized per-layer fp32 scale sidecars, zero-initialized (the
+    /// write kernel skips padding slots). k is token-major `[blocks,
+    /// kv_heads, block_size, head_dim/32]`; v is transposed group-major
+    /// `[blocks, kv_heads, head_dim/32, block_size]`. `None` for layers
+    /// without paged cache. Allocated on top of `memory_mb` (~12.5%
+    /// overhead); folded into the block budget in a follow-up.
     fn allocate_q8_scales(
         model_config: &dyn ModelConfigLike,
         cache_config: &CacheConfig,
@@ -263,17 +276,17 @@ impl CacheEngine {
             model_config.kv_cache_layout_for_layer(layer_idx),
             KvCacheLayout::Standard | KvCacheLayout::StandardNoFlashInfer
         ) {
-            candle_core::bail!("Q8_0 KV cache requires the Standard layout");
+            candle_core::bail!("Block-quantized KV cache requires the Standard layout");
         }
         if !layer_device.is_cuda() {
-            candle_core::bail!("Q8_0 KV cache is only supported on CUDA/ROCm");
+            candle_core::bail!("Block-quantized KV cache is only supported on CUDA/ROCm");
         }
         let kv_heads = model_config.num_kv_heads_for_layer(layer_idx);
         let k_dim = model_config.k_head_dim_for_layer(layer_idx);
         let v_dim = model_config.v_head_dim_for_layer(layer_idx);
         if k_dim % 32 != 0 || v_dim % 32 != 0 || k_dim > 512 || v_dim > 512 {
             candle_core::bail!(
-                "Q8_0 KV cache requires head dims % 32 == 0 and <= 512, got k={k_dim} v={v_dim}"
+                "Block-quantized KV cache requires head dims % 32 == 0 and <= 512, got k={k_dim} v={v_dim}"
             );
         }
         let block = cache_config.block_size;
@@ -283,7 +296,7 @@ impl CacheEngine {
             layer_device,
         )?;
         let v = Tensor::zeros(
-            (num_gpu_blocks, kv_heads, block, v_dim / 32),
+            (num_gpu_blocks, kv_heads, v_dim / 32, block),
             DType::F32,
             layer_device,
         )?;
@@ -329,11 +342,13 @@ impl CacheEngine {
                         dtype,
                         cache_config.block_size,
                         layer_idx,
+                        cache_config.cache_type,
                     );
                     let value_block_shape = Self::calculate_value_block_shape(
                         model_config,
                         cache_config.block_size,
                         layer_idx,
+                        cache_config.cache_type,
                     );
                     #[allow(unused)]
                     let key_blocks = if let Device::Metal(dev) = &device {
@@ -582,7 +597,10 @@ impl CacheEngine {
                 }
             };
             gpu_cache.push((key_blocks, value_blocks));
-            if cache_config.cache_type == PagedCacheType::Q8_0 {
+            if matches!(
+                cache_config.cache_type,
+                PagedCacheType::Q8_0 | PagedCacheType::Q4_0
+            ) {
                 // `device` is already the resolved per-layer device here.
                 q8_scales.push(Self::allocate_q8_scales(
                     model_config,
@@ -655,12 +673,20 @@ impl CacheEngine {
         dtype: DType,
         block_size: usize,
         layer_idx: usize,
+        cache_type: PagedCacheType,
     ) -> (usize, usize, usize, usize) {
         let element_size = dtype.size_in_bytes();
         let x = 16 / element_size;
+        // Q4_0 packs 2 elems per byte: 16-byte chunks cover 32 head-dim
+        // elems, so the chunk count doubles down vs the byte count.
+        let chunks = if cache_type == PagedCacheType::Q4_0 {
+            model_config.k_head_dim_for_layer(layer_idx) / 32
+        } else {
+            model_config.k_head_dim_for_layer(layer_idx) / x
+        };
         (
             model_config.num_kv_heads_for_layer(layer_idx),
-            model_config.k_head_dim_for_layer(layer_idx) / x,
+            chunks,
             block_size,
             x,
         )
@@ -670,11 +696,18 @@ impl CacheEngine {
         model_config: &dyn ModelConfigLike,
         block_size: usize,
         layer_idx: usize,
+        cache_type: PagedCacheType,
     ) -> (usize, usize, usize) {
+        // Q4_0 packs 2 slots per byte along the block.
+        let block_elems = if cache_type == PagedCacheType::Q4_0 {
+            block_size / 2
+        } else {
+            block_size
+        };
         (
             model_config.num_kv_heads_for_layer(layer_idx),
             model_config.v_head_dim_for_layer(layer_idx),
-            block_size,
+            block_elems,
         )
     }
 
@@ -693,12 +726,12 @@ impl CacheEngine {
 
 impl Drop for CacheEngine {
     fn drop(&mut self) {
-        // Release Q8 scale registrations so a dropped engine cannot pin
-        // stale multi-GB scale tensors alive across server reloads.
+        // Release block-quantized scale registrations so a dropped engine
+        // cannot pin stale multi-GB scale tensors alive across reloads.
         // Best-effort: a poisoned mutex here must not panic in drop.
         if let Ok(cache) = self.gpu_cache.lock() {
             for (key_cache, _) in cache.iter() {
-                let _ = super::q8_registry::unregister_q8_scales(key_cache);
+                let _ = super::block_scales::unregister_block_scales(key_cache);
             }
         }
     }
@@ -730,6 +763,11 @@ mod tests {
             Ok::<PagedCacheType, String>(PagedCacheType::Q8_0)
         );
         assert_eq!(PagedCacheType::Q8_0.to_dtype(DType::BF16), DType::U8);
+        assert_eq!(
+            "q4_0".parse(),
+            Ok::<PagedCacheType, String>(PagedCacheType::Q4_0)
+        );
+        assert_eq!(PagedCacheType::Q4_0.to_dtype(DType::BF16), DType::U8);
         // Off-device: Q8_0 must fail on device support, not missing kernels.
         let err = PagedCacheType::Q8_0
             .validate(

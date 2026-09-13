@@ -12,6 +12,7 @@
 #endif
 
 #include "quantization/q8/q8_utils.cuh"
+#include "quantization/q4/q4_utils.cuh"
 
 #include <algorithm>
 #include <cassert>
@@ -209,14 +210,193 @@ __global__ void reshape_and_cache_q8_kernel(
   }
 }
 
-#define CALL_RESHAPE_AND_CACHE_Q8(KV_T)                                        \
-  vllm::reshape_and_cache_q8_kernel<KV_T>                                      \
-      <<<grid_q8, block_q8, 0, stream>>>(                                      \
+// Q4_0 block quantize + blocked write. One CUDA block per (token, head),
+// same amax scheme as Q8_0 with d = amax/7. Nibbles carry a +8 bias, two
+// elems per byte: K packs along head-dim (byte holds d, d+1), V packs along
+// tokens (byte holds slots 2m, 2m+1). K bytes are block-private so each
+// thread writes whole bytes; V bytes are shared across the slot pair, so
+// V nibbles merge with atomic And/Or on disjoint bits (zero-init not
+// required, recycled blocks safe).
+// Scales mirror Q8_0: k token-major, v transposed group-major.
+template <typename scalar_t>
+__global__ void reshape_and_cache_q4_kernel(
+    const scalar_t *__restrict__ key,   // [num_tokens, num_heads, head_size]
+    const scalar_t *__restrict__ value, // [num_tokens, num_heads, head_size]
+    int8_t *__restrict__ key_cache,     // [num_blocks, num_heads,
+                                        // head_size/32, block_size, 16]
+    int8_t *__restrict__ value_cache,   // [num_blocks, num_heads, head_size,
+                                        // block_size/2]
+    float *__restrict__ k_scales,       // [num_blocks, num_heads, block_size,
+                                        // head_size/32]
+    float *__restrict__ v_scales,       // [num_blocks, num_heads,
+                                        // head_size/32, block_size]
+    const int64_t *__restrict__ slot_mapping, // [num_tokens]
+    const int key_stride, const int value_stride, const int num_heads,
+    const int head_size, const int block_size, const int x) {
+  const int64_t token_head = blockIdx.x;
+  const int64_t token_idx = token_head / num_heads;
+  const int head_idx = token_head % num_heads;
+  const int64_t slot_idx = slot_mapping[token_idx];
+  if (slot_idx < 0) {
+    return;
+  }
+  const int64_t block_idx = slot_idx / block_size;
+  const int64_t block_offset = slot_idx % block_size;
+  const int G = head_size / vllm::q4::kQ4BlockSize;
+
+  __shared__ float sh_kmax[16];
+  __shared__ float sh_vmax[16];
+  if (threadIdx.x < 16) {
+    sh_kmax[threadIdx.x] = 0.f;
+    sh_vmax[threadIdx.x] = 0.f;
+  }
+  __syncthreads();
+  const int64_t key_base = token_idx * key_stride + head_idx * head_size;
+  const int64_t value_base = token_idx * value_stride + head_idx * head_size;
+  auto to_float = [](scalar_t v) -> float {
+    if constexpr (std::is_same<scalar_t, float>::value) {
+      return v;
+    } else if constexpr (std::is_same<scalar_t, uint16_t>::value) {
+      __half h;
+      memcpy(&h, &v, sizeof(h));
+      return __half2float(h);
+    } else {
+      return __bfloat162float(v);
+    }
+  };
+  // Phase 1: per-32 amax per tensor, identical to Q8_0.
+  for (int d = threadIdx.x; d < head_size; d += blockDim.x) {
+    float a = to_float(key[key_base + d]);
+    a = a >= 0.f ? a : -a;
+    atomicMax(reinterpret_cast<unsigned int *>(&sh_kmax[d / 32]),
+              __float_as_uint(a));
+    float b = to_float(value[value_base + d]);
+    b = b >= 0.f ? b : -b;
+    atomicMax(reinterpret_cast<unsigned int *>(&sh_vmax[d / 32]),
+              __float_as_uint(b));
+  }
+  __syncthreads();
+  if (threadIdx.x < G) {
+    float dk = sh_kmax[threadIdx.x] / vllm::q4::kQ4MaxQ;
+    float dv = sh_vmax[threadIdx.x] / vllm::q4::kQ4MaxQ;
+    const int64_t scale_idx =
+        ((block_idx * num_heads + head_idx) * block_size + block_offset) * G +
+        threadIdx.x;
+    k_scales[scale_idx] = dk != 0.f ? dk : 1.f;
+    const int64_t v_scale_idx =
+        ((block_idx * num_heads + head_idx) * G + threadIdx.x) * block_size +
+        block_offset;
+    v_scales[v_scale_idx] = dv != 0.f ? dv : 1.f;
+  }
+  __syncthreads();
+
+  // Phase 2: quantize + packed write, two head-dim elems per thread.
+  const int64_t v_row_bytes = block_size / 2;
+  for (int dd = threadIdx.x * 2; dd < head_size; dd += blockDim.x * 2) {
+    const int c = dd / vllm::q4::kQ4BlockSize;
+    const int64_t scale_idx =
+        ((block_idx * num_heads + head_idx) * block_size + block_offset) * G +
+        c;
+    const int64_t v_scale_idx =
+        ((block_idx * num_heads + head_idx) * G + c) * block_size +
+        block_offset;
+    float dk = k_scales[scale_idx];
+    float dv = v_scales[v_scale_idx];
+    float fk0 = to_float(key[key_base + dd]);
+    float fk1 = to_float(key[key_base + dd + 1]);
+    float fv0 = to_float(value[value_base + dd]);
+    float fv1 = to_float(value[value_base + dd + 1]);
+    float idk = 1.f / dk;
+    float idv = 1.f / dv;
+    float qk0 = fk0 * idk;
+    float qk1 = fk1 * idk;
+    float qv0 = fv0 * idv;
+    float qv1 = fv1 * idv;
+    qk0 = qk0 > 7.f ? 7.f : (qk0 < -8.f ? -8.f : qk0);
+    qk1 = qk1 > 7.f ? 7.f : (qk1 < -8.f ? -8.f : qk1);
+    qv0 = qv0 > 7.f ? 7.f : (qv0 < -8.f ? -8.f : qv0);
+    qv1 = qv1 > 7.f ? 7.f : (qv1 < -8.f ? -8.f : qv1);
+    uint8_t nk0 =
+        static_cast<uint8_t>((qk0 >= 0.f ? qk0 + 0.5f : qk0 - 0.5f) + 8.f);
+    uint8_t nk1 =
+        static_cast<uint8_t>((qk1 >= 0.f ? qk1 + 0.5f : qk1 - 0.5f) + 8.f);
+    uint8_t nv0 =
+        static_cast<uint8_t>((qv0 >= 0.f ? qv0 + 0.5f : qv0 - 0.5f) + 8.f);
+    uint8_t nv1 =
+        static_cast<uint8_t>((qv1 >= 0.f ? qv1 + 0.5f : qv1 - 0.5f) + 8.f);
+
+    // K: 16-byte chunks hold 32 elems; byte (dd/32 chunk, (dd%32)/2).
+    const int64_t tgt_key_idx =
+        block_idx * num_heads * (head_size / 32) * block_size * x +
+        head_idx * (head_size / 32) * block_size * x +
+        (dd / 32) * block_size * x + block_offset * x + (dd % 32) / 2;
+    key_cache[tgt_key_idx] =
+        static_cast<int8_t>(nk0 | (nk1 << 4));
+    // V: bytes (dd, off/2) and (dd+1, off/2); each shared with the paired
+    // slot, which owns the other nibble. Merge ours with atomic And/Or on
+    // disjoint bits: order-independent and recycled-block safe.
+    const int64_t v_byte_base =
+        block_idx * num_heads * head_size * v_row_bytes +
+        head_idx * head_size * v_row_bytes + block_offset / 2;
+    const unsigned int v_shift =
+        static_cast<unsigned int>(block_offset & 1) * 4u;
+    const int64_t v_byte0 = v_byte_base + dd * v_row_bytes;
+    unsigned int *word0 = reinterpret_cast<unsigned int *>(
+        value_cache + (v_byte0 & ~3LL));
+    unsigned int sh0 =
+        static_cast<unsigned int>(v_byte0 & 3LL) * 8u + v_shift;
+    atomicAnd(word0, ~(0xFu << sh0));
+    atomicOr(word0, static_cast<unsigned int>(nv0) << sh0);
+    const int64_t v_byte1 = v_byte0 + v_row_bytes;
+    unsigned int *word1 = reinterpret_cast<unsigned int *>(
+        value_cache + (v_byte1 & ~3LL));
+    unsigned int sh1 =
+        static_cast<unsigned int>(v_byte1 & 3LL) * 8u + v_shift;
+    atomicAnd(word1, ~(0xFu << sh1));
+    atomicOr(word1, static_cast<unsigned int>(nv1) << sh1);
+  }
+}
+
+#define CALL_RESHAPE_AND_CACHE_Q4(KV_T)                                        \
+  vllm::reshape_and_cache_q4_kernel<KV_T>                                      \
+      <<<grid_q4, block_q4, 0, stream>>>(                                      \
           reinterpret_cast<KV_T *>(key), reinterpret_cast<KV_T *>(value),      \
           reinterpret_cast<int8_t *>(key_cache),                               \
           reinterpret_cast<int8_t *>(value_cache), k_scales, v_scales,         \
           slot_mapping, key_stride, value_stride, num_heads, head_size,        \
           block_size, x);
+
+// Q4_0 block-quantize write path. Payload is nibbles (x = 16 bytes cover 32
+// head-dim elems); scales are fp32 sidecars (k token-major, v transposed).
+// MVP constraints (checked host-side): head_size % 32 == 0, head_size <= 512,
+// block_size % 2 == 0.
+extern "C" void reshape_and_cache_q4(
+    void *key,         // [num_tokens, num_heads, head_size]
+    void *value,       // [num_tokens, num_heads, head_size]
+    void *key_cache,   // [num_blocks, num_heads, head_size/32, block_size, 16]
+    void *value_cache, // [num_blocks, num_heads, head_size, block_size/2]
+    float *k_scales,   // [num_blocks, num_heads, block_size, head_size/32]
+    float *v_scales,   // [num_blocks, num_heads, head_size/32, block_size]
+    int64_t *slot_mapping, // [num_tokens]
+
+    int32_t num_tokens, int32_t num_heads, int32_t head_size,
+    int32_t block_size, int32_t x, int32_t key_stride, int32_t value_stride,
+    cudaStream_t stream,
+
+    uint32_t dtype) {  // 0 => f16; 1 => bf16; 2 => f32
+  dim3 grid_q4(static_cast<unsigned int>(num_tokens) *
+               static_cast<unsigned int>(num_heads));
+  // 128 threads cover head_size <= 512 via paired stride loops.
+  dim3 block_q4(128);
+  if (dtype == 0) {
+    CALL_RESHAPE_AND_CACHE_Q4(uint16_t);
+  } else if (dtype == 1) {
+    CALL_RESHAPE_AND_CACHE_Q4(__nv_bfloat16);
+  } else if (dtype == 2) {
+    CALL_RESHAPE_AND_CACHE_Q4(float);
+  }
+  CUDA_CHECK(cudaGetLastError());
+}
 
 } // namespace vllm
 
@@ -234,7 +414,7 @@ extern "C" void reshape_and_cache(
     uint32_t dtype,       // 0 => f16; 1 => bf16; 2 => f32
     uint32_t cache_dtype, // 0 => f16; 1 => bf16; 2 => f32; 3 => fp8_e4m3
     // 4 => q8_0 block-int8 (served by reshape_and_cache_q8 below, which also
-    // takes fp32 per-32 scale sidecars)
+    // takes fp32 per-32 scale sidecars); 5 => q4_0 nibbles (reshape_and_cache_q4)
     float *k_scale, float *v_scale) {
   dim3 grid(num_tokens);
   dim3 block(std::min(num_heads * head_size, 512));
@@ -272,13 +452,21 @@ extern "C" void reshape_and_cache(
 // Q8_0 block-quantize write path. Payload is int8 with x = 16 packing;
 // scales are fp32 sidecars [num_blocks, num_heads, block_size, head_size/32].
 // MVP constraints (checked host-side): head_size % 32 == 0, head_size <= 512.
+#define CALL_RESHAPE_AND_CACHE_Q8(KV_T)                                        \
+  vllm::reshape_and_cache_q8_kernel<KV_T>                                      \
+      <<<grid_q8, block_q8, 0, stream>>>(                                      \
+          reinterpret_cast<KV_T *>(key), reinterpret_cast<KV_T *>(value),      \
+          reinterpret_cast<int8_t *>(key_cache),                               \
+          reinterpret_cast<int8_t *>(value_cache), k_scales, v_scales,         \
+          slot_mapping, key_stride, value_stride, num_heads, head_size,        \
+          block_size, x);
 extern "C" void reshape_and_cache_q8(
     void *key,         // [num_tokens, num_heads, head_size]
     void *value,       // [num_tokens, num_heads, head_size]
     void *key_cache,   // [num_blocks, num_heads, head_size/x, block_size, x]
     void *value_cache, // [num_blocks, num_heads, head_size, block_size]
     float *k_scales,   // [num_blocks, num_heads, block_size, head_size/32]
-    float *v_scales,   // same layout as k_scales
+    float *v_scales,   // [num_blocks, num_heads, head_size/32, block_size]
     int64_t *slot_mapping, // [num_tokens]
 
     int32_t num_tokens, int32_t num_heads, int32_t head_size,

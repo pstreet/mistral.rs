@@ -360,7 +360,11 @@ pub fn paged_attention(
     softmax_scale: f32,
     softcapping: f32,
     sinks: Option<&Tensor>,
+    quant: Option<crate::BlockQuantKind>,
 ) -> Result<Tensor> {
+    if quant.is_some() {
+        candle_core::bail!("block-quantized KV cache is only supported on CUDA/ROCm");
+    }
     let op = PagedAttention {
         softmax_scale,
         key_cache: key_cache.clone(),

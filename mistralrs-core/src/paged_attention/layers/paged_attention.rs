@@ -210,18 +210,20 @@ fn cache_input_can_write_directly(tensor: &Tensor) -> Result<bool> {
         && row_stride >= heads.saturating_mul(head_size))
 }
 
-// Q8_0 block-int8 read support: per-layer scale sidecars resolve from the
-// engine registry by cache identity (mirrors write_kv_cache). `None` unless
-// the cache payload is U8.
-fn q8_layer_scales(
+// Block-quantized (Q8_0/Q4_0) read support: per-layer scale sidecars resolve
+// from the engine registry by cache identity (mirrors write_kv_cache).
+// `None` unless the cache payload is U8.
+fn block_layer_scales(
     key_cache: &Tensor,
-) -> Result<Option<crate::paged_attention::q8_registry::Q8LayerScales>> {
+) -> Result<Option<crate::paged_attention::block_scales::BlockQuantScales>> {
     if key_cache.dtype() != DType::U8 {
         return Ok(None);
     }
     Ok(Some(
-        crate::paged_attention::q8_registry::lookup_q8_scales(key_cache)?.ok_or_else(|| {
-            candle_core::Error::msg("Q8_0 KV cache has no registered scale tensors for this layer")
+        crate::paged_attention::block_scales::lookup_block_scales(key_cache)?.ok_or_else(|| {
+            candle_core::Error::msg(
+                "Block-quantized KV cache has no registered scale tensors for this layer",
+            )
         })?,
     ))
 }
@@ -250,15 +252,26 @@ fn write_kv_cache(
             .reshape(cache_input_shape(value)?)?;
         &value_packed
     };
-    // Q8_0 block-quantized write: scales resolve from the engine registry by
+    // Block-quantized write: scales resolve from the engine registry by
     // cache identity, so no model call-site changes are needed.
     if key_cache.dtype() == DType::U8 {
-        let scales =
-            crate::paged_attention::q8_registry::lookup_q8_scales(key_cache)?.ok_or_else(|| {
+        let scales = crate::paged_attention::block_scales::lookup_block_scales(key_cache)?
+            .ok_or_else(|| {
                 candle_core::Error::msg(
-                    "Q8_0 KV cache has no registered scale tensors for this layer",
+                    "Block-quantized KV cache has no registered scale tensors for this layer",
                 )
             })?;
+        if scales.kind == mistralrs_paged_attn::BlockQuantKind::Q4_0 {
+            return mistralrs_paged_attn::reshape_and_cache_q4(
+                key,
+                value,
+                key_cache,
+                value_cache,
+                &scales.k,
+                &scales.v,
+                slot_mapping,
+            );
+        }
         return mistralrs_paged_attn::reshape_and_cache_q8(
             key,
             value,
@@ -328,10 +341,12 @@ fn gather_kv_cache_for_layout(
             }
         }
         AttentionBackendKind::Standard => {
-            // Q8_0 sidecars ride the scale args into the dequantizing gather.
-            let q8_scales = q8_layer_scales(key_cache)?;
-            let (k, v) = match q8_scales.as_ref() {
-                Some(q8) => (Some(&q8.k), Some(&q8.v)),
+            // Block-quantized sidecars ride the scale args into the
+            // dequantizing gather; the kind selects the kernel branch.
+            let bq_scales = block_layer_scales(key_cache)?;
+            let quant = bq_scales.as_ref().map(|bq| bq.kind);
+            let (k, v) = match bq_scales.as_ref() {
+                Some(bq) => (Some(&bq.k), Some(&bq.v)),
                 None => (scales.k, scales.v),
             };
             mistralrs_paged_attn::gather_kv_cache(
@@ -343,6 +358,7 @@ fn gather_kv_cache_for_layout(
                 cu_kv,
                 num_tokens,
                 dtype,
+                quant,
             )
         }
     }
@@ -2095,10 +2111,12 @@ impl PagedAttention {
         dev: &DeviceLocation,
     ) -> Result<Tensor> {
         let scales = self.cache_scales(key_cache);
-        // Q8_0 sidecars ride the scale args into the native int8 decode kernel.
-        let q8_scales = q8_layer_scales(key_cache)?;
-        let (k, v) = match q8_scales.as_ref() {
-            Some(q8) => (Some(&q8.k), Some(&q8.v)),
+        // Block-quantized sidecars ride the scale args into the native
+        // block-int decode kernel; the kind selects the kernel branch.
+        let bq_scales = block_layer_scales(key_cache)?;
+        let quant = bq_scales.as_ref().map(|bq| bq.kind);
+        let (k, v) = match bq_scales.as_ref() {
+            Some(bq) => (Some(&bq.k), Some(&bq.v)),
             None => (scales.k, scales.v),
         };
         paged_attention(
@@ -2118,6 +2136,7 @@ impl PagedAttention {
             ctx.sdpa_params.softmax_scale,
             ctx.sdpa_params.softcap.unwrap_or(1.0f32),
             ctx.sdpa_params.sinks.as_ref(),
+            quant,
         )
     }
 

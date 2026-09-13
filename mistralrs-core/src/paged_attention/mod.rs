@@ -6,6 +6,7 @@ pub(crate) mod attention_backend;
 pub mod block_hash;
 /// Flat block pool with LRU free list for KV cache block management (vLLM v1 approach).
 pub mod block_pool;
+mod block_scales;
 pub(crate) mod block_table_rows;
 mod cache_engine;
 mod config;
@@ -21,7 +22,6 @@ pub(crate) mod mm_prefix;
     feature = "metal"
 ))]
 pub(crate) mod plan;
-mod q8_registry;
 mod scales;
 mod scheduler;
 #[cfg(any(

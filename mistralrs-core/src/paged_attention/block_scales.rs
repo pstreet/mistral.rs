@@ -5,7 +5,8 @@ use std::{
 
 use candle_core::{Result, Storage, Tensor};
 
-// Q8_0 per-layer scale sidecars, keyed by the owning K-cache tensor identity.
+// Block-quantized (Q8_0/Q4_0) per-layer scale sidecars, keyed by the owning
+// K-cache tensor identity.
 //
 // Rationale: `PagedAttention::forward` receives resolved per-layer cache
 // tensors but no layer index (45+ model call sites destructure
@@ -18,13 +19,14 @@ use candle_core::{Result, Storage, Tensor};
 // cannot pin stale multi-GB caches.
 
 #[derive(Clone)]
-pub(crate) struct Q8LayerScales {
+pub(crate) struct BlockQuantScales {
     pub k: Tensor,
     pub v: Tensor,
+    pub kind: mistralrs_paged_attn::BlockQuantKind,
 }
 
-fn registry() -> &'static Mutex<HashMap<(usize, usize), Q8LayerScales>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<(usize, usize), Q8LayerScales>>> = OnceLock::new();
+fn registry() -> &'static Mutex<HashMap<(usize, usize), BlockQuantScales>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<(usize, usize), BlockQuantScales>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -36,7 +38,7 @@ fn cache_key(t: &Tensor) -> Result<(usize, usize)> {
     Ok((&*storage as *const Storage as usize, layout.start_offset()))
 }
 
-pub(crate) fn register_q8_scales(key_cache: &Tensor, scales: Q8LayerScales) -> Result<()> {
+pub(crate) fn register_block_scales(key_cache: &Tensor, scales: BlockQuantScales) -> Result<()> {
     let key = cache_key(key_cache)?;
     registry()
         .lock()
@@ -45,7 +47,7 @@ pub(crate) fn register_q8_scales(key_cache: &Tensor, scales: Q8LayerScales) -> R
     Ok(())
 }
 
-pub(crate) fn lookup_q8_scales(key_cache: &Tensor) -> Result<Option<Q8LayerScales>> {
+pub(crate) fn lookup_block_scales(key_cache: &Tensor) -> Result<Option<BlockQuantScales>> {
     let key = cache_key(key_cache)?;
     Ok(registry()
         .lock()
@@ -54,7 +56,7 @@ pub(crate) fn lookup_q8_scales(key_cache: &Tensor) -> Result<Option<Q8LayerScale
         .cloned())
 }
 
-pub(crate) fn unregister_q8_scales(key_cache: &Tensor) -> Result<()> {
+pub(crate) fn unregister_block_scales(key_cache: &Tensor) -> Result<()> {
     let key = cache_key(key_cache)?;
     registry()
         .lock()

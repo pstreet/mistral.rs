@@ -14,7 +14,11 @@ pub fn gather_kv_cache(
     cu_seq_lens: &Tensor, // [batch + 1]
     num_tokens: usize,    // cu_seq_lens[-1]
     out_dtype: DType,
+    quant: Option<crate::BlockQuantKind>,
 ) -> Result<(Tensor, Tensor)> {
+    if quant.is_some() {
+        candle_core::bail!("block-quantized KV cache is only supported on CUDA/ROCm");
+    }
     let cache_dtype = key_cache.dtype();
     if value_cache.dtype() != cache_dtype {
         candle_core::bail!(

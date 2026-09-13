@@ -12,6 +12,7 @@
 #endif
 
 #include "quantization/q8/q8_utils.cuh"
+#include "quantization/q4/q4_utils.cuh"
 
 #include <algorithm>
 
@@ -156,6 +157,45 @@ __global__ void gather_kv_cache_kernel(
                                                    v_scale[v_scale_idx]);
       k_out[out_base + i] = q8_out_cast<out_t>(k_deq);
       v_out[out_base + i] = q8_out_cast<out_t>(v_deq);
+    } else if constexpr (kv_dt == Fp8KVCacheDataType::kQ4_0) {
+      // Q4_0 nibbles (+8 bias): K packs along head-dim (byte holds the
+      // (d, d+1) pair, d even selects lo), V packs along slots (byte holds
+      // the (slot, slot+1) pair). Scales share the Q8_0 scheme (k
+      // token-major, v transposed group-major).
+      const int64_t k_q4_idx = static_cast<int64_t>(block_id) *
+                                   k_block_stride +
+                               head_idx * k_head_stride +
+                               (d / 32) * block_size * x + slot * x + (d % 32) / 2;
+      const uint8_t k_packed =
+          reinterpret_cast<const uint8_t *>(key_cache)[k_q4_idx];
+      const uint8_t k_nib =
+          (d & 1) ? static_cast<uint8_t>((k_packed >> 4) & 0xFu)
+                  : static_cast<uint8_t>(k_packed & 0xFu);
+      const int64_t v_q4_idx = (static_cast<int64_t>(block_id) * num_kv_heads +
+                                head_idx) *
+                                   head_size * (block_size / 2) +
+                               d * (block_size / 2) + slot / 2;
+      const uint8_t v_packed =
+          reinterpret_cast<const uint8_t *>(value_cache)[v_q4_idx];
+      const uint8_t v_nib =
+          (slot & 1) ? static_cast<uint8_t>((v_packed >> 4) & 0xFu)
+                     : static_cast<uint8_t>(v_packed & 0xFu);
+      const int64_t scale_row = (static_cast<int64_t>(block_id) * num_kv_heads +
+                                 head_idx) *
+                                    block_size +
+                                slot;
+      const int64_t v_scale_idx =
+          ((static_cast<int64_t>(block_id) * num_kv_heads + head_idx) *
+               q8_groups +
+           d / vllm::q4::kQ4BlockSize) *
+              block_size +
+          slot;
+      const float k_deq = vllm::q4::dequantize_q4_0(
+          k_nib, k_scale[scale_row * q8_groups + d / vllm::q4::kQ4BlockSize]);
+      const float v_deq =
+          vllm::q4::dequantize_q4_0(v_nib, v_scale[v_scale_idx]);
+      k_out[out_base + i] = q8_out_cast<out_t>(k_deq);
+      v_out[out_base + i] = q8_out_cast<out_t>(v_deq);
     } else {
       k_out[out_base + i] = fp8::scaled_convert<out_t, cache_t, kv_dt>(
           key_cache[k_src_idx], *k_scale);
@@ -192,7 +232,7 @@ extern "C" void gather_kv_cache(
     int32_t x, cudaStream_t stream,
     uint32_t out_dtype,  // 0 => f16; 1 => bf16; 2 => f32
     uint32_t cache_dtype // 0 => f16; 1 => bf16; 2 => f32; 3 => fp8_e4m3
-                         // 4 => q8_0 block-int8
+                         // 4 => q8_0 block-int8; 5 => q4_0 nibbles
 ) {
   if (num_tokens <= 0) {
     return;
@@ -223,6 +263,17 @@ extern "C" void gather_kv_cache(
                            vllm::Fp8KVCacheDataType::kQ8_0);
     } else if (out_dtype == 2) {
       CALL_GATHER_KV_CACHE(float, int8_t, vllm::Fp8KVCacheDataType::kQ8_0);
+    }
+  } else
+  if (cache_dtype == 5) {
+    // Q4_0 cache -> dequantize to out_dtype
+    if (out_dtype == 0) {
+      CALL_GATHER_KV_CACHE(uint16_t, int8_t, vllm::Fp8KVCacheDataType::kQ4_0);
+    } else if (out_dtype == 1) {
+      CALL_GATHER_KV_CACHE(__nv_bfloat16, int8_t,
+                           vllm::Fp8KVCacheDataType::kQ4_0);
+    } else if (out_dtype == 2) {
+      CALL_GATHER_KV_CACHE(float, int8_t, vllm::Fp8KVCacheDataType::kQ4_0);
     }
   } else
   {

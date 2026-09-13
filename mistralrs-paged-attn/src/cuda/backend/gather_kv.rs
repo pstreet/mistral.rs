@@ -2,6 +2,7 @@
 use crate::cuda::backend::flashinfer::{gather_kv_cache_flashinfer, is_flashinfer_cache};
 use crate::cuda::backend::slice_ptr;
 use crate::cuda::ffi::gather_kv_cache as ffi_gather_kv_cache;
+use crate::BlockQuantKind;
 use candle_core::backend::BackendStorage;
 use candle_core::{DType, Result, Storage, Tensor};
 use float8::F8E4M3;
@@ -29,16 +30,16 @@ fn validate_cache_scales(
             candle_core::bail!("gather_kv_cache requires explicit K/V scales for an f8e4m3 cache")
         }
         (DType::U8, Some(k_scale), Some(v_scale)) => {
-            // Q8_0 block-int8: fp32 per-32 scale sidecars, not scalars.
+            // Block-quantized (Q8_0/Q4_0): fp32 per-32 scale sidecars, not scalars.
             if k_scale.dtype() != DType::F32 || v_scale.dtype() != DType::F32 {
                 candle_core::bail!(
-                    "gather_kv_cache requires f32 K/V scale sidecars for a q8_0 cache"
+                    "gather_kv_cache requires f32 K/V scale sidecars for a block-quantized cache"
                 );
             }
         }
         (DType::U8, _, _) => {
             candle_core::bail!(
-                "gather_kv_cache requires explicit K/V scale sidecars for a q8_0 cache"
+                "gather_kv_cache requires explicit K/V scale sidecars for a block-quantized cache"
             )
         }
         (_, None, None) => {}
@@ -77,6 +78,7 @@ pub fn gather_kv_cache(
     cu_seq_lens: &Tensor, // [batch + 1]
     num_tokens: usize,    // cu_seq_lens[-1]
     out_dtype: DType,
+    quant: Option<BlockQuantKind>,
 ) -> Result<(Tensor, Tensor)> {
     let cache_dtype = key_cache.dtype();
     if value_cache.dtype() != cache_dtype {
@@ -116,13 +118,15 @@ pub fn gather_kv_cache(
         );
     }
 
-    // Extract dimensions from cache shapes
+    // Extract dimensions from cache shapes. Q4_0 packs 2 elems per byte, so
+    // its head_size/x covers twice the head dim of the byte count.
     let k_dims = key_cache.dims5()?;
     let num_kv_heads = k_dims.1;
     let head_size_over_x = k_dims.2;
     let block_size = k_dims.3;
     let x = k_dims.4;
-    let head_size = head_size_over_x * x;
+    let is_q4 = quant == Some(BlockQuantKind::Q4_0);
+    let head_size = head_size_over_x * x * if is_q4 { 2 } else { 1 };
 
     let cu_seq_lens_len = cu_seq_lens.dims1()?;
     let num_seqs = cu_seq_lens_len
@@ -163,9 +167,9 @@ pub fn gather_kv_cache(
         DType::BF16 => 1,
         DType::F32 => 2,
         DType::F8E4M3 => 3,
-        DType::U8 => 4,
+        DType::U8 => quant.map(|q| q.cache_dtype()).unwrap_or(4),
         other => candle_core::bail!(
-            "gather_kv_cache only supports f16, bf16, f32, f8e4m3, q8_0 cache (got {other:?})"
+            "gather_kv_cache only supports f16, bf16, f32, f8e4m3, q8_0, q4_0 cache (got {other:?})"
         ),
     };
 
@@ -182,10 +186,10 @@ pub fn gather_kv_cache(
             _ => candle_core::bail!("value_cache must be a cuda tensor"),
         };
 
-        // Get cache pointers - handle FP8/Q8 vs regular dtype
+        // Get cache pointers - handle FP8/block-quantized vs regular dtype
         let (kc_ptr, _kc_guard) = if cache_dtype_code == 3 {
             slice_ptr(kc_s.as_cuda_slice::<F8E4M3>()?, kc_l.start_offset())
-        } else if cache_dtype_code == 4 {
+        } else if matches!(cache_dtype_code, 4 | 5) {
             slice_ptr(kc_s.as_cuda_slice::<u8>()?, kc_l.start_offset())
         } else {
             match cache_dtype {
@@ -197,7 +201,7 @@ pub fn gather_kv_cache(
         };
         let (vc_ptr, _vc_guard) = if cache_dtype_code == 3 {
             slice_ptr(vc_s.as_cuda_slice::<F8E4M3>()?, vc_l.start_offset())
-        } else if cache_dtype_code == 4 {
+        } else if matches!(cache_dtype_code, 4 | 5) {
             slice_ptr(vc_s.as_cuda_slice::<u8>()?, vc_l.start_offset())
         } else {
             match cache_dtype {

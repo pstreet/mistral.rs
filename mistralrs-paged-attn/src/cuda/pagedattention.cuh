@@ -33,6 +33,7 @@
 #endif
 
 #include "quantization/q8/q8_utils.cuh"
+#include "quantization/q4/q4_utils.cuh"
 
 #include <algorithm>
 
@@ -253,10 +254,11 @@ __device__ void paged_attention_kernel(
       const int token_idx = block_idx * BLOCK_SIZE + physical_block_offset;
       K_vec k_vecs[NUM_VECS_PER_THREAD];
 
-      // Q8_0 scale row base for this token; the address math is loop-invariant
-      // so LICM keeps it in one register, while the scale loads ride L1 across
-      // the vec loop instead of occupying 8 registers per thread.
-      const int64_t q8_scale_base =
+      // Q8_0/Q4_0 scale row base for this token; the address math is
+      // loop-invariant so LICM keeps it in one register, while the scale
+      // loads ride L1 across the vec loop instead of occupying 8 registers
+      // per thread. Both dtypes share the token-major k sidecar layout.
+      const int64_t qk_scale_base =
           (physical_block_number * num_kv_heads + kv_head_idx) * BLOCK_SIZE +
           physical_block_offset;
 
@@ -288,8 +290,48 @@ __device__ void paged_attention_kernel(
             from_float(q8_k_dst[e],
                        vllm::q8::dequantize_q8_0(
                            q8_k_bytes[e],
-                           k_scale[q8_scale_base * Q8_GROUPS +
+                           k_scale[qk_scale_base * Q8_GROUPS +
                                    ((q8_base + e) >> 5)]));
+          }
+        } else if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kQ4_0) {
+          // VEC_SIZE/2 bytes hold this vec's VEC_SIZE elems (lo = even elem,
+          // hi = odd elem, +8 bias). Byte addresses reuse the Q8 byte math
+          // with halved vec granularity; k sidecar stays token-major.
+          // Degenerate VEC_SIZE == 1 (fp32, tiny blocks): one byte, one nibble.
+          const int q4_vec = vec_idx * VEC_SIZE / 2;
+          const int q4_off1 = q4_vec / x;
+          const int q4_off2 = q4_vec % x;
+          scalar_t *q4_k_dst = reinterpret_cast<scalar_t *>(&k_vecs[j]);
+          const int q4_base = vec_idx * VEC_SIZE;
+          if constexpr (VEC_SIZE == 1) {
+            const uint8_t *q4_k_byte = reinterpret_cast<const uint8_t *>(
+                k_ptr + q4_off1 * BLOCK_SIZE * x + q4_off2);
+            const uint8_t nib = (q4_base & 1)
+                                    ? static_cast<uint8_t>((*q4_k_byte >> 4) & 0xFu)
+                                    : static_cast<uint8_t>(*q4_k_byte & 0xFu);
+            from_float(q4_k_dst[0],
+                       vllm::q4::dequantize_q4_0(
+                           nib, k_scale[qk_scale_base * Q8_GROUPS + (q4_base >> 5)]));
+          } else {
+            using Cache_K_vec = typename vllm::Vec<uint8_t, VEC_SIZE / 2>::Type;
+            Cache_K_vec q4_k_packed = *reinterpret_cast<const Cache_K_vec *>(
+                k_ptr + q4_off1 * BLOCK_SIZE * x + q4_off2);
+            const uint8_t *q4_k_nibbles =
+                reinterpret_cast<const uint8_t *>(&q4_k_packed);
+#pragma unroll
+            for (int p = 0; p < VEC_SIZE / 2; ++p) {
+              const uint8_t packed = q4_k_nibbles[p];
+              from_float(q4_k_dst[2 * p],
+                         vllm::q4::dequantize_q4_0(
+                             packed & 0xFu,
+                             k_scale[qk_scale_base * Q8_GROUPS +
+                                     ((q4_base + 2 * p) >> 5)]));
+              from_float(q4_k_dst[2 * p + 1],
+                         vllm::q4::dequantize_q4_0(
+                             (packed >> 4) & 0xFu,
+                             k_scale[qk_scale_base * Q8_GROUPS +
+                                     ((q4_base + 2 * p + 1) >> 5)]));
+            }
           }
         } else {
           using Cache_K_vec = typename vllm::Vec<cache_t, VEC_SIZE>::Type;
@@ -449,6 +491,36 @@ __device__ void paged_attention_kernel(
           for (int e = 0; e < V_VEC_SIZE; ++e) {
             from_float(q8_v_dst[e], vllm::q8::dequantize_q8_0(
                                         q8_v_bytes[e], v_scale[q8_v_base + e]));
+          }
+        } else if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kQ4_0) {
+          static_assert(V_VEC_SIZE % 2 == 0, "Q4_0 needs an even V VEC_SIZE");
+          // Q4 V packs along tokens: 2 slots per byte, so this vec's
+          // V_VEC_SIZE tokens arrive as V_VEC_SIZE/2 contiguous bytes.
+          // physical_block_offset is a multiple of V_VEC_SIZE (hence even).
+          const int q4_v_offset =
+              row_idx * (BLOCK_SIZE / 2) + (physical_block_offset >> 1);
+          using Cache_V_vec =
+              typename vllm::Vec<uint8_t, V_VEC_SIZE / 2>::Type;
+          Cache_V_vec q4_v_packed =
+              *reinterpret_cast<const Cache_V_vec *>(v_ptr + q4_v_offset);
+          const uint8_t *q4_v_nibbles =
+              reinterpret_cast<const uint8_t *>(&q4_v_packed);
+          scalar_t *q4_v_dst = reinterpret_cast<scalar_t *>(&v_vec);
+          // v scales stay per-token (group-major sidecar, shared with Q8_0).
+          const int64_t q4_v_base =
+              ((physical_block_number * num_kv_heads + kv_head_idx) *
+                   Q8_GROUPS +
+               row_idx / 32) *
+                  BLOCK_SIZE +
+              physical_block_offset;
+#pragma unroll
+          for (int e = 0; e < V_VEC_SIZE; ++e) {
+            const uint8_t packed = q4_v_nibbles[e >> 1];
+            const uint8_t nib =
+                (e & 1) ? static_cast<uint8_t>((packed >> 4) & 0xFu)
+                        : static_cast<uint8_t>(packed & 0xFu);
+            from_float(q4_v_dst[e], vllm::q4::dequantize_q4_0(
+                                        nib, v_scale[q4_v_base + e]));
           }
         } else {
           using Cache_V_vec = typename vllm::Vec<cache_t, V_VEC_SIZE>::Type;

@@ -2,7 +2,7 @@ use std::fmt::{self, Display};
 
 use crate::paged_attention::{
     calculate_cache_config, device_memory_cap, CacheMemoryReservations, MemoryGpuConfig,
-    ModelConfigLike, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
+    ModelConfigLike, PagedCacheType, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
 };
 use crate::utils::debug::DeviceRepr;
 use crate::{DeviceLayerMapMetadata, DeviceMapMetadata, MemoryUsage, PagedAttentionConfig};
@@ -163,25 +163,34 @@ fn calculate_key_block_shape(
     model_config: &dyn ModelConfigLike,
     dtype: DType,
     block_size: usize,
+    cache_type: PagedCacheType,
 ) -> (usize, usize, usize, usize) {
     let element_size = dtype.size_in_bytes();
     let x = 16 / element_size;
-    (
-        model_config.num_kv_heads(),
-        model_config.k_head_dim() / x,
-        block_size,
-        x,
-    )
+    // Q4_0 packs 2 elems per byte: 16-byte chunks cover 32 head-dim elems.
+    let chunks = if cache_type == PagedCacheType::Q4_0 {
+        model_config.k_head_dim() / 32
+    } else {
+        model_config.k_head_dim() / x
+    };
+    (model_config.num_kv_heads(), chunks, block_size, x)
 }
 
 fn calculate_value_block_shape(
     model_config: &dyn ModelConfigLike,
     block_size: usize,
+    cache_type: PagedCacheType,
 ) -> (usize, usize, usize) {
+    // Q4_0 packs 2 slots per byte along the block.
+    let block_elems = if cache_type == PagedCacheType::Q4_0 {
+        block_size / 2
+    } else {
+        block_size
+    };
     (
         model_config.num_kv_heads(),
         model_config.v_head_dim(),
-        block_size,
+        block_elems,
     )
 }
 
@@ -318,10 +327,12 @@ pub fn get_device_layers(
                 Some(total_model_size_in_bytes),
                 Some(max_seq_len * max_batch_size),
             )?;
-            let key_shape = calculate_key_block_shape(&*model_cfg, dtype, cache.block_size);
+            let key_shape =
+                calculate_key_block_shape(&*model_cfg, dtype, cache.block_size, cfg.cache_type);
             let key_sz =
                 cache.num_gpu_blocks * key_shape.0 * key_shape.1 * key_shape.2 * key_shape.3;
-            let val_shape = calculate_value_block_shape(&*model_cfg, cache.block_size);
+            let val_shape =
+                calculate_value_block_shape(&*model_cfg, cache.block_size, cfg.cache_type);
             let val_sz = cache.num_gpu_blocks * val_shape.0 * val_shape.1 * val_shape.2;
             key_sz + val_sz
         }

@@ -19,6 +19,9 @@ enum class Fp8KVCacheDataType {
   // sidecars. Shares this enum (and the k_scale/v_scale kernel args, which
   // carry the sidecar bases) to avoid re-templating every launcher.
   kQ8_0 = 3,
+  // Block-int4: nibble payload (2 elems/byte, +8 bias) plus fp32 per-32
+  // scale sidecars, same sidecar scheme as Q8_0. Runtime cache_dtype 5.
+  kQ4_0 = 4,
 };
 
 // fp8 vector types for quantization of kv cache
