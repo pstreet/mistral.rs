@@ -59,4 +59,7 @@ if [ ! -f "$CONFIG" ]; then
     exit 1
 fi
 
+# Model paths in the toml are relative: resolve them from $LOCALAI_ROOT.
+cd "$LOCALAI_ROOT"
+
 exec "$MISTRALRS" from-config -f "$CONFIG"
