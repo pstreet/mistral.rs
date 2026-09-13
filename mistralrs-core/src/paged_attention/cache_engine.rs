@@ -66,6 +66,9 @@ fn uninit_block(
 pub enum PagedCacheType {
     #[default]
     Auto,
+    /// Native BF16 KV (same as `Auto` on BF16 models, but rejects anything
+    /// else instead of silently following the activation dtype).
+    BF16,
     F8E4M3,
     /// Block-int8 KV (llama.cpp Q8_0: int8 + fp16 scale per 32 elems).
     /// Payload dtype is U8; per-block scales ride in sidecar tensors (Phase 1).
@@ -75,6 +78,7 @@ pub enum PagedCacheType {
 impl PagedCacheType {
     pub fn to_dtype(&self, act_dtype: DType) -> DType {
         match self {
+            PagedCacheType::BF16 => DType::BF16,
             PagedCacheType::F8E4M3 => DType::F8E4M3,
             PagedCacheType::Q8_0 => DType::U8,
             PagedCacheType::Auto => act_dtype,
@@ -90,6 +94,15 @@ impl PagedCacheType {
     ) -> std::result::Result<(), String> {
         if *self == Self::Auto {
             return Ok(());
+        }
+        if *self == Self::BF16 {
+            return if act_dtype == DType::BF16 {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Explicit BF16 KV cache requires bf16 activations, got {act_dtype:?} (use `auto` for native dtype)"
+                ))
+            };
         }
         if !matches!(act_dtype, DType::F16 | DType::BF16 | DType::F32) {
             return Err(format!(
@@ -152,10 +165,11 @@ impl FromStr for PagedCacheType {
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "auto" => Ok(Self::Auto),
+            "bf16" => Ok(Self::BF16),
             "f8e4m3" => Ok(Self::F8E4M3),
             "q8_0" => Ok(Self::Q8_0),
             other => Err(format!(
-                "Unexpected `PagedCacheType`, got `{other}` but expected `auto`, `f8e4m3`, and `q8_0`."
+                "Unexpected `PagedCacheType`, got `{other}` but expected `auto`, `bf16`, `f8e4m3`, and `q8_0`."
             )),
         }
     }
