@@ -34,8 +34,10 @@
 
 #include "quantization/q8/q8_utils.cuh"
 #include "quantization/q4/q4_utils.cuh"
+#include "quantization/block/block_dequant_vec.cuh"
 
 #include <algorithm>
+#include <type_traits>
 
 // Must be a constant expression (used in constexpr math). RDNA targets are
 // wave32; HIP's warpSize variable is not a constant expression.
@@ -285,13 +287,34 @@ __device__ void paged_attention_kernel(
           // the old walking compare diverged across threads and chained the
           // unrolled iterations through a loop-carried dependency.
           const int q8_base = vec_idx * VEC_SIZE;
+#if defined(USE_ROCM)
+          if constexpr (VEC_SIZE == 4 && vllm::bq::kUseVecDequant<scalar_t>) {
+            // 4-wide: int8 -> float vector, splat/blend scales, packed
+            // float -> bf16 convert. Same values as the scalar loop.
+            vllm::bq::bqv_i8x4 qb;
+            __builtin_memcpy(&qb, q8_k_bytes, 4);
+            vllm::bq::bqv_f32x4 qf = __builtin_convertvector(
+                __builtin_convertvector(qb, vllm::bq::bqv_i32x4),
+                vllm::bq::bqv_f32x4);
+            const float *q8_row = k_scale + qk_scale_base * Q8_GROUPS;
+            vllm::bq::bqv_f32x4 sc = {
+                q8_row[(q8_base + 0) >> 5],
+                q8_row[(q8_base + 1) >> 5],
+                q8_row[(q8_base + 2) >> 5],
+                q8_row[(q8_base + 3) >> 5],
+            };
+            vllm::bq::pack_f32x4_to_bf16(q8_k_dst, qf * sc);
+          } else
+#endif
+          {
 #pragma unroll
-          for (int e = 0; e < VEC_SIZE; ++e) {
-            from_float(q8_k_dst[e],
-                       vllm::q8::dequantize_q8_0(
-                           q8_k_bytes[e],
-                           k_scale[qk_scale_base * Q8_GROUPS +
-                                   ((q8_base + e) >> 5)]));
+            for (int e = 0; e < VEC_SIZE; ++e) {
+              from_float(q8_k_dst[e],
+                         vllm::q8::dequantize_q8_0(
+                             q8_k_bytes[e],
+                             k_scale[qk_scale_base * Q8_GROUPS +
+                                     ((q8_base + e) >> 5)]));
+            }
           }
         } else if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kQ4_0) {
           // VEC_SIZE/2 bytes hold this vec's VEC_SIZE elems (lo = even elem,
@@ -303,6 +326,33 @@ __device__ void paged_attention_kernel(
           const int q4_off2 = q4_vec % x;
           scalar_t *q4_k_dst = reinterpret_cast<scalar_t *>(&k_vecs[j]);
           const int q4_base = vec_idx * VEC_SIZE;
+#if defined(USE_ROCM)
+          if constexpr (VEC_SIZE == 4 && vllm::bq::kUseVecDequant<scalar_t>) {
+            // 4-wide: 2 bytes -> 4 nibbles -> int/float vectors, indexed
+            // scales, packed float -> bf16 convert. Same values as scalar.
+            using Cache_K_vec = typename vllm::Vec<uint8_t, 2>::Type;
+            Cache_K_vec q4_k_packed = *reinterpret_cast<const Cache_K_vec *>(
+                k_ptr + q4_off1 * BLOCK_SIZE * x + q4_off2);
+            const uint8_t *q4_nb =
+                reinterpret_cast<const uint8_t *>(&q4_k_packed);
+            vllm::bq::bqv_i32x4 qi = {
+                static_cast<int>(q4_nb[0] & 0xFu) - 8,
+                static_cast<int>((q4_nb[0] >> 4) & 0xFu) - 8,
+                static_cast<int>(q4_nb[1] & 0xFu) - 8,
+                static_cast<int>((q4_nb[1] >> 4) & 0xFu) - 8,
+            };
+            vllm::bq::bqv_f32x4 qf =
+                __builtin_convertvector(qi, vllm::bq::bqv_f32x4);
+            const float *q4_row = k_scale + qk_scale_base * Q8_GROUPS;
+            vllm::bq::bqv_f32x4 sc = {
+                q4_row[(q4_base + 0) >> 5],
+                q4_row[(q4_base + 1) >> 5],
+                q4_row[(q4_base + 2) >> 5],
+                q4_row[(q4_base + 3) >> 5],
+            };
+            vllm::bq::pack_f32x4_to_bf16(q4_k_dst, qf * sc);
+          } else
+#endif
           if constexpr (VEC_SIZE == 1) {
             const uint8_t *q4_k_byte = reinterpret_cast<const uint8_t *>(
                 k_ptr + q4_off1 * BLOCK_SIZE * x + q4_off2);
@@ -487,10 +537,28 @@ __device__ void paged_attention_kernel(
                row_idx / 32) *
                   BLOCK_SIZE +
               physical_block_offset;
+#if defined(USE_ROCM)
+          if constexpr (V_VEC_SIZE % 4 == 0 && vllm::bq::kUseVecDequant<scalar_t>) {
+            // 4-wide chunks: int8 -> float vector, contiguous scale vector,
+            // packed float -> bf16 convert. Same values as the scalar loop.
+            for (int c = 0; c < V_VEC_SIZE; c += 4) {
+              vllm::bq::bqv_i8x4 qb;
+              __builtin_memcpy(&qb, q8_v_bytes + c, 4);
+              vllm::bq::bqv_f32x4 qf = __builtin_convertvector(
+                  __builtin_convertvector(qb, vllm::bq::bqv_i32x4),
+                  vllm::bq::bqv_f32x4);
+              vllm::bq::bqv_f32x4 sc;
+              __builtin_memcpy(&sc, v_scale + q8_v_base + c, 16);
+              vllm::bq::pack_f32x4_to_bf16(q8_v_dst + c, qf * sc);
+            }
+          } else
+#endif
+          {
 #pragma unroll
-          for (int e = 0; e < V_VEC_SIZE; ++e) {
-            from_float(q8_v_dst[e], vllm::q8::dequantize_q8_0(
-                                        q8_v_bytes[e], v_scale[q8_v_base + e]));
+            for (int e = 0; e < V_VEC_SIZE; ++e) {
+              from_float(q8_v_dst[e], vllm::q8::dequantize_q8_0(
+                                          q8_v_bytes[e], v_scale[q8_v_base + e]));
+            }
           }
         } else if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kQ4_0) {
           static_assert(V_VEC_SIZE % 2 == 0, "Q4_0 needs an even V VEC_SIZE");
@@ -513,14 +581,36 @@ __device__ void paged_attention_kernel(
                row_idx / 32) *
                   BLOCK_SIZE +
               physical_block_offset;
+#if defined(USE_ROCM)
+          if constexpr (V_VEC_SIZE % 4 == 0 && vllm::bq::kUseVecDequant<scalar_t>) {
+            // 4-wide chunks: 2 nibble bytes -> 4 ints -> float vector,
+            // contiguous scale vector, packed convert. Same values as scalar.
+            for (int c = 0; c < V_VEC_SIZE; c += 4) {
+              const uint8_t *nb = q4_v_nibbles + c / 2;
+              vllm::bq::bqv_i32x4 qi = {
+                  static_cast<int>(nb[0] & 0xFu) - 8,
+                  static_cast<int>((nb[0] >> 4) & 0xFu) - 8,
+                  static_cast<int>(nb[1] & 0xFu) - 8,
+                  static_cast<int>((nb[1] >> 4) & 0xFu) - 8,
+              };
+              vllm::bq::bqv_f32x4 qf =
+                  __builtin_convertvector(qi, vllm::bq::bqv_f32x4);
+              vllm::bq::bqv_f32x4 sc;
+              __builtin_memcpy(&sc, v_scale + q4_v_base + c, 16);
+              vllm::bq::pack_f32x4_to_bf16(q4_v_dst + c, qf * sc);
+            }
+          } else
+#endif
+          {
 #pragma unroll
-          for (int e = 0; e < V_VEC_SIZE; ++e) {
-            const uint8_t packed = q4_v_nibbles[e >> 1];
-            const uint8_t nib =
-                (e & 1) ? static_cast<uint8_t>((packed >> 4) & 0xFu)
-                        : static_cast<uint8_t>(packed & 0xFu);
-            from_float(q4_v_dst[e], vllm::q4::dequantize_q4_0(
-                                        nib, v_scale[q4_v_base + e]));
+            for (int e = 0; e < V_VEC_SIZE; ++e) {
+              const uint8_t packed = q4_v_nibbles[e >> 1];
+              const uint8_t nib =
+                  (e & 1) ? static_cast<uint8_t>((packed >> 4) & 0xFu)
+                          : static_cast<uint8_t>(packed & 0xFu);
+              from_float(q4_v_dst[e], vllm::q4::dequantize_q4_0(
+                                          nib, v_scale[q4_v_base + e]));
+            }
           }
         } else {
           using Cache_V_vec = typename vllm::Vec<cache_t, V_VEC_SIZE>::Type;

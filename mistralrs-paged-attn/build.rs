@@ -298,6 +298,7 @@ fn build_rocm() -> Result<()> {
         "src/cuda/quantization/fp8/amd/quant_utils.cuh",
         "src/cuda/quantization/q8/q8_utils.cuh",
         "src/cuda/quantization/q4/q4_utils.cuh",
+        "src/cuda/quantization/block/block_dequant_vec.cuh",
     ] {
         println!("cargo:rerun-if-changed={header}");
     }
