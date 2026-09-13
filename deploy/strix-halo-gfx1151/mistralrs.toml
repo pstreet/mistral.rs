@@ -1,0 +1,177 @@
+# mistralrs.toml - mistral.rs config mirroring models.ini
+#
+# Loaded by: mistralrs from-config -f <this file> (see ~/.config/mistralrs-server-wrapper.sh)
+#
+# Differences vs models.ini:
+#   - mistral.rs loads EVERY [[models]] entry at boot (no lazy/LRU loading like
+#     llama-server's --models-max). All 12 models are ~276 GB, so only one is
+#     active below; the rest are commented out and ready to enable.
+#   - There is no per-model "alias". The API-visible model id is the model path
+#     (model_id). With one active model, clients just use model="default".
+#   - Sampling knobs from models.ini (top-k, top-p, temp, repeat/presence
+#     penalty) are per-request in the OpenAI API, not set here.
+#   - spec-type = draft-mtp is a global runtime flag in mistral.rs, not per-model.
+
+command = "serve"
+# Single active model -> clients address it as "default".
+default_model_id = "/home/pstreet/LocalAI/models/orcarouter/Qwen3.8-27B-Uncensored-GGUF"
+
+[server]
+host = "127.0.0.1"
+port = 1235
+no_ui = true
+
+[paged_attn]
+# Q8_0 block-int8 KV (native read path 2026-09-09): 2x blocks vs BF16,
+# validated vs BF16 (identical short outputs, coherent long and
+# partition-crossing decode, -5 to -9% decode T/s). FP8 uncalibrated tested
+# earlier: 2x capacity but -28% prefill, NaN risk (E4M3 clips at 448).
+# Backup of the BF16 line: mistralrs.toml.bak.bf16.
+cache_type = "Q8_0"
+# 250k ctx (mistralrs priority, 2026-09-07; Q8_0 2026-09-09): 16384MB Q8_0
+# -> 8192 blocks = full 262144 model context (BF16 gave 246688 tokens).
+# GTT free ~86GB; weights 22GB + reserve 2.5GB + KV 16GB + graphs
+# ~1.5GB fits. Llama-server loads on demand alongside.
+#memory_mb = 16384
+
+[runtime]
+# Match llama-server's --no-warmup behavior: no prefix caching for this setup.
+#prefix_cache_n = 0
+# Decode test 2026-09-07: MTP n=3 stable (+19%). Q4 wall test done, restored.
+# MTP sweep 2026-09-11, essay 1500tok temp0.3 (short ctx goodput T/s):
+# n=1 10.58, n=2 11.10 (LOCKED), n=3 10.50, n=5 8.27,
+# off+graphs 9.12, off+nographs 8.91 (graphs +2.4%, keep on).
+# 47k ctx: n=2 5.29 > n=3 4.75 > off 4.50. greedy == auto (sampling
+# not the constraint; draft-head quality is).
+# A/B recheck 2026-09-11 (machine, /v1/completions 1500tok temp0.3,
+# avg_compl_tok_per_sec; harness /tmp/opencode/mtp_bench.py):
+# n=1 10.18/10.29, n=2 10.53/10.58/11.05 (best 11.05), n=3 10.47/10.52,
+# n=5 8.11. Confirms narrow 1-2 plateau; n=3 does NOT beat n=2 (within
+# noise, never above). Run-to-run var ~+/-0.3 (thermal). Keep n=2.
+mtp = true
+mtp_n_predict = 2
+mtp_draft_sampling = "greedy"
+# Larger prefill chunk: long prompts run as fewer, bigger F16 GEMMs, which cuts
+# per-chunk weight dequant and lifts cold prefill to ~295 tok/s (validated on
+# gfx1151). Capped at the 4096 batch-token budget; lower this if concurrent
+# prefill latency matters more than single-prompt throughput.
+max_prefill_chunk_tokens = 4096
+# Prefill batch token quantum: larger chunks amortize per-chunk overhead for long prompts.
+
+# ============================================================
+# Qwen3.8 27B (ACTIVE, restored after Q4 test)
+# ============================================================
+
+[[models]]
+model_id = "/home/pstreet/LocalAI/models/orcarouter/Qwen3.8-27B-Uncensored-GGUF"
+
+[models.format]
+quantized_file = "Qwen3.8-27B-Uncensored-Q6_K.gguf"
+mmproj = "mmproj-Qwen3.8-27B-Uncensored-f16.gguf"
+tok_model_id = "Qwen/Qwen3.8-27B"
+
+# ============================================================
+# Q4 TEST 2026-09-07: Qwen3.6-27B Q4_K_XL done (11.14 tok/s vs 9.93 Q6)
+# ============================================================
+
+# [[models]]
+# model_id = "/home/pstreet/LocalAI/models/unsloth/Qwen3.6-27B-MTP-GGUF"
+#
+# [models.format]
+# quantized_file = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+
+# ============================================================
+# Qwen3.6 MTP family (text-only; MTP head needs the global [runtime] mtp flag)
+# ============================================================
+#
+# [[models]]
+# model_id = "/home/pstreet/LocalAI/models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
+#
+# [models.format]
+# quantized_file = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
+#
+# [[models]]
+# model_id = "/home/pstreet/LocalAI/models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
+#
+# [models.format]
+# quantized_file = "Qwen3.6-35B-A3B-Q8_0.gguf"
+#
+# [[models]]
+# model_id = "/home/pstreet/LocalAI/models/unsloth/Qwen3.6-27B-MTP-GGUF"
+#
+# [models.format]
+# quantized_file = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+
+# ============================================================
+# Qwen3.6 27B finetune (DavidAU, vision)
+# ============================================================
+#
+# [[models]]
+# model_id = "/home/pstreet/LocalAI/models/DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF"
+#
+# [models.format]
+# quantized_file = "Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-AMD-MTP-Q6_K.gguf"
+# mmproj = "mmproj-F16.gguf"
+
+# ============================================================
+# Qwen3.8 27B (unsloth, vision)
+# ============================================================
+#
+# [[models]]
+# model_id = "/home/pstreet/LocalAI/models/unsloth/Qwen3.8-27B-GGUF"
+#
+# [models.format]
+# quantized_file = "Qwen3.8-27B-UD-Q6_K_XL.gguf"
+# mmproj = "mmproj-BF16.gguf"
+# tok_model_id = "Qwen/Qwen3.8-27B"
+
+# ============================================================
+# Muse Glimmer 30B (vision; needs tok_model_id for GGUF)
+# ============================================================
+#
+# [[models]]
+# model_id = "/home/pstreet/LocalAI/models/unsloth/Muse-Glimmer-30B-GGUF"
+#
+# [models.format]
+# quantized_file = "Muse-Glimmer-30B-UD-Q6_K_XL.gguf"
+# mmproj = "mmproj-Muse-Glimmer-30B-Q8_0.gguf"
+# tok_model_id = "meta-models/Muse-Glimmer-30B"
+
+# ============================================================
+# Large coder / general
+# ============================================================
+#
+# [[models]]
+# model_id = "/home/pstreet/LocalAI/models/unsloth/Qwen3-Coder-Next-GGUF"
+#
+# [models.format]
+# quantized_file = "Qwen3-Coder-Next-MXFP4_MOE.gguf"
+#
+# [[models]]
+# model_id = "/home/pstreet/LocalAI/models/unsloth/gemma-4-26B-A4B-it-GGUF"
+#
+# [models.format]
+# quantized_file = "gemma-4-26B-A4B-it-UD-Q6_K_XL.gguf"
+# mmproj = "mmproj-F16.gguf"
+#
+# [[models]]
+# model_id = "/home/pstreet/LocalAI/models/mradermacher/Llama-3.2-30B-A3B-II-Dark-Champion-INSTRUCT-Heretic-Abliterated-Uncensored-GGUF"
+#
+# [models.format]
+# quantized_file = "Llama3.2-30B-A3B-II-Dark-Champion-INSTRUCT-Heretic-Abliterated-Uncensored.Q6_K.gguf"
+
+# ============================================================
+# Small / fast
+# ============================================================
+#
+# [[models]]
+# model_id = "/home/pstreet/LocalAI/models/unsloth/Qwen3.5-4B-MTP-GGUF"
+#
+# [models.format]
+# quantized_file = "Qwen3.5-4B-Q8_0.gguf"
+#
+# [[models]]
+# model_id = "/home/pstreet/LocalAI/models/unsloth/Qwen3-16B-A3B-GGUF"
+#
+# [models.format]
+# quantized_file = "Qwen3-16B-A3B-Q4_K_M.gguf"

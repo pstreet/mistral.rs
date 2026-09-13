@@ -1,0 +1,22 @@
+[Unit]
+Description=mistral.rs Server (Strix Halo gfx1151)
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+WorkingDirectory=%h/LocalAI
+ExecStart=%h/.config/mistralrs-server-wrapper.sh
+LimitMEMLOCK=infinity
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=300
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,6 @@
+[Unit]
+Description=Check mistralrs-server liveness, restart if wedged
+
+[Service]
+Type=oneshot
+ExecStart=%h/.config/mistralrs-server-healthcheck.sh
