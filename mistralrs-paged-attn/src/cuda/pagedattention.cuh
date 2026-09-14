@@ -255,6 +255,12 @@ __device__ void paged_attention_kernel(
           (thread_group_idx + i * WARP_SIZE) % BLOCK_SIZE;
       const int token_idx = block_idx * BLOCK_SIZE + physical_block_offset;
       K_vec k_vecs[NUM_VECS_PER_THREAD];
+#if defined(USE_ROCM)
+      constexpr bool kQ4KStream = kv_dt == Fp8KVCacheDataType::kQ4_0 &&
+                                  VEC_SIZE == 8 &&
+                                  bq::kUseVecDequant<scalar_t>;
+      typename FloatVec<K_vec>::Type qk_acc;
+#endif
 
       // Q8_0/Q4_0 scale row base for this token; the address math is
       // loop-invariant so LICM keeps it in one register, while the scale
@@ -327,7 +333,35 @@ __device__ void paged_attention_kernel(
           scalar_t *q4_k_dst = reinterpret_cast<scalar_t *>(&k_vecs[j]);
           const int q4_base = vec_idx * VEC_SIZE;
 #if defined(USE_ROCM)
-          if constexpr (VEC_SIZE == 4 && vllm::bq::kUseVecDequant<scalar_t>) {
+          if constexpr (kQ4KStream) {
+            using Cache_K_vec = typename vllm::Vec<uint8_t, VEC_SIZE / 2>::Type;
+            Cache_K_vec q4_k_packed = *reinterpret_cast<const Cache_K_vec *>(
+                k_ptr + q4_off1 * BLOCK_SIZE * x + q4_off2);
+            const uint8_t *q4_k_nibbles =
+                reinterpret_cast<const uint8_t *>(&q4_k_packed);
+            K_vec k_cur;
+            scalar_t *k_dst = reinterpret_cast<scalar_t *>(&k_cur);
+#pragma unroll
+            for (int p = 0; p < VEC_SIZE / 2; ++p) {
+              const uint8_t packed = q4_k_nibbles[p];
+              from_float(k_dst[2 * p],
+                         vllm::q4::dequantize_q4_0(
+                             packed & 0xFu,
+                             k_scale[qk_scale_base * Q8_GROUPS +
+                                     ((q4_base + 2 * p) >> 5)]));
+              from_float(k_dst[2 * p + 1],
+                         vllm::q4::dequantize_q4_0(
+                             (packed >> 4) & 0xFu,
+                             k_scale[qk_scale_base * Q8_GROUPS +
+                                     ((q4_base + 2 * p + 1) >> 5)]));
+            }
+            if (j == 0) {
+              qk_acc = mul<typename FloatVec<K_vec>::Type, K_vec, K_vec>(
+                  q_vecs[thread_group_offset][j], k_cur);
+            } else {
+              qk_acc = fma(q_vecs[thread_group_offset][j], k_cur, qk_acc);
+            }
+          } else if constexpr (VEC_SIZE == 4 && vllm::bq::kUseVecDequant<scalar_t>) {
             // 4-wide: 2 bytes -> 4 nibbles -> int/float vectors, indexed
             // scales, packed float -> bf16 convert. Same values as scalar.
             using Cache_K_vec = typename vllm::Vec<uint8_t, 2>::Type;
@@ -395,8 +429,19 @@ __device__ void paged_attention_kernel(
 
       // Compute dot product.
       // This includes a reduction across the threads in the same thread group.
-      float qk = scale * Qk_dot<scalar_t, THREAD_GROUP_SIZE>::dot(
-                             q_vecs[thread_group_offset], k_vecs);
+      float qk;
+#if defined(USE_ROCM)
+      if constexpr (kQ4KStream) {
+        float qk_sum = sum(qk_acc);
+#pragma unroll
+        for (int mask = THREAD_GROUP_SIZE / 2; mask >= 1; mask /= 2) {
+          qk_sum += VLLM_SHFL_XOR_SYNC(qk_sum, mask);
+        }
+        qk = scale * qk_sum;
+      } else
+#endif
+        qk = scale * Qk_dot<scalar_t, THREAD_GROUP_SIZE>::dot(
+            q_vecs[thread_group_offset], k_vecs);
 
       // Apply softcapping
       if (softcapping != 1.0) {
