@@ -13,6 +13,7 @@
 
 #include "quantization/q8/q8_utils.cuh"
 #include "quantization/q4/q4_utils.cuh"
+#include "quantization/wht.cuh"
 
 #include <algorithm>
 #include <cassert>
@@ -265,20 +266,60 @@ __global__ void reshape_and_cache_q4_kernel(
     }
   };
   // Phase 1: per-32 amax per tensor, identical to Q8_0.
+  // Q4 K incoherence: rotate post-RoPE K by a fixed signed Hadamard before
+  // amax/quant so outliers spread (TurboQuant-style, minus QJL). V stays
+  // plain RTN. The query side applies the same rotation (pagedattention.cuh)
+  // so the dot is exact; gather inverse-rotates. Active only for bf16/256
+  // (must match the decode-side gate); otherwise K stages through unrotated.
+  __shared__ float wht_k[256];
+  constexpr bool kDoWht =
+      std::is_same<scalar_t, __nv_bfloat16>::value;
+  for (int d = threadIdx.x; d < head_size && d < 256; d += blockDim.x) {
+    wht_k[d] = to_float(key[key_base + d]);
+  }
+  __syncthreads();
+  const bool do_wht = kDoWht && vllm::wht::wht_supported(head_size);
+  if (do_wht) {
+    for (int d = threadIdx.x; d < 256; d += blockDim.x) {
+      wht_k[d] *= vllm::wht::wht_sign(head_idx, d);
+    }
+    __syncthreads();
+    vllm::wht::wht_inplace(wht_k, 256);
+  }
+  // Q4 V incoherence: same signed-Hadamard rotation along head-dim (per
+  // token, always available). V packing/scales along slots are unchanged;
+  // only the quantized values rotate. Decode un-rotates once on the output
+  // vector (pagedattention.cuh); gather inverse-rotates (prefill path).
+  __shared__ float wht_v[256];
+  for (int d = threadIdx.x; d < head_size && d < 256; d += blockDim.x) {
+    wht_v[d] = to_float(value[value_base + d]);
+  }
+  __syncthreads();
+  if (do_wht) {
+    for (int d = threadIdx.x; d < 256; d += blockDim.x) {
+      wht_v[d] *= vllm::wht::wht_sign(head_idx, d);
+    }
+    __syncthreads();
+    vllm::wht::wht_inplace(wht_v, 256);
+  }
   for (int d = threadIdx.x; d < head_size; d += blockDim.x) {
-    float a = to_float(key[key_base + d]);
+    float a = do_wht ? wht_k[d] : to_float(key[key_base + d]);
     a = a >= 0.f ? a : -a;
     atomicMax(reinterpret_cast<unsigned int *>(&sh_kmax[d / 32]),
               __float_as_uint(a));
-    float b = to_float(value[value_base + d]);
+    float b = do_wht ? wht_v[d] : to_float(value[value_base + d]);
     b = b >= 0.f ? b : -b;
     atomicMax(reinterpret_cast<unsigned int *>(&sh_vmax[d / 32]),
               __float_as_uint(b));
   }
   __syncthreads();
   if (threadIdx.x < G) {
-    float dk = sh_kmax[threadIdx.x] / vllm::q4::kQ4MaxQ;
-    float dv = sh_vmax[threadIdx.x] / vllm::q4::kQ4MaxQ;
+    // LM codebook (WHT path) keeps d = amax so y = x/d = x/amax matches the
+    // grid's fit distribution; plain Q4_0 keeps d = amax/7.
+    float dk = do_wht ? sh_kmax[threadIdx.x]
+                      : sh_kmax[threadIdx.x] / vllm::q4::kQ4MaxQ;
+    float dv = do_wht ? sh_vmax[threadIdx.x]
+                      : sh_vmax[threadIdx.x] / vllm::q4::kQ4MaxQ;
     const int64_t scale_idx =
         ((block_idx * num_heads + head_idx) * block_size + block_offset) * G +
         threadIdx.x;
@@ -302,28 +343,32 @@ __global__ void reshape_and_cache_q4_kernel(
         block_offset;
     float dk = k_scales[scale_idx];
     float dv = v_scales[v_scale_idx];
-    float fk0 = to_float(key[key_base + dd]);
-    float fk1 = to_float(key[key_base + dd + 1]);
-    float fv0 = to_float(value[value_base + dd]);
-    float fv1 = to_float(value[value_base + dd + 1]);
+    float fk0 = do_wht ? wht_k[dd] : to_float(key[key_base + dd]);
+    float fk1 = do_wht ? wht_k[dd + 1] : to_float(key[key_base + dd + 1]);
+    float fv0 = do_wht ? wht_v[dd] : to_float(value[value_base + dd]);
+    float fv1 = do_wht ? wht_v[dd + 1] : to_float(value[value_base + dd + 1]);
     float idk = 1.f / dk;
     float idv = 1.f / dv;
-    float qk0 = fk0 * idk;
-    float qk1 = fk1 * idk;
-    float qv0 = fv0 * idv;
-    float qv1 = fv1 * idv;
-    qk0 = qk0 > 7.f ? 7.f : (qk0 < -8.f ? -8.f : qk0);
-    qk1 = qk1 > 7.f ? 7.f : (qk1 < -8.f ? -8.f : qk1);
-    qv0 = qv0 > 7.f ? 7.f : (qv0 < -8.f ? -8.f : qv0);
-    qv1 = qv1 > 7.f ? 7.f : (qv1 < -8.f ? -8.f : qv1);
-    uint8_t nk0 =
-        static_cast<uint8_t>((qk0 >= 0.f ? qk0 + 0.5f : qk0 - 0.5f) + 8.f);
-    uint8_t nk1 =
-        static_cast<uint8_t>((qk1 >= 0.f ? qk1 + 0.5f : qk1 - 0.5f) + 8.f);
-    uint8_t nv0 =
-        static_cast<uint8_t>((qv0 >= 0.f ? qv0 + 0.5f : qv0 - 0.5f) + 8.f);
-    uint8_t nv1 =
-        static_cast<uint8_t>((qv1 >= 0.f ? qv1 + 0.5f : qv1 - 0.5f) + 8.f);
+    float yk0 = fk0 * idk;
+    float yk1 = fk1 * idk;
+    float yv0 = fv0 * idv;
+    float yv1 = fv1 * idv;
+    uint8_t nk0, nk1, nv0, nv1;
+    if (do_wht) {
+      nk0 = vllm::q4::nearest_level_q4_lm(yk0);
+      nk1 = vllm::q4::nearest_level_q4_lm(yk1);
+      nv0 = vllm::q4::nearest_level_q4_lm(yv0);
+      nv1 = vllm::q4::nearest_level_q4_lm(yv1);
+    } else {
+      yk0 = yk0 > 7.f ? 7.f : (yk0 < -8.f ? -8.f : yk0);
+      yk1 = yk1 > 7.f ? 7.f : (yk1 < -8.f ? -8.f : yk1);
+      yv0 = yv0 > 7.f ? 7.f : (yv0 < -8.f ? -8.f : yv0);
+      yv1 = yv1 > 7.f ? 7.f : (yv1 < -8.f ? -8.f : yv1);
+      nk0 = static_cast<uint8_t>((yk0 >= 0.f ? yk0 + 0.5f : yk0 - 0.5f) + 8.f);
+      nk1 = static_cast<uint8_t>((yk1 >= 0.f ? yk1 + 0.5f : yk1 - 0.5f) + 8.f);
+      nv0 = static_cast<uint8_t>((yv0 >= 0.f ? yv0 + 0.5f : yv0 - 0.5f) + 8.f);
+      nv1 = static_cast<uint8_t>((yv1 >= 0.f ? yv1 + 0.5f : yv1 - 0.5f) + 8.f);
+    }
 
     // K: 16-byte chunks hold 32 elems; byte (dd/32 chunk, (dd%32)/2).
     const int64_t tgt_key_idx =

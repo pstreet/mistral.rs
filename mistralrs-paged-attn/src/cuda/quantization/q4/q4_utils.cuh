@@ -7,6 +7,8 @@
 
 #include <cstdint>
 
+#include "q4_codebook.cuh"
+
 namespace vllm {
 namespace q4 {
 

@@ -34,6 +34,7 @@
 
 #include "quantization/q8/q8_utils.cuh"
 #include "quantization/q4/q4_utils.cuh"
+#include "quantization/wht.cuh"
 #include "quantization/block/block_dequant_vec.cuh"
 
 #include <algorithm>
@@ -213,6 +214,31 @@ __device__ void paged_attention_kernel(
   __syncthreads(); // TODO(naed90): possible speedup if this is replaced with a
                    // memory wall right before we use q_vecs
 
+  // Q4_0 Lloyd-Max codebook gate: the LM grid is only valid on WHT-rotated
+  // (Gaussian) data, so it tracks the rotation gate (bf16/256) exactly.
+  constexpr bool kLmQ4 = HEAD_SIZE == 256 &&
+                         std::is_same<scalar_t, __nv_bfloat16>::value;
+
+  // Q4_0 K incoherence: the cache holds signed-Hadamard-rotated K (see
+  // reshape_and_cache). Rotate the staged query identically so Q'.K' = Q.K;
+  // the dot below needs no inverse. Q8/FP8/BF16 K is unrotated: skip. Gate
+  // must match the store side (bf16/256); other instantiations keep identity.
+  if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kQ4_0 && kLmQ4) {
+    __shared__ float wht_q[256];
+    scalar_t *qflat = reinterpret_cast<scalar_t *>(q_vecs);
+    for (int d = thread_idx; d < 256; d += NUM_THREADS) {
+      // Gate above pins scalar_t to bf16; direct conversion, no branches.
+      wht_q[d] =
+          __bfloat162float(qflat[d]) * vllm::wht::wht_sign(kv_head_idx, d);
+    }
+    __syncthreads();
+    vllm::wht::wht_inplace(wht_q, 256);
+    for (int d = thread_idx; d < 256; d += NUM_THREADS) {
+      from_float(qflat[d], wht_q[d]);
+    }
+    __syncthreads();
+  }
+
   // Memory planning.
   extern __shared__ char shared_mem[];
   // NOTE(woosuk): We use FP32 for the softmax logits for better accuracy.
@@ -345,12 +371,12 @@ __device__ void paged_attention_kernel(
             for (int p = 0; p < VEC_SIZE / 2; ++p) {
               const uint8_t packed = q4_k_nibbles[p];
               from_float(k_dst[2 * p],
-                         vllm::q4::dequantize_q4_0(
+                         vllm::q4::dequantize_q4<kLmQ4>(
                              packed & 0xFu,
                              k_scale[qk_scale_base * Q8_GROUPS +
                                      ((q4_base + 2 * p) >> 5)]));
               from_float(k_dst[2 * p + 1],
-                         vllm::q4::dequantize_q4_0(
+                         vllm::q4::dequantize_q4<kLmQ4>(
                              (packed >> 4) & 0xFu,
                              k_scale[qk_scale_base * Q8_GROUPS +
                                      ((q4_base + 2 * p + 1) >> 5)]));
@@ -369,14 +395,21 @@ __device__ void paged_attention_kernel(
                 k_ptr + q4_off1 * BLOCK_SIZE * x + q4_off2);
             const uint8_t *q4_nb =
                 reinterpret_cast<const uint8_t *>(&q4_k_packed);
-            vllm::bq::bqv_i32x4 qi = {
-                static_cast<int>(q4_nb[0] & 0xFu) - 8,
-                static_cast<int>((q4_nb[0] >> 4) & 0xFu) - 8,
-                static_cast<int>(q4_nb[1] & 0xFu) - 8,
-                static_cast<int>((q4_nb[1] >> 4) & 0xFu) - 8,
-            };
-            vllm::bq::bqv_f32x4 qf =
-                __builtin_convertvector(qi, vllm::bq::bqv_f32x4);
+            vllm::bq::bqv_f32x4 qf;
+            if constexpr (kLmQ4) {
+              qf = {vllm::q4::kQ4LmLevels[q4_nb[0] & 0xFu],
+                    vllm::q4::kQ4LmLevels[(q4_nb[0] >> 4) & 0xFu],
+                    vllm::q4::kQ4LmLevels[q4_nb[1] & 0xFu],
+                    vllm::q4::kQ4LmLevels[(q4_nb[1] >> 4) & 0xFu]};
+            } else {
+              vllm::bq::bqv_i32x4 qi = {
+                  static_cast<int>(q4_nb[0] & 0xFu) - 8,
+                  static_cast<int>((q4_nb[0] >> 4) & 0xFu) - 8,
+                  static_cast<int>(q4_nb[1] & 0xFu) - 8,
+                  static_cast<int>((q4_nb[1] >> 4) & 0xFu) - 8,
+              };
+              qf = __builtin_convertvector(qi, vllm::bq::bqv_f32x4);
+            }
             const float *q4_row = k_scale + qk_scale_base * Q8_GROUPS;
             vllm::bq::bqv_f32x4 sc = {
                 q4_row[(q4_base + 0) >> 5],
@@ -394,7 +427,7 @@ __device__ void paged_attention_kernel(
                                     ? static_cast<uint8_t>((*q4_k_byte >> 4) & 0xFu)
                                     : static_cast<uint8_t>(*q4_k_byte & 0xFu);
             from_float(q4_k_dst[0],
-                       vllm::q4::dequantize_q4_0(
+                       vllm::q4::dequantize_q4<kLmQ4>(
                            nib, k_scale[qk_scale_base * Q8_GROUPS + (q4_base >> 5)]));
           } else {
             using Cache_K_vec = typename vllm::Vec<uint8_t, VEC_SIZE / 2>::Type;
@@ -406,12 +439,12 @@ __device__ void paged_attention_kernel(
             for (int p = 0; p < VEC_SIZE / 2; ++p) {
               const uint8_t packed = q4_k_nibbles[p];
               from_float(q4_k_dst[2 * p],
-                         vllm::q4::dequantize_q4_0(
+                         vllm::q4::dequantize_q4<kLmQ4>(
                              packed & 0xFu,
                              k_scale[qk_scale_base * Q8_GROUPS +
                                      ((q4_base + 2 * p) >> 5)]));
               from_float(q4_k_dst[2 * p + 1],
-                         vllm::q4::dequantize_q4_0(
+                         vllm::q4::dequantize_q4<kLmQ4>(
                              (packed >> 4) & 0xFu,
                              k_scale[qk_scale_base * Q8_GROUPS +
                                      ((q4_base + 2 * p + 1) >> 5)]));
@@ -632,14 +665,21 @@ __device__ void paged_attention_kernel(
             // contiguous scale vector, packed convert. Same values as scalar.
             for (int c = 0; c < V_VEC_SIZE; c += 4) {
               const uint8_t *nb = q4_v_nibbles + c / 2;
-              vllm::bq::bqv_i32x4 qi = {
-                  static_cast<int>(nb[0] & 0xFu) - 8,
-                  static_cast<int>((nb[0] >> 4) & 0xFu) - 8,
-                  static_cast<int>(nb[1] & 0xFu) - 8,
-                  static_cast<int>((nb[1] >> 4) & 0xFu) - 8,
-              };
-              vllm::bq::bqv_f32x4 qf =
-                  __builtin_convertvector(qi, vllm::bq::bqv_f32x4);
+              vllm::bq::bqv_f32x4 qf;
+              if constexpr (kLmQ4) {
+                qf = {vllm::q4::kQ4LmLevels[nb[0] & 0xFu],
+                      vllm::q4::kQ4LmLevels[(nb[0] >> 4) & 0xFu],
+                      vllm::q4::kQ4LmLevels[nb[1] & 0xFu],
+                      vllm::q4::kQ4LmLevels[(nb[1] >> 4) & 0xFu]};
+              } else {
+                vllm::bq::bqv_i32x4 qi = {
+                    static_cast<int>(nb[0] & 0xFu) - 8,
+                    static_cast<int>((nb[0] >> 4) & 0xFu) - 8,
+                    static_cast<int>(nb[1] & 0xFu) - 8,
+                    static_cast<int>((nb[1] >> 4) & 0xFu) - 8,
+                };
+                qf = __builtin_convertvector(qi, vllm::bq::bqv_f32x4);
+              }
               vllm::bq::bqv_f32x4 sc;
               __builtin_memcpy(&sc, v_scale + q4_v_base + c, 16);
               vllm::bq::pack_f32x4_to_bf16(q4_v_dst + c, qf * sc);
@@ -653,7 +693,7 @@ __device__ void paged_attention_kernel(
               const uint8_t nib =
                   (e & 1) ? static_cast<uint8_t>((packed >> 4) & 0xFu)
                           : static_cast<uint8_t>(packed & 0xFu);
-              from_float(q4_v_dst[e], vllm::q4::dequantize_q4_0(
+              from_float(q4_v_dst[e], vllm::q4::dequantize_q4<kLmQ4>(
                                           nib, v_scale[q4_v_base + e]));
             }
           }
@@ -730,6 +770,38 @@ __device__ void paged_attention_kernel(
   }
 
   // Write the final output.
+  // Q4_0 V incoherence: the cache holds head-dim-rotated V, so accs holds
+  // A = P.V'. Un-rotate once per output vector: O = S.H(A). Linear, hence
+  // exact across v1/v2 partitions (the reduce kernel combines partials
+  // linearly). Gate must match the store side (bf16/256).
+  if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kQ4_0 && HEAD_SIZE == 256 &&
+                std::is_same<scalar_t, __nv_bfloat16>::value) {
+    __shared__ float wht_o[256];
+    for (int d = thread_idx; d < 256; d += NUM_THREADS) {
+      wht_o[d] = 0.f;
+    }
+    if (warp_idx == 0) {
+#pragma unroll
+      for (int i = 0; i < NUM_ROWS_PER_THREAD; i++) {
+        const int row_idx = lane / NUM_V_VECS_PER_ROW + i * NUM_ROWS_PER_ITER;
+        if (row_idx < HEAD_SIZE && lane % NUM_V_VECS_PER_ROW == 0) {
+          wht_o[row_idx] = accs[i];
+        }
+      }
+    }
+    __syncthreads();
+    vllm::wht::wht_inplace(wht_o, 256);
+    if (warp_idx == 0) {
+#pragma unroll
+      for (int i = 0; i < NUM_ROWS_PER_THREAD; i++) {
+        const int row_idx = lane / NUM_V_VECS_PER_ROW + i * NUM_ROWS_PER_ITER;
+        if (row_idx < HEAD_SIZE && lane % NUM_V_VECS_PER_ROW == 0) {
+          accs[i] = wht_o[row_idx] * vllm::wht::wht_sign(kv_head_idx, row_idx);
+        }
+      }
+    }
+    __syncthreads();
+  }
   if (warp_idx == 0) {
     scalar_t *out_ptr =
         out + seq_idx * num_heads * max_num_partitions * HEAD_SIZE +

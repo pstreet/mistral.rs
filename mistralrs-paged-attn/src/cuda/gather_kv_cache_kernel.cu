@@ -13,6 +13,7 @@
 
 #include "quantization/q8/q8_utils.cuh"
 #include "quantization/q4/q4_utils.cuh"
+#include "quantization/wht.cuh"
 
 #include <algorithm>
 
@@ -117,6 +118,80 @@ __global__ void gather_kv_cache_kernel(
   // when the sidecar pointers are null (only dereferenced in the Q8 branch).
   const int32_t q8_groups = head_size / vllm::q8::kQ8BlockSize;
 
+  // Q4_0 K incoherence: the cache holds signed-Hadamard-rotated K (see
+  // reshape_and_cache). Gather feeds original-domain consumers (prefill),
+  // so dequantize each head row then inverse-rotate (H is self-inverse;
+  // signs go after the transform). V is plain RTN: handled below as usual.
+  // Non-256 head sizes use the identity path in the main loop.
+  if constexpr (kv_dt == Fp8KVCacheDataType::kQ4_0) {
+    if (head_size == 256) {
+      __shared__ float wht_row[256];
+      for (int32_t h = 0; h < num_kv_heads; ++h) {
+        for (int32_t d = threadIdx.x; d < 256; d += blockDim.x) {
+          const int64_t k_q4_idx =
+              static_cast<int64_t>(block_id) * k_block_stride +
+              h * k_head_stride + (d / 32) * block_size * x + slot * x +
+              (d % 32) / 2;
+          const uint8_t k_packed =
+              reinterpret_cast<const uint8_t *>(key_cache)[k_q4_idx];
+          const uint8_t k_nib =
+              (d & 1) ? static_cast<uint8_t>((k_packed >> 4) & 0xFu)
+                      : static_cast<uint8_t>(k_packed & 0xFu);
+          const int64_t scale_row =
+              (static_cast<int64_t>(block_id) * num_kv_heads + h) * block_size +
+              slot;
+          wht_row[d] = vllm::q4::dequantize_q4<true>(
+              k_nib,
+              k_scale[scale_row * q8_groups + d / vllm::q4::kQ4BlockSize]);
+        }
+        __syncthreads();
+        vllm::wht::wht_inplace(wht_row, 256);
+        for (int32_t d = threadIdx.x; d < 256; d += blockDim.x) {
+          k_out[out_base + h * head_size + d] = q8_out_cast<out_t>(
+              wht_row[d] * vllm::wht::wht_sign(h, d));
+        }
+        __syncthreads();
+      }
+    }
+  }
+
+  // Q4_0 V incoherence (mirror of the K prepass above): the cache holds
+  // head-dim-rotated V. Gather feeds original-domain consumers, so dequant
+  // each head row then inverse-rotate (signs after the transform).
+  if constexpr (kv_dt == Fp8KVCacheDataType::kQ4_0) {
+    if (head_size == 256) {
+      __shared__ float wht_vrow[256];
+      for (int32_t h = 0; h < num_kv_heads; ++h) {
+        for (int32_t d = threadIdx.x; d < 256; d += blockDim.x) {
+          const int64_t v_q4_idx =
+              (static_cast<int64_t>(block_id) * num_kv_heads + h) * head_size *
+                  (block_size / 2) +
+              d * (block_size / 2) + slot / 2;
+          const uint8_t v_packed =
+              reinterpret_cast<const uint8_t *>(value_cache)[v_q4_idx];
+          const uint8_t v_nib =
+              (slot & 1) ? static_cast<uint8_t>((v_packed >> 4) & 0xFu)
+                         : static_cast<uint8_t>(v_packed & 0xFu);
+          const int64_t v_scale_idx =
+              ((static_cast<int64_t>(block_id) * num_kv_heads + h) *
+                   q8_groups +
+               d / vllm::q4::kQ4BlockSize) *
+                  block_size +
+              slot;
+          wht_vrow[d] =
+              vllm::q4::dequantize_q4<true>(v_nib, v_scale[v_scale_idx]);
+        }
+        __syncthreads();
+        vllm::wht::wht_inplace(wht_vrow, 256);
+        for (int32_t d = threadIdx.x; d < 256; d += blockDim.x) {
+          v_out[out_base + h * head_size + d] = q8_out_cast<out_t>(
+              wht_vrow[d] * vllm::wht::wht_sign(h, d));
+        }
+        __syncthreads();
+      }
+    }
+  }
+
   for (int i = threadIdx.x; i < n; i += blockDim.x) {
     const int head_idx = i / head_size;
     const int d = i % head_size;
@@ -190,12 +265,16 @@ __global__ void gather_kv_cache_kernel(
            d / vllm::q4::kQ4BlockSize) *
               block_size +
           slot;
-      const float k_deq = vllm::q4::dequantize_q4_0(
-          k_nib, k_scale[scale_row * q8_groups + d / vllm::q4::kQ4BlockSize]);
-      const float v_deq =
-          vllm::q4::dequantize_q4_0(v_nib, v_scale[v_scale_idx]);
-      k_out[out_base + i] = q8_out_cast<out_t>(k_deq);
-      v_out[out_base + i] = q8_out_cast<out_t>(v_deq);
+       const float k_deq = vllm::q4::dequantize_q4<false>(
+           k_nib, k_scale[scale_row * q8_groups + d / vllm::q4::kQ4BlockSize]);
+       const float v_deq =
+           vllm::q4::dequantize_q4<false>(v_nib, v_scale[v_scale_idx]);
+      if (head_size != 256) {
+        k_out[out_base + i] = q8_out_cast<out_t>(k_deq);
+      }  // else K already inverse-rotated by the prepass above
+      if (head_size != 256) {
+        v_out[out_base + i] = q8_out_cast<out_t>(v_deq);
+      }  // else V already inverse-rotated by the prepass above
     } else {
       k_out[out_base + i] = fp8::scaled_convert<out_t, cache_t, kv_dt>(
           key_cache[k_src_idx], *k_scale);

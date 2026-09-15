@@ -29,6 +29,8 @@ no_ui = true
 # partition-crossing decode, -5 to -9% decode T/s). FP8 uncalibrated tested
 # earlier: 2x capacity but -28% prefill, NaN risk (E4M3 clips at 448).
 # Backup of the BF16 line: mistralrs.toml.bak.bf16.
+# NOTE 2026-09-14: stays Q8_0 on purpose as the A/B reference while
+# production runs Q4_0 (streaming-K kernel, commit 2c79bada6).
 cache_type = "Q8_0"
 # 250k ctx (mistralrs priority, 2026-09-07; Q8_0 2026-09-09): 16384MB Q8_0
 # -> 8192 blocks = full 262144 model context (BF16 gave 246688 tokens).

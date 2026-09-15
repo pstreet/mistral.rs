@@ -24,15 +24,7 @@ port = 1235
 no_ui = true
 
 [paged_attn]
-# Q4_0 block-int4 KV (streaming-K kernel 2026-09-14, commit 2c79bada6):
-# 47k decode 7.35 T/s, matches BF16 7.32, beats Q8 5.59. Byte-identical
-# vs old Q4 on controlled prompts. Q8_0 line kept in git history.
-cache_type = "Q4_0"
-# 250k ctx (mistralrs priority, 2026-09-07; Q8_0 2026-09-09): 16384MB Q8_0
-# -> 8192 blocks = full 262144 model context (BF16 gave 246688 tokens).
-# GTT free ~86GB; weights 22GB + reserve 2.5GB + KV 16GB + graphs
-# ~1.5GB fits. Llama-server loads on demand alongside.
-#memory_mb = 16384
+cache_type = "Q8_0"
 
 [runtime]
 # Match llama-server's --no-warmup behavior: no prefix caching for this setup.
