@@ -102,7 +102,7 @@ The MCP *client* configuration (`mcp_config`) lives under `[runtime]`, not `[ser
 | `memory_mb` | `--pa-memory-mb` | not set | KV cache budget in MB. Conflicts with `context_len`. |
 | `memory_fraction` | `--pa-memory-fraction` | not set | KV cache budget as fraction of VRAM (0.0 to 1.0). Conflicts with `context_len` and `memory_mb`. |
 | `block_size` | `--pa-block-size` | not set | Tokens per block. |
-| `cache_type` | `--pa-cache-type` | `auto` | KV cache quantization type. |
+| `cache_type` | `--pa-cache-type` | `auto` | KV cache quantization type: `auto`, `bf16`, `f8e4m3`, `q8_0`, or `q4_0` (ROCm only, see [paged attention](/guides/perf/paged-attention/)). |
 
 ## `[sandbox]` section
 

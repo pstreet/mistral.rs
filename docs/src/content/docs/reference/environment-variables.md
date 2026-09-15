@@ -35,6 +35,7 @@ For the offline workflow (pre-downloading models, local paths), see [run models]
 | `MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD` | `MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD=1` releases GGUF host shard buffers once model weights are loaded to the device. Later host reads fail; do not combine with flows that reload from the GGUF source after load. |
 | `MISTRALRS_MANAGED_WEIGHTS` | `MISTRALRS_MANAGED_WEIGHTS=1` allocates GGUF and safetensors weight tensors in HIP managed memory on ROCm, filling them from the host and prefetching to the device instead of a host-to-device copy. Also covers ISQ (in-situ quantization) weight uploads. Composes with `MISTRALRS_GGUF_NO_MMAP` and `MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD`. No effect on other backends. |
 | `MISTRALRS_ISQ_SINGLETHREAD` | If set, runs [ISQ (in-situ quantization)](/reference/quantization-types/) single-threaded. |
+| `MISTRALRS_Q4_QJL` | Set to `1` or `true` to enable the 1-bit quantization-residual sidecars for the `q4_0` paged KV cache (ROCm). Off by default; without it the `q4_0` cache uses the Lloyd-Max grid only. Costs ~25% extra KV memory. See [paged attention](/guides/perf/paged-attention/). |
 
 ## CPU runtime
 
