@@ -375,10 +375,13 @@ pub struct UnloadedModelState {
     pub engine_config: EngineConfig,
     /// MCP client configuration
     pub mcp_client_config: Option<McpClientConfig>,
-    /// Model category (Text, Multimodal, etc.)
-    pub category: ModelCategory,
-    /// Model metadata configuration
-    pub mistralrs_config: MistralRsConfig,
+    /// Model category (Text, Multimodal, etc.). `None` for models registered
+    /// lazy (never loaded yet): nothing on the reload path reads this, and
+    /// the real category is derived from the pipeline at load time.
+    pub category: Option<ModelCategory>,
+    /// Model metadata configuration. `None` for lazy-registered models,
+    /// same reasoning as `category`.
+    pub mistralrs_config: Option<MistralRsConfig>,
 }
 
 /// Internal structure to hold per-engine state
@@ -2333,6 +2336,66 @@ impl MistralRs {
         Ok(())
     }
 
+    /// Register a model as unloaded without loading any weights.
+    /// The model appears in listings as unloaded and is loaded on demand by
+    /// the existing auto-reload path (`get_sender`) or an explicit
+    /// `/v1/models/reload` call. Unlike `add_model` this never touches the
+    /// default engine: with no running engine there is nothing to default to.
+    pub fn add_unloaded_model(
+        &self,
+        model_id: String,
+        state: UnloadedModelState,
+    ) -> Result<(), String> {
+        {
+            let reloading = self
+                .reloading_models
+                .read()
+                .map_err(|_| "Failed to acquire read lock on reloading_models")?;
+            if reloading.contains(&model_id) {
+                return Err(format!("Model {model_id} is currently reloading"));
+            }
+        }
+        {
+            let engines = self
+                .engines
+                .read()
+                .map_err(|_| "Failed to acquire read lock on engines")?;
+            if engines.contains_key(&model_id) {
+                return Err(format!("Model {model_id} already exists"));
+            }
+        }
+        {
+            let unloaded = self
+                .unloaded_models
+                .read()
+                .map_err(|_| "Failed to acquire read lock on unloaded_models")?;
+            if unloaded.contains_key(&model_id) {
+                return Err(format!("Model {model_id} already exists (unloaded)"));
+            }
+        }
+        {
+            let aliases = self
+                .model_aliases
+                .read()
+                .map_err(|_| "Failed to acquire read lock on model_aliases")?;
+            if aliases.contains_key(&model_id) {
+                return Err(format!(
+                    "Model ID '{}' conflicts with an existing alias",
+                    model_id
+                ));
+            }
+        }
+
+        let mut unloaded = self
+            .unloaded_models
+            .write()
+            .map_err(|_| "Failed to acquire write lock on unloaded_models")?;
+        unloaded.insert(model_id.clone(), state);
+
+        info!("Model '{model_id}' registered as unloaded (lazy)");
+        Ok(())
+    }
+
     /// Remove a model engine from the MistralRs instance
     pub fn remove_model(&self, model_id: &str) -> Result<(), String> {
         let resolved_model_id = self.resolve_alias(model_id).map_err(|e| e.to_string())?;
@@ -2394,7 +2457,9 @@ impl MistralRs {
         Ok(default_lock.clone())
     }
 
-    /// Set the default model ID
+    /// Set the default model ID. Accepts loaded and lazy-registered
+    /// (unloaded) models; requests without an explicit model trigger
+    /// auto-reload for the latter.
     pub fn set_default_model_id(&self, model_id: &str) -> Result<(), String> {
         let resolved_model_id = self.resolve_alias(model_id).map_err(|e| e.to_string())?;
         let engines = self
@@ -2402,7 +2467,13 @@ impl MistralRs {
             .read()
             .map_err(|_| "Failed to acquire read lock on engines")?;
         if !engines.contains_key(&resolved_model_id) {
-            return Err(format!("Model {resolved_model_id} not found"));
+            let unloaded = self
+                .unloaded_models
+                .read()
+                .map_err(|_| "Failed to acquire read lock on unloaded_models")?;
+            if !unloaded.contains_key(&resolved_model_id) {
+                return Err(format!("Model {resolved_model_id} not found"));
+            }
         }
         drop(engines);
 
@@ -2642,8 +2713,8 @@ impl MistralRs {
                 tool_callbacks: engine_instance.reboot_state.tool_callbacks.clone(),
             },
             mcp_client_config: engine_instance.reboot_state.mcp_client_config.clone(),
-            category: engine_instance.category.clone(),
-            mistralrs_config: engine_instance.config.clone(),
+            category: Some(engine_instance.category.clone()),
+            mistralrs_config: Some(engine_instance.config.clone()),
         };
 
         // Send terminate signal to the engine

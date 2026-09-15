@@ -9,8 +9,8 @@ use crate::{
     engine::IntervalLogger,
     paged_attention::{
         block_hash::{BlockHash, MultimodalKind},
-        CacheConfig, KVCacheManager, PagedAttentionScheduler, PagedAttentionSchedulerConfig,
-        PagedAttentionSchedulerOutput,
+        CacheConfig, KVCacheManager, PagedAttentionConfig, PagedAttentionScheduler,
+        PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
     },
     sequence::Sequence,
     speculative::SpeculativePrefixCheckpointPolicy,
@@ -64,6 +64,17 @@ pub enum SchedulerConfig {
         max_decode_steps_before_prefill: usize,
         config: CacheConfig,
     },
+    /// Planned paged attention for models registered without loading.
+    /// Holds the pre-load `PagedAttentionConfig`; `refresh_paged_cache_config`
+    /// swaps in the realized `CacheConfig` (becoming `PagedAttentionMeta`)
+    /// during reload, so this never reaches scheduler construction.
+    PagedAttentionPlanned {
+        max_num_seqs: usize,
+        max_num_batched_tokens: usize,
+        max_prefill_chunk_tokens: usize,
+        max_decode_steps_before_prefill: usize,
+        config: PagedAttentionConfig,
+    },
 }
 
 impl SchedulerConfig {
@@ -71,9 +82,29 @@ impl SchedulerConfig {
         &mut self,
         realized_cache_config: Option<CacheConfig>,
     ) -> anyhow::Result<()> {
-        match (self, realized_cache_config) {
+        match (&mut *self, realized_cache_config) {
             (Self::PagedAttentionMeta { config, .. }, Some(realized_cache_config)) => {
                 *config = realized_cache_config;
+                Ok(())
+            }
+            (
+                Self::PagedAttentionPlanned {
+                    max_num_seqs,
+                    max_num_batched_tokens,
+                    max_prefill_chunk_tokens,
+                    max_decode_steps_before_prefill,
+                    ..
+                },
+                Some(realized_cache_config),
+            ) => {
+                let meta = Self::PagedAttentionMeta {
+                    max_num_seqs: *max_num_seqs,
+                    max_num_batched_tokens: *max_num_batched_tokens,
+                    max_prefill_chunk_tokens: *max_prefill_chunk_tokens,
+                    max_decode_steps_before_prefill: *max_decode_steps_before_prefill,
+                    config: realized_cache_config,
+                };
+                *self = meta;
                 Ok(())
             }
             (Self::DefaultScheduler { .. }, None) => Ok(()),
@@ -88,6 +119,9 @@ impl SchedulerConfig {
             Self::DefaultScheduler { method } => {
                 Arc::new(Mutex::new(DefaultScheduler::new(method)))
             }
+            Self::PagedAttentionPlanned { .. } => panic!(
+                "Planned scheduler config reached scheduler construction: refresh it with the realized cache config first (lazy models do this on reload)"
+            ),
             Self::PagedAttentionMeta {
                 max_num_seqs,
                 max_num_batched_tokens,

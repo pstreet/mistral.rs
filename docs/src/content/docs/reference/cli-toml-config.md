@@ -134,6 +134,8 @@ Each entry defines one loaded model.
 | `jinja_explicit` | path | no | Jinja override for this model. |
 | `matformer_config_path` | path | no | MatFormer slice config (CSV/JSON). |
 | `matformer_slice_name` | string | no | MatFormer slice to load. |
+| `alias` | string | no | API-visible name for this model (like llama.cpp `--alias`). Defaults to `model_id`. |
+| `lazy` | boolean | no | Register without loading weights (`serve` with 2+ models only; the first model must stay eager). Lazy models load on first request or explicit `/v1/models/reload`. |
 
 Each `[[models]]` entry can carry nested sections whose field shapes mirror the corresponding CLI flags:
 

@@ -373,13 +373,18 @@ async fn build_model_configs(
 
         let resolved_loader_id = crate::commands::serve::model_id_of(&model_type);
         let mut config = ModelConfig::new(entry.model_id.clone(), model_selected);
+        if entry.lazy {
+            config = config.with_lazy(true);
+        }
         if let Some(max_model_len) = entry.max_model_len {
             config = config.with_max_model_len(max_model_len);
         }
         if let Some(overrides) = entry.hf_overrides.clone() {
             config = config.with_hf_config_overrides(overrides);
         }
-        if resolved_loader_id != entry.model_id {
+        if let Some(alias) = entry.alias.clone() {
+            config = config.with_alias(alias);
+        } else if resolved_loader_id != entry.model_id {
             config = config.with_alias(entry.model_id.clone());
         }
 
@@ -490,6 +495,46 @@ lora = [
         .unwrap();
         assert_eq!(models.len(), 1);
         assert!(!cpu);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn from_config_maps_alias_and_lazy() {
+        let root = std::env::temp_dir().join(format!("mistralrs-gguf-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("model-Q4_K_M.gguf"), []).unwrap();
+        let input = format!(
+            r#"
+command = "serve"
+
+[[models]]
+model_id = "{}"
+alias = "tiny"
+lazy = true
+
+[models.format]
+quantized_file = "model-Q4_K_M.gguf"
+"#,
+            root.display()
+        );
+        let config: CliConfig = toml::from_str(&input).unwrap();
+        let CliConfig::Serve(config) = config else {
+            unreachable!()
+        };
+        assert_eq!(config.models[0].alias.as_deref(), Some("tiny"));
+        assert!(config.models[0].lazy);
+
+        let (models, _) = build_model_configs(
+            &config.models,
+            &config.runtime,
+            &mistralrs_core::TokenSource::None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].alias.as_deref(), Some("tiny"));
+        assert!(models[0].lazy);
 
         fs::remove_dir_all(root).unwrap();
     }

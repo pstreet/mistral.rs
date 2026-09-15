@@ -116,6 +116,15 @@ pub struct ModelEntry {
     /// Named slice to load from the MatFormer config.
     #[serde(default)]
     pub matformer_slice_name: Option<String>,
+    /// Register without loading weights (multi-model `serve` only; the first
+    /// model seeds the instance and must stay eager). Lazy models load on
+    /// first request or explicit `/v1/models/reload`.
+    #[serde(default)]
+    pub lazy: bool,
+    /// API-visible name for this model (like llama.cpp `--alias`). Defaults
+    /// to `model_id` when the loader id differs, else the loader id itself.
+    #[serde(default)]
+    pub alias: Option<String>,
 }
 
 #[derive(Deserialize, Default, Clone)]

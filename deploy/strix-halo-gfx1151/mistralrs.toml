@@ -5,9 +5,11 @@
 # WorkingDirectory there and the wrapper cds there; cd there for manual runs).
 #
 # Differences vs models.ini:
-#   - mistral.rs loads EVERY [[models]] entry at boot (no lazy/LRU loading like
-#     llama-server's --models-max). All 12 models are ~276 GB, so only one is
-#     active below; the rest are commented out and ready to enable.
+#   - Non-first [[models]] entries accept `lazy = true`: registered at boot
+#     without loading, demand-loaded on first request (no LRU eviction yet,
+#     unlike llama-server's --models-max). All 12 models are ~276 GB, so
+#     only one is active below; the rest are commented out and ready to
+#     enable (uncomment + add `lazy = true` to register without loading).
 #   - There is no per-model "alias". The API-visible model id is the model path
 #     (model_id). With one active model, clients just use model="default".
 #   - Sampling knobs from models.ini (top-k, top-p, temp, repeat/presence

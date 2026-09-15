@@ -41,6 +41,11 @@ pub struct ModelConfig {
     pub in_situ_quant: Option<String>,
     #[serde(default)]
     pub encoder_cache_memory_bytes: Option<NonZeroUsize>,
+    /// Register without loading weights. The model appears as unloaded and
+    /// loads on first request (auto-reload) or explicit `/v1/models/reload`.
+    /// Only honored for non-first models: the first model seeds the instance.
+    #[serde(default)]
+    pub lazy: bool,
 }
 
 impl ModelConfig {
@@ -56,7 +61,13 @@ impl ModelConfig {
             num_device_layers: None,
             in_situ_quant: None,
             encoder_cache_memory_bytes: None,
+            lazy: false,
         }
+    }
+
+    pub fn with_lazy(mut self, lazy: bool) -> Self {
+        self.lazy = lazy;
+        self
     }
 
     pub fn with_chat_template(mut self, chat_template: String) -> Self {
@@ -997,6 +1008,12 @@ impl MistralRsForServerBuilder {
 
         // Use the first model as the base configuration
         let first_model = &self.models[0];
+        if first_model.lazy {
+            anyhow::bail!(
+                "Model '{}' is marked lazy, but the first model seeds the instance and must load eagerly. Put an eager model first.",
+                first_model.model_id
+            );
+        }
         let model = first_model.model.clone();
         let model_for_config = model.clone();
         let first_chat_template = first_model
@@ -1073,8 +1090,14 @@ impl MistralRsForServerBuilder {
             &self
                 .models
                 .iter()
-                .map(|_| PagedKvModelRequest {
-                    paged_attn: requested_cache_config,
+                // Lazy models hold no KV cache until loaded; giving them a
+                // fair-share slice would shrink every eager model's budget.
+                .map(|m| PagedKvModelRequest {
+                    paged_attn: if m.lazy {
+                        None
+                    } else {
+                        requested_cache_config
+                    },
                     max_num_seqs: self.max_seqs,
                 })
                 .collect::<Vec<_>>(),
@@ -1218,6 +1241,139 @@ impl MistralRsForServerBuilder {
                 "Loading additional model from config key: {}",
                 model_config.model_id
             );
+
+            if model_config.lazy {
+                // No pipeline name exists pre-load, so the alias (or config
+                // key) is the canonical ID. The pipeline name is not
+                // registered as an alias; address lazy models by these.
+                let primary_id = model_config
+                    .alias
+                    .clone()
+                    .unwrap_or_else(|| model_config.model_id.clone());
+
+                if !registered_ids.insert(primary_id.clone()) {
+                    anyhow::bail!(
+                        "Model ID conflict: '{}' is already registered (config key: {}).",
+                        primary_id,
+                        model_config.model_id
+                    );
+                }
+
+                let model = model_config.model.clone();
+                let dtype = get_model_dtype(&model)?;
+                let auto_device_map_params = get_auto_device_map_params(&model)?;
+                let chat_template = model_config
+                    .chat_template
+                    .clone()
+                    .or(self.chat_template.clone());
+                let jinja_explicit = model_config
+                    .jinja_explicit
+                    .clone()
+                    .or(self.jinja_explicit.clone());
+                let max_model_len = model_config.max_model_len.or(self.max_model_len);
+                let hf_config_overrides = model_config
+                    .hf_config_overrides
+                    .clone()
+                    .or(self.hf_config_overrides.clone());
+                let mapper_for_config = init_mapper(
+                    &model_config
+                        .num_device_layers
+                        .clone()
+                        .or(self.num_device_layers.clone()),
+                    &auto_device_map_params,
+                );
+                let isq = model_config
+                    .in_situ_quant
+                    .as_ref()
+                    .or(self.in_situ_quant.as_ref())
+                    .map(|isq| {
+                        parse_isq_value(isq, Some(&device)).map_err(|e| anyhow::anyhow!("{e}"))
+                    })
+                    .transpose()?;
+
+                // Full requested budget, not a fair-share slice (none was
+                // reserved above). Reload swaps in the realized config.
+                let scheduler_config = match requested_cache_config {
+                    Some(config) => SchedulerConfig::PagedAttentionPlanned {
+                        max_num_seqs: self.max_seqs,
+                        max_num_batched_tokens: self.max_num_batched_tokens.get(),
+                        max_prefill_chunk_tokens: self.max_prefill_chunk_tokens.get(),
+                        max_decode_steps_before_prefill: self.max_decode_steps_before_prefill.get(),
+                        config,
+                    },
+                    None => SchedulerConfig::DefaultScheduler {
+                        method: DefaultSchedulerMethod::Fixed(
+                            self.max_seqs.try_into().unwrap(),
+                        ),
+                    },
+                };
+                let engine_config = mistralrs_core::EngineConfig {
+                    no_kv_cache: self.no_kv_cache,
+                    no_prefix_cache: false,
+                    prefix_cache_n: self.prefix_cache_n,
+                    prefill_chunk_size: if self.prefill_chunk_size == 0 {
+                        None
+                    } else {
+                        Some(self.prefill_chunk_size)
+                    },
+                    disable_eos_stop: self.disable_eos_stop,
+                    throughput_logging_enabled: !self.interactive_mode,
+                    search_embedding_model,
+                    search_callback: self.search_callback.clone(),
+                    tool_callbacks: HashMap::new(),
+                };
+                let loader_config = ModelLoaderConfig {
+                    model_selected: model,
+                    token_source: self.token_source.clone(),
+                    hf_revision: None,
+                    dtype,
+                    device: device.clone(),
+                    device_map_setting: mapper_for_config,
+                    isq,
+                    paged_attn_config: requested_cache_config,
+                    silent: false,
+                    chat_template,
+                    jinja_explicit,
+                    max_model_len,
+                    hf_config_overrides,
+                    mtp_config: None,
+                    encoder_cache_memory_bytes: model_config
+                        .encoder_cache_memory_bytes
+                        .map(NonZeroUsize::get)
+                        .or(self.encoder_cache_memory_bytes),
+                };
+                mistralrs
+                    .add_unloaded_model(
+                        primary_id.clone(),
+                        mistralrs_core::UnloadedModelState {
+                            loader_config,
+                            scheduler_config,
+                            engine_config,
+                            mcp_client_config: self.mcp_client_config.clone(),
+                            category: None,
+                            mistralrs_config: None,
+                        },
+                    )
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to register lazy model {primary_id}: {e}")
+                    })?;
+
+                // Addressable by config key too (mirrors the eager path's
+                // pipeline-name alias; the real pipeline name is unknown
+                // until first load).
+                if model_config.model_id != primary_id {
+                    mistralrs
+                        .register_model_alias(model_config.model_id.clone(), &primary_id)
+                        .map_err(|e| anyhow::anyhow!(e))?;
+                }
+
+                info!(
+                    "Model `{}` registered as unloaded/lazy (from config key: {})",
+                    primary_id, model_config.model_id
+                );
+                loaded_model_ids.push(primary_id);
+                continue;
+            }
 
             let model = model_config.model.clone();
             let model_for_config = model.clone();
@@ -1393,8 +1549,8 @@ impl MistralRsForServerBuilder {
                 .map_err(|e| anyhow::anyhow!("Failed to set default model: {}", e))?;
         }
 
-        // Log all models loaded
-        info!("All models loaded: `{}`", loaded_model_ids.join("`, `"));
+        // Log all models registered (eager loaded + lazy unloaded)
+        info!("All models registered: `{}`", loaded_model_ids.join("`, `"));
 
         // Log default model
         if let Some(ref default_id) = self.default_model_id {

@@ -580,7 +580,8 @@ impl Engine {
             SchedulerConfig::DefaultScheduler {
                 method: DefaultSchedulerMethod::Fixed(max_num_seqs),
             } => max_num_seqs.get(),
-            SchedulerConfig::PagedAttentionMeta { max_num_seqs, .. } => *max_num_seqs,
+            SchedulerConfig::PagedAttentionMeta { max_num_seqs, .. }
+            | SchedulerConfig::PagedAttentionPlanned { max_num_seqs, .. } => *max_num_seqs,
         };
         logger.set_sequence_capacity(max_active_sequences);
 
@@ -608,7 +609,8 @@ impl Engine {
             )
         };
         let recurrent_capacity = match &config {
-            SchedulerConfig::PagedAttentionMeta { max_num_seqs, .. } => Some(
+            SchedulerConfig::PagedAttentionMeta { max_num_seqs, .. }
+            | SchedulerConfig::PagedAttentionPlanned { max_num_seqs, .. } => Some(
                 max_num_seqs
                     .checked_add(RECURRENT_GRAPH_PAD_SLOTS)
                     .ok_or_else(|| anyhow::anyhow!("maximum sequence count overflow"))?,
