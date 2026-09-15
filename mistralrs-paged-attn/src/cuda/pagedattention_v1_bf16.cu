@@ -17,7 +17,8 @@ extern "C" void paged_attention_v1_bf16(
 
     uint32_t cache_dtype, // 0 => f16; 1 => bf16; 2 => f32; 3 => fp8_e4m3
                              // 4 => q8_0 block-int8; 5 => q4_0 nibbles
-    float *k_scale, float *v_scale, const float *sinks) {
+    float *k_scale, float *v_scale, const uint8_t *k_res, const uint8_t *v_res,
+    const float *sinks) {
 
 #ifdef ENABLE_FP8
   if (cache_dtype == 3) {

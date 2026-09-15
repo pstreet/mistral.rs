@@ -269,6 +269,14 @@ fn write_kv_cache(
                 value_cache,
                 &scales.k,
                 &scales.v,
+                scales
+                    .k_res
+                    .as_ref()
+                    .expect("Q4_0 requires residual sidecars"),
+                scales
+                    .v_res
+                    .as_ref()
+                    .expect("Q4_0 requires residual sidecars"),
                 slot_mapping,
             );
         }
@@ -354,6 +362,8 @@ fn gather_kv_cache_for_layout(
                 value_cache,
                 k,
                 v,
+                bq_scales.as_ref().and_then(|bq| bq.k_res.as_ref()),
+                bq_scales.as_ref().and_then(|bq| bq.v_res.as_ref()),
                 block_tables,
                 cu_kv,
                 num_tokens,
@@ -2123,6 +2133,8 @@ impl PagedAttention {
             query,
             k,
             v,
+            bq_scales.as_ref().and_then(|bq| bq.k_res.as_ref()),
+            bq_scales.as_ref().and_then(|bq| bq.v_res.as_ref()),
             key_cache,
             value_cache,
             ctx.block_tables(dev).unwrap(),

@@ -74,6 +74,8 @@ pub fn gather_kv_cache(
     value_cache: &Tensor, // [num_blocks, kv_heads, head_size, block_size]
     k_scale: Option<&Tensor>,
     v_scale: Option<&Tensor>,
+    k_res: Option<&Tensor>,
+    v_res: Option<&Tensor>,
     block_table: &Tensor, // [batch, max_blocks]
     cu_seq_lens: &Tensor, // [batch + 1]
     num_tokens: usize,    // cu_seq_lens[-1]
@@ -278,6 +280,29 @@ pub fn gather_kv_cache(
         } else {
             (std::ptr::null(), None)
         };
+        // QJL residual bit packs (Q4 LM path); null unless sidecars exist.
+        let _kr_storage = k_res.map(|kr| kr.storage_and_layout());
+        let (k_res_ptr, _kr_guard) = if let Some((ref s, l)) = _kr_storage {
+            let s = match &**s {
+                Storage::Cuda(s) => s,
+                _ => candle_core::bail!("k_res must be a cuda tensor"),
+            };
+            let (ptr, guard) = slice_ptr(s.as_cuda_slice::<u8>()?, l.start_offset());
+            (ptr as *const u8, Some(guard))
+        } else {
+            (std::ptr::null(), None)
+        };
+        let _vr_storage = v_res.map(|vr| vr.storage_and_layout());
+        let (v_res_ptr, _vr_guard) = if let Some((ref s, l)) = _vr_storage {
+            let s = match &**s {
+                Storage::Cuda(s) => s,
+                _ => candle_core::bail!("v_res must be a cuda tensor"),
+            };
+            let (ptr, guard) = slice_ptr(s.as_cuda_slice::<u8>()?, l.start_offset());
+            (ptr as *const u8, Some(guard))
+        } else {
+            (std::ptr::null(), None)
+        };
 
         let (_, block_table_stride) = bt_l.shape().dims2()?;
 
@@ -291,6 +316,8 @@ pub fn gather_kv_cache(
                 vo_ptr as *const core::ffi::c_void,
                 k_scale_ptr,
                 v_scale_ptr,
+                k_res_ptr,
+                v_res_ptr,
                 bt_ptr as *const i32,
                 cu_ptr as *const i32,
                 num_tokens_i32,

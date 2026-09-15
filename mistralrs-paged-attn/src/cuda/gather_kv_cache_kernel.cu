@@ -68,6 +68,8 @@ __global__ void gather_kv_cache_kernel(
     out_t *__restrict__ v_out,         // [num_tokens, kv_heads, head_size]
     const float *__restrict__ k_scale, // scalar or nullptr
     const float *__restrict__ v_scale, // scalar or nullptr
+    const uint8_t *__restrict__ k_res, // Q4 QJL bits (or nullptr)
+    const uint8_t *__restrict__ v_res, // Q4 QJL bits (or nullptr)
     const int32_t *__restrict__ block_table, // [batch, max_blocks]
     const int32_t *__restrict__ cu_seq_lens, // [batch + 1]
     const int32_t num_tokens, const int32_t num_seqs, const int32_t block_size,
@@ -127,6 +129,12 @@ __global__ void gather_kv_cache_kernel(
     if (head_size == 256) {
       __shared__ float wht_row[256];
       for (int32_t h = 0; h < num_kv_heads; ++h) {
+        // QJL residual row for this (block, head, slot), token-major.
+        const uint8_t *k_res_row =
+            k_res + ((static_cast<int64_t>(block_id) * num_kv_heads + h) *
+                         block_size +
+                     slot) *
+                        q8_groups * 4;
         for (int32_t d = threadIdx.x; d < 256; d += blockDim.x) {
           const int64_t k_q4_idx =
               static_cast<int64_t>(block_id) * k_block_stride +
@@ -140,8 +148,8 @@ __global__ void gather_kv_cache_kernel(
           const int64_t scale_row =
               (static_cast<int64_t>(block_id) * num_kv_heads + h) * block_size +
               slot;
-          wht_row[d] = vllm::q4::dequantize_q4<true>(
-              k_nib,
+          wht_row[d] = vllm::q4::dequant_k_q4_res<true>(
+              k_res_row, d, k_nib,
               k_scale[scale_row * q8_groups + d / vllm::q4::kQ4BlockSize]);
         }
         __syncthreads();
@@ -178,8 +186,15 @@ __global__ void gather_kv_cache_kernel(
                d / vllm::q4::kQ4BlockSize) *
                   block_size +
               slot;
-          wht_vrow[d] =
-              vllm::q4::dequantize_q4<true>(v_nib, v_scale[v_scale_idx]);
+          // QJL residual group base for this head-dim group, group-major.
+          const uint8_t *v_res_gbase =
+              v_res + (((static_cast<int64_t>(block_id) * num_kv_heads + h) *
+                            q8_groups +
+                        d / vllm::q4::kQ4BlockSize) *
+                       block_size) *
+                          4;
+          wht_vrow[d] = vllm::q4::dequant_v_q4_res<true>(
+              v_res_gbase, slot, d & 31, v_nib, v_scale[v_scale_idx]);
         }
         __syncthreads();
         vllm::wht::wht_inplace(wht_vrow, 256);
@@ -293,7 +308,9 @@ __global__ void gather_kv_cache_kernel(
           reinterpret_cast<CACHE_T *>(value_cache),                            \
           reinterpret_cast<OUT_T *>(k_out), reinterpret_cast<OUT_T *>(v_out),  \
           reinterpret_cast<const float *>(k_scale),                            \
-          reinterpret_cast<const float *>(v_scale), block_table, cu_seq_lens,  \
+          reinterpret_cast<const float *>(v_scale),                            \
+          reinterpret_cast<const uint8_t *>(k_res),                            \
+          reinterpret_cast<const uint8_t *>(v_res), block_table, cu_seq_lens,  \
           num_tokens, num_seqs, block_size, block_table_stride, num_kv_heads,  \
           head_size, x);
 
@@ -304,6 +321,8 @@ extern "C" void gather_kv_cache(
     void *v_out,       // [num_tokens, kv_heads, head_size]
     void *k_scale,     // scalar or nullptr
     void *v_scale,     // scalar or nullptr
+    void *k_res,       // Q4 QJL bits (or nullptr)
+    void *v_res,       // Q4 QJL bits (or nullptr)
     const int32_t *block_table, // [batch, max_blocks]
     const int32_t *cu_seq_lens, // [batch + 1]
     int32_t num_tokens, int32_t num_seqs, int32_t block_size,

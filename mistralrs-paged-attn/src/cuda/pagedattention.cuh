@@ -133,6 +133,8 @@ __device__ void paged_attention_kernel(
     const float *__restrict__ alibi_slopes, // [num_heads]
     const int q_stride, const int kv_block_stride, const int kv_head_stride,
     const float *k_scale, const float *v_scale,
+    const uint8_t *__restrict__ k_res, // Q4 QJL residual bits (or nullptr)
+    const uint8_t *__restrict__ v_res, // Q4 QJL residual bits (or nullptr)
     const float *__restrict__ sinks // [num_heads] or nullptr
     ) {
   const int seq_idx = blockIdx.y;
@@ -358,6 +360,11 @@ __device__ void paged_attention_kernel(
           const int q4_off2 = q4_vec % x;
           scalar_t *q4_k_dst = reinterpret_cast<scalar_t *>(&k_vecs[j]);
           const int q4_base = vec_idx * VEC_SIZE;
+          // QJL residual row for this token (valid when kLmQ4; else null).
+          const uint8_t *k_res_row = nullptr;
+          if constexpr (kLmQ4) {
+            k_res_row = k_res + qk_scale_base * Q8_GROUPS * 4;
+          }
 #if defined(USE_ROCM)
           if constexpr (kQ4KStream) {
             using Cache_K_vec = typename vllm::Vec<uint8_t, VEC_SIZE / 2>::Type;
@@ -371,12 +378,13 @@ __device__ void paged_attention_kernel(
             for (int p = 0; p < VEC_SIZE / 2; ++p) {
               const uint8_t packed = q4_k_nibbles[p];
               from_float(k_dst[2 * p],
-                         vllm::q4::dequantize_q4<kLmQ4>(
-                             packed & 0xFu,
+                         vllm::q4::dequant_k_q4_res<kLmQ4>(
+                             k_res_row, q4_base + 2 * p, packed & 0xFu,
                              k_scale[qk_scale_base * Q8_GROUPS +
                                      ((q4_base + 2 * p) >> 5)]));
               from_float(k_dst[2 * p + 1],
-                         vllm::q4::dequantize_q4<kLmQ4>(
+                         vllm::q4::dequant_k_q4_res<kLmQ4>(
+                             k_res_row, q4_base + 2 * p + 1,
                              (packed >> 4) & 0xFu,
                              k_scale[qk_scale_base * Q8_GROUPS +
                                      ((q4_base + 2 * p + 1) >> 5)]));
@@ -397,10 +405,15 @@ __device__ void paged_attention_kernel(
                 reinterpret_cast<const uint8_t *>(&q4_k_packed);
             vllm::bq::bqv_f32x4 qf;
             if constexpr (kLmQ4) {
-              qf = {vllm::q4::kQ4LmLevels[q4_nb[0] & 0xFu],
-                    vllm::q4::kQ4LmLevels[(q4_nb[0] >> 4) & 0xFu],
-                    vllm::q4::kQ4LmLevels[q4_nb[1] & 0xFu],
-                    vllm::q4::kQ4LmLevels[(q4_nb[1] >> 4) & 0xFu]};
+              // Folded residual LUT at scale 1 (the sc vector applies amax).
+              qf = {vllm::q4::dequant_k_q4_res<true>(
+                        k_res_row, q4_base + 0, q4_nb[0] & 0xFu, 1.f),
+                    vllm::q4::dequant_k_q4_res<true>(
+                        k_res_row, q4_base + 1, (q4_nb[0] >> 4) & 0xFu, 1.f),
+                    vllm::q4::dequant_k_q4_res<true>(
+                        k_res_row, q4_base + 2, q4_nb[1] & 0xFu, 1.f),
+                    vllm::q4::dequant_k_q4_res<true>(
+                        k_res_row, q4_base + 3, (q4_nb[1] >> 4) & 0xFu, 1.f)};
             } else {
               vllm::bq::bqv_i32x4 qi = {
                   static_cast<int>(q4_nb[0] & 0xFu) - 8,
@@ -427,8 +440,9 @@ __device__ void paged_attention_kernel(
                                     ? static_cast<uint8_t>((*q4_k_byte >> 4) & 0xFu)
                                     : static_cast<uint8_t>(*q4_k_byte & 0xFu);
             from_float(q4_k_dst[0],
-                       vllm::q4::dequantize_q4<kLmQ4>(
-                           nib, k_scale[qk_scale_base * Q8_GROUPS + (q4_base >> 5)]));
+                       vllm::q4::dequant_k_q4_res<kLmQ4>(
+                           k_res_row, q4_base, nib,
+                           k_scale[qk_scale_base * Q8_GROUPS + (q4_base >> 5)]));
           } else {
             using Cache_K_vec = typename vllm::Vec<uint8_t, VEC_SIZE / 2>::Type;
             Cache_K_vec q4_k_packed = *reinterpret_cast<const Cache_K_vec *>(
@@ -439,12 +453,13 @@ __device__ void paged_attention_kernel(
             for (int p = 0; p < VEC_SIZE / 2; ++p) {
               const uint8_t packed = q4_k_nibbles[p];
               from_float(q4_k_dst[2 * p],
-                         vllm::q4::dequantize_q4<kLmQ4>(
-                             packed & 0xFu,
+                         vllm::q4::dequant_k_q4_res<kLmQ4>(
+                             k_res_row, q4_base + 2 * p, packed & 0xFu,
                              k_scale[qk_scale_base * Q8_GROUPS +
                                      ((q4_base + 2 * p) >> 5)]));
               from_float(q4_k_dst[2 * p + 1],
-                         vllm::q4::dequantize_q4<kLmQ4>(
+                         vllm::q4::dequant_k_q4_res<kLmQ4>(
+                             k_res_row, q4_base + 2 * p + 1,
                              (packed >> 4) & 0xFu,
                              k_scale[qk_scale_base * Q8_GROUPS +
                                      ((q4_base + 2 * p + 1) >> 5)]));
@@ -659,6 +674,16 @@ __device__ void paged_attention_kernel(
                row_idx / 32) *
                   BLOCK_SIZE +
               physical_block_offset;
+          // QJL residual group base for this head-dim row (valid when kLmQ4).
+          const uint8_t *v_res_gbase = nullptr;
+          if constexpr (kLmQ4) {
+            v_res_gbase =
+                v_res + (((physical_block_number * num_kv_heads + kv_head_idx) *
+                              Q8_GROUPS +
+                          row_idx / 32) *
+                         BLOCK_SIZE) *
+                            4;
+          }
 #if defined(USE_ROCM)
           if constexpr (V_VEC_SIZE % 4 == 0 && vllm::bq::kUseVecDequant<scalar_t>) {
             // 4-wide chunks: 2 nibble bytes -> 4 ints -> float vector,
@@ -667,10 +692,21 @@ __device__ void paged_attention_kernel(
               const uint8_t *nb = q4_v_nibbles + c / 2;
               vllm::bq::bqv_f32x4 qf;
               if constexpr (kLmQ4) {
-                qf = {vllm::q4::kQ4LmLevels[nb[0] & 0xFu],
-                      vllm::q4::kQ4LmLevels[(nb[0] >> 4) & 0xFu],
-                      vllm::q4::kQ4LmLevels[nb[1] & 0xFu],
-                      vllm::q4::kQ4LmLevels[(nb[1] >> 4) & 0xFu]};
+                // Folded residual LUT at scale 1 (sc applies amax). All 4
+                // lanes share head-dim row_idx; slots are offset+c+lane.
+                const int vi = row_idx & 31;
+                qf = {vllm::q4::dequant_v_q4_res<true>(
+                          v_res_gbase, physical_block_offset + c + 0, vi,
+                          nb[0] & 0xFu, 1.f),
+                      vllm::q4::dequant_v_q4_res<true>(
+                          v_res_gbase, physical_block_offset + c + 1, vi,
+                          (nb[0] >> 4) & 0xFu, 1.f),
+                      vllm::q4::dequant_v_q4_res<true>(
+                          v_res_gbase, physical_block_offset + c + 2, vi,
+                          nb[1] & 0xFu, 1.f),
+                      vllm::q4::dequant_v_q4_res<true>(
+                          v_res_gbase, physical_block_offset + c + 3, vi,
+                          (nb[1] >> 4) & 0xFu, 1.f)};
               } else {
                 vllm::bq::bqv_i32x4 qi = {
                     static_cast<int>(nb[0] & 0xFu) - 8,
@@ -693,8 +729,10 @@ __device__ void paged_attention_kernel(
               const uint8_t nib =
                   (e & 1) ? static_cast<uint8_t>((packed >> 4) & 0xFu)
                           : static_cast<uint8_t>(packed & 0xFu);
-              from_float(q4_v_dst[e], vllm::q4::dequantize_q4<kLmQ4>(
-                                          nib, v_scale[q4_v_base + e]));
+              from_float(q4_v_dst[e],
+                         vllm::q4::dequant_v_q4_res<kLmQ4>(
+                             v_res_gbase, physical_block_offset + e,
+                             row_idx & 31, nib, v_scale[q4_v_base + e]));
             }
           }
         } else {
@@ -835,13 +873,14 @@ __global__ void paged_attention_v1_kernel(
     const float *__restrict__ alibi_slopes, // [num_heads]
     const int q_stride, const int kv_block_stride, const int kv_head_stride,
     const float *k_scale, const float *v_scale,
+    const uint8_t *__restrict__ k_res, const uint8_t *__restrict__ v_res,
     const float *__restrict__ sinks) {
   paged_attention_kernel<scalar_t, cache_t, kv_dt, HEAD_SIZE, BLOCK_SIZE,
                          NUM_THREADS>(
       /* exp_sums */ nullptr, /* max_logits */ nullptr, out, q, k_cache,
       v_cache, num_kv_heads, scale, softcapping, block_tables, context_lens,
       max_num_blocks_per_seq, alibi_slopes, q_stride, kv_block_stride,
-      kv_head_stride, k_scale, v_scale, sinks);
+      kv_head_stride, k_scale, v_scale, k_res, v_res, sinks);
 }
 
 // Grid: (num_heads, num_seqs, max_num_partitions).
@@ -866,13 +905,14 @@ __global__ void paged_attention_v2_kernel(
     const float *__restrict__ alibi_slopes, // [num_heads]
     const int q_stride, const int kv_block_stride, const int kv_head_stride,
     const float *k_scale, const float *v_scale,
+    const uint8_t *__restrict__ k_res, const uint8_t *__restrict__ v_res,
     const float *__restrict__ sinks) {
   paged_attention_kernel<scalar_t, cache_t, kv_dt, HEAD_SIZE, BLOCK_SIZE,
                          NUM_THREADS, PARTITION_SIZE>(
       exp_sums, max_logits, tmp_out, q, k_cache, v_cache, num_kv_heads, scale,
       softcapping, block_tables, context_lens, max_num_blocks_per_seq,
       alibi_slopes, q_stride, kv_block_stride, kv_head_stride, k_scale,
-      v_scale, sinks);
+      v_scale, k_res, v_res, sinks);
 }
 
 // Grid: (num_heads, num_seqs).
@@ -1011,7 +1051,7 @@ __global__ void paged_attention_v2_reduce_kernel(
           reinterpret_cast<CACHE_T *>(value_cache), num_kv_heads, scale,       \
           softcapping, block_tables, context_lens, max_num_blocks_per_seq,     \
           reinterpret_cast<float *>(alibi_slopes), q_stride, kv_block_stride,  \
-          kv_head_stride, k_scale, v_scale, sinks);
+          kv_head_stride, k_scale, v_scale, k_res, v_res, sinks);
 
 // TODO(woosuk): Tune NUM_THREADS.
 template <typename T, typename CACHE_T, vllm::Fp8KVCacheDataType KV_DT,
@@ -1025,6 +1065,7 @@ inline void paged_attention_v1_launcher(
     int num_seqs, int num_heads, int head_size, int max_num_blocks_per_seq,
     int q_stride, int kv_block_stride, int kv_head_stride, cudaStream_t stream,
     const float *k_scale, const float *v_scale,
+    const uint8_t *k_res, const uint8_t *v_res,
     const float *sinks) {
 
   // int thread_group_size = MAX(WARP_SIZE / BLOCK_SIZE, 1);
@@ -1081,7 +1122,7 @@ inline void paged_attention_v1_launcher(
       out, query, key_cache, value_cache, alibi_slopes, num_kv_heads, scale,   \
       softcapping, block_tables, context_lens, max_context_len, num_seqs,      \
       num_heads, head_size, max_num_blocks_per_seq, q_stride, kv_block_stride, \
-      kv_head_stride, stream, k_scale, v_scale, sinks);
+      kv_head_stride, stream, k_scale, v_scale, k_res, v_res, sinks);
 
 // NOTE(woosuk): To reduce the compilation time, we omitted block sizes
 // 1, 2, 4, 64, 128, 256.
@@ -1110,7 +1151,7 @@ inline void paged_attention_v1_launcher(
           reinterpret_cast<CACHE_T *>(value_cache), num_kv_heads, scale,       \
           softcapping, block_tables, context_lens, max_num_blocks_per_seq,     \
           reinterpret_cast<float *>(alibi_slopes), q_stride, kv_block_stride,  \
-          kv_head_stride, k_scale, v_scale, sinks);                            \
+          kv_head_stride, k_scale, v_scale, k_res, v_res, sinks);              \
   vllm::paged_attention_v2_reduce_kernel<T, HEAD_SIZE, NUM_THREADS,            \
                                          PARTITION_SIZE>                       \
       <<<reduce_grid, block, reduce_shared_mem_size, stream>>>(                \
@@ -1128,6 +1169,7 @@ inline void paged_attention_v2_launcher(
     int num_seqs, int num_heads, int head_size, int max_num_blocks_per_seq,
     int q_stride, int kv_block_stride, int kv_head_stride, cudaStream_t stream,
     const float *k_scale, const float *v_scale,
+    const uint8_t *k_res, const uint8_t *v_res,
     const float *sinks
 ) {
   // int thread_group_size = MAX(WARP_SIZE / BLOCK_SIZE, 1);
@@ -1188,7 +1230,7 @@ inline void paged_attention_v2_launcher(
       alibi_slopes, num_kv_heads, scale, softcapping, block_tables,            \
       context_lens, max_context_len, num_seqs, num_heads, head_size,           \
       max_num_blocks_per_seq, q_stride, kv_block_stride, kv_head_stride,       \
-      stream, k_scale, v_scale, sinks);
+      stream, k_scale, v_scale, k_res, v_res, sinks);
 
 // NOTE(woosuk): To reduce the compilation time, we omitted block sizes
 // 1, 2, 4, 64, 128, 256.

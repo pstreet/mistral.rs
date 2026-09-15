@@ -23,6 +23,10 @@ pub(crate) struct BlockQuantScales {
     pub k: Tensor,
     pub v: Tensor,
     pub kind: mistralrs_paged_attn::BlockQuantKind,
+    // QJL 1-bit residual sidecars (Q4_0 only): U8 bit packs, 4 bytes per
+    // 32-elem group. `None` for Q8_0 and non-LM paths.
+    pub k_res: Option<Tensor>,
+    pub v_res: Option<Tensor>,
 }
 
 fn registry() -> &'static Mutex<HashMap<(usize, usize), BlockQuantScales>> {

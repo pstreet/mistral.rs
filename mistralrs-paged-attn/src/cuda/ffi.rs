@@ -157,6 +157,8 @@ extern "C" {
         value_cache: *const c_void,
         k_scales: *mut f32,
         v_scales: *mut f32,
+        k_res: *mut u8,
+        v_res: *mut u8,
         slot_mapping: *const c_long,
 
         num_tokens: c_int,
@@ -313,6 +315,8 @@ extern "C" {
         v_out: *const c_void,
         k_scale: *const f32,
         v_scale: *const f32,
+        k_res: *const u8,
+        v_res: *const u8,
         block_table: *const c_int,
         cu_seq_lens: *const c_int,
         num_tokens: c_int,
@@ -351,6 +355,8 @@ extern "C" {
         cache_dtype: u32,
         k_scale: *const f32,
         v_scale: *const f32,
+        k_res: *const u8,
+        v_res: *const u8,
         sinks: *const f32,
     );
 
@@ -378,6 +384,8 @@ extern "C" {
         cache_dtype: u32,
         k_scale: *const f32,
         v_scale: *const f32,
+        k_res: *const u8,
+        v_res: *const u8,
         sinks: *const f32,
     );
 
@@ -405,6 +413,8 @@ extern "C" {
         cache_dtype: u32,
         k_scale: *const f32,
         v_scale: *const f32,
+        k_res: *const u8,
+        v_res: *const u8,
         sinks: *const f32,
     );
 
@@ -435,6 +445,8 @@ extern "C" {
         cache_dtype: u32,
         k_scale: *const f32,
         v_scale: *const f32,
+        k_res: *const u8,
+        v_res: *const u8,
         sinks: *const f32,
     );
 
@@ -465,6 +477,8 @@ extern "C" {
         cache_dtype: u32,
         k_scale: *const f32,
         v_scale: *const f32,
+        k_res: *const u8,
+        v_res: *const u8,
         sinks: *const f32,
     );
 
@@ -495,6 +509,8 @@ extern "C" {
         cache_dtype: u32,
         k_scale: *const f32,
         v_scale: *const f32,
+        k_res: *const u8,
+        v_res: *const u8,
         sinks: *const f32,
     );
 

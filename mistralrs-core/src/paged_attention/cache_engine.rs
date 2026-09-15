@@ -213,21 +213,13 @@ impl CacheEngine {
         let dtype = cache_config.cache_type.to_dtype(dtype);
         let (gpu_cache, q8_scales) =
             Self::allocate_gpu_cache(model_config, cache_config, dtype, device, layer_devices)?;
-        if let Some(kind) = match cache_config.cache_type {
-            PagedCacheType::Q8_0 => Some(mistralrs_paged_attn::BlockQuantKind::Q8_0),
-            PagedCacheType::Q4_0 => Some(mistralrs_paged_attn::BlockQuantKind::Q4_0),
-            _ => None,
-        } {
+        if matches!(
+            cache_config.cache_type,
+            PagedCacheType::Q8_0 | PagedCacheType::Q4_0
+        ) {
             for ((key_cache, _), scales) in gpu_cache.iter().zip(q8_scales.iter()) {
-                if let Some((k, v)) = scales {
-                    register_block_scales(
-                        key_cache,
-                        BlockQuantScales {
-                            k: k.clone(),
-                            v: v.clone(),
-                            kind,
-                        },
-                    )?;
+                if let Some(s) = scales {
+                    register_block_scales(key_cache, s.clone())?;
                 }
             }
         }
@@ -268,7 +260,7 @@ impl CacheEngine {
         layer_idx: usize,
         layer_device: &Device,
         num_gpu_blocks: usize,
-    ) -> Result<Option<(Tensor, Tensor)>> {
+    ) -> Result<Option<BlockQuantScales>> {
         if !model_config.layer_has_paged_kv_cache(layer_idx) || num_gpu_blocks == 0 {
             return Ok(None);
         }
@@ -281,6 +273,11 @@ impl CacheEngine {
         if !layer_device.is_cuda() {
             candle_core::bail!("Block-quantized KV cache is only supported on CUDA/ROCm");
         }
+        let kind = match cache_config.cache_type {
+            PagedCacheType::Q8_0 => mistralrs_paged_attn::BlockQuantKind::Q8_0,
+            PagedCacheType::Q4_0 => mistralrs_paged_attn::BlockQuantKind::Q4_0,
+            _ => return Ok(None),
+        };
         let kv_heads = model_config.num_kv_heads_for_layer(layer_idx);
         let k_dim = model_config.k_head_dim_for_layer(layer_idx);
         let v_dim = model_config.v_head_dim_for_layer(layer_idx);
@@ -300,7 +297,31 @@ impl CacheEngine {
             DType::F32,
             layer_device,
         )?;
-        Ok(Some((k, v)))
+        // QJL residual bits (Q4_0 only): 4 bytes per 32-elem group, same
+        // grouping as the scales (k token-major, v transposed group-major).
+        let (k_res, v_res) = if kind == mistralrs_paged_attn::BlockQuantKind::Q4_0 {
+            (
+                Some(Tensor::zeros(
+                    (num_gpu_blocks, kv_heads, block, k_dim / 32, 4),
+                    DType::U8,
+                    layer_device,
+                )?),
+                Some(Tensor::zeros(
+                    (num_gpu_blocks, kv_heads, v_dim / 32, block, 4),
+                    DType::U8,
+                    layer_device,
+                )?),
+            )
+        } else {
+            (None, None)
+        };
+        Ok(Some(BlockQuantScales {
+            k,
+            v,
+            kind,
+            k_res,
+            v_res,
+        }))
     }
 
     fn allocate_gpu_cache(
@@ -309,7 +330,7 @@ impl CacheEngine {
         dtype: DType,
         device: &Device,
         layer_devices: Vec<Option<Device>>,
-    ) -> Result<(Vec<KVCache>, Vec<Option<(Tensor, Tensor)>>)> {
+    ) -> Result<(Vec<KVCache>, Vec<Option<BlockQuantScales>>)> {
         let mut gpu_cache = Vec::new();
         let mut q8_scales = Vec::new();
 

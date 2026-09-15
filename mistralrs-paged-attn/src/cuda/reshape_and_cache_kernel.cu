@@ -231,6 +231,10 @@ __global__ void reshape_and_cache_q4_kernel(
                                         // head_size/32]
     float *__restrict__ v_scales,       // [num_blocks, num_heads,
                                         // head_size/32, block_size]
+    uint8_t *__restrict__ k_res,        // [num_blocks, num_heads, block_size,
+                                        // head_size/32, 4]
+    uint8_t *__restrict__ v_res,        // [num_blocks, num_heads,
+                                        // head_size/32, block_size, 4]
     const int64_t *__restrict__ slot_mapping, // [num_tokens]
     const int key_stride, const int value_stride, const int num_heads,
     const int head_size, const int block_size, const int x) {
@@ -272,6 +276,11 @@ __global__ void reshape_and_cache_q4_kernel(
   // so the dot is exact; gather inverse-rotates. Active only for bf16/256
   // (must match the decode-side gate); otherwise K stages through unrotated.
   __shared__ float wht_k[256];
+  // QJL residual sign staging: one byte per head-dim (0/1), packed to 4
+  // bytes per 32-elem group after the quantize loop. Only filled on the
+  // WHT/LM path; otherwise the residual sidecars stay zero.
+  __shared__ uint8_t sh_rk[512];
+  __shared__ uint8_t sh_rv[512];
   constexpr bool kDoWht =
       std::is_same<scalar_t, __nv_bfloat16>::value;
   for (int d = threadIdx.x; d < head_size && d < 256; d += blockDim.x) {
@@ -359,6 +368,15 @@ __global__ void reshape_and_cache_q4_kernel(
       nk1 = vllm::q4::nearest_level_q4_lm(yk1);
       nv0 = vllm::q4::nearest_level_q4_lm(yv0);
       nv1 = vllm::q4::nearest_level_q4_lm(yv1);
+      // QJL residual signs in the rotated domain: s = (x >= x_hat).
+      sh_rk[dd] = static_cast<uint8_t>(
+          fk0 >= vllm::q4::kQ4LmLevels[nk0] * dk ? 1u : 0u);
+      sh_rk[dd + 1] = static_cast<uint8_t>(
+          fk1 >= vllm::q4::kQ4LmLevels[nk1] * dk ? 1u : 0u);
+      sh_rv[dd] = static_cast<uint8_t>(
+          fv0 >= vllm::q4::kQ4LmLevels[nv0] * dv ? 1u : 0u);
+      sh_rv[dd + 1] = static_cast<uint8_t>(
+          fv1 >= vllm::q4::kQ4LmLevels[nv1] * dv ? 1u : 0u);
     } else {
       yk0 = yk0 > 7.f ? 7.f : (yk0 < -8.f ? -8.f : yk0);
       yk1 = yk1 > 7.f ? 7.f : (yk1 < -8.f ? -8.f : yk1);
@@ -400,6 +418,34 @@ __global__ void reshape_and_cache_q4_kernel(
     atomicAnd(word1, ~(0xFu << sh1));
     atomicOr(word1, static_cast<unsigned int>(nv1) << sh1);
   }
+  // QJL residual sidecars: pack staged sign bits (byte b of group c holds
+  // elems [8b, 8b+7], LSB-first) and write 4 bytes per group. K is
+  // token-major, V transposed group-major, mirroring the scale sidecars.
+  if (do_wht) {
+    __syncthreads();
+    for (int cb = threadIdx.x; cb < G * 4; cb += blockDim.x) {
+      const int c = cb / 4;
+      const int b = cb % 4;
+      uint8_t kb = 0;
+      uint8_t vb = 0;
+#pragma unroll
+      for (int i = 0; i < 8; ++i) {
+        kb = static_cast<uint8_t>(kb | (sh_rk[c * 32 + b * 8 + i] << i));
+        vb = static_cast<uint8_t>(vb | (sh_rv[c * 32 + b * 8 + i] << i));
+      }
+      const int64_t k_res_idx =
+          ((block_idx * num_heads + head_idx) * block_size + block_offset) *
+              G * 4 +
+          c * 4 + b;
+      k_res[k_res_idx] = kb;
+      const int64_t v_res_idx =
+          (((block_idx * num_heads + head_idx) * G + c) * block_size +
+           block_offset) *
+              4 +
+          b;
+      v_res[v_res_idx] = vb;
+    }
+  }
 }
 
 #define CALL_RESHAPE_AND_CACHE_Q4(KV_T)                                        \
@@ -407,8 +453,8 @@ __global__ void reshape_and_cache_q4_kernel(
       <<<grid_q4, block_q4, 0, stream>>>(                                      \
           reinterpret_cast<KV_T *>(key), reinterpret_cast<KV_T *>(value),      \
           reinterpret_cast<int8_t *>(key_cache),                               \
-          reinterpret_cast<int8_t *>(value_cache), k_scales, v_scales,         \
-          slot_mapping, key_stride, value_stride, num_heads, head_size,        \
+          reinterpret_cast<int8_t *>(value_cache), k_scales, v_scales, k_res,  \
+          v_res, slot_mapping, key_stride, value_stride, num_heads, head_size, \
           block_size, x);
 
 // Q4_0 block-quantize write path. Payload is nibbles (x = 16 bytes cover 32
@@ -422,6 +468,8 @@ extern "C" void reshape_and_cache_q4(
     void *value_cache, // [num_blocks, num_heads, head_size, block_size/2]
     float *k_scales,   // [num_blocks, num_heads, block_size, head_size/32]
     float *v_scales,   // [num_blocks, num_heads, head_size/32, block_size]
+    uint8_t *k_res,    // [num_blocks, num_heads, block_size, head_size/32, 4]
+    uint8_t *v_res,    // [num_blocks, num_heads, head_size/32, block_size, 4]
     int64_t *slot_mapping, // [num_tokens]
 
     int32_t num_tokens, int32_t num_heads, int32_t head_size,
