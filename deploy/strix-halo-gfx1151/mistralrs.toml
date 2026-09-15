@@ -12,8 +12,6 @@
 #   - Per-model `alias` gives short API names (llama.cpp-style); the full
 #     model_id path also resolves. With one eager model, clients can still
 #     just use model="default".
-#   - There is no per-model "alias". The API-visible model id is the model path
-#     (model_id). With one active model, clients just use model="default".
 #   - Sampling knobs from models.ini (top-k, top-p, temp, repeat/presence
 #     penalty) are per-request in the OpenAI API, not set here.
 #   - spec-type = draft-mtp is a global runtime flag in mistral.rs, not per-model.
@@ -82,6 +80,7 @@ tok_model_id = "Qwen/Qwen3.8-27B"
 model_id = "models/unsloth/Qwen3.6-27B-MTP-GGUF"
 alias = "qwen3.6-27b-q4"
 lazy = true
+mtp = false
 
 [models.format]
 quantized_file = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
@@ -94,6 +93,7 @@ quantized_file = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
 model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
 alias = "qwen3.6-35b-q4"
 lazy = true
+mtp = false
 
 [models.format]
 quantized_file = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
@@ -104,6 +104,7 @@ quantized_file = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
 model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
 alias = "qwen3.6-35b-q8"
 lazy = true
+mtp = false
 
 [models.format]
 quantized_file = "Qwen3.6-35B-A3B-Q8_0.gguf"
@@ -112,6 +113,7 @@ quantized_file = "Qwen3.6-35B-A3B-Q8_0.gguf"
 model_id = "models/unsloth/Qwen3.6-27B-MTP-GGUF"
 alias = "qwen3.6-27b-ud-q4"
 lazy = true
+mtp = false
 
 [models.format]
 quantized_file = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
@@ -124,6 +126,7 @@ quantized_file = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
 model_id = "models/DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF"
 alias = "fable-fusion-27b"
 lazy = true
+mtp = false
 
 [models.format]
 quantized_file = "Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-AMD-MTP-Q6_K.gguf"
@@ -137,6 +140,7 @@ mmproj = "mmproj-F16.gguf"
 model_id = "models/unsloth/Qwen3.8-27B-GGUF"
 alias = "qwen3.8-27b-unsloth"
 lazy = true
+mtp = false
 
 [models.format]
 quantized_file = "Qwen3.8-27B-UD-Q6_K_XL.gguf"
@@ -151,6 +155,7 @@ tok_model_id = "Qwen/Qwen3.8-27B"
 model_id = "models/unsloth/Muse-Glimmer-30B-GGUF"
 alias = "Muse-glimmer-30b"
 lazy = true
+mtp = false
 
 [models.format]
 quantized_file = "Muse-Glimmer-30B-UD-Q6_K_XL.gguf"
@@ -165,6 +170,7 @@ tok_model_id = "meta-models/Muse-Glimmer-30B"
 model_id = "models/unsloth/Qwen3-Coder-Next-GGUF"
 alias = "qwen3-coder-next"
 lazy = true
+mtp = false
 
 [models.format]
 quantized_file = "Qwen3-Coder-Next-MXFP4_MOE.gguf"
@@ -173,6 +179,7 @@ quantized_file = "Qwen3-Coder-Next-MXFP4_MOE.gguf"
 model_id = "models/unsloth/gemma-4-26B-A4B-it-GGUF"
 alias = "gemma-4-26b"
 lazy = true
+mtp = false
 
 [models.format]
 quantized_file = "gemma-4-26B-A4B-it-UD-Q6_K_XL.gguf"
@@ -182,6 +189,7 @@ mmproj = "mmproj-F16.gguf"
 model_id = "models/mradermacher/Llama-3.2-30B-A3B-II-Dark-Champion-INSTRUCT-Heretic-Abliterated-Uncensored-GGUF"
 alias = "llama-3.2-30b"
 lazy = true
+mtp = false
 
 [models.format]
 quantized_file = "Llama3.2-30B-A3B-II-Dark-Champion-INSTRUCT-Heretic-Abliterated-Uncensored.Q6_K.gguf"
@@ -194,6 +202,7 @@ quantized_file = "Llama3.2-30B-A3B-II-Dark-Champion-INSTRUCT-Heretic-Abliterated
 model_id = "models/unsloth/Qwen3.5-4B-MTP-GGUF"
 alias = "qwen3.5-4b"
 lazy = true
+mtp = false
 
 [models.format]
 quantized_file = "Qwen3.5-4B-Q8_0.gguf"
@@ -202,6 +211,7 @@ quantized_file = "Qwen3.5-4B-Q8_0.gguf"
 model_id = "models/unsloth/Qwen3-16B-A3B-GGUF"
 alias = "qwen3-16b"
 lazy = true
+mtp = false
 
 [models.format]
 quantized_file = "Qwen3-16B-A3B-Q4_K_M.gguf"

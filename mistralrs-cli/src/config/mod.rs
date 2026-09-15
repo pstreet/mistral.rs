@@ -125,6 +125,11 @@ pub struct ModelEntry {
     /// to `model_id` when the loader id differs, else the loader id itself.
     #[serde(default)]
     pub alias: Option<String>,
+    /// MTP speculative decoding for this model. `None` inherits the global
+    /// `[runtime] mtp` flag. Only honored for the first model and lazy
+    /// entries (a headless model fails at load, not at boot, when lazy).
+    #[serde(default)]
+    pub mtp: Option<bool>,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -180,10 +185,12 @@ fn validate_config(config: &CliConfig) -> Result<()> {
     }
 
     if let Some(default_id) = default_model_id {
-        let has_model = models.iter().any(|model| model.model_id == *default_id);
+        let has_model = models.iter().any(|model| {
+            model.model_id == *default_id || model.alias.as_deref() == Some(default_id)
+        });
         if !has_model {
             anyhow::bail!(
-                "default_model_id '{}' does not match any model_id in [[models]]",
+                "default_model_id '{}' does not match any model_id or alias in [[models]]",
                 default_id
             );
         }

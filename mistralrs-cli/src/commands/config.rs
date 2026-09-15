@@ -65,6 +65,16 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
 
     let (model_configs, cpu) = build_model_configs(&models, &runtime, &global.token_source).await?;
 
+    // A per-entry `mtp = true` needs an MtpConfig to inherit even when the
+    // global flag is off (e.g. headless seed + MTP lazy entry). This only
+    // feeds the fallback; the global setting is untouched.
+    let mtp_entry_fallback = runtime.mtp_config().is_none().then(|| {
+        models.iter().any(|m| m.mtp == Some(true)).then(|| {
+            mistralrs_core::MtpConfig::builtin(runtime.mtp_n_predict)
+                .with_draft_sampling_method(runtime.mtp_draft_sampling.into())
+        })
+    }).flatten();
+
     let mut builder = MistralRsForServerBuilder::new()
         .with_max_seqs(runtime.max_seqs)
         .with_max_num_batched_tokens(runtime.max_num_batched_tokens)
@@ -96,6 +106,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         .with_paged_ctxt_len_optional(paged_ctxt_len)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
         .with_mtp_config_optional(runtime.mtp_config())
+        .with_mtp_config_fallback_optional(mtp_entry_fallback)
         .with_paged_attn_cache_type(paged_cache_type);
 
     for config in model_configs {
@@ -376,6 +387,9 @@ async fn build_model_configs(
         if entry.lazy {
             config = config.with_lazy(true);
         }
+        if let Some(mtp) = entry.mtp {
+            config = config.with_mtp(mtp);
+        }
         if let Some(max_model_len) = entry.max_model_len {
             config = config.with_max_model_len(max_model_len);
         }
@@ -535,6 +549,43 @@ quantized_file = "model-Q4_K_M.gguf"
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].alias.as_deref(), Some("tiny"));
         assert!(models[0].lazy);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn from_config_maps_mtp_opt_in() {
+        let root = std::env::temp_dir().join(format!("mistralrs-gguf-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("model-Q4_K_M.gguf"), []).unwrap();
+        let input = format!(
+            r#"
+command = "serve"
+
+[[models]]
+model_id = "{}"
+mtp = false
+
+[models.format]
+quantized_file = "model-Q4_K_M.gguf"
+"#,
+            root.display()
+        );
+        let config: CliConfig = toml::from_str(&input).unwrap();
+        let CliConfig::Serve(config) = config else {
+            unreachable!()
+        };
+        assert_eq!(config.models[0].mtp, Some(false));
+
+        let (models, _) = build_model_configs(
+            &config.models,
+            &config.runtime,
+            &mistralrs_core::TokenSource::None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].mtp, Some(false));
 
         fs::remove_dir_all(root).unwrap();
     }

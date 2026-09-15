@@ -46,6 +46,10 @@ pub struct ModelConfig {
     /// Only honored for non-first models: the first model seeds the instance.
     #[serde(default)]
     pub lazy: bool,
+    /// MTP speculative decoding. `None` inherits the global flag. Honored
+    /// for the first model and lazy entries only.
+    #[serde(default)]
+    pub mtp: Option<bool>,
 }
 
 impl ModelConfig {
@@ -62,11 +66,17 @@ impl ModelConfig {
             in_situ_quant: None,
             encoder_cache_memory_bytes: None,
             lazy: false,
+            mtp: None,
         }
     }
 
     pub fn with_lazy(mut self, lazy: bool) -> Self {
         self.lazy = lazy;
+        self
+    }
+
+    pub fn with_mtp(mut self, mtp: bool) -> Self {
+        self.mtp = Some(mtp);
         self
     }
 
@@ -306,6 +316,10 @@ pub struct MistralRsForServerBuilder {
 
     /// Optional MTP assistant configuration.
     mtp_config: Option<MtpConfig>,
+    /// Fallback MTP config for per-entry `mtp = true` opt-ins when the
+    /// global flag is off. Never applied to the seed or eager models; only
+    /// lazy entries read it.
+    mtp_entry_fallback: Option<MtpConfig>,
     encoder_cache_memory_bytes: Option<usize>,
 
     /// Prefill chunk size in tokens for paged attention. 0 = use default (4096).
@@ -361,12 +375,38 @@ impl Default for MistralRsForServerBuilder {
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
             mtp_config: defaults::MTP_CONFIG,
+            mtp_entry_fallback: None,
             encoder_cache_memory_bytes: None,
             prefill_chunk_size: defaults::PREFILL_CHUNK_SIZE,
             disable_eos_stop: false,
             code_exec_config: None,
             shell_config: None,
         }
+    }
+}
+
+/// Resolve the effective MTP config for one model entry. `None` inherits the
+/// global flag; an explicit `true` without any available config is a boot
+/// error rather than a silent plain load. Free function (not a method) so
+/// call sites can use it after `self.device` is moved out.
+fn resolve_entry_mtp_config(
+    global: &Option<MtpConfig>,
+    fallback: &Option<MtpConfig>,
+    entry_mtp: Option<bool>,
+    config_key: &str,
+) -> Result<Option<MtpConfig>> {
+    if entry_mtp.unwrap_or(global.is_some()) {
+        global
+            .clone()
+            .or_else(|| fallback.clone())
+            .map(Some)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Model '{config_key}' requests MTP but no MTP configuration is available (global [runtime] mtp is off and no fallback was provided)."
+                )
+            })
+    } else {
+        Ok(None)
     }
 }
 
@@ -718,6 +758,12 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Fallback MTP config for per-entry opt-ins when the global flag is off.
+    pub fn with_mtp_config_fallback_optional(mut self, config: Option<MtpConfig>) -> Self {
+        self.mtp_entry_fallback = config;
+        self
+    }
+
     /// Set prefill chunk size in tokens for paged attention.
     pub fn with_prefill_chunk_size(mut self, size: usize) -> Self {
         self.prefill_chunk_size = size;
@@ -997,6 +1043,21 @@ impl MistralRsForServerBuilder {
         Ok(mistralrs)
     }
 
+    /// Resolve the effective MTP config for one model entry (see the free
+    /// function below for semantics).
+    fn resolve_entry_mtp(
+        &self,
+        entry_mtp: Option<bool>,
+        config_key: &str,
+    ) -> Result<Option<MtpConfig>> {
+        resolve_entry_mtp_config(
+            &self.mtp_config,
+            &self.mtp_entry_fallback,
+            entry_mtp,
+            config_key,
+        )
+    }
+
     /// Build a multi-model instance
     pub async fn build_multi_model(mut self) -> Result<SharedMistralRsState> {
         let mtp_runtime = MtpRuntimeConfig::new(self.prefix_cache_n);
@@ -1014,6 +1075,9 @@ impl MistralRsForServerBuilder {
                 first_model.model_id
             );
         }
+        // Resolve before `self.device` is moved out below.
+        let first_mtp_config =
+            self.resolve_entry_mtp(first_model.mtp, &first_model.model_id)?;
         let model = first_model.model.clone();
         let model_for_config = model.clone();
         let first_chat_template = first_model
@@ -1055,7 +1119,7 @@ impl MistralRsForServerBuilder {
             .with_jinja_explicit(first_jinja_explicit.clone())
             .with_max_model_len(first_max_model_len)
             .with_hf_config_overrides(first_hf_config_overrides.clone())
-            .with_mtp(self.mtp_config.as_ref().is_some_and(MtpConfig::is_builtin))
+            .with_mtp(first_mtp_config.as_ref().is_some_and(MtpConfig::is_builtin))
             .with_encoder_cache_memory_bytes(first_encoder_cache_memory_bytes)
             .build()?;
 
@@ -1106,7 +1170,7 @@ impl MistralRsForServerBuilder {
         if let Some(first) = paged_kv_plan.paged_attn.first_mut() {
             *first = reserve_external_mtp_memory_with_runtime(
                 *first,
-                self.mtp_config.as_ref(),
+                first_mtp_config.as_ref(),
                 mtp_runtime,
                 &dtype,
                 &device,
@@ -1139,7 +1203,7 @@ impl MistralRsForServerBuilder {
             isq,
             first_cache_config,
         )?;
-        if let Some(mtp_config) = self.mtp_config.clone() {
+        if let Some(mtp_config) = first_mtp_config.clone() {
             pipeline.lock().await.attach_speculative_with_runtime(
                 mistralrs_core::SpeculativeConfig::Mtp(mtp_config.with_draft_lm_head_isq(isq)),
                 mtp_runtime,
@@ -1197,7 +1261,7 @@ impl MistralRsForServerBuilder {
             jinja_explicit: first_jinja_explicit,
             max_model_len: first_max_model_len,
             hf_config_overrides: first_hf_config_overrides,
-            mtp_config: self.mtp_config.clone(),
+            mtp_config: first_mtp_config.clone(),
             encoder_cache_memory_bytes: first_encoder_cache_memory_bytes,
         };
 
@@ -1330,6 +1394,12 @@ impl MistralRsForServerBuilder {
                     search_callback: self.search_callback.clone(),
                     tool_callbacks: HashMap::new(),
                 };
+                let entry_mtp_config = resolve_entry_mtp_config(
+                    &self.mtp_config,
+                    &self.mtp_entry_fallback,
+                    model_config.mtp,
+                    &model_config.model_id,
+                )?;
                 let loader_config = ModelLoaderConfig {
                     model_selected: model,
                     token_source: self.token_source.clone(),
@@ -1344,7 +1414,10 @@ impl MistralRsForServerBuilder {
                     jinja_explicit,
                     max_model_len,
                     hf_config_overrides,
-                    mtp_config: None,
+                    // Reload attaches the draft head from this config
+                    // (builtin needs no extra reservation: reserve_* is a
+                    // no-op for it).
+                    mtp_config: entry_mtp_config,
                     encoder_cache_memory_bytes: model_config
                         .encoder_cache_memory_bytes
                         .map(NonZeroUsize::get)
@@ -1389,6 +1462,13 @@ impl MistralRsForServerBuilder {
                 );
                 loaded_model_ids.push(primary_id);
                 continue;
+            }
+
+            if model_config.mtp == Some(true) {
+                anyhow::bail!(
+                    "Model '{}' requests MTP, which is currently supported for the first model and lazy entries only.",
+                    model_config.model_id
+                );
             }
 
             let model = model_config.model.clone();
