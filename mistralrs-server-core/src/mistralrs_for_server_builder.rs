@@ -1123,6 +1123,11 @@ impl MistralRsForServerBuilder {
 
         let mut loaded_model_ids = Vec::new();
         let mut registered_ids = HashSet::new();
+        // Every primary ID plus every registered alias. Key-alias
+        // registration consults this so duplicate config keys (two entries
+        // sharing one model_id) degrade to alias-only addressing with a log
+        // line instead of failing the boot.
+        let mut used_names = HashSet::new();
 
         let pipeline: LoadedPipeline = loader.load_model_from_hf(
             None,
@@ -1232,8 +1237,10 @@ impl MistralRsForServerBuilder {
                 mistralrs
                     .register_model_alias(first_pipeline_name.clone(), &first_primary_id)
                     .map_err(|e| anyhow::anyhow!(e))?;
+                used_names.insert(first_pipeline_name.clone());
             }
         }
+        used_names.insert(first_primary_id.clone());
 
         // Load additional models
         for (model_index, model_config) in self.models.iter().enumerate().skip(1) {
@@ -1258,6 +1265,7 @@ impl MistralRsForServerBuilder {
                         model_config.model_id
                     );
                 }
+                used_names.insert(primary_id.clone());
 
                 let model = model_config.model.clone();
                 let dtype = get_model_dtype(&model)?;
@@ -1360,11 +1368,19 @@ impl MistralRsForServerBuilder {
 
                 // Addressable by config key too (mirrors the eager path's
                 // pipeline-name alias; the real pipeline name is unknown
-                // until first load).
+                // until first load). A duplicate config key keeps its first
+                // registration; the model stays reachable via its alias.
                 if model_config.model_id != primary_id {
-                    mistralrs
-                        .register_model_alias(model_config.model_id.clone(), &primary_id)
-                        .map_err(|e| anyhow::anyhow!(e))?;
+                    if used_names.insert(model_config.model_id.clone()) {
+                        mistralrs
+                            .register_model_alias(model_config.model_id.clone(), &primary_id)
+                            .map_err(|e| anyhow::anyhow!(e))?;
+                    } else {
+                        info!(
+                            "Config key '{}' already registered; model `{}` reachable by alias only",
+                            model_config.model_id, primary_id
+                        );
+                    }
                 }
 
                 info!(
@@ -1460,6 +1476,7 @@ impl MistralRsForServerBuilder {
                     model_config.model_id
                 );
             }
+            used_names.insert(primary_id.clone());
 
             // Add the model to the MistralRs instance
             let engine_config = mistralrs_core::EngineConfig {
@@ -1525,6 +1542,7 @@ impl MistralRsForServerBuilder {
                     mistralrs
                         .register_model_alias(pipeline_name.clone(), &primary_id)
                         .map_err(|e| anyhow::anyhow!(e))?;
+                    used_names.insert(pipeline_name.clone());
                 }
             }
 
