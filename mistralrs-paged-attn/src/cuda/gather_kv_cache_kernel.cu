@@ -130,11 +130,15 @@ __global__ void gather_kv_cache_kernel(
       __shared__ float wht_row[256];
       for (int32_t h = 0; h < num_kv_heads; ++h) {
         // QJL residual row for this (block, head, slot), token-major.
-        const uint8_t *k_res_row =
-            k_res + ((static_cast<int64_t>(block_id) * num_kv_heads + h) *
-                         block_size +
-                     slot) *
-                        q8_groups * 4;
+        // Null when the sidecars are not allocated (QJL disabled).
+        const uint8_t *k_res_row = nullptr;
+        if (k_res != nullptr) {
+          k_res_row =
+              k_res + ((static_cast<int64_t>(block_id) * num_kv_heads + h) *
+                           block_size +
+                       slot) *
+                          q8_groups * 4;
+        }
         for (int32_t d = threadIdx.x; d < 256; d += blockDim.x) {
           const int64_t k_q4_idx =
               static_cast<int64_t>(block_id) * k_block_stride +
@@ -187,12 +191,16 @@ __global__ void gather_kv_cache_kernel(
                   block_size +
               slot;
           // QJL residual group base for this head-dim group, group-major.
-          const uint8_t *v_res_gbase =
-              v_res + (((static_cast<int64_t>(block_id) * num_kv_heads + h) *
-                            q8_groups +
-                        d / vllm::q4::kQ4BlockSize) *
-                       block_size) *
-                          4;
+          // Null when the sidecars are not allocated (QJL disabled).
+          const uint8_t *v_res_gbase = nullptr;
+          if (v_res != nullptr) {
+            v_res_gbase =
+                v_res + (((static_cast<int64_t>(block_id) * num_kv_heads + h) *
+                              q8_groups +
+                          d / vllm::q4::kQ4BlockSize) *
+                         block_size) *
+                            4;
+          }
           wht_vrow[d] = vllm::q4::dequant_v_q4_res<true>(
               v_res_gbase, slot, d & 31, v_nib, v_scale[v_scale_idx]);
         }

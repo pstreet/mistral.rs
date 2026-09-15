@@ -983,8 +983,8 @@ pub fn reshape_and_cache_q4(
     value_cache: &Tensor,
     k_scales: &Tensor,
     v_scales: &Tensor,
-    k_res: &Tensor,
-    v_res: &Tensor,
+    k_res: Option<&Tensor>,
+    v_res: Option<&Tensor>,
     slot_mapping: &Tensor,
 ) -> Result<()> {
     const Q4_BLOCK: usize = 32;
@@ -1014,11 +1014,13 @@ pub fn reshape_and_cache_q4(
         }
     }
     for (name, t) in [("k_res", k_res), ("v_res", v_res)] {
-        if t.dtype() != DType::U8 {
-            candle::bail!(
-                "reshape_and_cache_q4 requires u8 {name}, got {:?}",
-                t.dtype()
-            );
+        if let Some(t) = t {
+            if t.dtype() != DType::U8 {
+                candle::bail!(
+                    "reshape_and_cache_q4 requires u8 {name}, got {:?}",
+                    t.dtype()
+                );
+            }
         }
     }
 
@@ -1057,16 +1059,8 @@ pub fn reshape_and_cache_q4(
         Storage::Cuda(s) => s,
         _ => candle::bail!("Q4 v_scales must be a cuda tensor"),
     };
-    let (kr_st, kr_l) = k_res.storage_and_layout();
-    let kr_cuda = match &*kr_st {
-        Storage::Cuda(s) => s,
-        _ => candle::bail!("Q4 k_res must be a cuda tensor"),
-    };
-    let (vr_st, vr_l) = v_res.storage_and_layout();
-    let vr_cuda = match &*vr_st {
-        Storage::Cuda(s) => s,
-        _ => candle::bail!("Q4 v_res must be a cuda tensor"),
-    };
+    let kr_storage = k_res.map(|kr| kr.storage_and_layout());
+    let vr_storage = v_res.map(|vr| vr.storage_and_layout());
 
     let (num_tokens, num_heads, head_size, key_stride) =
         cache_input_layout(k_l, "key", "reshape_and_cache_q4")?;
@@ -1114,19 +1108,23 @@ pub fn reshape_and_cache_q4(
             [num_blocks, num_heads, groups, block_size]
         );
     }
-    if k_res.shape().dims() != [num_blocks, num_heads, block_size, groups, 4] {
-        candle::bail!(
-            "shape mismatch k_res {:?}, expected {:?}",
-            k_res.shape(),
-            [num_blocks, num_heads, block_size, groups, 4]
-        );
+    if let Some(k_res) = k_res {
+        if k_res.shape().dims() != [num_blocks, num_heads, block_size, groups, 4] {
+            candle::bail!(
+                "shape mismatch k_res {:?}, expected {:?}",
+                k_res.shape(),
+                [num_blocks, num_heads, block_size, groups, 4]
+            );
+        }
     }
-    if v_res.shape().dims() != [num_blocks, num_heads, groups, block_size, 4] {
-        candle::bail!(
-            "shape mismatch v_res {:?}, expected {:?}",
-            v_res.shape(),
-            [num_blocks, num_heads, groups, block_size, 4]
-        );
+    if let Some(v_res) = v_res {
+        if v_res.shape().dims() != [num_blocks, num_heads, groups, block_size, 4] {
+            candle::bail!(
+                "shape mismatch v_res {:?}, expected {:?}",
+                v_res.shape(),
+                [num_blocks, num_heads, groups, block_size, 4]
+            );
+        }
     }
     if block_size % 2 != 0 {
         candle::bail!("reshape_and_cache_q4 requires an even block_size, got {block_size}");
@@ -1182,10 +1180,27 @@ pub fn reshape_and_cache_q4(
         _ => unreachable!("dtype checked above"),
     };
 
-    let kr_u8 = kr_cuda.as_cuda_slice::<u8>()?;
-    let (kr_ptr, _kr_guard) = slice_ptr(kr_u8, kr_l.start_offset());
-    let vr_u8 = vr_cuda.as_cuda_slice::<u8>()?;
-    let (vr_ptr, _vr_guard) = slice_ptr(vr_u8, vr_l.start_offset());
+    // QJL residual sidecars; null when QJL is disabled (store skips write).
+    let (kr_ptr, _kr_guard) = if let Some((ref s, l)) = kr_storage {
+        let s = match &**s {
+            Storage::Cuda(s) => s,
+            _ => candle::bail!("Q4 k_res must be a cuda tensor"),
+        };
+        let (ptr, guard) = slice_ptr(s.as_cuda_slice::<u8>()?, l.start_offset());
+        (ptr as *mut u8, Some(guard))
+    } else {
+        (std::ptr::null_mut(), None)
+    };
+    let (vr_ptr, _vr_guard) = if let Some((ref s, l)) = vr_storage {
+        let s = match &**s {
+            Storage::Cuda(s) => s,
+            _ => candle::bail!("Q4 v_res must be a cuda tensor"),
+        };
+        let (ptr, guard) = slice_ptr(s.as_cuda_slice::<u8>()?, l.start_offset());
+        (ptr as *mut u8, Some(guard))
+    } else {
+        (std::ptr::null_mut(), None)
+    };
 
     unsafe {
         ffi::reshape_and_cache_q4(

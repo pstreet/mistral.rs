@@ -262,6 +262,9 @@ fn write_kv_cache(
                 )
             })?;
         if scales.kind == mistralrs_paged_attn::BlockQuantKind::Q4_0 {
+            // Residual sidecars are `Some` only with MISTRALRS_Q4_QJL=1;
+            // `None` (default) runs the store without the residual write
+            // and decode falls back to the plain LM grid.
             return mistralrs_paged_attn::reshape_and_cache_q4(
                 key,
                 value,
@@ -269,14 +272,8 @@ fn write_kv_cache(
                 value_cache,
                 &scales.k,
                 &scales.v,
-                scales
-                    .k_res
-                    .as_ref()
-                    .expect("Q4_0 requires residual sidecars"),
-                scales
-                    .v_res
-                    .as_ref()
-                    .expect("Q4_0 requires residual sidecars"),
+                scales.k_res.as_ref(),
+                scales.v_res.as_ref(),
                 slot_mapping,
             );
         }

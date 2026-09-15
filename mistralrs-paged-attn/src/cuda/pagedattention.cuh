@@ -360,10 +360,13 @@ __device__ void paged_attention_kernel(
           const int q4_off2 = q4_vec % x;
           scalar_t *q4_k_dst = reinterpret_cast<scalar_t *>(&k_vecs[j]);
           const int q4_base = vec_idx * VEC_SIZE;
-          // QJL residual row for this token (valid when kLmQ4; else null).
+          // QJL residual row for this token. Null unless kLmQ4 with the
+          // sidecars allocated (QJL enabled); helpers fall back to LM.
           const uint8_t *k_res_row = nullptr;
           if constexpr (kLmQ4) {
-            k_res_row = k_res + qk_scale_base * Q8_GROUPS * 4;
+            if (k_res != nullptr) {
+              k_res_row = k_res + qk_scale_base * Q8_GROUPS * 4;
+            }
           }
 #if defined(USE_ROCM)
           if constexpr (kQ4KStream) {
@@ -674,15 +677,18 @@ __device__ void paged_attention_kernel(
                row_idx / 32) *
                   BLOCK_SIZE +
               physical_block_offset;
-          // QJL residual group base for this head-dim row (valid when kLmQ4).
+          // QJL residual group base for this head-dim row. Null unless
+          // kLmQ4 with the sidecars allocated; helpers fall back to LM.
           const uint8_t *v_res_gbase = nullptr;
           if constexpr (kLmQ4) {
-            v_res_gbase =
-                v_res + (((physical_block_number * num_kv_heads + kv_head_idx) *
-                              Q8_GROUPS +
-                          row_idx / 32) *
-                         BLOCK_SIZE) *
-                            4;
+            if (v_res != nullptr) {
+              v_res_gbase =
+                  v_res + (((physical_block_number * num_kv_heads + kv_head_idx) *
+                                Q8_GROUPS +
+                            row_idx / 32) *
+                           BLOCK_SIZE) *
+                              4;
+            }
           }
 #if defined(USE_ROCM)
           if constexpr (V_VEC_SIZE % 4 == 0 && vllm::bq::kUseVecDequant<scalar_t>) {

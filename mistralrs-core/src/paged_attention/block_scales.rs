@@ -24,9 +24,24 @@ pub(crate) struct BlockQuantScales {
     pub v: Tensor,
     pub kind: mistralrs_paged_attn::BlockQuantKind,
     // QJL 1-bit residual sidecars (Q4_0 only): U8 bit packs, 4 bytes per
-    // 32-elem group. `None` for Q8_0 and non-LM paths.
+    // 32-elem group. `Some` only when `MISTRALRS_Q4_QJL=1`; otherwise the
+    // kernels fall back to the plain LM grid. `None` for Q8_0.
     pub k_res: Option<Tensor>,
     pub v_res: Option<Tensor>,
+}
+
+// QJL 1-bit residual for Q4_0 KV: opt-in via `MISTRALRS_Q4_QJL=1` (or
+// `true`), off by default. Measured flat-to-negative on 391 exact-match
+// and logprob distance vs LM-only while costing +25% KV memory, so it
+// stays a configurable experiment, not the default path. Read once;
+// restart the server to change.
+pub(crate) fn qjl_enabled() -> bool {
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| {
+        std::env::var("MISTRALRS_Q4_QJL")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    })
 }
 
 fn registry() -> &'static Mutex<HashMap<(usize, usize), BlockQuantScales>> {

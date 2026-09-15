@@ -88,12 +88,16 @@ __device__ __forceinline__ float dequantize_q4_res(uint8_t nib, uint32_t sbit,
 
 // K decode with optional residual: k_res_row points at this
 // (block, head, slot) row (row base = k_res + row*G*4), d = head-dim.
-// When Lm is false the residual load compiles out (row may be null).
+// Null row (QJL disabled) falls back to the plain LM grid; when Lm is
+// false the residual load compiles out (row may be null).
 template <bool Lm>
 __device__ __forceinline__ float dequant_k_q4_res(const uint8_t *k_res_row,
                                                  int d, uint8_t nib,
                                                  float scale) {
   if constexpr (Lm) {
+    if (k_res_row == nullptr) {
+      return kQ4LmLevels[nib] * scale;
+    }
     int i = d & 31;
     uint32_t s =
         (static_cast<uint32_t>(k_res_row[(d >> 5) * 4 + (i >> 3)] >> (i & 7))) &
@@ -105,12 +109,16 @@ __device__ __forceinline__ float dequant_k_q4_res(const uint8_t *k_res_row,
 
 // V decode with optional residual: v_res_gbase points at this
 // (block, head, group) base (base = v_res + (((b*H+h)*G+g)*B)*4),
-// slot = token slot in block, i = head-dim % 32.
+// slot = token slot in block, i = head-dim % 32. Null base falls back
+// to the plain LM grid.
 template <bool Lm>
 __device__ __forceinline__ float dequant_v_q4_res(const uint8_t *v_res_gbase,
                                                  int slot, int i, uint8_t nib,
                                                  float scale) {
   if constexpr (Lm) {
+    if (v_res_gbase == nullptr) {
+      return kQ4LmLevels[nib] * scale;
+    }
     uint32_t s =
         (static_cast<uint32_t>(v_res_gbase[slot * 4 + (i >> 3)] >> (i & 7))) &
         1u;

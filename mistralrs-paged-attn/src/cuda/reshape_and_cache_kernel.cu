@@ -421,7 +421,8 @@ __global__ void reshape_and_cache_q4_kernel(
   // QJL residual sidecars: pack staged sign bits (byte b of group c holds
   // elems [8b, 8b+7], LSB-first) and write 4 bytes per group. K is
   // token-major, V transposed group-major, mirroring the scale sidecars.
-  if (do_wht) {
+  // Null sidecars (QJL disabled) skip the write; decode falls back to LM.
+  if (do_wht && k_res != nullptr && v_res != nullptr) {
     __syncthreads();
     for (int cb = threadIdx.x; cb < G * 4; cb += blockDim.x) {
       const int c = cb / 4;

@@ -297,9 +297,13 @@ impl CacheEngine {
             DType::F32,
             layer_device,
         )?;
-        // QJL residual bits (Q4_0 only): 4 bytes per 32-elem group, same
-        // grouping as the scales (k token-major, v transposed group-major).
-        let (k_res, v_res) = if kind == mistralrs_paged_attn::BlockQuantKind::Q4_0 {
+        // QJL residual bits (Q4_0 only, opt-in via MISTRALRS_Q4_QJL):
+        // 4 bytes per 32-elem group, same grouping as the scales
+        // (k token-major, v transposed group-major). Off by default;
+        // kernels fall back to the plain LM grid on null sidecars.
+        let (k_res, v_res) = if kind == mistralrs_paged_attn::BlockQuantKind::Q4_0
+            && super::block_scales::qjl_enabled()
+        {
             (
                 Some(Tensor::zeros(
                     (num_gpu_blocks, kv_heads, block, k_dim / 32, 4),
