@@ -74,7 +74,6 @@ alias = "qwen3.8-27b"
 [models.format]
 quantized_file = "Qwen3.8-27B-Uncensored-Q6_K.gguf"
 mmproj = "mmproj-Qwen3.8-27B-Uncensored-f16.gguf"
-tok_model_id = "Qwen/Qwen3.8-27B"
 
 # ============================================================
 # Everything below is lazy: registered at boot, loaded on first request.
@@ -97,7 +96,9 @@ mtp = false
 quantized_file = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
 
 # ------------------------------------------------------------
-# Muse Glimmer 30B (vision; needs tok_model_id for GGUF)
+# Muse Glimmer 30B (vision). Standalone: no tok_model_id; config/tokenizer
+# are synthesized from the GGUF. NOTE: qwen3_5 standalone builder is proven;
+# a non-qwen3_5 vision arch may need its own builder before this lazy-loads.
 # ------------------------------------------------------------
 
 [[models]]
@@ -109,7 +110,6 @@ mtp = false
 [models.format]
 quantized_file = "Muse-Glimmer-30B-UD-Q6_K_XL.gguf"
 mmproj = "mmproj-Muse-Glimmer-30B-Q8_0.gguf"
-tok_model_id = "meta-models/Muse-Glimmer-30B"
 
 # ------------------------------------------------------------
 # Large coder / general
