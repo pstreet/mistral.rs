@@ -306,6 +306,13 @@ impl IntervalLogger {
         metrics::gauge!("mistralrs_sequences_running").set(running as f64);
     }
 
+    /// Sequences currently admitted (running + queued). Refreshed by the
+    /// engine loop, so a just-drained engine can read stale-nonzero briefly;
+    /// eviction treats that as busy and moves to the next candidate.
+    pub fn num_running(&self) -> usize {
+        self.num_running.load(Ordering::Relaxed)
+    }
+
     pub fn set_num_waiting(&self, waiting: usize) {
         self.num_waiting.store(waiting, Ordering::Relaxed);
         metrics::gauge!("mistralrs_sequences_waiting").set(waiting as f64);

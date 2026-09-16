@@ -23,7 +23,7 @@ use std::{
     fs::OpenOptions,
     io::Write,
     path::PathBuf,
-    sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
+    sync::{atomic::AtomicBool, Arc, Condvar, Mutex, RwLock},
     thread::{self, JoinHandle},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -44,6 +44,13 @@ pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISI
     None => "unknown",
 };
 pub const MISTRALRS_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Extra headroom beyond the estimated weights + KV bytes a demand-load
+/// needs: decode-graph arenas, MTP draft state, allocator fragmentation.
+const EVICT_HEADROOM_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// How long concurrent demand-load waiters block for an in-flight load
+/// before giving up (single 30B-class GGUF loads take minutes).
+const LOAD_WAIT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 pub const DEFAULT_ENGINE_REQUEST_QUEUE_CAPACITY: usize = 10_000;
 pub const REQUEST_QUEUE_DURATION_METRIC: &str = "mistralrs_request_queue_duration_seconds";
 
@@ -450,6 +457,13 @@ pub struct MistralRs {
     unloaded_models: RwLock<HashMap<String, UnloadedModelState>>,
     /// Models currently being reloaded (to prevent concurrent reloads)
     reloading_models: RwLock<HashSet<String>>,
+    /// Bumped on every completed (or failed) reload; demand-load waiters
+    /// sleep on this and re-check the maps. Spurious wakeups are harmless.
+    /// Standalone: never held together with any lock below.
+    reload_cv: Arc<(Mutex<u64>, Condvar)>,
+    /// Last dispatch time per loaded engine, for LRU eviction. Leaf: take
+    /// after `engines`, drop before calling unload.
+    last_used: RwLock<HashMap<String, Instant>>,
     default_engine_id: RwLock<Option<String>>,
     /// Alternate IDs that resolve to primary model IDs.
     model_aliases: RwLock<HashMap<String, String>>,
@@ -1720,6 +1734,8 @@ impl MistralRs {
             engines: RwLock::new(engines),
             unloaded_models: RwLock::new(HashMap::new()),
             reloading_models: RwLock::new(HashSet::new()),
+            reload_cv: Arc::new((Mutex::new(0), Condvar::new())),
+            last_used: RwLock::new(HashMap::from([(id.clone(), Instant::now())])),
             default_engine_id: RwLock::new(Some(id.clone())),
             model_aliases: RwLock::new(alias_map),
             log,
@@ -1790,71 +1806,214 @@ impl MistralRs {
     }
 
     /// Get sender for a specific model. If model_id is None, uses default engine.
-    /// If the model is unloaded, it will be automatically reloaded before returning the sender.
+    /// If the model is unloaded, it is reloaded on demand: room is evicted
+    /// first (LRU, see `evict_for_request`), and concurrent requests for the
+    /// same model wait on the in-flight load instead of erroring.
     pub fn get_sender(&self, model_id: Option<&str>) -> Result<Sender<Request>, MistralRsError> {
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
-        // Check if model is loaded
-        let is_loaded = {
-            let engines = self
-                .engines
-                .read()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
-            engines.contains_key(&resolved_model_id)
-        };
+        loop {
+            // Check if model is loaded
+            let is_loaded = {
+                let engines = self
+                    .engines
+                    .read()
+                    .map_err(|_| MistralRsError::EnginePoisoned)?;
+                engines.contains_key(&resolved_model_id)
+            };
 
-        if is_loaded {
-            // Check if engine is dead and needs reboot
-            if self.engine_dead(&resolved_model_id)? {
-                tracing::warn!("Engine {} is dead, rebooting", resolved_model_id);
-                self.reboot_engine(&resolved_model_id)?
+            if is_loaded {
+                // Check if engine is dead and needs reboot
+                if self.engine_dead(&resolved_model_id)? {
+                    tracing::warn!("Engine {} is dead, rebooting", resolved_model_id);
+                    self.reboot_engine(&resolved_model_id)?
+                }
+
+                let engines = self
+                    .engines
+                    .read()
+                    .map_err(|_| MistralRsError::EnginePoisoned)?;
+                if let Some(engine_instance) = engines.get(&resolved_model_id) {
+                    self.touch_model(&resolved_model_id);
+                    return Ok(engine_instance.sender.clone());
+                }
             }
 
-            let engines = self
-                .engines
-                .read()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
-            if let Some(engine_instance) = engines.get(&resolved_model_id) {
-                return Ok(engine_instance.sender.clone());
+            // Check if model is unloaded - trigger auto-reload
+            let is_unloaded = {
+                let unloaded = self
+                    .unloaded_models
+                    .read()
+                    .map_err(|_| MistralRsError::EnginePoisoned)?;
+                unloaded.contains_key(&resolved_model_id)
+            };
+
+            if is_unloaded {
+                // Atomically claim the loader role: whoever holds the write
+                // lock and finds no marker inserts one. Everyone else waits
+                // on the in-flight load. The claim releases in
+                // `reload_claimed` (load attempted) or below (eviction
+                // refused), always with a waiter wakeup.
+                let claimed = {
+                    let mut reloading = self
+                        .reloading_models
+                        .write()
+                        .map_err(|_| MistralRsError::EnginePoisoned)?;
+                    if reloading.contains(&resolved_model_id) {
+                        false
+                    } else {
+                        reloading.insert(resolved_model_id.clone());
+                        true
+                    }
+                };
+                if !claimed {
+                    self.wait_for_reload(&resolved_model_id)?;
+                    continue;
+                }
+                tracing::info!(
+                    "Model {} is unloaded, triggering auto-reload",
+                    resolved_model_id
+                );
+                if let Err(e) = self.evict_for_request(&resolved_model_id) {
+                    self.release_reload_claim(&resolved_model_id);
+                    return Err(e);
+                }
+                // Marker held: errors propagate, marker releases inside.
+                self.reload_claimed_blocking(&resolved_model_id)?;
+                self.touch_model(&resolved_model_id);
+                continue;
             }
+
+            // Loaded nowhere and not registered as unloaded: a load may
+            // still be in flight (entry removed at the very end of reload).
+            let is_reloading = self
+                .reloading_models
+                .read()
+                .map_err(|_| MistralRsError::EnginePoisoned)?
+                .contains(&resolved_model_id);
+            if is_reloading {
+                return Err(MistralRsError::ModelReloading(resolved_model_id));
+            }
+
+            return Err(MistralRsError::ModelNotFound(resolved_model_id));
         }
+    }
 
-        // Check if model is unloaded - trigger auto-reload
-        let is_unloaded = {
+    /// Record a dispatch against an engine for LRU eviction. Best-effort:
+    /// a poisoned lock must not fail the request it was looked up for.
+    fn touch_model(&self, model_id: &str) {
+        if let Ok(mut last_used) = self.last_used.write() {
+            last_used.insert(model_id.to_string(), Instant::now());
+        }
+    }
+
+    /// Wake all demand-load waiters. Called after every reload attempt,
+    /// success or failure, so waiters re-check the maps instead of timing out.
+    fn bump_reload_cv(&self) {
+        let (lock, cv) = &*self.reload_cv;
+        if let Ok(mut gen) = lock.lock() {
+            *gen = gen.wrapping_add(1);
+            cv.notify_all();
+        }
+    }
+
+    /// Block until the in-flight load of `model_id` completes (or
+    /// `LOAD_WAIT_TIMEOUT` elapses). The caller re-checks the maps after
+    /// every wake, so unrelated completions just cause another wait.
+    fn wait_for_reload(&self, model_id: &str) -> Result<(), MistralRsError> {
+        let (lock, cv) = &*self.reload_cv;
+        let gen = lock.lock().map_err(|_| MistralRsError::EnginePoisoned)?;
+        let start = *gen;
+        let (_guard, res) = cv
+            .wait_timeout_while(gen, LOAD_WAIT_TIMEOUT, |g| {
+                *g == start
+                    && self
+                        .reloading_models
+                        .read()
+                        .map(|reloading| reloading.contains(model_id))
+                        .unwrap_or(false)
+            })
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
+        if res.timed_out() {
+            return Err(MistralRsError::ReloadFailed(format!(
+                "Timed out waiting for model {model_id} to reload"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Make room for a demand-load: estimate the incoming footprint and
+    /// LRU-unload resident engines until it fits (plus headroom). Engines
+    /// with admitted sequences are never evicted; models whose footprint
+    /// can't be estimated (remote weights, context-sized KV) load without
+    /// eviction, as before. Explicit `/v1/models/reload` does not evict.
+    fn evict_for_request(&self, model_id: &str) -> Result<(), MistralRsError> {
+        let (device, need_bytes) = {
             let unloaded = self
                 .unloaded_models
                 .read()
                 .map_err(|_| MistralRsError::EnginePoisoned)?;
-            unloaded.contains_key(&resolved_model_id)
+            let state = unloaded
+                .get(model_id)
+                .ok_or_else(|| MistralRsError::ModelNotFound(model_id.to_string()))?;
+            let device = state.loader_config.device.clone();
+            let available = MemoryUsage
+                .query(&device)
+                .map_err(|e| {
+                    MistralRsError::ReloadFailed(format!("Failed to query device memory: {e}"))
+                })?
+                .available() as u64;
+            let Some(need) = estimate_load_bytes(&state.loader_config, available) else {
+                warn!(
+                    "Model {model_id} footprint unknown; loading without eviction"
+                );
+                return Ok(());
+            };
+            (device, need)
         };
 
-        if is_unloaded {
-            tracing::info!(
-                "Model {} is unloaded, triggering auto-reload",
-                resolved_model_id
+        let mut skipped = HashSet::new();
+        loop {
+            let available = MemoryUsage
+                .query(&device)
+                .map_err(|e| {
+                    MistralRsError::ReloadFailed(format!("Failed to query device memory: {e}"))
+                })?
+                .available() as u64;
+            if available >= need_bytes {
+                return Ok(());
+            }
+            let candidate = {
+                let engines = self
+                    .engines
+                    .read()
+                    .map_err(|_| MistralRsError::EnginePoisoned)?;
+                let last_used = self
+                    .last_used
+                    .read()
+                    .map_err(|_| MistralRsError::EnginePoisoned)?;
+                engines
+                    .iter()
+                    .filter(|(id, _)| *id != model_id && !skipped.contains(*id))
+                    .filter(|(_, inst)| inst.logger.num_running() == 0)
+                    .min_by_key(|(id, _)| last_used.get(*id).copied())
+                    .map(|(id, _)| id.clone())
+            };
+            let Some(candidate) = candidate else {
+                return Err(MistralRsError::ReloadFailed(format!(
+                    "Insufficient device memory for model {model_id} (need ~{} MB) and no evictable resident model",
+                    need_bytes / 1024 / 1024
+                )));
+            };
+            info!(
+                "Evicting LRU model {candidate} to make room for {model_id} (need ~{} MB)",
+                need_bytes / 1024 / 1024
             );
-            self.reload_model_blocking(&resolved_model_id)?;
-
-            // After reload, get the sender
-            let engines = self
-                .engines
-                .read()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
-            if let Some(engine_instance) = engines.get(&resolved_model_id) {
-                return Ok(engine_instance.sender.clone());
+            if let Err(e) = self.unload_model(&candidate) {
+                warn!("Eviction of {candidate} failed ({e}); trying next candidate");
+                skipped.insert(candidate);
             }
         }
-
-        let is_reloading = self
-            .reloading_models
-            .read()
-            .map_err(|_| MistralRsError::EnginePoisoned)?
-            .contains(&resolved_model_id);
-        if is_reloading {
-            return Err(MistralRsError::ModelReloading(resolved_model_id));
-        }
-
-        Err(MistralRsError::ModelNotFound(resolved_model_id))
     }
 
     /// Look up a file across all loaded engines. `None` if missing or expired.
@@ -2332,6 +2491,8 @@ impl MistralRs {
             *default_lock = Some(model_id.clone());
             info!("First model added, setting '{}' as default", model_id);
         }
+        drop(engines);
+        self.touch_model(&model_id);
 
         Ok(())
     }
@@ -2432,6 +2593,10 @@ impl MistralRs {
                 .write()
                 .map_err(|_| "Failed to acquire write lock on model_aliases")?;
             aliases.retain(|_, target| target != &resolved_model_id);
+            drop(aliases);
+            if let Ok(mut last_used) = self.last_used.write() {
+                last_used.remove(&resolved_model_id);
+            }
 
             Ok(())
         } else {
@@ -2728,6 +2893,10 @@ impl MistralRs {
             .write()
             .map_err(|_| MistralRsError::EnginePoisoned)?;
         unloaded.insert(resolved_model_id.to_string(), unloaded_state);
+        drop(unloaded);
+        if let Ok(mut last_used) = self.last_used.write() {
+            last_used.remove(&resolved_model_id);
+        }
 
         // Update default if needed
         let mut default_lock = self
@@ -2773,6 +2942,12 @@ impl MistralRs {
             reloading.insert(resolved_model_id.clone());
         }
 
+        self.reload_claimed(&resolved_model_id).await
+    }
+
+    /// Reload with the `reloading_models` marker already held by the caller.
+    /// Removes the marker and wakes waiters on every outcome.
+    async fn reload_claimed(&self, resolved_model_id: &str) -> Result<(), MistralRsError> {
         // Get the unloaded state
         let unloaded_state = {
             let unloaded = self
@@ -2780,24 +2955,26 @@ impl MistralRs {
                 .read()
                 .map_err(|_| MistralRsError::EnginePoisoned)?;
             unloaded
-                .get(&resolved_model_id)
+                .get(resolved_model_id)
                 .cloned()
-                .ok_or_else(|| MistralRsError::ModelNotFound(resolved_model_id.clone()))?
+                .ok_or_else(|| MistralRsError::ModelNotFound(resolved_model_id.to_string()))?
         };
 
         // Attempt to reload
         let result = self
-            .do_reload_model(&resolved_model_id, unloaded_state)
+            .do_reload_model(resolved_model_id, unloaded_state)
             .await;
 
-        // Remove from reloading set
+        // Remove from reloading set and wake demand-load waiters (they
+        // re-check the maps, so this runs on success and failure).
         {
             let mut reloading = self
                 .reloading_models
                 .write()
                 .map_err(|_| MistralRsError::EnginePoisoned)?;
-            reloading.remove(&resolved_model_id);
+            reloading.remove(resolved_model_id);
         }
+        self.bump_reload_cv();
 
         result
     }
@@ -2920,6 +3097,7 @@ impl MistralRs {
         }
 
         info!("Model {} reloaded successfully", model_id);
+        self.touch_model(model_id);
         Ok(())
     }
 
@@ -2947,6 +3125,40 @@ impl MistralRs {
                 rt.block_on(self.reload_model(model_id))
             }
         }
+    }
+
+    /// Blocking `reload_claimed`: same runtime handling as
+    /// `reload_model_blocking`, but the caller holds the reloading marker.
+    fn reload_claimed_blocking(&self, resolved_model_id: &str) -> Result<(), MistralRsError> {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::CurrentThread {
+                    Err(MistralRsError::ReloadFailed(
+                        "Cannot reload model blocking from single-threaded runtime. Use reload_model() instead.".to_string()
+                    ))
+                } else {
+                    tokio::task::block_in_place(|| {
+                        handle.block_on(self.reload_claimed(resolved_model_id))
+                    })
+                }
+            }
+            Err(_) => {
+                let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                    MistralRsError::ReloadFailed(format!("Failed to create runtime: {e}"))
+                })?;
+                rt.block_on(self.reload_claimed(resolved_model_id))
+            }
+        }
+    }
+
+    /// Release a reloading marker claimed in `get_sender` when the load
+    /// cannot proceed (eviction failure), and wake waiters so they move on
+    /// instead of timing out.
+    fn release_reload_claim(&self, resolved_model_id: &str) {
+        if let Ok(mut reloading) = self.reloading_models.write() {
+            reloading.remove(resolved_model_id);
+        }
+        self.bump_reload_cv();
     }
 
     /// List all unloaded model IDs
@@ -3047,6 +3259,66 @@ impl MistralRs {
     }
 }
 
+/// Estimated device bytes a demand-load needs: local weight files plus the
+/// planned KV budget plus headroom. `None` when either side is unknowable
+/// pre-load (remote weights, context-sized KV); callers then skip eviction.
+fn estimate_load_bytes(loader_config: &ModelLoaderConfig, available_now: u64) -> Option<u64> {
+    let weights = gguf_local_weight_bytes(&loader_config.model_selected)?;
+    let kv = match &loader_config.paged_attn_config {
+        None => 0,
+        Some(planned) => match planned.mem_gpu {
+            MemoryGpuConfig::MbAmount(v) => v as u64 * 1024 * 1024,
+            MemoryGpuConfig::BestEffortMbAmount { target_mb, .. } => {
+                target_mb as u64 * 1024 * 1024
+            }
+            MemoryGpuConfig::Utilization(f) => (available_now as f64 * f as f64) as u64,
+            MemoryGpuConfig::ContextSize(_) => return None,
+        },
+    };
+    Some(weights.saturating_add(kv).saturating_add(EVICT_HEADROOM_BYTES))
+}
+
+/// On-disk bytes of local GGUF weight files (shards + projector). `None`
+/// for hub repo ids, missing files, and non-GGUF selections.
+fn gguf_local_weight_bytes(selected: &ModelSelected) -> Option<u64> {
+    let (base, files, mmproj) = match selected {
+        ModelSelected::GGUF {
+            quantized_model_id,
+            quantized_filename,
+            mmproj_filename,
+            ..
+        } => (
+            quantized_model_id,
+            quantized_filename,
+            mmproj_filename.as_ref(),
+        ),
+        ModelSelected::XLoraGGUF {
+            quantized_model_id,
+            quantized_filename,
+            ..
+        }
+        | ModelSelected::LoraGGUF {
+            quantized_model_id,
+            quantized_filename,
+            ..
+        } => (quantized_model_id, quantized_filename, None),
+        _ => return None,
+    };
+    let base_path = std::path::Path::new(base);
+    if !base_path.is_dir() {
+        return None;
+    }
+    let mut names: Vec<&str> = files.split(';').collect();
+    if let Some(m) = mmproj {
+        names.extend(m.split(';'));
+    }
+    let mut total = 0u64;
+    for name in names {
+        total = total.saturating_add(std::fs::metadata(base_path.join(name)).ok()?.len());
+    }
+    Some(total)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3057,6 +3329,8 @@ mod tests {
             engines: RwLock::new(HashMap::new()),
             unloaded_models: RwLock::new(HashMap::new()),
             reloading_models: RwLock::new(HashSet::new()),
+            reload_cv: Arc::new((Mutex::new(0), Condvar::new())),
+            last_used: RwLock::new(HashMap::new()),
             default_engine_id: RwLock::new(None),
             model_aliases: RwLock::new(HashMap::new()),
             log: None,
