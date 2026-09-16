@@ -1,0 +1,3 @@
+# hipcc/AMDGCN build artifacts (emitted in-crate during ROCm builds)
+pagedattention_v1_bf16-*
+pagedattention_v1_bf16.cu-*
