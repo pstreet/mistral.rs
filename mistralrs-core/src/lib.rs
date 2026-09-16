@@ -51,6 +51,35 @@ const EVICT_HEADROOM_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// How long concurrent demand-load waiters block for an in-flight load
 /// before giving up (single 30B-class GGUF loads take minutes).
 const LOAD_WAIT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// Default idle time before the TTL task may unload an engine. Reserved for
+/// the idle-eviction pass; no task reads it yet.
+const DEFAULT_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
+
+/// Router policy: demand-load behavior knobs. Served from `[router]`
+/// (from-config) or the server builder; defaults preserve historical
+/// behavior except auto-evict, which is new.
+#[derive(Clone, Copy, Debug)]
+pub struct RouterPolicy {
+    /// LRU-unload residents to fit demand-loads. Default on.
+    pub auto_evict: bool,
+    /// Headroom added to every demand-load footprint estimate.
+    pub evict_headroom_bytes: u64,
+    /// How long concurrent demand-loads wait on an in-flight load.
+    pub load_wait_timeout: Duration,
+    /// Idle time before TTL eviction may unload an engine (future use).
+    pub idle_ttl: Duration,
+}
+
+impl Default for RouterPolicy {
+    fn default() -> Self {
+        Self {
+            auto_evict: true,
+            evict_headroom_bytes: EVICT_HEADROOM_BYTES,
+            load_wait_timeout: LOAD_WAIT_TIMEOUT,
+            idle_ttl: DEFAULT_IDLE_TTL,
+        }
+    }
+}
 pub const DEFAULT_ENGINE_REQUEST_QUEUE_CAPACITY: usize = 10_000;
 pub const REQUEST_QUEUE_DURATION_METRIC: &str = "mistralrs_request_queue_duration_seconds";
 
@@ -464,6 +493,9 @@ pub struct MistralRs {
     /// Last dispatch time per loaded engine, for LRU eviction. Leaf: take
     /// after `engines`, drop before calling unload.
     last_used: RwLock<HashMap<String, Instant>>,
+    /// Router policy for demand-load eviction and load-wait behavior.
+    /// Set once at build; read-only afterwards.
+    router_policy: RouterPolicy,
     default_engine_id: RwLock<Option<String>>,
     /// Alternate IDs that resolve to primary model IDs.
     model_aliases: RwLock<HashMap<String, String>>,
@@ -567,6 +599,7 @@ pub struct MistralRsBuilder {
     code_exec_config: Option<CodeExecutionConfig>,
     shell_config: Option<ShellConfig>,
     defer_daemon_start: bool,
+    router_policy: RouterPolicy,
 }
 
 impl MistralRsBuilder {
@@ -597,6 +630,7 @@ impl MistralRsBuilder {
             code_exec_config: None,
             shell_config: None,
             defer_daemon_start: false,
+            router_policy: RouterPolicy::default(),
         }
     }
 
@@ -610,6 +644,12 @@ impl MistralRsBuilder {
     /// Without this, models cannot be unloaded and reloaded.
     pub fn with_loader_config(mut self, loader_config: ModelLoaderConfig) -> Self {
         self.loader_config = Some(loader_config);
+        self
+    }
+
+    /// Router policy for demand-load eviction and load-wait behavior.
+    pub fn with_router_policy(mut self, policy: RouterPolicy) -> Self {
+        self.router_policy = policy;
         self
     }
     pub fn with_log(mut self, log: String) -> Self {
@@ -1559,6 +1599,7 @@ impl MistralRs {
             #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))]
             shell_config,
             defer_daemon_start,
+            router_policy,
         } = config;
 
         let device = get_mut_arcmutex!(pipeline).device();
@@ -1736,6 +1777,7 @@ impl MistralRs {
             reloading_models: RwLock::new(HashSet::new()),
             reload_cv: Arc::new((Mutex::new(0), Condvar::new())),
             last_used: RwLock::new(HashMap::from([(id.clone(), Instant::now())])),
+            router_policy,
             default_engine_id: RwLock::new(Some(id.clone())),
             model_aliases: RwLock::new(alias_map),
             log,
@@ -1917,15 +1959,16 @@ impl MistralRs {
         }
     }
 
-    /// Block until the in-flight load of `model_id` completes (or
-    /// `LOAD_WAIT_TIMEOUT` elapses). The caller re-checks the maps after
-    /// every wake, so unrelated completions just cause another wait.
+    /// Block until the in-flight load of `model_id` completes (or the
+    /// policy load-wait timeout elapses). The caller re-checks the maps
+    /// after every wake, so unrelated completions just cause another wait.
     fn wait_for_reload(&self, model_id: &str) -> Result<(), MistralRsError> {
+        let timeout = self.router_policy.load_wait_timeout;
         let (lock, cv) = &*self.reload_cv;
         let gen = lock.lock().map_err(|_| MistralRsError::EnginePoisoned)?;
         let start = *gen;
         let (_guard, res) = cv
-            .wait_timeout_while(gen, LOAD_WAIT_TIMEOUT, |g| {
+            .wait_timeout_while(gen, timeout, |g| {
                 *g == start
                     && self
                         .reloading_models
@@ -1947,7 +1990,11 @@ impl MistralRs {
     /// with admitted sequences are never evicted; models whose footprint
     /// can't be estimated (remote weights, context-sized KV) load without
     /// eviction, as before. Explicit `/v1/models/reload` does not evict.
+    /// No-op when the router policy disables auto-evict.
     fn evict_for_request(&self, model_id: &str) -> Result<(), MistralRsError> {
+        if !self.router_policy.auto_evict {
+            return Ok(());
+        }
         let (device, need_bytes) = {
             let unloaded = self
                 .unloaded_models
@@ -1963,7 +2010,9 @@ impl MistralRs {
                     MistralRsError::ReloadFailed(format!("Failed to query device memory: {e}"))
                 })?
                 .available() as u64;
-            let Some(need) = estimate_load_bytes(&state.loader_config, available) else {
+            let Some(need) =
+                estimate_load_bytes(&state.loader_config, available, self.router_policy.evict_headroom_bytes)
+            else {
                 warn!(
                     "Model {model_id} footprint unknown; loading without eviction"
                 );
@@ -3262,7 +3311,11 @@ impl MistralRs {
 /// Estimated device bytes a demand-load needs: local weight files plus the
 /// planned KV budget plus headroom. `None` when either side is unknowable
 /// pre-load (remote weights, context-sized KV); callers then skip eviction.
-fn estimate_load_bytes(loader_config: &ModelLoaderConfig, available_now: u64) -> Option<u64> {
+fn estimate_load_bytes(
+    loader_config: &ModelLoaderConfig,
+    available_now: u64,
+    headroom_bytes: u64,
+) -> Option<u64> {
     let weights = gguf_local_weight_bytes(&loader_config.model_selected)?;
     let kv = match &loader_config.paged_attn_config {
         None => 0,
@@ -3275,7 +3328,7 @@ fn estimate_load_bytes(loader_config: &ModelLoaderConfig, available_now: u64) ->
             MemoryGpuConfig::ContextSize(_) => return None,
         },
     };
-    Some(weights.saturating_add(kv).saturating_add(EVICT_HEADROOM_BYTES))
+    Some(weights.saturating_add(kv).saturating_add(headroom_bytes))
 }
 
 /// On-disk bytes of local GGUF weight files (shards + projector). `None`
@@ -3331,6 +3384,7 @@ mod tests {
             reloading_models: RwLock::new(HashSet::new()),
             reload_cv: Arc::new((Mutex::new(0), Condvar::new())),
             last_used: RwLock::new(HashMap::new()),
+            router_policy: RouterPolicy::default(),
             default_engine_id: RwLock::new(None),
             model_aliases: RwLock::new(HashMap::new()),
             log: None,

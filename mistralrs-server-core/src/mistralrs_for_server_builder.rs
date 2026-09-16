@@ -320,6 +320,8 @@ pub struct MistralRsForServerBuilder {
     /// global flag is off. Never applied to the seed or eager models; only
     /// lazy entries read it.
     mtp_entry_fallback: Option<MtpConfig>,
+    /// Router policy for demand-load eviction and load-wait behavior.
+    router_policy: mistralrs_core::RouterPolicy,
     encoder_cache_memory_bytes: Option<usize>,
 
     /// Prefill chunk size in tokens for paged attention. 0 = use default (4096).
@@ -376,6 +378,7 @@ impl Default for MistralRsForServerBuilder {
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
             mtp_config: defaults::MTP_CONFIG,
             mtp_entry_fallback: None,
+            router_policy: mistralrs_core::RouterPolicy::default(),
             encoder_cache_memory_bytes: None,
             prefill_chunk_size: defaults::PREFILL_CHUNK_SIZE,
             disable_eos_stop: false,
@@ -764,6 +767,12 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Router policy for demand-load eviction and load-wait behavior.
+    pub fn with_router_policy(mut self, policy: mistralrs_core::RouterPolicy) -> Self {
+        self.router_policy = policy;
+        self
+    }
+
     /// Set prefill chunk size in tokens for paged attention.
     pub fn with_prefill_chunk_size(mut self, size: usize) -> Self {
         self.prefill_chunk_size = size;
@@ -1020,6 +1029,7 @@ impl MistralRsForServerBuilder {
         .with_no_kv_cache(self.no_kv_cache)
         .with_prefix_cache_n(self.prefix_cache_n)
         .with_disable_eos_stop(self.disable_eos_stop)
+        .with_router_policy(self.router_policy)
         .with_loader_config(loader_config);
 
         if let Some(id) = self.model_id_override {
@@ -1277,6 +1287,7 @@ impl MistralRsForServerBuilder {
         .with_prefix_cache_n(self.prefix_cache_n)
         .with_disable_eos_stop(self.disable_eos_stop)
         .with_deferred_daemon_start(true)
+        .with_router_policy(self.router_policy)
         .with_loader_config(first_loader_config);
         if first_primary_id != first_pipeline_name {
             builder = builder.with_model_id(first_primary_id.clone());

@@ -104,6 +104,17 @@ The MCP *client* configuration (`mcp_config`) lives under `[runtime]`, not `[ser
 | `block_size` | `--pa-block-size` | not set | Tokens per block. |
 | `cache_type` | `--pa-cache-type` | `auto` | KV cache quantization type: `auto`, `bf16`, `f8e4m3`, `q8_0`, or `q4_0` (ROCm only, see [paged attention](/guides/perf/paged-attention/)). |
 
+## `[router]` section (`serve` only)
+
+Demand-load policy for lazy (`lazy = true`) models. All fields optional.
+
+| Field | Default | Purpose |
+|---|---|---|
+| `auto_evict` | `true` | LRU-unload idle resident models to fit demand-loads. `false` loads without evicting (previous behavior). |
+| `evict_headroom_mb` | `2048` | Headroom added to every demand-load footprint estimate (graphs, draft state, fragmentation). |
+| `load_wait_timeout_secs` | `900` | How long concurrent demand-loads wait on an in-flight load before erroring. |
+| `idle_ttl_secs` | `1800` | Idle time before TTL eviction may unload an engine. Stored, not yet acted on. |
+
 ## `[sandbox]` section
 
 OS-level isolation for the code-execution subprocess. Mechanics and threat model: [sandbox reference](/reference/sandbox/).

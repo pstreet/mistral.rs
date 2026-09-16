@@ -37,6 +37,8 @@ pub struct ServeConfig {
     pub models: Vec<ModelEntry>,
     #[serde(default)]
     pub default_model_id: Option<String>,
+    #[serde(default)]
+    pub router: RouterOptions,
 }
 
 #[derive(Deserialize, Default)]
@@ -57,6 +59,42 @@ pub struct RunConfig {
     pub reasoning_effort: Option<ReasoningEffort>,
     #[serde(default)]
     pub adapter: Option<String>,
+}
+
+#[derive(Deserialize, Default, Clone, Copy)]
+pub struct RouterOptions {
+    /// LRU-unload residents to fit demand-loads. Default true.
+    #[serde(default)]
+    pub auto_evict: Option<bool>,
+    /// Headroom (MB) added to every demand-load footprint estimate.
+    #[serde(default)]
+    pub evict_headroom_mb: Option<u64>,
+    /// Seconds concurrent demand-loads wait on an in-flight load.
+    #[serde(default)]
+    pub load_wait_timeout_secs: Option<u64>,
+    /// Seconds of idleness before TTL eviction may unload an engine.
+    /// Stored for the future TTL pass; no task reads it yet.
+    #[serde(default)]
+    pub idle_ttl_secs: Option<u64>,
+}
+
+impl RouterOptions {
+    pub fn into_policy(self) -> mistralrs_core::RouterPolicy {
+        let mut policy = mistralrs_core::RouterPolicy::default();
+        if let Some(auto_evict) = self.auto_evict {
+            policy.auto_evict = auto_evict;
+        }
+        if let Some(mb) = self.evict_headroom_mb {
+            policy.evict_headroom_bytes = mb * 1024 * 1024;
+        }
+        if let Some(secs) = self.load_wait_timeout_secs {
+            policy.load_wait_timeout = std::time::Duration::from_secs(secs);
+        }
+        if let Some(secs) = self.idle_ttl_secs {
+            policy.idle_ttl = std::time::Duration::from_secs(secs);
+        }
+        policy
+    }
 }
 
 #[derive(Deserialize, Default, Clone)]

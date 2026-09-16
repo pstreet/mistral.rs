@@ -44,6 +44,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         sandbox,
         models,
         default_model_id,
+        router,
     } = cfg;
 
     if server.observability_config().metrics {
@@ -107,6 +108,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         .with_paged_attn_block_size_optional(paged_attn_block_size)
         .with_mtp_config_optional(runtime.mtp_config())
         .with_mtp_config_fallback_optional(mtp_entry_fallback)
+        .with_router_policy(router.into_policy())
         .with_paged_attn_cache_type(paged_cache_type);
 
     for config in model_configs {
@@ -588,5 +590,40 @@ quantized_file = "model-Q4_K_M.gguf"
         assert_eq!(models[0].mtp, Some(false));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn from_config_parses_router_section() {
+        let input = r#"
+command = "serve"
+default_model_id = "m"
+
+[router]
+auto_evict = false
+evict_headroom_mb = 512
+load_wait_timeout_secs = 60
+idle_ttl_secs = 300
+
+[[models]]
+model_id = "m"
+
+[models.format]
+quantized_file = "model-Q4_K_M.gguf"
+"#;
+        let config: CliConfig = toml::from_str(input).unwrap();
+        let CliConfig::Serve(config) = config else {
+            unreachable!()
+        };
+        let policy = config.router.into_policy();
+        assert!(!policy.auto_evict);
+        assert_eq!(policy.evict_headroom_bytes, 512 * 1024 * 1024);
+        assert_eq!(
+            policy.load_wait_timeout,
+            std::time::Duration::from_secs(60)
+        );
+        assert_eq!(policy.idle_ttl, std::time::Duration::from_secs(300));
+        let default = crate::config::RouterOptions::default().into_policy();
+        assert!(default.auto_evict);
+        assert_eq!(default.evict_headroom_bytes, 2 * 1024 * 1024 * 1024);
     }
 }
