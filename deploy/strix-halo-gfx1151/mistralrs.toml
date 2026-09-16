@@ -6,9 +6,12 @@
 #
 # Differences vs models.ini:
 #   - Only the first [[models]] entry loads at boot (it seeds the instance);
-#     the rest use `lazy = true` (registered, demand-loaded on first request;
-#     no LRU eviction yet, unlike llama-server's --models-max). All 13 models
-#     would be ~300 GB resident, so only the default is eager.
+#     the rest use `lazy = true` (registered, demand-loaded on first request).
+#     Demand-loads LRU-evict idle residents to fit (plus headroom) and evict
+#     engines idle past the router TTL; concurrent demand-loads for the same
+#     model wait on the in-flight load. See [router] below.
+#   - Per-model `alias` gives short API names (llama.cpp-style); the full
+#     model_id path also resolves. Clients can still just use model="default".
 #   - Per-model `alias` gives short API names (llama.cpp-style); the full
 #     model_id path also resolves. With one eager model, clients can still
 #     just use model="default".
@@ -27,6 +30,14 @@ no_ui = true
 
 [paged_attn]
 cache_type = "Q8_0"
+
+# Demand-load policy for lazy models (router commits 7ba9f430f-1ea83644c).
+# Values below are the code defaults, pinned explicitly.
+[router]
+auto_evict = true
+evict_headroom_mb = 2048
+load_wait_timeout_secs = 900
+idle_ttl_secs = 1800
 
 [runtime]
 # Match llama-server's --no-warmup behavior: no prefix caching for this setup.
@@ -67,26 +78,13 @@ tok_model_id = "Qwen/Qwen3.8-27B"
 
 # ============================================================
 # Everything below is lazy: registered at boot, loaded on first request.
-# NOTE: lazy models load WITHOUT the MTP head (speculative attach only
-# happens on the eager path), and two models resident at once must fit
-# VRAM side by side until eviction (#2) lands.
+# NOTE: lazy models inherit the global MTP flag unless pinned `mtp = false`
+# (all entries below are pinned: two residents at once must fit VRAM, and
+# the MTP draft head adds footprint; the eager default keeps MTP n=2).
 # ============================================================
 
 # ------------------------------------------------------------
-# Q4 TEST 2026-09-07: Qwen3.6-27B Q4_K_XL done (11.14 tok/s vs 9.93 Q6)
-# ------------------------------------------------------------
-
-[[models]]
-model_id = "models/unsloth/Qwen3.6-27B-MTP-GGUF"
-alias = "qwen3.6-27b-q4"
-lazy = true
-mtp = false
-
-[models.format]
-quantized_file = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
-
-# ------------------------------------------------------------
-# Qwen3.6 MTP family (text-only)
+# Qwen3.6 35B MoE (text-only)
 # ------------------------------------------------------------
 
 [[models]]
@@ -97,55 +95,6 @@ mtp = false
 
 [models.format]
 quantized_file = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
-
-# Same config key as above with a different weight file: the shared key
-# stays aliased to qwen3.6-35b-q4, this one is reachable via its alias only.
-[[models]]
-model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
-alias = "qwen3.6-35b-q8"
-lazy = true
-mtp = false
-
-[models.format]
-quantized_file = "Qwen3.6-35B-A3B-Q8_0.gguf"
-
-[[models]]
-model_id = "models/unsloth/Qwen3.6-27B-MTP-GGUF"
-alias = "qwen3.6-27b-ud-q4"
-lazy = true
-mtp = false
-
-[models.format]
-quantized_file = "Qwen3.6-27B-UD-Q4_K_XL.gguf"
-
-# ------------------------------------------------------------
-# Qwen3.6 27B finetune (DavidAU, vision)
-# ------------------------------------------------------------
-
-[[models]]
-model_id = "models/DavidAU/Qwen3.6-27B-Fable-Fusion-711-Uncensored-Heretic-NM-DAU-NEO-MAX-MTP-GGUF"
-alias = "fable-fusion-27b"
-lazy = true
-mtp = false
-
-[models.format]
-quantized_file = "Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-AMD-MTP-Q6_K.gguf"
-mmproj = "mmproj-F16.gguf"
-
-# ------------------------------------------------------------
-# Qwen3.8 27B (unsloth, vision)
-# ------------------------------------------------------------
-
-[[models]]
-model_id = "models/unsloth/Qwen3.8-27B-GGUF"
-alias = "qwen3.8-27b-unsloth"
-lazy = true
-mtp = false
-
-[models.format]
-quantized_file = "Qwen3.8-27B-UD-Q6_K_XL.gguf"
-mmproj = "mmproj-BF16.gguf"
-tok_model_id = "Qwen/Qwen3.8-27B"
 
 # ------------------------------------------------------------
 # Muse Glimmer 30B (vision; needs tok_model_id for GGUF)
