@@ -19,6 +19,9 @@ use crate::gguf::{
     },
     get_gguf_chat_template, get_gguf_chat_template_from_metadata,
     multimodal_bindings::build_gemma4_bindings,
+    multimodal_config::supports_standalone_assets,
+    multimodal_config::synthesize_multimodal_config,
+    multimodal_config::synthesize_qwen35_preprocessor,
     multimodal_vision_registry::resolve_native_multimodal_gguf,
     muse_glimmer_bindings::normalize_muse_glimmer_config,
     normal_bindings::build_normal_bindings,
@@ -875,15 +878,21 @@ impl GGUFLoader {
             }
         };
         validate_native_dynamic_lora(self.dynamic_lora.as_ref(), rope_pairing, &architecture)?;
-        if paths.get_config_filename().as_os_str().is_empty() {
-            bail!(
-                "multimodal GGUF architecture `{architecture}` requires its original `config.json`; pass `--tok-model-id <original-model-id>`"
-            );
-        }
-        let config = prepare_native_multimodal_config(
-            &loader_type,
-            &fs::read_to_string(paths.get_config_filename())?,
-        )?;
+        let tensor_names = archive.tensors().keys().cloned().collect::<Vec<_>>();
+        let (raw_config, synthesized) = if paths.get_config_filename().as_os_str().is_empty() {
+            (
+                synthesize_multimodal_config(
+                    &loader_type,
+                    &architecture,
+                    archive.metadata(),
+                    &tensor_names,
+                )?,
+                true,
+            )
+        } else {
+            (fs::read_to_string(paths.get_config_filename())?, false)
+        };
+        let config = prepare_native_multimodal_config(&loader_type, &raw_config)?;
         let config = stamp_qk_rope_layout(&config, rope_pairing)?;
         if architecture == "gemma3" {
             ensure_gemma3_vision_config(&config)?;
@@ -908,11 +917,16 @@ impl GGUFLoader {
             .as_ref()
             .map(fs::read_to_string)
             .transpose()?;
-        let preprocessor_config = paths
+        let preprocessor_config = match paths
             .get_preprocessor_config()
             .as_ref()
             .map(fs::read_to_string)
-            .transpose()?;
+            .transpose()?
+        {
+            Some(config) => Some(config),
+            None if synthesized => Some(synthesize_qwen35_preprocessor(archive.metadata())?),
+            None => None,
+        };
         let mut source_weight_files = paths.get_weight_filenames().to_vec();
         source_weight_files.extend_from_slice(mmproj_paths);
         let source = PreparedMultimodalSource {
@@ -955,6 +969,17 @@ impl GGUFLoader {
             archive.release_host_shards();
         }
         Ok(pipeline)
+    }
+
+    fn standalone_cover(
+        model_archive: &mistralrs_quant::GgufArchive,
+        projector_archives: &[mistralrs_quant::GgufArchive],
+    ) -> bool {
+        let projector_metadata = projector_archives
+            .iter()
+            .map(|archive| archive.metadata())
+            .collect::<Vec<_>>();
+        supports_standalone_assets(model_archive.metadata(), &projector_metadata)
     }
 
     fn infer_multimodal_asset_paths(
@@ -1001,10 +1026,16 @@ impl GGUFLoader {
         let inferred_model_id = match inferred_model_id {
             Ok(inferred_model_id) => inferred_model_id,
             Err(error) if config_missing => {
+                if Self::standalone_cover(&model_archive, &projector_archives) {
+                    warn!(
+                        "Multimodal GGUF names no Hugging Face base model; synthesizing `config.json` from GGUF metadata instead"
+                    );
+                    return Ok(None);
+                }
                 return Err(error).context(
                     "Cannot infer original model assets from GGUF base-model metadata; pass \
                      `--tok-model-id <original-model-id>` to override it",
-                )
+                );
             }
             Err(error) => {
                 warn!(
@@ -1016,6 +1047,12 @@ impl GGUFLoader {
         };
         let Some(inferred_model_id) = inferred_model_id else {
             if config_missing {
+                if Self::standalone_cover(&model_archive, &projector_archives) {
+                    warn!(
+                        "Multimodal GGUF names no Hugging Face base model; synthesizing `config.json` from GGUF metadata instead"
+                    );
+                    return Ok(None);
+                }
                 bail!(
                     "multimodal GGUF requires its original `config.json`, but the GGUF files do \
                      not identify one unambiguous Hugging Face base model; pass \

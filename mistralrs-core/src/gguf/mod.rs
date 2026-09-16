@@ -11,6 +11,7 @@ pub(crate) mod llama4_bindings;
 mod mistral3_bindings;
 mod multimodal_binding_utils;
 pub(crate) mod multimodal_bindings;
+pub(crate) mod multimodal_config;
 pub(crate) mod multimodal_vision_registry;
 pub(crate) mod muse_glimmer_bindings;
 pub(crate) mod normal_bindings;
