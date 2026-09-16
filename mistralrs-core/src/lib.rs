@@ -1985,16 +1985,18 @@ impl MistralRs {
         Ok(())
     }
 
-    /// Make room for a demand-load: estimate the incoming footprint and
-    /// LRU-unload resident engines until it fits (plus headroom). Engines
-    /// with admitted sequences are never evicted; models whose footprint
-    /// can't be estimated (remote weights, context-sized KV) load without
-    /// eviction, as before. Explicit `/v1/models/reload` does not evict.
-    /// No-op when the router policy disables auto-evict.
+    /// Make room for a demand-load: engines idle past the router TTL go
+    /// first, then the footprint estimate drives LRU eviction until it fits
+    /// (plus headroom). Engines with admitted sequences are never evicted;
+    /// models whose footprint can't be estimated (remote weights,
+    /// context-sized KV) load without eviction, as before. Explicit
+    /// `/v1/models/reload` does not evict. No-op when the router policy
+    /// disables auto-evict.
     fn evict_for_request(&self, model_id: &str) -> Result<(), MistralRsError> {
         if !self.router_policy.auto_evict {
             return Ok(());
         }
+        self.evict_idle(model_id)?;
         let (device, need_bytes) = {
             let unloaded = self
                 .unloaded_models
@@ -2063,6 +2065,40 @@ impl MistralRs {
                 skipped.insert(candidate);
             }
         }
+    }
+
+    /// Unload resident engines idle longer than the router TTL. Runs on
+    /// demand-loads only, ahead of the fit-check loop; `ZERO` disables.
+    /// Busy engines and the model being loaded are never TTL victims.
+    fn evict_idle(&self, except: &str) -> Result<(), MistralRsError> {
+        let ttl = self.router_policy.idle_ttl;
+        if ttl.is_zero() {
+            return Ok(());
+        }
+        let stale: Vec<String> = {
+            let engines = self
+                .engines
+                .read()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            let last_used = self
+                .last_used
+                .read()
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
+            engines
+                .iter()
+                .filter(|(id, _)| *id != except)
+                .filter(|(_, inst)| inst.logger.num_running() == 0)
+                .filter(|(id, _)| last_used.get(*id).is_some_and(|t| t.elapsed() > ttl))
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        for id in stale {
+            info!("Evicting idle model {id} (TTL {}s)", ttl.as_secs());
+            if let Err(e) = self.unload_model(&id) {
+                warn!("TTL eviction of {id} failed ({e})");
+            }
+        }
+        Ok(())
     }
 
     /// Look up a file across all loaded engines. `None` if missing or expired.

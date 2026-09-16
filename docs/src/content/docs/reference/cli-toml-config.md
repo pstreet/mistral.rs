@@ -113,7 +113,7 @@ Demand-load policy for lazy (`lazy = true`) models. All fields optional.
 | `auto_evict` | `true` | LRU-unload idle resident models to fit demand-loads. `false` loads without evicting (previous behavior). |
 | `evict_headroom_mb` | `2048` | Headroom added to every demand-load footprint estimate (graphs, draft state, fragmentation). |
 | `load_wait_timeout_secs` | `900` | How long concurrent demand-loads wait on an in-flight load before erroring. |
-| `idle_ttl_secs` | `1800` | Idle time before TTL eviction may unload an engine. Stored, not yet acted on. |
+| `idle_ttl_secs` | `1800` | Idle seconds after which a demand-load may unload an idle engine. `0` disables. Enforced on demand-loads only (no background sweeper); busy engines are never victims. |
 
 ## `[sandbox]` section
 
