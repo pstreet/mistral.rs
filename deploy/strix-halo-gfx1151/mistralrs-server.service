@@ -1,7 +1,7 @@
 [Unit]
 Description=mistral.rs Server (Strix Halo gfx1151)
-StartLimitIntervalSec=120
-StartLimitBurst=3
+#StartLimitIntervalSec=120
+#StartLimitBurst=3
 
 [Service]
 Type=simple
