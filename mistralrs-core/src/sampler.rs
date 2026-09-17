@@ -528,7 +528,7 @@ pub(crate) struct CudaBatchSamplingPlan {
     pub(crate) min_p: f32,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CudaSpeculativeSamplingPlan {
     pub(crate) inverse_temperature: f32,
@@ -802,7 +802,7 @@ impl Sampler {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn cuda_speculative_sampling_plan(
         &self,
         return_logprobs: bool,
@@ -1063,7 +1063,7 @@ impl Sampler {
         })
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn submit_cuda_top1_batch_owned(
         &self,
         logits: &Tensor,

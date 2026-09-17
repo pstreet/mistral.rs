@@ -7,17 +7,17 @@ use rand_isaac::Isaac64Rng;
 use crate::pipeline::sampling::{finish_or_add_toks_to_seq, sample_sequence};
 use crate::pipeline::Pipeline;
 use crate::prefix_cacher::PrefixCacheManagerV2;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::sampler::CudaSpeculativeSamplingPlan;
 use crate::sampler::{Logprobs, Sampler};
 use crate::sequence::{Sequence, SequenceRecognizer, SequenceState};
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use super::proposer::SpeculativeTokens;
 use super::proposer::{SparseSpeculativeProbs, SpeculativeProposalDistribution};
 
 pub(crate) fn can_greedy_device_verify(seq: &Sequence) -> bool {
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     {
         !seq.return_logprobs()
             && !seq.sampling_logprob_required()
@@ -28,7 +28,7 @@ pub(crate) fn can_greedy_device_verify(seq: &Sequence) -> bool {
                 .cuda_batch_sampling_plan(false)
                 .is_some_and(|plan| plan.kind.is_argmax())
     }
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
     {
         let _ = seq;
         false
@@ -40,7 +40,7 @@ pub(crate) fn can_batch_greedy_device_verify(seqs: &[&mut Sequence]) -> bool {
         && seqs.iter().all(|seq| can_greedy_device_verify(seq))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn sparse_rejection_plan(seq: &Sequence) -> Option<CudaSpeculativeSamplingPlan> {
     if seq.return_logprobs()
         || seq.sampling_logprob_required()
@@ -51,7 +51,7 @@ fn sparse_rejection_plan(seq: &Sequence) -> Option<CudaSpeculativeSamplingPlan> 
     seq.sampler().cuda_speculative_sampling_plan(false)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn sparse_distribution_is_cuda_eligible(sparse: &SparseSpeculativeProbs, drafts: usize) -> bool {
     let [positions, q_width] = *sparse.token_ids().dims() else {
         return false;
@@ -72,7 +72,7 @@ pub(crate) fn can_batch_device_verify(seqs: &[&mut Sequence]) -> bool {
     if can_batch_greedy_device_verify(seqs) {
         return true;
     }
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     {
         crate::speculative::staging::staged_batch_width(seqs).is_some()
             && seqs.iter().all(|seq| {
@@ -94,20 +94,20 @@ pub(crate) fn can_batch_device_verify(seqs: &[&mut Sequence]) -> bool {
                 }
             })
     }
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
     {
         let _ = seqs;
         false
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct GreedyDeviceVerifyInput<'a> {
     pub(crate) seq: &'a Sequence,
     pub(crate) logits: &'a Tensor,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn greedy_device_verify_batch(
     inputs: &[GreedyDeviceVerifyInput<'_>],
 ) -> Result<Vec<Option<Vec<u32>>>> {
@@ -180,7 +180,7 @@ pub(crate) fn greedy_device_verify_batch(
     Ok(outputs)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct SparseRejectionVerifyInput<'a> {
     pub(crate) seq: &'a Sequence,
     pub(crate) logits: &'a Tensor,
@@ -188,7 +188,7 @@ pub(crate) struct SparseRejectionVerifyInput<'a> {
     pub(crate) distribution: Option<&'a SpeculativeProposalDistribution>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 enum SparseRejectionCandidateDistribution {
     Deterministic,
     Sparse {
@@ -198,7 +198,7 @@ enum SparseRejectionCandidateDistribution {
     },
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl SparseRejectionCandidateDistribution {
     fn width(&self) -> usize {
         match self {
@@ -212,7 +212,7 @@ impl SparseRejectionCandidateDistribution {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct SparseRejectionCandidate<'a> {
     input_idx: usize,
     logits: Tensor,
@@ -223,13 +223,13 @@ struct SparseRejectionCandidate<'a> {
     vocab: usize,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 enum SparseRejectionDraftTokens {
     Host(Vec<u32>),
     DeviceRows(Vec<Tensor>),
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl SparseRejectionDraftTokens {
     fn as_input(&self) -> crate::cuda::speculative_rejection::SparseRejectionDraftInput<'_> {
         match self {
@@ -243,20 +243,20 @@ impl SparseRejectionDraftTokens {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct SparseRejectionDeviceVerifyOutput {
     pub(crate) verifications: Vec<Option<DeviceVerification>>,
     pub(crate) materialized_proposals: Vec<Option<Vec<u32>>>,
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 fn packed_target_shape_matches(dims: &[usize], batch: usize, drafts: usize, vocab: usize) -> bool {
     drafts
         .checked_add(1)
         .is_some_and(|rows| dims == [batch, rows, vocab])
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 fn is_complete_ordered_sparse_group(
     input_count: usize,
     candidate_input_indices: impl Iterator<Item = usize>,
@@ -265,7 +265,7 @@ fn is_complete_ordered_sparse_group(
     candidate_input_indices.eq(0..input_count) && group_indices.eq(0..input_count)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn batch_sparse_rejection_logits(logits: Vec<Tensor>) -> Result<Tensor> {
     match logits.as_slice() {
         [logits] => Ok(logits.clone()),
@@ -273,7 +273,7 @@ fn batch_sparse_rejection_logits(logits: Vec<Tensor>) -> Result<Tensor> {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn sparse_rejection_candidate<'a>(
     input_idx: usize,
     input: &'a SparseRejectionVerifyInput<'a>,
@@ -335,7 +335,7 @@ fn sparse_rejection_candidate<'a>(
     }))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct SparseRejectionPendingCandidate {
     input_idx: usize,
     drafts: usize,
@@ -344,14 +344,14 @@ struct SparseRejectionPendingCandidate {
     sample_uniform: f32,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct SparseRejectionDeviceBatchSubmission {
     input_count: usize,
     candidates: Vec<SparseRejectionPendingCandidate>,
     submission: crate::cuda::speculative_rejection::CudaSparseRejectionSubmission,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn decode_sparse_rejection_row(
     candidate: SparseRejectionPendingCandidate,
     row: crate::cuda::speculative_rejection::SparseRejectionRow,
@@ -410,7 +410,7 @@ fn decode_sparse_rejection_row(
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn decode_sparse_rejection_completion(
     input_count: usize,
     candidates: Vec<SparseRejectionPendingCandidate>,
@@ -442,7 +442,7 @@ fn decode_sparse_rejection_completion(
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn sparse_rejection_candidates<'a>(
     inputs: &'a [SparseRejectionVerifyInput<'a>],
 ) -> Result<Vec<SparseRejectionCandidate<'a>>> {
@@ -453,7 +453,7 @@ fn sparse_rejection_candidates<'a>(
         .collect()
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn sparse_rejection_same_group(
     candidate: &SparseRejectionCandidate<'_>,
     seed: &SparseRejectionCandidate<'_>,
@@ -473,7 +473,7 @@ fn sparse_rejection_same_group(
         }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn sparse_rejection_uniforms(
     candidates: &[SparseRejectionCandidate<'_>],
     inputs: &[SparseRejectionVerifyInput<'_>],
@@ -492,7 +492,7 @@ fn sparse_rejection_uniforms(
         .collect()
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn submit_sparse_rejection_group(
     input_count: usize,
     candidates: &[SparseRejectionCandidate<'_>],
@@ -666,7 +666,7 @@ fn submit_sparse_rejection_group(
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn complete_sparse_rejection_device_verify_batch(
     pending: SparseRejectionDeviceBatchSubmission,
     workspace: &mut Option<crate::cuda::speculative_rejection::CudaSparseRejectionWorkspace>,
@@ -677,7 +677,7 @@ pub(crate) fn complete_sparse_rejection_device_verify_batch(
     decode_sparse_rejection_completion(pending.input_count, pending.candidates, completion)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn try_submit_sparse_rejection_device_verify_batch(
     inputs: &[SparseRejectionVerifyInput<'_>],
     batched_target_logits: Option<&Tensor>,
@@ -708,7 +708,7 @@ pub(crate) fn try_submit_sparse_rejection_device_verify_batch(
     .map(Some)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn sparse_rejection_device_verify_batch(
     inputs: &[SparseRejectionVerifyInput<'_>],
     batched_target_logits: Option<&Tensor>,
@@ -778,7 +778,7 @@ pub struct VerificationOutcome {
     pub continuation_token: Option<u32>,
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 pub(crate) enum DeviceVerification {
     TargetTokens(Vec<u32>),
     SparseRejection {
@@ -1016,7 +1016,7 @@ fn validate_device_verification(
     Ok(())
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 fn partition_device_tokens(tokens: Vec<u32>, row_counts: &[usize]) -> Result<Vec<Vec<u32>>> {
     let expected = row_counts.iter().try_fold(0usize, |total, &rows| {
         total.checked_add(rows).ok_or_else(|| {
@@ -1576,7 +1576,7 @@ mod tests {
         assert!(partition_device_tokens(vec![1, 2], &[1, 2]).is_err());
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn sparse_cuda_fallback_reuses_uniforms_in_input_order() -> candle_core::Result<()> {
         use super::{decode_sparse_rejection_completion, SparseRejectionPendingCandidate};
@@ -1661,7 +1661,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn sparse_cuda_eligibility_rejects_invalid_inputs() -> candle_core::Result<()> {
         use super::sparse_distribution_is_cuda_eligible;
@@ -1696,7 +1696,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn sparse_cuda_eligibility_allows_noncontiguous_inputs() -> candle_core::Result<()> {
         use super::sparse_distribution_is_cuda_eligible;

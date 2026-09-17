@@ -1226,7 +1226,7 @@ impl Sequence {
         self.staged_speculative_distribution.take()
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn staged_speculative_distribution(
         &self,
     ) -> Option<&SpeculativeProposalDistribution> {

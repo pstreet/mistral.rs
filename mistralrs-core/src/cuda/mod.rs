@@ -19,6 +19,6 @@ pub(crate) mod input_packing;
 pub mod moe;
 #[cfg(feature = "cuda")]
 pub(crate) mod preload;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) mod speculative_rejection;
 pub mod ssm;

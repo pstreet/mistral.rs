@@ -20,7 +20,7 @@ use super::proposer::{
     SpeculativeTokens,
 };
 use super::staging::{staged_batch_state, StagedBatchState};
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use super::verifier::{
     complete_sparse_rejection_device_verify_batch, greedy_device_verify_batch,
     sparse_rejection_device_verify_batch, try_submit_sparse_rejection_device_verify_batch,
@@ -37,7 +37,7 @@ struct PreparedVerification {
     proposal_distribution: Option<SpeculativeProposalDistribution>,
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 fn materialize_prepared_proposals(prepared: &mut [Option<PreparedVerification>]) -> Result<()> {
     let device_rows = prepared
         .iter()
@@ -74,7 +74,7 @@ fn materialize_prepared_proposals(prepared: &mut [Option<PreparedVerification>])
     Ok(())
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 fn complete_after_preparation<T, U>(
     preparation: Result<T>,
     complete: impl FnOnce() -> Result<U>,
@@ -120,7 +120,7 @@ pub trait SpeculativePipelineExt: Pipeline {
 
     fn build_speculative_verify_inputs(&self, input_meta: InputMetadata) -> Result<Box<dyn Any>>;
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_sparse_rejection_workspace(
         &self,
     ) -> &std::sync::Mutex<Option<crate::speculative::CudaSparseRejectionWorkspace>>;
@@ -157,7 +157,7 @@ where
     P: SpeculativePipelineExt,
     C: SpeculativeCacheAccess,
 {
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
     let _ = batched_logits;
 
     if !target.has_speculative_proposer() || seqs.is_empty() || logits.len() != seqs.len() {
@@ -329,11 +329,11 @@ where
     P: SpeculativePipelineExt,
     C: SpeculativeCacheAccess,
 {
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
     let _ = batched_logits;
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     let mut proposer_preparation: Option<Box<dyn SpeculativeProposePreparation>> = None;
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
     let proposer_preparation: Option<Box<dyn SpeculativeProposePreparation>> = None;
 
     let mut prepared = Vec::with_capacity(seqs.len());
@@ -368,7 +368,7 @@ where
         }));
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     let mut device_verifications = {
         let active_indices = prepared
             .iter()
@@ -494,7 +494,7 @@ where
         materialize_prepared_proposals(&mut prepared)?;
         aligned
     };
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
     let mut device_verifications = std::iter::repeat_with(|| None)
         .take(seqs.len())
         .collect::<Vec<Option<DeviceVerification>>>();

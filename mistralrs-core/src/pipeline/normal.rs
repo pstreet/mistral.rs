@@ -119,7 +119,7 @@ pub struct NormalPipeline {
     metadata: Arc<GeneralMetadata>,
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     cuda_sparse_rejection: StdMutex<Option<crate::speculative::CudaSparseRejectionWorkspace>>,
     generation_defaults: Option<crate::ModelGenerationDefaults>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -292,7 +292,7 @@ pub(crate) fn build_normal_pipeline(
         }),
         #[cfg(any(feature = "cuda", feature = "rocm"))]
         cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         cuda_sparse_rejection: StdMutex::new(None),
         generation_defaults,
         mapper,
@@ -1750,7 +1750,7 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
         }))
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_sparse_rejection_workspace(
         &self,
     ) -> &StdMutex<Option<crate::speculative::CudaSparseRejectionWorkspace>> {

@@ -10,7 +10,7 @@ pub(crate) mod staging;
 pub mod target;
 pub mod verifier;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[doc(hidden)]
 pub use crate::cuda::speculative_rejection::CudaSparseRejectionWorkspace;
 pub use config::{
