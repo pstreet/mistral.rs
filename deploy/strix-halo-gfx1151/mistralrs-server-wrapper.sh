@@ -29,7 +29,7 @@ export MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD=1
 # are not CPU-mapped, so they stay out of process RSS / cgroup / OOM
 # accounting. Costs a load-time 2x spike during the copy. Set 1 to restore
 # managed (host-visible, prefetch) weights.
-export MISTRALRS_MANAGED_WEIGHTS=1
+export MISTRALRS_MANAGED_WEIGHTS=0
 export MISTRALRS_CUDA_GRAPHS=1
 # hipBLASLt with F32 accumulate: COMPUTE_16F fails heuristically (error 6,
 # INTERNAL_ERROR) on some shapes on gfx1151 RDNA3.5, and 32F accum is faster

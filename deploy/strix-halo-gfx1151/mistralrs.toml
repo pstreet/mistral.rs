@@ -23,8 +23,6 @@
 command = "serve"
 # Single active model -> clients address it as "default".
 default_model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
-#default_model_id = "models/orcarouter/Qwen3.8-27B-Uncensored-GGUF"
-#default_model_id = "models/unsloth/Qwen3.5-4B-MTP-GGUF"
 
 [server]
 host = "127.0.0.1"
@@ -75,6 +73,7 @@ max_prefill_chunk_tokens = 2048
 model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
 alias = "qwen3.6-35b-q4"
 mtp = false
+lazy = true
 
 [models.format]
 quantized_file = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
