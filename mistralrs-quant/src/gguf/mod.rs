@@ -936,6 +936,33 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn bf16_gather_forward_matches_f32_reference() -> Result<()> {
+        let weight = Tensor::ones((2, 4, 256), DType::F32, &Device::Cpu)?;
+        let layer = Arc::new(GgufMatMul::from_qtensor(
+            QTensor::quantize(&weight, GgmlDType::Q4K)?,
+            None,
+        ));
+        let input_f32 = (Tensor::arange(0u32, 256, &Device::Cpu)?.to_dtype(DType::F32)? * 0.01)?
+            .reshape((1, 1, 256))?;
+        let indices = Tensor::from_vec(vec![1u32, 0], (1, 2), &Device::Cpu)?;
+        let expected = layer.gather_forward(&input_f32, &indices)?;
+        let actual = layer.gather_forward(&input_f32.to_dtype(DType::BF16)?, &indices)?;
+        assert_eq!(actual.dims(), expected.dims());
+        assert_eq!(actual.dtype(), DType::BF16);
+        let actual = actual.to_dtype(DType::F32)?;
+        let err = (&actual - &expected)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        let scale = expected.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(
+            err <= 0.05 * (1.0 + scale),
+            "bf16 gather max error {err} at reference scale {scale}"
+        );
+        Ok(())
+    }
+
     #[cfg(any(feature = "cuda", feature = "rocm", feature = "metal"))]
     fn assert_cross_device_capture_preserves_packed_weight(device: Device) -> Result<()> {
         let weight = Tensor::ones((4, 256), DType::F32, &Device::Cpu)?;

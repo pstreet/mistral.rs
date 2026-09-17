@@ -4,7 +4,7 @@
 
 use candle_core::{
     quantized::{QMatMul, QTensor},
-    Result, Tensor,
+    DType, Result, Tensor,
 };
 use candle_nn::Linear;
 use std::sync::Arc;
@@ -77,7 +77,12 @@ pub fn qtensor_indexed_moe_forward(
     // Create an UnquantLinear and use its gather_forward
     let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(weights, None)))?;
 
-    unquant.gather_forward(x, ids)
+    // Dequantized weights are F32 while activations may be BF16/F16: the
+    // gather matmul needs matching dtypes, so run it in F32 and cast back.
+    let input_dtype = x.dtype();
+    unquant
+        .gather_forward(&x.to_dtype(DType::F32)?, ids)?
+        .to_dtype(input_dtype)
 }
 
 /// Perform indexed MoE forward pass on a QMatMul.
@@ -95,10 +100,25 @@ pub fn cpu_indexed_moe_forward(qmatmul: &QMatMul, x: &Tensor, ids: &Tensor) -> R
     match qmatmul {
         QMatMul::QTensor(qtensor) => qtensor_indexed_moe_forward(qtensor, x, ids),
         QMatMul::Tensor(t) | QMatMul::TensorF16(t) => {
-            // For non-quantized tensors, use UnquantLinear directly
-            let unquant =
-                UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(t.clone(), None)))?;
-            unquant.gather_forward(x, ids)
+            // For non-quantized tensors, use UnquantLinear directly. The
+            // gather matmul needs matching dtypes: on mismatch run it in
+            // F32 and restore the input dtype.
+            if t.dtype() == x.dtype() {
+                let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
+                    t.clone(),
+                    None,
+                )))?;
+                unquant.gather_forward(x, ids)
+            } else {
+                let input_dtype = x.dtype();
+                let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
+                    t.to_dtype(DType::F32)?,
+                    None,
+                )))?;
+                unquant
+                    .gather_forward(&x.to_dtype(DType::F32)?, ids)?
+                    .to_dtype(input_dtype)
+            }
         }
     }
 }
