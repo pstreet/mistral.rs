@@ -457,7 +457,7 @@ pub fn sample_draft_rows(
     sequences: &[&Sequence],
     contexts: &mut [Vec<u32>],
     rng: &Arc<Mutex<Isaac64Rng>>,
-) -> Result<Vec<u32>> {
+) -> Result<Vec<(u32, f32)>> {
     let batch = sequences.len();
     if contexts.len() != batch || logits.dim(0)? != batch {
         candle_core::bail!(
@@ -480,7 +480,14 @@ pub fn sample_draft_rows(
             batch > 1,
         )?;
         contexts[row].push(sampled.token);
-        tokens.push(sampled.token);
+        // Verifier needs q(draft) under the sampler's effective distribution.
+        let q = sampled.logprob.exp();
+        let q = if q.is_finite() && q > 0.0 {
+            q.min(1.0)
+        } else {
+            1.0
+        };
+        tokens.push((sampled.token, q));
     }
     Ok(tokens)
 }

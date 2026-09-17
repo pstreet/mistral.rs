@@ -772,14 +772,16 @@ impl Qwen3_5Model {
             .map(|seq| seq.get_toks().to_vec())
             .collect::<Vec<_>>();
         let mut tokens: Vec<Vec<u32>> = vec![Vec::with_capacity(n_predict); batch];
-        let mut logits = Vec::with_capacity(n_predict);
+        let mut probs: Vec<Vec<f32>> = vec![Vec::with_capacity(n_predict); batch];
+        let mut last_device = None;
         for step in 0..n_predict {
             let step_logits = self.draft_logits(&hidden)?;
             let drafts = sample_draft_rows(&step_logits, ctx.sequences, &mut contexts, &ctx.rng)?;
-            for (i, draft) in drafts.iter().enumerate() {
+            for (i, (draft, q)) in drafts.iter().enumerate() {
                 tokens[i].push(*draft);
+                probs[i].push(*q);
             }
-            logits.push(step_logits);
+            last_device = Some(step_logits.device().clone());
             if step + 1 == n_predict {
                 break;
             }
@@ -789,7 +791,7 @@ impl Qwen3_5Model {
                 .iter()
                 .zip(cursor.iter_mut())
                 .zip(drafts.iter())
-                .map(|((seq_id, (position, mrope)), draft)| {
+                .map(|((seq_id, (position, mrope)), (draft, _))| {
                     *position += 1;
                     for value in mrope.iter_mut() {
                         *value += 1;
@@ -805,12 +807,18 @@ impl Qwen3_5Model {
             hidden = self.drafter_forward(head, &chained, &hidden, &kv_cache, paged_meta)?;
         }
 
-        // [n_predict, batch, vocab] -> per sequence [n_predict, vocab]
-        let logits = Tensor::stack(&logits, 1)?;
+        // Sparse q (width 1: just the drafted token) unlocks the device verifier
+        // and carries the exact proposal probability for stochastic verification.
+        let device = last_device.ok_or_else(|| candle_core::Error::msg("no draft steps"))?;
         let proposals = tokens
             .into_iter()
-            .enumerate()
-            .map(|(row, tokens)| Ok(SpeculativeProposal::with_logits(tokens, logits.get(row)?)))
+            .zip(probs)
+            .map(|(tokens, probs)| {
+                let n = tokens.len();
+                let token_ids = Tensor::from_vec(tokens.clone(), (n, 1), &device)?;
+                let probs = Tensor::from_vec(probs, (n, 1), &device)?;
+                SpeculativeProposal::with_sparse_probs(tokens, token_ids, probs)
+            })
             .collect::<Result<Vec<_>>>()?;
         Ok(Some(SpeculativeProposalBatch::new(proposals)))
     }
