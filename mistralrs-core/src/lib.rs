@@ -2053,12 +2053,12 @@ impl MistralRs {
                     MistralRsError::ReloadFailed(format!("Failed to query device memory: {e}"))
                 })?
                 .available() as u64;
-            let Some(need) =
-                estimate_load_bytes(&state.loader_config, available, self.router_policy.evict_headroom_bytes)
-            else {
-                warn!(
-                    "Model {model_id} footprint unknown; loading without eviction"
-                );
+            let Some(need) = estimate_load_bytes(
+                &state.loader_config,
+                available,
+                self.router_policy.evict_headroom_bytes,
+            ) else {
+                warn!("Model {model_id} footprint unknown; loading without eviction");
                 return Ok(());
             };
             (device, need)
@@ -3424,9 +3424,7 @@ fn estimate_load_bytes(
         None => 0,
         Some(planned) => match planned.mem_gpu {
             MemoryGpuConfig::MbAmount(v) => v as u64 * 1024 * 1024,
-            MemoryGpuConfig::BestEffortMbAmount { target_mb, .. } => {
-                target_mb as u64 * 1024 * 1024
-            }
+            MemoryGpuConfig::BestEffortMbAmount { target_mb, .. } => target_mb as u64 * 1024 * 1024,
             MemoryGpuConfig::Utilization(f) => (available_now as f64 * f as f64) as u64,
             MemoryGpuConfig::ContextSize(_) => return None,
         },
