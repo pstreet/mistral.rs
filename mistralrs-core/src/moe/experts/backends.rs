@@ -8,18 +8,18 @@ use mistralrs_quant::{
 use std::sync::Arc;
 
 use crate::cuda::moe;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::layers::Activation;
 
 use super::checkpoint::ExpertCheckpoint;
 #[cfg(feature = "cuda")]
 use super::config::gated_act;
 use super::config::{ExpertProj, MoEExpertsConfig};
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use super::forward::MoECudaFastPath;
 use super::forward::{MoEForward, MoEForwardConfig};
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const GROUPED_PREFILL_MIN_TOKENS: usize = 32;
 
 /// Canonical stacked expert weights, ENK [E, N, K] = [E, out, in]. The raw backends (Fused,
@@ -65,7 +65,7 @@ fn should_stage_prequantized_on_cpu(experts_vb: &ShardedVarBuilder) -> bool {
         .all(|name| should_apply_immediate_isq(&experts_vb.pp(name)))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 enum GroupedGateUp {
     Packed(Tensor),
     SortedPair { gate: Tensor, up: Tensor },
@@ -306,7 +306,7 @@ impl FastExpertsWeights {
     }
 }
 
-#[cfg(all(test, feature = "cuda"))]
+#[cfg(all(test, any(feature = "cuda", feature = "rocm")))]
 mod tests {
     use super::*;
     use crate::moe::experts::forward::{MoEForwardPhase, MoEForwardShape};
@@ -621,6 +621,125 @@ mod tests {
     fn quantized_grouped_prefill_lora_bf16_matches_gather_pipeline() -> Result<()> {
         run_quantized_grouped_prefill_lora(DType::BF16, 0.12)
     }
+
+    fn quant_method_with(
+        weight: Tensor,
+        dtype: GgmlDType,
+        device: &Device,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        let weight = QTensor::quantize_onto(&weight, dtype, device)?;
+        Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+            q_weight: Arc::new(weight),
+            b: None,
+        })?))
+    }
+
+    fn run_q4k_fast_cuda_matches_gather(tokens: usize, seq_len: usize) -> Result<()> {
+        const EXPERTS: usize = 3;
+        // Q4_K super-blocks need K divisible by 256.
+        const HIDDEN: usize = 256;
+        const INTERMEDIATE: usize = 512;
+        const TOPK: usize = 2;
+
+        let device = Device::new_cuda(0)?;
+        let fast = FastExpertsWeights {
+            fused_gate_proj: quant_method_with(
+                tensor((EXPERTS, INTERMEDIATE, HIDDEN), 0.1)?,
+                GgmlDType::Q4K,
+                &device,
+            )?,
+            fused_up_proj: quant_method_with(
+                tensor((EXPERTS, INTERMEDIATE, HIDDEN), 0.7)?,
+                GgmlDType::Q4K,
+                &device,
+            )?,
+            fused_down_proj: quant_method_with(
+                tensor((EXPERTS, HIDDEN, INTERMEDIATE), 1.3)?,
+                GgmlDType::Q4K,
+                &device,
+            )?,
+            sharded: false,
+        };
+
+        let xs = tensor((1, tokens, HIDDEN), 3.1)?
+            .to_dtype(DType::BF16)?
+            .to_device(&device)?;
+        let xs_flat = xs.reshape((tokens, HIDDEN))?;
+        let topk_ids = Tensor::from_vec(
+            (0..tokens)
+                .flat_map(|token| {
+                    [
+                        u32::try_from(token % EXPERTS).expect("expert index is bounded"),
+                        u32::try_from((token + 1) % EXPERTS).expect("expert index is bounded"),
+                    ]
+                })
+                .collect::<Vec<_>>(),
+            (tokens, TOPK),
+            &device,
+        )?;
+        let topk_weights = Tensor::from_vec(
+            (0..tokens)
+                .flat_map(|_| vec![0.6f32, 0.4])
+                .collect::<Vec<_>>(),
+            (tokens, TOPK),
+            &device,
+        )?;
+        let phase = if seq_len > 1 {
+            MoEForwardPhase::Prefill
+        } else {
+            MoEForwardPhase::Decode
+        };
+        let forward = MoEForward {
+            xs: &xs,
+            xs_flat: &xs_flat,
+            topk_weights: &topk_weights,
+            topk_ids: &topk_ids,
+            original_dtype: DType::BF16,
+            shape: MoEForwardShape {
+                batch_size: 1,
+                seq_len,
+                hidden_dim: HIDDEN,
+                num_tokens: tokens,
+                phase,
+            },
+            lora: None,
+        };
+        let config = MoEForwardConfig {
+            num_experts: EXPERTS,
+            num_experts_per_tok: TOPK,
+            act: Activation::Silu,
+        };
+
+        let actual = fast
+            .forward_cuda(&forward, config)?
+            .expect("Q4_K takes the GPU fast path");
+        let expected = fast.forward_gather(&forward, config)?;
+        assert_eq!(actual.dtype(), DType::BF16);
+        let error = (&actual.to_dtype(DType::F32)? - &expected.to_dtype(DType::F32)?)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        let scale = expected
+            .to_dtype(DType::F32)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(
+            error <= 0.1 * (1.0 + scale),
+            "Q4_K fast-path max error {error} at reference scale {scale}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn q4k_fused_decode_matches_gather_pipeline() -> Result<()> {
+        run_q4k_fast_cuda_matches_gather(2, 1)
+    }
+
+    #[test]
+    fn q4k_grouped_prefill_matches_gather_pipeline() -> Result<()> {
+        run_q4k_fast_cuda_matches_gather(GROUPED_PREFILL_MIN_TOKENS, GROUPED_PREFILL_MIN_TOKENS)
+    }
 }
 
 impl FastExpertsWeights {
@@ -686,12 +805,12 @@ impl FusedExpertsWeights {
         }
         let is_prefill = forward.shape.phase.is_prefill();
         let (expert_ids, sorted_token_ids) = if forward.shape.phase.is_prefill() {
-            #[cfg(feature = "cuda")]
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
             {
                 use crate::ops::ArgSortOp;
                 forward.topk_ids.flatten_all()?.sort(true)?
             }
-            #[cfg(not(feature = "cuda"))]
+            #[cfg(not(any(feature = "cuda", feature = "rocm")))]
             forward.topk_ids.flatten_all()?.sort_last_dim(true)?
         } else {
             forward.topk_ids.flatten_all()?.sort_last_dim(true)?
@@ -733,12 +852,12 @@ impl FusedExpertsWeights {
     fn forward_lora(&self, forward: &MoEForward, config: MoEForwardConfig) -> Result<Tensor> {
         let is_prefill = forward.shape.phase.is_prefill();
         let (expert_ids, sorted_token_ids) = if is_prefill {
-            #[cfg(feature = "cuda")]
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
             {
                 use crate::ops::ArgSortOp;
                 forward.topk_ids.flatten_all()?.sort(true)?
             }
-            #[cfg(not(feature = "cuda"))]
+            #[cfg(not(any(feature = "cuda", feature = "rocm")))]
             forward.topk_ids.flatten_all()?.sort_last_dim(true)?
         } else {
             forward.topk_ids.flatten_all()?.sort_last_dim(true)?
@@ -972,7 +1091,7 @@ impl FastExpertsWeights {
         config: MoEForwardConfig,
     ) -> Result<Tensor> {
         if forward.lora.is_some() {
-            #[cfg(feature = "cuda")]
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
             if self.fused_gate_proj.stats_snapshot().is_none() {
                 match Self::select_cuda_fast_path(forward) {
                     Some(MoECudaFastPath::Decode) => {
@@ -996,7 +1115,7 @@ impl FastExpertsWeights {
             return self.forward_gather_lora(forward, config);
         }
         // while collecting, force the gather path; fused kernels never materialize the routed inputs
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         if self.fused_gate_proj.stats_snapshot().is_none() {
             if let Some(result) = self.forward_cuda(forward, config)? {
                 return Ok(result);
@@ -1006,7 +1125,7 @@ impl FastExpertsWeights {
         self.forward_gather(forward, config)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn grouped_lora_preserves_route_order(&self) -> bool {
         self.fused_gate_proj
             .get_qtensor()
@@ -1016,7 +1135,7 @@ impl FastExpertsWeights {
             })
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(super) fn select_cuda_fast_path(forward: &MoEForward) -> Option<MoECudaFastPath> {
         if !forward.xs.device().is_cuda() {
             return None;
@@ -1031,7 +1150,7 @@ impl FastExpertsWeights {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(super) fn forward_cuda(
         &self,
         forward: &MoEForward,
@@ -1183,7 +1302,7 @@ impl FastExpertsWeights {
             .to_dtype(forward.original_dtype)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn forward_decode_lora(
         &self,
         forward: &MoEForward,
@@ -1259,7 +1378,7 @@ impl FastExpertsWeights {
     }
 
     /// Fused MoE decode path for CUDA. Returns Ok(Some) on success, Ok(None) to fall back.
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(super) fn forward_decode(
         &self,
         forward: &MoEForward,
@@ -1337,7 +1456,7 @@ impl FastExpertsWeights {
     }
 
     /// Grouped MoE forward for CUDA prefill. Returns Ok(Some) on success, Ok(None) to fall back.
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(super) fn forward_grouped(
         &self,
         forward: &MoEForward,

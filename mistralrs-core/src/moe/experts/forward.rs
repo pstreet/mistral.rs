@@ -64,13 +64,13 @@ pub(super) struct MoEForward<'a> {
 
 #[derive(Clone, Copy)]
 pub(super) struct MoEForwardConfig {
-    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+    #[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
     pub num_experts: usize,
     pub num_experts_per_tok: usize,
     pub act: Activation,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[derive(Clone, Copy)]
 pub(super) enum MoECudaFastPath {
     Decode,
