@@ -69,12 +69,16 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
     // A per-entry `mtp = true` needs an MtpConfig to inherit even when the
     // global flag is off (e.g. headless seed + MTP lazy entry). This only
     // feeds the fallback; the global setting is untouched.
-    let mtp_entry_fallback = runtime.mtp_config().is_none().then(|| {
-        models.iter().any(|m| m.mtp == Some(true)).then(|| {
-            mistralrs_core::MtpConfig::builtin(runtime.mtp_n_predict)
-                .with_draft_sampling_method(runtime.mtp_draft_sampling.into())
+    let mtp_entry_fallback = runtime
+        .mtp_config()
+        .is_none()
+        .then(|| {
+            models.iter().any(|m| m.mtp == Some(true)).then(|| {
+                mistralrs_core::MtpConfig::builtin(runtime.mtp_n_predict)
+                    .with_draft_sampling_method(runtime.mtp_draft_sampling.into())
+            })
         })
-    }).flatten();
+        .flatten();
 
     let mut builder = MistralRsForServerBuilder::new()
         .with_max_seqs(runtime.max_seqs)
@@ -618,14 +622,8 @@ quantized_file = "model-Q4_K_M.gguf"
         let policy = config.router.into_policy();
         assert!(!policy.auto_evict);
         assert_eq!(policy.evict_headroom_bytes, 512 * 1024 * 1024);
-        assert_eq!(
-            policy.load_wait_timeout,
-            std::time::Duration::from_secs(60)
-        );
-        assert_eq!(
-            policy.evict_busy_wait,
-            std::time::Duration::from_secs(120)
-        );
+        assert_eq!(policy.load_wait_timeout, std::time::Duration::from_secs(60));
+        assert_eq!(policy.evict_busy_wait, std::time::Duration::from_secs(120));
         assert_eq!(policy.idle_ttl, std::time::Duration::from_secs(300));
         let default = crate::config::RouterOptions::default().into_policy();
         assert!(default.auto_evict);
