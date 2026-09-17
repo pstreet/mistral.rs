@@ -5,6 +5,7 @@
 # WorkingDirectory there and the wrapper cds there; cd there for manual runs).
 #
 # Differences vs models.ini:
+#   - ACTIVE default: Qwen3.6-35B (eager, top entry); Qwen3.8-27B is now lazy.
 #   - Only the first [[models]] entry loads at boot (it seeds the instance);
 #     the rest use `lazy = true` (registered, demand-loaded on first request).
 #     Demand-loads LRU-evict idle residents to fit (plus headroom) and evict
@@ -21,7 +22,9 @@
 
 command = "serve"
 # Single active model -> clients address it as "default".
-default_model_id = "models/orcarouter/Qwen3.8-27B-Uncensored-GGUF"
+default_model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
+#default_model_id = "models/orcarouter/Qwen3.8-27B-Uncensored-GGUF"
+#default_model_id = "models/unsloth/Qwen3.5-4B-MTP-GGUF"
 
 [server]
 host = "127.0.0.1"
@@ -60,20 +63,46 @@ mtp_draft_sampling = "greedy"
 # per-chunk weight dequant and lifts cold prefill to ~295 tok/s (validated on
 # gfx1151). Capped at the 4096 batch-token budget; lower this if concurrent
 # prefill latency matters more than single-prompt throughput.
-max_prefill_chunk_tokens = 4096
+max_prefill_chunk_tokens = 2048
 # Prefill batch token quantum: larger chunks amortize per-chunk overhead for long prompts.
 
 # ============================================================
-# Qwen3.8 27B (ACTIVE default, eager: first model seeds the instance)
+# Qwen3.6 35B MoE (ACTIVE default, eager: first model seeds the instance)
+# ============================================================
+
+[[models]]
+model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
+alias = "qwen3.6-35b-q4"
+mtp = false
+
+[models.format]
+quantized_file = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
+
+
+# ============================================================
+# Qwen3.8 27B (lazy, demand-loaded)
 # ============================================================
 
 [[models]]
 model_id = "models/orcarouter/Qwen3.8-27B-Uncensored-GGUF"
 alias = "qwen3.8-27b"
+lazy = true
+#mtp = false (multimodal MTP target+verify verified on this model)
 
 [models.format]
 quantized_file = "Qwen3.8-27B-Uncensored-Q6_K.gguf"
 mmproj = "mmproj-Qwen3.8-27B-Uncensored-f16.gguf"
+
+
+[[models]]
+model_id = "models/unsloth/Qwen3.5-4B-MTP-GGUF"
+alias = "qwen3.5-4b"
+lazy = true
+mtp = false
+
+[models.format]
+quantized_file = "Qwen3.5-4B-Q8_0.gguf"
+
 
 # ============================================================
 # Everything below is lazy: registered at boot, loaded on first request.
@@ -81,19 +110,6 @@ mmproj = "mmproj-Qwen3.8-27B-Uncensored-f16.gguf"
 # (all entries below are pinned: two residents at once must fit VRAM, and
 # the MTP draft head adds footprint; the eager default keeps MTP n=2).
 # ============================================================
-
-# ------------------------------------------------------------
-# Qwen3.6 35B MoE (text-only)
-# ------------------------------------------------------------
-
-[[models]]
-model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
-alias = "qwen3.6-35b-q4"
-lazy = true
-mtp = false
-
-[models.format]
-quantized_file = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
 
 # ------------------------------------------------------------
 # Muse Glimmer 30B (vision). Standalone: no tok_model_id; config/tokenizer
@@ -146,15 +162,6 @@ quantized_file = "Llama3.2-30B-A3B-II-Dark-Champion-INSTRUCT-Heretic-Abliterated
 # ------------------------------------------------------------
 # Small / fast
 # ------------------------------------------------------------
-
-[[models]]
-model_id = "models/unsloth/Qwen3.5-4B-MTP-GGUF"
-alias = "qwen3.5-4b"
-lazy = true
-mtp = false
-
-[models.format]
-quantized_file = "Qwen3.5-4B-Q8_0.gguf"
 
 [[models]]
 model_id = "models/unsloth/Qwen3-16B-A3B-GGUF"
