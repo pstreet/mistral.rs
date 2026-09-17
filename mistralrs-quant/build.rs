@@ -124,6 +124,8 @@ fn build_rocm() -> Result<(), String> {
         ("kernels/gptq/q_gemm.cu", None),
         ("kernels/moe/moe_align.cu", None),
         ("kernels/moe/gelu_tanh_and_mul.cu", None),
+        ("kernels/indexed_moe/indexed_moe.cu", None),
+        ("kernels/moe_grouped/moe_grouped.cu", None),
         ("kernels/mmq_gguf/mmq_quantize.cu", None),
         ("kernels/mmq_gguf/mmq_instance_q2_k.cu", None),
         ("kernels/mmq_gguf/mmq_instance_q3_k.cu", None),

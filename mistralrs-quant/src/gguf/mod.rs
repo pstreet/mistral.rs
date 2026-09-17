@@ -1,6 +1,6 @@
 pub mod archive;
 pub mod cpu;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) mod cuda;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub mod fast_mmq;
@@ -495,14 +495,14 @@ impl QuantMethod for GgufMatMul {
         // - x: (n_tokens, 1, hidden_dim) or (n_tokens, n_experts_per_tok, hidden_dim)
         // - indices: (n_tokens, n_experts_per_tok)
         // - weights (self): (n_experts, out_features, in_features)
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         let res = if x.device().is_cuda() {
             cuda::qmatmul_indexed_moe_forward(&self.w, x, indices)?
         } else {
             cpu::cpu_indexed_moe_forward(&self.w, x, indices)?
         };
 
-        #[cfg(not(feature = "cuda"))]
+        #[cfg(not(any(feature = "cuda", feature = "rocm")))]
         let res = cpu::cpu_indexed_moe_forward(&self.w, x, indices)?;
 
         if let Some(b) = &self.b {
