@@ -311,7 +311,7 @@ pub struct Sampler {
     logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     top1_cache: Arc<Mutex<Option<crate::ops::CudaTop1LogitsWorkspace>>>,
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     topk_sampling_cache: Arc<Mutex<Option<crate::ops::CudaTopKSamplingWorkspace>>>,
 }
 
@@ -426,13 +426,13 @@ impl Drop for CudaTop1BatchSubmission {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaTopKBatchSubmission {
     cache: Arc<Mutex<Option<crate::ops::CudaTopKSamplingWorkspace>>>,
     submission: Option<crate::ops::CudaTopKSamplingSubmission>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaTopKBatchSubmission {
     pub(crate) fn batch_size(&self) -> usize {
         self.submission
@@ -495,7 +495,7 @@ impl CudaTopKBatchSubmission {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl Drop for CudaTopKBatchSubmission {
     fn drop(&mut self) {
         let Some(submission) = self.submission.take() else {
@@ -632,7 +632,7 @@ fn top_p_cutoff(top_p: f32, kept_probs: impl Iterator<Item = f32>) -> f32 {
     top_p * kept_probs.sum::<f32>()
 }
 
-#[cfg(all(feature = "cuda", test))]
+#[cfg(all(any(feature = "cuda", feature = "rocm"), test))]
 fn weighted_index_from_unit_f32(weights: &[f32], unit: f32) -> Result<usize> {
     if weights.is_empty() || !unit.is_finite() || !(0.0..1.0).contains(&unit) {
         candle_core::bail!("invalid resident sampling weights or uniform");
@@ -732,7 +732,7 @@ impl Sampler {
             logits_processors,
             #[cfg(any(feature = "cuda", feature = "rocm"))]
             top1_cache: Arc::new(Mutex::new(None)),
-            #[cfg(feature = "cuda")]
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
             topk_sampling_cache: Arc::new(Mutex::new(None)),
         })
     }
@@ -826,7 +826,7 @@ impl Sampler {
         })
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn cuda_resident_sampling_plan(
         &self,
         return_logprobs: bool,
@@ -841,7 +841,7 @@ impl Sampler {
         Some(plan)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn draw_cuda_resident_uniform(rng: &mut Isaac64Rng) -> f32 {
         use rand::distr::Uniform;
 
@@ -1071,7 +1071,7 @@ impl Sampler {
         self.submit_cuda_top1_batch(logits, false)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn submit_cuda_top1_batch_into(
         &self,
         logits: &Tensor,
@@ -1087,7 +1087,7 @@ impl Sampler {
         })
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn submit_cuda_topk_batch_owned(
         &self,
         logits: &Tensor,
@@ -1103,7 +1103,7 @@ impl Sampler {
         })
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn submit_cuda_topk_batch_into(
         &self,
         logits: &Tensor,
@@ -2614,7 +2614,7 @@ mod tests {
         assert!(matches!(greedy_plan.kind, CudaBatchSamplingKind::Greedy));
         assert_eq!(greedy_plan.inverse_temperature, 1.0);
         // cudarc-hip has no resident sampling API
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         {
             assert!(greedy.cuda_resident_sampling_plan(false).is_some());
             assert!(greedy.cuda_speculative_sampling_plan(false).is_none());
@@ -2654,13 +2654,13 @@ mod tests {
         ));
         assert_eq!(top_k_plan.inverse_temperature, 2.0);
         // cudarc-hip has no resident sampling API
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         {
             assert!(top_k.cuda_resident_sampling_plan(false).is_some());
         }
         assert!(top_k.cuda_batch_sampling_plan(true).is_none());
         // cudarc-hip has no speculative sampling API
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         {
             let speculative_top_k = top_k.cuda_speculative_sampling_plan(false).unwrap();
             assert_eq!(speculative_top_k.inverse_temperature, 2.0);
@@ -2708,7 +2708,7 @@ mod tests {
             CudaBatchSamplingKind::Categorical
         ));
         // cudarc-hip has no resident sampling API
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         {
             assert!(unbounded.cuda_resident_sampling_plan(false).is_none());
             let speculative_unbounded = unbounded.cuda_speculative_sampling_plan(false).unwrap();
@@ -2824,7 +2824,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn resident_unit_uniform_matches_weighted_index_for_fixed_seeds() {
         use super::weighted_index_from_unit_f32;
@@ -2873,7 +2873,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn cuda_categorical_row_parses_token_and_logprob() {
         use super::Sampler;

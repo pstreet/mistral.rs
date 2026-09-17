@@ -8,19 +8,19 @@ use std::{
 use candle_core::{Error, Result};
 use tokio::sync::{mpsc, oneshot};
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::pipeline::sampling::CudaTokenBatchSubmission;
 
 const COMPLETION_QUEUE_CAPACITY: usize = 2;
 const COMPLETION_CHANNEL_CLOSED: &str = "CUDA decode completion worker stopped";
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const COMPLETION_THREAD_NAME: &str = "mistralrs-cuda-decode-completion";
 
 trait CompletionSubmission: Send + 'static {
     fn complete(self) -> Result<Vec<u32>>;
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CompletionSubmission for CudaTokenBatchSubmission {
     fn complete(self) -> Result<Vec<u32>> {
         CudaTokenBatchSubmission::complete(self)
@@ -102,12 +102,12 @@ impl<S: CompletionSubmission> Drop for CompletionWorker<S> {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaDecodeCompletionWorker {
     worker: CompletionWorker<CudaTokenBatchSubmission>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaDecodeCompletionWorker {
     pub(crate) fn new() -> Result<Self> {
         Ok(Self {

@@ -3,7 +3,7 @@ mod auto;
 pub mod chat_template;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) mod cuda_graph;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[doc(hidden)]
 pub use cuda_graph::CudaDecodeGraphLaunch;
 mod diffusion;
@@ -1785,7 +1785,7 @@ pub trait Pipeline:
             .map(ForwardStepResult::eager)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[doc(hidden)]
     fn replay_cuda_decode_one_token(
         &mut self,

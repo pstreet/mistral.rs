@@ -71,7 +71,7 @@ impl<T> AdmissionQueue<T> {
         self.policy.max_dispatches_per_step()
     }
 
-    #[cfg(any(feature = "cuda", test))]
+    #[cfg(any(feature = "cuda", feature = "rocm", test))]
     pub(super) fn blocks_decode_continuation(&self) -> bool {
         !self.bypass_controls.is_empty()
             || !self.shutdown.is_empty()

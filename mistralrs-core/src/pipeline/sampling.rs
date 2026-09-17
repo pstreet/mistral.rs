@@ -7,7 +7,7 @@ use rand_isaac::Isaac64Rng;
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::sampler::CudaBatchSamplingKind;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::sampler::{
     CudaBatchSamplingPlan, CudaTop1BatchSubmission, CudaTopKBatchSubmission, Sampler,
 };
@@ -866,18 +866,18 @@ pub(crate) fn can_sample_batch_cuda(seqs: &[&mut Sequence]) -> bool {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 enum CudaTokenBatchSubmissionInner {
     Top1(CudaTop1BatchSubmission),
     TopK(CudaTopKBatchSubmission),
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaTokenBatchSubmission {
     inner: CudaTokenBatchSubmissionInner,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaTokenBatchSubmission {
     pub(crate) fn batch_size(&self) -> usize {
         match &self.inner {
@@ -914,13 +914,13 @@ impl CudaTokenBatchSubmission {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct CudaTokenBatchPlan {
     sampler: Arc<Sampler>,
     topk_params: Option<Vec<crate::ops::CudaTopKSamplingParams>>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn cuda_token_sampling_plan(seq: &Sequence) -> Option<CudaBatchSamplingPlan> {
     if !matches!(&seq.recognizer, SequenceRecognizer::None)
         || seq.tool_call_state.is_some()
@@ -933,7 +933,7 @@ fn cuda_token_sampling_plan(seq: &Sequence) -> Option<CudaBatchSamplingPlan> {
         .cuda_resident_sampling_plan(seq.return_logprobs())
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn prepare_cuda_token_batch(
     seqs: &[&mut Sequence],
     rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
@@ -1005,7 +1005,7 @@ fn prepare_cuda_token_batch(
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn try_submit_cuda_token_batch_inner(
     logits: &Tensor,
     seqs: &[&mut Sequence],
@@ -1043,7 +1043,7 @@ fn try_submit_cuda_token_batch_inner(
     Ok(Some(CudaTokenBatchSubmission { inner }))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn try_submit_cuda_token_batch(
     logits: &Tensor,
     seqs: &[&mut Sequence],
@@ -1053,7 +1053,7 @@ pub(crate) fn try_submit_cuda_token_batch(
     try_submit_cuda_token_batch_inner(logits, seqs, Some(resident_input), rng)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn try_submit_cuda_token_batch_owned(
     logits: &Tensor,
     seqs: &[&mut Sequence],
@@ -1063,7 +1063,7 @@ pub(crate) fn try_submit_cuda_token_batch_owned(
 }
 
 pub(crate) fn can_submit_cuda_token_batch_seqs(seqs: &[&mut Sequence]) -> bool {
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     {
         let mut has_live_sequence = false;
         for seq in seqs {
@@ -1077,7 +1077,7 @@ pub(crate) fn can_submit_cuda_token_batch_seqs(seqs: &[&mut Sequence]) -> bool {
         }
         has_live_sequence
     }
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
     {
         let _ = seqs;
         false
@@ -1106,7 +1106,7 @@ fn one_token_stays_within_limits(
     generated_len.saturating_add(1) < max_generation_len && sequence_len < max_model_len
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 fn validate_token_batch_cardinality(
     sequence_count: usize,
     token_count: usize,
@@ -1120,7 +1120,7 @@ fn validate_token_batch_cardinality(
     Ok(())
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_token_batch_will_finish(
     this: &dyn Pipeline,
     seqs: &[&mut Sequence],
@@ -1139,7 +1139,7 @@ pub(crate) fn cuda_token_batch_will_finish(
     )
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 fn cuda_token_batch_will_finish_with_metadata(
     seqs: &[&mut Sequence],
     token_ids: &[u32],
@@ -1162,7 +1162,7 @@ fn cuda_token_batch_will_finish_with_metadata(
         }))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) async fn finish_cuda_token_batch(
     this: &dyn Pipeline,
     seqs: &mut [&mut Sequence],
@@ -1539,7 +1539,7 @@ pub async fn sample_sequence(
 #[cfg(test)]
 mod tests {
     use mistralrs_mcp::{Function, Tool, ToolType};
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     use rand::RngCore;
     use rand::SeedableRng;
     use std::{collections::HashMap, sync::Arc};
@@ -1704,7 +1704,7 @@ mod tests {
         assert_eq!(a_then_b, (a, b));
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn resident_batch_plan_draws_once_only_for_sampled_rows() {
         let fallback = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(999)));

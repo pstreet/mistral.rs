@@ -26,7 +26,7 @@ pub(crate) const CUDA_TOP1_PACKED_WIDTH: usize = 2;
 pub(crate) const CUDA_TOP1_INVALID_TOKEN: u32 = u32::MAX;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 const CUDA_ASYNC_TOKEN_RING_SLOTS: usize = 2;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const CUDA_TOPK_SAMPLING_PARAM_WIDTH: usize = 5;
 #[cfg(feature = "cuda")]
 pub(crate) const CUDA_DFLASH_SELECTOR_MAX_K: usize = 128;
@@ -3290,7 +3290,7 @@ pub(crate) fn cuda_top1_logits_f32_packed_batched_cached(
         .collect())
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[derive(Clone, Copy)]
 pub(crate) struct CudaTopKSamplingParams {
     pub(crate) inverse_temperature: f32,
@@ -3300,7 +3300,7 @@ pub(crate) struct CudaTopKSamplingParams {
     pub(crate) uniform: f32,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub struct CudaTopKSamplingWorkspace {
     capacity_rows: usize,
     capacity_k: usize,
@@ -3311,18 +3311,18 @@ pub struct CudaTopKSamplingWorkspace {
     slots: Vec<CudaTopKSamplingSlot>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct CudaTopKSamplingSlot {
     params: candle_core::cuda_backend::cudarc::driver::CudaSlice<f32>,
     params_host: candle_core::cuda_backend::cudarc::driver::PinnedHostSlice<f32>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaTopKSamplingSubmission {
     token: CudaAsyncTokenSubmission,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaTopKSamplingSubmission {
     pub(crate) fn batch_size(&self) -> usize {
         self.token.batch_size()
@@ -3333,19 +3333,19 @@ impl CudaTopKSamplingSubmission {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaTopKSamplingCompletion<'a> {
     token_ids: &'a [u32],
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl<'a> CudaTopKSamplingCompletion<'a> {
     pub(crate) fn token_ids(&self) -> &'a [u32] {
         self.token_ids
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn new_cuda_topk_sampling_slot(
     dev: &candle_core::CudaDevice,
     capacity_rows: usize,
@@ -3368,7 +3368,7 @@ fn new_cuda_topk_sampling_slot(
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn new_cuda_topk_sampling_workspace(
     dev: &candle_core::CudaDevice,
     rows: usize,
@@ -3398,7 +3398,7 @@ fn new_cuda_topk_sampling_workspace(
     })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn validate_cuda_topk_sampling_params(
     params: &[CudaTopKSamplingParams],
     rows: usize,
@@ -3427,7 +3427,7 @@ fn validate_cuda_topk_sampling_params(
     Ok(max_k)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn copy_cuda_topk_sampling_params(
     dev: &candle_core::CudaDevice,
     slot: &mut CudaTopKSamplingSlot,
@@ -3450,7 +3450,7 @@ fn copy_cuda_topk_sampling_params(
     Ok(())
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn cuda_topk_sampling_submit_inner(
     input: &Tensor,
     token_ids_dst: Option<&Tensor>,
@@ -3561,7 +3561,7 @@ fn cuda_topk_sampling_submit_inner(
     Ok(CudaTopKSamplingSubmission { token })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_topk_sampling_submit_batched(
     input: &Tensor,
     params: &[CudaTopKSamplingParams],
@@ -3576,7 +3576,7 @@ pub(crate) fn cuda_topk_sampling_submit_batched(
     )
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_topk_sampling_submit_batched_into(
     input: &Tensor,
     token_ids_dst: &Tensor,
@@ -3592,7 +3592,7 @@ pub(crate) fn cuda_topk_sampling_submit_batched_into(
     )
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_topk_sampling_device_tokens_wait_on(
     workspace: &mut CudaTopKSamplingWorkspace,
     submission: &CudaTopKSamplingSubmission,
@@ -3605,7 +3605,7 @@ pub(crate) fn cuda_topk_sampling_device_tokens_wait_on(
     )
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_topk_sampling_device_tokens_release_after(
     workspace: &mut CudaTopKSamplingWorkspace,
     submission: &CudaTopKSamplingSubmission,
@@ -3618,7 +3618,7 @@ pub(crate) fn cuda_topk_sampling_device_tokens_release_after(
     )
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_topk_sampling_submission_complete<'a>(
     workspace: &'a mut CudaTopKSamplingWorkspace,
     submission: &CudaTopKSamplingSubmission,
@@ -3632,7 +3632,7 @@ pub(crate) fn cuda_topk_sampling_submission_complete<'a>(
     Ok(CudaTopKSamplingCompletion { token_ids })
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_topk_sampling_submission_cancel(
     workspace: &mut CudaTopKSamplingWorkspace,
     submission: &CudaTopKSamplingSubmission,

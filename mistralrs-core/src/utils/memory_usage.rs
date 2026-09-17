@@ -34,14 +34,14 @@ impl DeviceMemory {
 
 pub struct MemoryUsage;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CudaMemoryPoolUsage {
     pub reserved: usize,
     pub used: usize,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CudaMemoryPoolSnapshot {
     pub current: CudaMemoryPoolUsage,
@@ -50,7 +50,7 @@ pub struct CudaMemoryPoolSnapshot {
     pub release_threshold: usize,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CudaGraphMemoryUsage {
     pub reserved: usize,
@@ -59,7 +59,7 @@ pub struct CudaGraphMemoryUsage {
     pub used_high: usize,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CudaAllocatorSnapshot {
     pub total: usize,
@@ -68,7 +68,7 @@ pub struct CudaAllocatorSnapshot {
     pub graph_pool: Option<CudaGraphMemoryUsage>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaMemoryPoolUsage {
     pub fn cached(self) -> usize {
         self.reserved.saturating_sub(self.used)
@@ -140,7 +140,7 @@ impl MemoryUsage {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub fn query_cuda_memory_pool(&self, device: &Device) -> Result<Option<CudaMemoryPoolUsage>> {
         use candle_core::cuda_backend::cudarc::driver::sys;
         use candle_core::cuda_backend::WrapErr;
@@ -173,7 +173,7 @@ impl MemoryUsage {
         }))
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub fn query_cuda_allocator(&self, device: &Device) -> Result<Option<CudaAllocatorSnapshot>> {
         use candle_core::cuda::cudarc::driver::result;
         use candle_core::cuda_backend::cudarc::driver::sys;
@@ -232,7 +232,7 @@ impl MemoryUsage {
         }))
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub fn trim_cuda_memory_pool(&self, device: &Device, min_bytes: usize) -> Result<bool> {
         use candle_core::cuda_backend::cudarc::driver::sys;
         use candle_core::cuda_backend::WrapErr;
@@ -258,7 +258,7 @@ impl MemoryUsage {
         Ok(true)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub fn synchronize_cuda_context(&self, device: &Device) -> Result<bool> {
         let Device::Cuda(device) = device else {
             return Ok(false);
@@ -272,7 +272,7 @@ impl MemoryUsage {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn cuda_memory_pool_attribute(
     pool: candle_core::cuda_backend::cudarc::driver::sys::CUmemoryPool,
     attribute: candle_core::cuda_backend::cudarc::driver::sys::CUmemPool_attribute,
@@ -293,7 +293,7 @@ fn cuda_memory_pool_attribute(
     Ok(value)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn query_cuda_graph_memory(
     device: candle_core::cuda_backend::cudarc::driver::sys::CUdevice,
 ) -> Result<Option<CudaGraphMemoryUsage>> {
@@ -335,7 +335,7 @@ fn query_cuda_graph_memory(
     }))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn cuda_graph_memory_attribute(
     device: candle_core::cuda_backend::cudarc::driver::sys::CUdevice,
     attribute: candle_core::cuda_backend::cudarc::driver::sys::CUgraphMem_attribute,
@@ -361,7 +361,7 @@ fn cuda_graph_memory_attribute(
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn cuda_result(
     result: candle_core::cuda_backend::cudarc::driver::sys::CUresult,
     context: &'static str,

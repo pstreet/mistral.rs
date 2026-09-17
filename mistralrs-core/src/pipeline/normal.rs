@@ -2492,7 +2492,7 @@ impl Pipeline for NormalPipeline {
         Ok(ForwardStepResult::eager(output))
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn replay_cuda_decode_one_token(
         &mut self,
         launch: CudaDecodeGraphLaunch,

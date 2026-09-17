@@ -1,20 +1,20 @@
 use std::time::Duration;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use std::time::Instant;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use std::sync::Arc;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use candle_core::cuda_backend::cudarc::driver::CudaStream;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use rand_isaac::Isaac64Rng;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::{prefix_cacher::PrefixCacheManagerV2, sequence::Sequence};
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use super::{
     sampling::{self, CudaTokenBatchSubmission},
     ForwardInputsResult, ForwardStepResult, Pipeline,
@@ -35,7 +35,7 @@ impl StepLookahead {
 
 pub(crate) struct StepCompletion {
     duration: Duration,
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     cuda_tail: Option<CudaDecodeTail>,
 }
 
@@ -43,7 +43,7 @@ impl StepCompletion {
     pub(crate) fn ready(duration: Duration) -> Self {
         Self {
             duration,
-            #[cfg(feature = "cuda")]
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
             cuda_tail: None,
         }
     }
@@ -52,7 +52,7 @@ impl StepCompletion {
         self.duration
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn with_cuda_tail(duration: Duration, cuda_tail: Option<CudaDecodeTail>) -> Self {
         Self {
             duration,
@@ -60,7 +60,7 @@ impl StepCompletion {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn into_cuda_tail(mut self) -> Option<CudaDecodeTail> {
         self.cuda_tail.take()
     }
@@ -72,7 +72,7 @@ pub struct StepSubmission {
 
 pub(crate) enum StepSubmissionKind {
     Ready(StepCompletion),
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     Cuda(CudaStepSubmission),
 }
 
@@ -83,7 +83,7 @@ impl StepSubmission {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn cuda(submission: CudaStepSubmission) -> Self {
         Self {
             inner: StepSubmissionKind::Cuda(submission),
@@ -97,25 +97,25 @@ impl StepSubmission {
     pub(crate) fn into_ready(self) -> Option<StepCompletion> {
         match self.inner {
             StepSubmissionKind::Ready(completion) => Some(completion),
-            #[cfg(feature = "cuda")]
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
             StepSubmissionKind::Cuda(_) => None,
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(crate) fn cuda_has_tail(&self) -> bool {
         matches!(&self.inner, StepSubmissionKind::Cuda(step) if step.has_tail())
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaDecodeTail {
     result: Option<ForwardStepResult>,
     stream: Arc<CudaStream>,
     pending: bool,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaDecodeTail {
     fn new(result: ForwardStepResult, stream: Arc<CudaStream>) -> Self {
         Self {
@@ -165,7 +165,7 @@ impl CudaDecodeTail {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl Drop for CudaDecodeTail {
     fn drop(&mut self) {
         if self.pending {
@@ -174,14 +174,14 @@ impl Drop for CudaDecodeTail {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaStepSubmission {
     current: Option<CudaTokenBatchSubmission>,
     tail: Option<CudaDecodeTail>,
     duration: Duration,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaStepSubmission {
     fn new(
         current: CudaTokenBatchSubmission,
@@ -213,14 +213,14 @@ impl CudaStepSubmission {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaStepPending {
     tail: Option<CudaDecodeTail>,
     duration: Duration,
     batch_size: usize,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaStepPending {
     pub(crate) fn finish(mut self, token_ids: Vec<u32>) -> candle_core::Result<CudaStepCompletion> {
         if token_ids.len() != self.batch_size {
@@ -238,14 +238,14 @@ impl CudaStepPending {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaStepCompletion {
     token_ids: Vec<u32>,
     tail: Option<CudaDecodeTail>,
     duration: Duration,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaStepCompletion {
     pub(crate) fn token_ids(&self) -> &[u32] {
         &self.token_ids
@@ -287,13 +287,13 @@ impl CudaStepCompletion {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) enum CudaTailSubmission {
     Submitted(CudaStepSubmission),
     Unsupported(CudaDecodeTail),
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn submit_forward_lookahead<P: Pipeline + ?Sized>(
     pipeline: &mut P,
     seqs: &[&mut Sequence],
@@ -339,7 +339,7 @@ pub(crate) fn submit_forward_lookahead<P: Pipeline + ?Sized>(
     )))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn submit_decode_tail<P: Pipeline + ?Sized>(
     pipeline: &mut P,
     seqs: &[&mut Sequence],
@@ -424,7 +424,7 @@ mod tests {
         assert_eq!(direct.duration(), duration);
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn pending_completion_preserves_row_order_and_cardinality() {
         use super::CudaStepPending;

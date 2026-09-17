@@ -1148,9 +1148,7 @@ impl MistralRsForServerBuilder {
                 config,
             },
             None => SchedulerConfig::DefaultScheduler {
-                method: DefaultSchedulerMethod::Fixed(
-                    self.max_seqs.try_into().unwrap(),
-                ),
+                method: DefaultSchedulerMethod::Fixed(self.max_seqs.try_into().unwrap()),
             },
         };
         let engine_config = mistralrs_core::EngineConfig {
@@ -1210,9 +1208,7 @@ impl MistralRsForServerBuilder {
                     mistralrs_config: None,
                 },
             )
-            .map_err(|e| {
-                anyhow::anyhow!("Failed to register lazy model {primary_id}: {e}")
-            })?;
+            .map_err(|e| anyhow::anyhow!("Failed to register lazy model {primary_id}: {e}"))?;
 
         // Addressable by config key too (mirrors the eager path's
         // pipeline-name alias; the real pipeline name is unknown
@@ -1261,8 +1257,7 @@ impl MistralRsForServerBuilder {
             );
         }
         // Resolve before `self.device` is moved out below.
-        let first_mtp_config =
-            self.resolve_entry_mtp(first_model.mtp, &first_model.model_id)?;
+        let first_mtp_config = self.resolve_entry_mtp(first_model.mtp, &first_model.model_id)?;
         let model = first_model.model.clone();
         let model_for_config = model.clone();
         let first_chat_template = first_model
@@ -1343,11 +1338,7 @@ impl MistralRsForServerBuilder {
                 // Lazy models hold no KV cache until loaded; giving them a
                 // fair-share slice would shrink every eager model's budget.
                 .map(|m| PagedKvModelRequest {
-                    paged_attn: if m.lazy {
-                        None
-                    } else {
-                        requested_cache_config
-                    },
+                    paged_attn: if m.lazy { None } else { requested_cache_config },
                     max_num_seqs: self.max_seqs,
                 })
                 .collect::<Vec<_>>(),

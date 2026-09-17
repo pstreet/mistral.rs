@@ -64,9 +64,9 @@ use crate::{
 mod add_request;
 mod admission;
 pub(crate) mod agentic_loop;
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
 mod cuda_decode;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 mod cuda_memory;
 pub use agentic_loop::DEFAULT_MAX_TOOL_ROUNDS;
 pub(crate) mod agentic_session;
@@ -86,17 +86,17 @@ fn record_paged_recurrent_prefix_validation(outcome: &'static str, reason: &'sta
     .increment(1);
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use self::cuda_decode::CudaDecodeCompletionWorker;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::paged_attention::block_hash::MultimodalAttentionPolicy;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::pipeline::execution::{
     submit_decode_tail, CudaDecodeTail, CudaStepCompletion, CudaStepSubmission, CudaTailSubmission,
 };
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::response::Response;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::sequence::Sequence;
 
 pub enum EngineInstruction {
@@ -220,11 +220,11 @@ pub struct Engine {
     pub(crate) file_store: crate::files::FileStore,
     // Re-runs the decode graph precapture after the recurrent pool grows and drops every graph
     pub(crate) graph_precapture_ctx: Option<DecodeGraphPrecaptureCtx>,
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     cuda_decode_enabled: bool,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 struct CudaDecodeBatchLease {
     rows: Vec<Arc<std::sync::Mutex<Sequence>>>,
     sequence_ids: Box<[usize]>,
@@ -232,14 +232,14 @@ struct CudaDecodeBatchLease {
     started: Instant,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 enum CudaPromptRejection {
     InvalidRequest(String),
     Internal(String),
     Unavailable(String),
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaPromptRejection {
     fn reason(&self) -> &str {
         match self {
@@ -260,7 +260,7 @@ impl CudaPromptRejection {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaDecodeBatchLease {
     fn new(
         rows: Vec<Arc<std::sync::Mutex<Sequence>>>,
@@ -662,7 +662,7 @@ impl Engine {
         let paged_block_retention_monitor = paged_block_retention
             .as_ref()
             .map(|retention| retention.revocation_monitor());
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         let cuda_decode_enabled =
             has_paged_attention && get_mut_arcmutex!(pipeline).device().is_cuda();
         let graph_precapture_ctx = if no_kv_cache {
@@ -735,7 +735,7 @@ impl Engine {
             session_store,
             file_store,
             graph_precapture_ctx,
-            #[cfg(feature = "cuda")]
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
             cuda_decode_enabled,
         })
     }
@@ -911,7 +911,7 @@ impl Engine {
         true
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     async fn complete_cuda_step(
         &self,
         worker: &CudaDecodeCompletionWorker,
@@ -922,7 +922,7 @@ impl Engine {
         pending.finish(completion.await?)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn account_cuda_decode_rows(&self, rows: &[Arc<std::sync::Mutex<Sequence>>]) {
         for row in rows {
             get_mut_arcmutex!(row).advance_num_computed_tokens(1);
@@ -930,7 +930,7 @@ impl Engine {
         self.logger.add_decode_tokens_processed(rows.len());
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn drain_cuda_decode_batch(&self, lease: CudaDecodeBatchLease) -> candle_core::Result<()> {
         let CudaDecodeBatchLease { rows, tail, .. } = lease;
         tail.drain()?;
@@ -938,7 +938,7 @@ impl Engine {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     async fn reject_prompt_for_cuda_memory(
         &self,
         rows: &[Arc<std::sync::Mutex<Sequence>>],
@@ -959,7 +959,7 @@ impl Engine {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn maintain_cuda_prompt_memory(
         &self,
         cuda_memory_pool: &mut cuda_memory::CudaMemoryPoolMaintenance,
@@ -980,7 +980,7 @@ impl Engine {
         memory_status
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     async fn continue_cuda_decode_batch(
         &self,
         lease: CudaDecodeBatchLease,
@@ -1123,7 +1123,7 @@ impl Engine {
         let policy =
             admission::AdmissionPolicy::new(self.max_active_sequences, max_pending_requests);
         let mut pending = admission::AdmissionQueue::new(policy);
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         let cuda_completion_worker = if self.cuda_decode_enabled {
             match CudaDecodeCompletionWorker::new() {
                 Ok(worker) => Some(worker),
@@ -1135,9 +1135,9 @@ impl Engine {
         } else {
             None
         };
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         let mut cuda_decode_lease: Option<CudaDecodeBatchLease> = None;
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         let mut cuda_memory_pool = {
             let pipeline = get_mut_arcmutex!(self.pipeline);
             let devices = pipeline.execution_devices();
@@ -1153,7 +1153,7 @@ impl Engine {
             }
             cuda_memory::CudaMemoryPoolMaintenance::new(unique_devices)
         };
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
         let mut cuda_prompt_preemption_workspace = None;
         'lp: loop {
             let should_terminate = || {
@@ -1167,7 +1167,7 @@ impl Engine {
             };
 
             if should_terminate() {
-                #[cfg(feature = "cuda")]
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
                 if let Some(lease) = cuda_decode_lease.take() {
                     if let Err(err) = self.drain_cuda_decode_batch(lease) {
                         tracing::warn!("Failed to drain the CUDA decode tail: {err}");
@@ -1179,9 +1179,9 @@ impl Engine {
 
             let channel_disconnected = self.collect_pending_requests(&mut pending).await;
             pending.retain(|request| !Self::request_is_abandoned(request));
-            #[cfg(feature = "cuda")]
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
             let decode_batch_leased = cuda_decode_lease.is_some();
-            #[cfg(not(feature = "cuda"))]
+            #[cfg(not(any(feature = "cuda", feature = "rocm")))]
             let decode_batch_leased = false;
             {
                 let mut scheduler = get_mut_arcmutex!(self.scheduler);
@@ -1192,7 +1192,7 @@ impl Engine {
                 }
             }
             if let Some(request) = pending.take_shutdown() {
-                #[cfg(feature = "cuda")]
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
                 if let Some(lease) = cuda_decode_lease.take() {
                     if let Err(err) = self.drain_cuda_decode_batch(lease) {
                         tracing::warn!("Failed to drain the CUDA decode tail: {err}");
@@ -1244,7 +1244,7 @@ impl Engine {
                 if !pending.is_empty() {
                     continue;
                 }
-                #[cfg(feature = "cuda")]
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
                 if cuda_memory_pool.when_idle() {
                     debug_assert!(cuda_decode_lease.is_none());
                     loop {
@@ -1302,7 +1302,7 @@ impl Engine {
 
             if TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst) {
                 self.replicate_request_to_daemons(&Request::TerminateAllSeqsNextStep);
-                #[cfg(feature = "cuda")]
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
                 if let Some(lease) = cuda_decode_lease.take() {
                     let leased_rows = lease.rows.clone();
                     let result = self.drain_cuda_decode_batch(lease);
@@ -1323,7 +1323,7 @@ impl Engine {
                 }
             }
 
-            #[cfg(feature = "cuda")]
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
             if let Some(lease) = cuda_decode_lease.take() {
                 let leased_rows = lease.rows.clone();
                 let allow_lookahead = !pending.blocks_decode_continuation() && {
@@ -1375,7 +1375,7 @@ impl Engine {
             let prefix_validator = hybrid_prefix_validator
                 .as_mut()
                 .map(|v| v as &mut dyn PagedPrefixCacheValidator);
-            #[cfg(feature = "cuda")]
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
             let waiting_prompt_preemption_enabled =
                 if let Some(workspace_bytes) = cuda_prompt_preemption_workspace {
                     debug_assert!(cuda_decode_lease.is_none());
@@ -1395,7 +1395,7 @@ impl Engine {
                 };
             let mut scheduler = get_mut_arcmutex!(self.scheduler);
             self.free_finished_scheduler_sequences(&mut *scheduler);
-            #[cfg(feature = "cuda")]
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
             scheduler.set_waiting_prompt_preemption_enabled(waiting_prompt_preemption_enabled);
             let scheduled = scheduler.schedule(&self.logger, prefix_validator);
             self.prune_revoked_paged_recurrent_prefixes();
@@ -1590,7 +1590,7 @@ impl Engine {
                         .scheduled
                         .first()
                         .is_some_and(|seq| get_mut_arcmutex!(seq).is_prompt());
-                    #[cfg(feature = "cuda")]
+                    #[cfg(any(feature = "cuda", feature = "rocm"))]
                     let step_lookahead = if !is_prompt
                         && cuda_completion_worker.is_some()
                         && !pending.blocks_decode_continuation()
@@ -1605,7 +1605,7 @@ impl Engine {
                     } else {
                         StepLookahead::Disabled
                     };
-                    #[cfg(not(feature = "cuda"))]
+                    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
                     let step_lookahead = StepLookahead::Disabled;
                     drop(scheduler);
                     if !preempted_sequence_ids.is_empty() {
@@ -1615,11 +1615,11 @@ impl Engine {
                             tracing::error!("Failed to release preempted speculative state: {err}");
                         }
                     }
-                    #[cfg(feature = "cuda")]
+                    #[cfg(any(feature = "cuda", feature = "rocm"))]
                     let mut prefix_gather_workspace_limit = None;
-                    #[cfg(not(feature = "cuda"))]
+                    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
                     let prefix_gather_workspace_limit = None;
-                    #[cfg(feature = "cuda")]
+                    #[cfg(any(feature = "cuda", feature = "rocm"))]
                     if is_prompt && !output.scheduled.is_empty() {
                         let (
                             model_metadata,
@@ -1949,7 +1949,7 @@ impl Engine {
                         drop(guards_mut);
                         drop(guards);
 
-                        #[cfg(feature = "cuda")]
+                        #[cfg(any(feature = "cuda", feature = "rocm"))]
                         if submission.cuda_has_tail() {
                             let mut scheduler = get_mut_arcmutex!(self.scheduler);
                             scheduler.record_decode_continuation();
@@ -1957,7 +1957,7 @@ impl Engine {
 
                         let step_exec_time = match submission.into_inner() {
                             StepSubmissionKind::Ready(completion) => completion.duration(),
-                            #[cfg(feature = "cuda")]
+                            #[cfg(any(feature = "cuda", feature = "rocm"))]
                             StepSubmissionKind::Cuda(submission) => {
                                 let completion_result = self
                                     .complete_cuda_step(
@@ -2227,7 +2227,7 @@ impl Engine {
                             }
                         }
                     }
-                    #[cfg(feature = "cuda")]
+                    #[cfg(any(feature = "cuda", feature = "rocm"))]
                     if is_prompt && cuda_memory_pool.after_prompt_step() {
                         debug_assert!(cuda_decode_lease.is_none());
                         loop {
@@ -2244,11 +2244,11 @@ impl Engine {
                 }
             }
 
-            #[cfg(feature = "cuda")]
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
             if cuda_decode_lease.is_none() {
                 self.free_finished_scheduler_sequences(&mut *scheduler);
             }
-            #[cfg(not(feature = "cuda"))]
+            #[cfg(not(any(feature = "cuda", feature = "rocm")))]
             self.free_finished_scheduler_sequences(&mut *scheduler);
         }
     }
