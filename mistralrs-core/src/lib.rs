@@ -51,6 +51,16 @@ const EVICT_HEADROOM_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// How long concurrent demand-load waiters block for an in-flight load
 /// before giving up (single 30B-class GGUF loads take minutes).
 const LOAD_WAIT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// How long a demand-load waits for busy residents to go idle before
+/// giving up (single generations can run minutes; the waiter holds the
+/// reload marker, so concurrent requesters pile onto the load-wait CV).
+const EVICT_BUSY_WAIT: Duration = Duration::from_secs(5 * 60);
+/// Poll cadence while waiting for busy residents.
+const EVICT_BUSY_POLL: Duration = Duration::from_millis(500);
+/// Grace after an eviction during which the loop keeps waiting even with no
+/// residents: the engine thread exits async on Terminate, so its weights and
+/// KV cache only show up in memory stats later.
+const EVICT_RECLAIM_GRACE: Duration = Duration::from_secs(10);
 /// Default idle time before the TTL task may unload an engine. Reserved for
 /// the idle-eviction pass; no task reads it yet.
 const DEFAULT_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
@@ -66,6 +76,9 @@ pub struct RouterPolicy {
     pub evict_headroom_bytes: u64,
     /// How long concurrent demand-loads wait on an in-flight load.
     pub load_wait_timeout: Duration,
+    /// How long a demand-load waits for busy residents to go idle before
+    /// failing the request. Zero disables the wait (fail fast).
+    pub evict_busy_wait: Duration,
     /// Idle time before TTL eviction may unload an engine (future use).
     pub idle_ttl: Duration,
 }
@@ -76,6 +89,7 @@ impl Default for RouterPolicy {
             auto_evict: true,
             evict_headroom_bytes: EVICT_HEADROOM_BYTES,
             load_wait_timeout: LOAD_WAIT_TIMEOUT,
+            evict_busy_wait: EVICT_BUSY_WAIT,
             idle_ttl: DEFAULT_IDLE_TTL,
         }
     }
@@ -1790,6 +1804,32 @@ impl MistralRs {
         })
     }
 
+    /// Headless instance: no seed engine. All models register lazy and load
+    /// on first request; metadata routes (/health, /v1/models) work with
+    /// zero residents. Daemon replication needs a seed engine, so headless
+    /// boot refuses daemon mode at the server builder.
+    pub fn new_headless(router_policy: RouterPolicy, log: Option<String>) -> Arc<Self> {
+        info!("mistral.rs version: {MISTRALRS_VERSION}");
+        info!("git revision: {MISTRALRS_GIT_REVISION}");
+        Arc::new(Self {
+            engines: RwLock::new(HashMap::new()),
+            unloaded_models: RwLock::new(HashMap::new()),
+            reloading_models: RwLock::new(HashSet::new()),
+            reload_cv: Arc::new((Mutex::new(0), Condvar::new())),
+            last_used: RwLock::new(HashMap::new()),
+            router_policy,
+            default_engine_id: RwLock::new(None),
+            model_aliases: RwLock::new(HashMap::new()),
+            log,
+            id: "unseeded".to_string(),
+            creation_time: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Time travel has occurred!")
+                .as_secs(),
+            next_request_id: Mutex::new(RefCell::new(1)),
+        })
+    }
+
     /// Attempts to reboot a specific engine by model_id
     fn reboot_engine(&self, model_id: &str) -> Result<(), MistralRsError> {
         let mut engines = self.engines.write().map_err(|_| {
@@ -1917,6 +1957,7 @@ impl MistralRs {
                     resolved_model_id
                 );
                 if let Err(e) = self.evict_for_request(&resolved_model_id) {
+                    warn!("Demand-load of {resolved_model_id} refused: eviction failed ({e})");
                     self.release_reload_claim(&resolved_model_id);
                     return Err(e);
                 }
@@ -2024,6 +2065,9 @@ impl MistralRs {
         };
 
         let mut skipped = HashSet::new();
+        let deadline = Instant::now() + self.router_policy.evict_busy_wait;
+        let mut last_evicted: Option<Instant> = None;
+        let mut wait_logged = false;
         loop {
             let available = MemoryUsage
                 .query(&device)
@@ -2034,7 +2078,7 @@ impl MistralRs {
             if available >= need_bytes {
                 return Ok(());
             }
-            let candidate = {
+            let (candidate, any_busy) = {
                 let engines = self
                     .engines
                     .read()
@@ -2043,26 +2087,45 @@ impl MistralRs {
                     .last_used
                     .read()
                     .map_err(|_| MistralRsError::EnginePoisoned)?;
-                engines
+                let any_busy = engines
+                    .iter()
+                    .any(|(id, inst)| *id != model_id && inst.logger.num_running() > 0);
+                let candidate = engines
                     .iter()
                     .filter(|(id, _)| *id != model_id && !skipped.contains(*id))
                     .filter(|(_, inst)| inst.logger.num_running() == 0)
                     .min_by_key(|(id, _)| last_used.get(*id).copied())
-                    .map(|(id, _)| id.clone())
+                    .map(|(id, _)| id.clone());
+                (candidate, any_busy)
             };
-            let Some(candidate) = candidate else {
-                return Err(MistralRsError::ReloadFailed(format!(
-                    "Insufficient device memory for model {model_id} (need ~{} MB) and no evictable resident model",
+            if let Some(candidate) = candidate {
+                info!(
+                    "Evicting LRU model {candidate} to make room for {model_id} (need ~{} MB)",
                     need_bytes / 1024 / 1024
-                )));
-            };
-            info!(
-                "Evicting LRU model {candidate} to make room for {model_id} (need ~{} MB)",
-                need_bytes / 1024 / 1024
-            );
-            if let Err(e) = self.unload_model(&candidate) {
-                warn!("Eviction of {candidate} failed ({e}); trying next candidate");
-                skipped.insert(candidate);
+                );
+                if let Err(e) = self.unload_model(&candidate) {
+                    warn!("Eviction of {candidate} failed ({e}); trying next candidate");
+                    skipped.insert(candidate);
+                } else {
+                    last_evicted = Some(Instant::now());
+                }
+            } else {
+                let reclaiming = last_evicted.is_some_and(|t| t.elapsed() < EVICT_RECLAIM_GRACE);
+                if (any_busy || reclaiming) && Instant::now() < deadline {
+                    if !wait_logged {
+                        warn!(
+                            "Demand-load of {model_id} waiting for memory: busy residents or evicted teardown (need ~{} MB)",
+                            need_bytes / 1024 / 1024
+                        );
+                        wait_logged = true;
+                    }
+                    std::thread::sleep(EVICT_BUSY_POLL);
+                } else {
+                    return Err(MistralRsError::ReloadFailed(format!(
+                        "Insufficient device memory for model {model_id} (need ~{} MB) and no evictable resident model",
+                        need_bytes / 1024 / 1024
+                    )));
+                }
             }
         }
     }
@@ -3076,6 +3139,9 @@ impl MistralRs {
 
         let loader_config = &unloaded_state.loader_config;
 
+        // Boot-time BLAS init is skipped by headless boot; first load covers it.
+        mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(loader_config.device.clone());
+
         // Build the loader from the stored config
         let loader = LoaderBuilder::new(loader_config.model_selected.clone())
             .with_chat_template(loader_config.chat_template.clone())
@@ -3240,6 +3306,7 @@ impl MistralRs {
     /// cannot proceed (eviction failure), and wake waiters so they move on
     /// instead of timing out.
     fn release_reload_claim(&self, resolved_model_id: &str) {
+        info!("Reload claim for {resolved_model_id} released, load aborted");
         if let Ok(mut reloading) = self.reloading_models.write() {
             reloading.remove(resolved_model_id);
         }

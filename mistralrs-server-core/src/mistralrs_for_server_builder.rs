@@ -43,7 +43,8 @@ pub struct ModelConfig {
     pub encoder_cache_memory_bytes: Option<NonZeroUsize>,
     /// Register without loading weights. The model appears as unloaded and
     /// loads on first request (auto-reload) or explicit `/v1/models/reload`.
-    /// Only honored for non-first models: the first model seeds the instance.
+    /// Honored for non-first models; when every model is lazy the instance
+    /// boots headless with no seed engine.
     #[serde(default)]
     pub lazy: bool,
     /// MTP speculative decoding. `None` inherits the global flag. Honored
@@ -413,6 +414,14 @@ fn resolve_entry_mtp_config(
     }
 }
 
+/// Shared per-boot inputs for lazy registration, callable from both the
+/// seeded loop and the all-lazy branch.
+struct LazyRegisterShared<'a> {
+    mistralrs: &'a mistralrs_core::MistralRs,
+    device: &'a Device,
+    requested_cache_config: Option<PagedAttentionConfig>,
+    search_embedding_model: Option<SearchEmbeddingModel>,
+}
 impl MistralRsForServerBuilder {
     /// Creates a new `MistralRsForServerBuilder` with default settings.
     ///
@@ -1068,20 +1077,186 @@ impl MistralRsForServerBuilder {
         )
     }
 
+    /// Register one lazy entry as unloaded (weights load on first request).
+    /// Mirrors the eager path's addressability: alias or config key resolves
+    /// from boot; the pipeline name is unknown until first load.
+    async fn register_lazy_entry(
+        &self,
+        shared: &LazyRegisterShared<'_>,
+        model_config: &ModelConfig,
+        registered_ids: &mut HashSet<String>,
+        used_names: &mut HashSet<String>,
+        loaded_model_ids: &mut Vec<String>,
+    ) -> Result<()> {
+        // No pipeline name exists pre-load, so the alias (or config
+        // key) is the canonical ID. The pipeline name is not
+        // registered as an alias; address lazy models by these.
+        let primary_id = model_config
+            .alias
+            .clone()
+            .unwrap_or_else(|| model_config.model_id.clone());
+
+        if !registered_ids.insert(primary_id.clone()) {
+            anyhow::bail!(
+                "Model ID conflict: '{}' is already registered (config key: {}).",
+                primary_id,
+                model_config.model_id
+            );
+        }
+        used_names.insert(primary_id.clone());
+
+        let model = model_config.model.clone();
+        let dtype = get_model_dtype(&model)?;
+        let auto_device_map_params = get_auto_device_map_params(&model)?;
+        let chat_template = model_config
+            .chat_template
+            .clone()
+            .or(self.chat_template.clone());
+        let jinja_explicit = model_config
+            .jinja_explicit
+            .clone()
+            .or(self.jinja_explicit.clone());
+        let max_model_len = model_config.max_model_len.or(self.max_model_len);
+        let hf_config_overrides = model_config
+            .hf_config_overrides
+            .clone()
+            .or(self.hf_config_overrides.clone());
+        let mapper_for_config = init_mapper(
+            &model_config
+                .num_device_layers
+                .clone()
+                .or(self.num_device_layers.clone()),
+            &auto_device_map_params,
+        );
+        let isq = model_config
+            .in_situ_quant
+            .as_ref()
+            .or(self.in_situ_quant.as_ref())
+            .map(|isq| {
+                parse_isq_value(isq, Some(shared.device)).map_err(|e| anyhow::anyhow!("{e}"))
+            })
+            .transpose()?;
+
+        // Full requested budget, not a fair-share slice (none was
+        // reserved above). Reload swaps in the realized config.
+        let scheduler_config = match shared.requested_cache_config {
+            Some(config) => SchedulerConfig::PagedAttentionPlanned {
+                max_num_seqs: self.max_seqs,
+                max_num_batched_tokens: self.max_num_batched_tokens.get(),
+                max_prefill_chunk_tokens: self.max_prefill_chunk_tokens.get(),
+                max_decode_steps_before_prefill: self.max_decode_steps_before_prefill.get(),
+                config,
+            },
+            None => SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(
+                    self.max_seqs.try_into().unwrap(),
+                ),
+            },
+        };
+        let engine_config = mistralrs_core::EngineConfig {
+            no_kv_cache: self.no_kv_cache,
+            no_prefix_cache: false,
+            prefix_cache_n: self.prefix_cache_n,
+            prefill_chunk_size: if self.prefill_chunk_size == 0 {
+                None
+            } else {
+                Some(self.prefill_chunk_size)
+            },
+            disable_eos_stop: self.disable_eos_stop,
+            throughput_logging_enabled: !self.interactive_mode,
+            search_embedding_model: shared.search_embedding_model,
+            search_callback: self.search_callback.clone(),
+            tool_callbacks: HashMap::new(),
+        };
+        let entry_mtp_config = resolve_entry_mtp_config(
+            &self.mtp_config,
+            &self.mtp_entry_fallback,
+            model_config.mtp,
+            &model_config.model_id,
+        )?;
+        let loader_config = ModelLoaderConfig {
+            model_selected: model,
+            token_source: self.token_source.clone(),
+            hf_revision: None,
+            dtype,
+            device: shared.device.clone(),
+            device_map_setting: mapper_for_config,
+            isq,
+            paged_attn_config: shared.requested_cache_config,
+            silent: false,
+            chat_template,
+            jinja_explicit,
+            max_model_len,
+            hf_config_overrides,
+            // Reload attaches the draft head from this config
+            // (builtin needs no extra reservation: reserve_* is a
+            // no-op for it).
+            mtp_config: entry_mtp_config,
+            encoder_cache_memory_bytes: model_config
+                .encoder_cache_memory_bytes
+                .map(NonZeroUsize::get)
+                .or(self.encoder_cache_memory_bytes),
+        };
+        shared
+            .mistralrs
+            .add_unloaded_model(
+                primary_id.clone(),
+                mistralrs_core::UnloadedModelState {
+                    loader_config,
+                    scheduler_config,
+                    engine_config,
+                    mcp_client_config: self.mcp_client_config.clone(),
+                    category: None,
+                    mistralrs_config: None,
+                },
+            )
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to register lazy model {primary_id}: {e}")
+            })?;
+
+        // Addressable by config key too (mirrors the eager path's
+        // pipeline-name alias; the real pipeline name is unknown
+        // until first load). A duplicate config key keeps its first
+        // registration; the model stays reachable via its alias.
+        if model_config.model_id != primary_id {
+            if used_names.insert(model_config.model_id.clone()) {
+                shared
+                    .mistralrs
+                    .register_model_alias(model_config.model_id.clone(), &primary_id)
+                    .map_err(|e| anyhow::anyhow!(e))?;
+            } else {
+                info!(
+                    "Config key '{}' already registered; model `{}` reachable by alias only",
+                    model_config.model_id, primary_id
+                );
+            }
+        }
+
+        info!(
+            "Model `{}` registered as unloaded/lazy (from config key: {})",
+            primary_id, model_config.model_id
+        );
+        loaded_model_ids.push(primary_id);
+        Ok(())
+    }
+
     /// Build a multi-model instance
     pub async fn build_multi_model(mut self) -> Result<SharedMistralRsState> {
-        let mtp_runtime = MtpRuntimeConfig::new(self.prefix_cache_n);
         if self.models.is_empty() {
             anyhow::bail!("No models configured for multi-model mode");
         }
+        if self.models.iter().all(|m| m.lazy) {
+            return self.build_all_lazy().await;
+        }
 
+        let mtp_runtime = MtpRuntimeConfig::new(self.prefix_cache_n);
         mistralrs_core::distributed::begin_tensor_parallel_session(self.models.len())?;
 
         // Use the first model as the base configuration
         let first_model = &self.models[0];
         if first_model.lazy {
             anyhow::bail!(
-                "Model '{}' is marked lazy, but the first model seeds the instance and must load eagerly. Put an eager model first.",
+                "Model '{}' is marked lazy, but the first model seeds the instance and must load eagerly. Put an eager model first or mark every model lazy.",
                 first_model.model_id
             );
         }
@@ -1112,7 +1287,8 @@ impl MistralRsForServerBuilder {
             self.max_seqs = 1;
         }
 
-        let device = if let Some(device) = self.device {
+        // Cloned, not moved: the lazy loop below calls back into `self`.
+        let device = if let Some(device) = self.device.clone() {
             device
         } else {
             init_device(self.cpu, self.seed)?
@@ -1325,153 +1501,20 @@ impl MistralRsForServerBuilder {
             );
 
             if model_config.lazy {
-                // No pipeline name exists pre-load, so the alias (or config
-                // key) is the canonical ID. The pipeline name is not
-                // registered as an alias; address lazy models by these.
-                let primary_id = model_config
-                    .alias
-                    .clone()
-                    .unwrap_or_else(|| model_config.model_id.clone());
-
-                if !registered_ids.insert(primary_id.clone()) {
-                    anyhow::bail!(
-                        "Model ID conflict: '{}' is already registered (config key: {}).",
-                        primary_id,
-                        model_config.model_id
-                    );
-                }
-                used_names.insert(primary_id.clone());
-
-                let model = model_config.model.clone();
-                let dtype = get_model_dtype(&model)?;
-                let auto_device_map_params = get_auto_device_map_params(&model)?;
-                let chat_template = model_config
-                    .chat_template
-                    .clone()
-                    .or(self.chat_template.clone());
-                let jinja_explicit = model_config
-                    .jinja_explicit
-                    .clone()
-                    .or(self.jinja_explicit.clone());
-                let max_model_len = model_config.max_model_len.or(self.max_model_len);
-                let hf_config_overrides = model_config
-                    .hf_config_overrides
-                    .clone()
-                    .or(self.hf_config_overrides.clone());
-                let mapper_for_config = init_mapper(
-                    &model_config
-                        .num_device_layers
-                        .clone()
-                        .or(self.num_device_layers.clone()),
-                    &auto_device_map_params,
-                );
-                let isq = model_config
-                    .in_situ_quant
-                    .as_ref()
-                    .or(self.in_situ_quant.as_ref())
-                    .map(|isq| {
-                        parse_isq_value(isq, Some(&device)).map_err(|e| anyhow::anyhow!("{e}"))
-                    })
-                    .transpose()?;
-
-                // Full requested budget, not a fair-share slice (none was
-                // reserved above). Reload swaps in the realized config.
-                let scheduler_config = match requested_cache_config {
-                    Some(config) => SchedulerConfig::PagedAttentionPlanned {
-                        max_num_seqs: self.max_seqs,
-                        max_num_batched_tokens: self.max_num_batched_tokens.get(),
-                        max_prefill_chunk_tokens: self.max_prefill_chunk_tokens.get(),
-                        max_decode_steps_before_prefill: self.max_decode_steps_before_prefill.get(),
-                        config,
-                    },
-                    None => SchedulerConfig::DefaultScheduler {
-                        method: DefaultSchedulerMethod::Fixed(
-                            self.max_seqs.try_into().unwrap(),
-                        ),
-                    },
-                };
-                let engine_config = mistralrs_core::EngineConfig {
-                    no_kv_cache: self.no_kv_cache,
-                    no_prefix_cache: false,
-                    prefix_cache_n: self.prefix_cache_n,
-                    prefill_chunk_size: if self.prefill_chunk_size == 0 {
-                        None
-                    } else {
-                        Some(self.prefill_chunk_size)
-                    },
-                    disable_eos_stop: self.disable_eos_stop,
-                    throughput_logging_enabled: !self.interactive_mode,
+                let shared = LazyRegisterShared {
+                    mistralrs: &mistralrs,
+                    device: &device,
+                    requested_cache_config,
                     search_embedding_model,
-                    search_callback: self.search_callback.clone(),
-                    tool_callbacks: HashMap::new(),
                 };
-                let entry_mtp_config = resolve_entry_mtp_config(
-                    &self.mtp_config,
-                    &self.mtp_entry_fallback,
-                    model_config.mtp,
-                    &model_config.model_id,
-                )?;
-                let loader_config = ModelLoaderConfig {
-                    model_selected: model,
-                    token_source: self.token_source.clone(),
-                    hf_revision: None,
-                    dtype,
-                    device: device.clone(),
-                    device_map_setting: mapper_for_config,
-                    isq,
-                    paged_attn_config: requested_cache_config,
-                    silent: false,
-                    chat_template,
-                    jinja_explicit,
-                    max_model_len,
-                    hf_config_overrides,
-                    // Reload attaches the draft head from this config
-                    // (builtin needs no extra reservation: reserve_* is a
-                    // no-op for it).
-                    mtp_config: entry_mtp_config,
-                    encoder_cache_memory_bytes: model_config
-                        .encoder_cache_memory_bytes
-                        .map(NonZeroUsize::get)
-                        .or(self.encoder_cache_memory_bytes),
-                };
-                mistralrs
-                    .add_unloaded_model(
-                        primary_id.clone(),
-                        mistralrs_core::UnloadedModelState {
-                            loader_config,
-                            scheduler_config,
-                            engine_config,
-                            mcp_client_config: self.mcp_client_config.clone(),
-                            category: None,
-                            mistralrs_config: None,
-                        },
-                    )
-                    .map_err(|e| {
-                        anyhow::anyhow!("Failed to register lazy model {primary_id}: {e}")
-                    })?;
-
-                // Addressable by config key too (mirrors the eager path's
-                // pipeline-name alias; the real pipeline name is unknown
-                // until first load). A duplicate config key keeps its first
-                // registration; the model stays reachable via its alias.
-                if model_config.model_id != primary_id {
-                    if used_names.insert(model_config.model_id.clone()) {
-                        mistralrs
-                            .register_model_alias(model_config.model_id.clone(), &primary_id)
-                            .map_err(|e| anyhow::anyhow!(e))?;
-                    } else {
-                        info!(
-                            "Config key '{}' already registered; model `{}` reachable by alias only",
-                            model_config.model_id, primary_id
-                        );
-                    }
-                }
-
-                info!(
-                    "Model `{}` registered as unloaded/lazy (from config key: {})",
-                    primary_id, model_config.model_id
-                );
-                loaded_model_ids.push(primary_id);
+                self.register_lazy_entry(
+                    &shared,
+                    model_config,
+                    &mut registered_ids,
+                    &mut used_names,
+                    &mut loaded_model_ids,
+                )
+                .await?;
                 continue;
             }
 
@@ -1675,6 +1718,78 @@ impl MistralRsForServerBuilder {
             mistralrs.run_daemon_replicator_forever();
         }
 
+        Ok(mistralrs)
+    }
+
+    /// All-lazy boot: no seed engine. Every entry registers unloaded, so
+    /// metadata routes answer immediately and weights load on first request.
+    async fn build_all_lazy(mut self) -> Result<SharedMistralRsState> {
+        if mistralrs_core::distributed::is_daemon() {
+            anyhow::bail!(
+                "All-lazy boot cannot seed a daemon replicator; put an eager model first."
+            );
+        }
+        mistralrs_core::distributed::begin_tensor_parallel_session(self.models.len())?;
+
+        let device = if let Some(device) = self.device.clone() {
+            device
+        } else {
+            init_device(self.cpu, self.seed)?
+        };
+        let paged_attn = configure_paged_attn(&device, self.paged_attn);
+        let requested_cache_config = init_cache_config(
+            self.paged_attn_block_size,
+            self.paged_attn_gpu_mem,
+            self.paged_attn_gpu_mem_usage,
+            self.paged_ctxt_len,
+            self.paged_cache_type,
+            !paged_attn,
+        )?
+        .map(|config| config.with_serving_capacity(self.max_seqs))
+        .transpose()?
+        .map(|config| config.with_recurrent_prefix_capacity(self.prefix_cache_n));
+
+        let mistralrs =
+            mistralrs_core::MistralRs::new_headless(self.router_policy, self.log.clone());
+        let search_embedding_model =
+            get_search_embedding_model(self.enable_search, self.search_embedding_model);
+        let shared = LazyRegisterShared {
+            mistralrs: &mistralrs,
+            device: &device,
+            requested_cache_config,
+            search_embedding_model,
+        };
+        let mut registered_ids = HashSet::new();
+        let mut used_names = HashSet::new();
+        let mut loaded_model_ids = Vec::new();
+        for model_config in &self.models {
+            info!(
+                "Registering lazy model from config key: {}",
+                model_config.model_id
+            );
+            self.register_lazy_entry(
+                &shared,
+                model_config,
+                &mut registered_ids,
+                &mut used_names,
+                &mut loaded_model_ids,
+            )
+            .await?;
+        }
+
+        // First entry stays the default without an explicit default, mirroring
+        // the seeded path. Unloaded defaults demand-load on first request.
+        let default_id = self
+            .default_model_id
+            .clone()
+            .or_else(|| loaded_model_ids.first().cloned());
+        if let Some(default_id) = default_id {
+            mistralrs
+                .set_default_model_id(&default_id)
+                .map_err(|e| anyhow::anyhow!("Failed to set default model: {}", e))?;
+            info!("Default model: {default_id}");
+        }
+        info!("All models registered: `{}`", loaded_model_ids.join("`, `"));
         Ok(mistralrs)
     }
 }

@@ -602,6 +602,7 @@ default_model_id = "m"
 auto_evict = false
 evict_headroom_mb = 512
 load_wait_timeout_secs = 60
+evict_busy_wait_secs = 120
 idle_ttl_secs = 300
 
 [[models]]
@@ -620,6 +621,10 @@ quantized_file = "model-Q4_K_M.gguf"
         assert_eq!(
             policy.load_wait_timeout,
             std::time::Duration::from_secs(60)
+        );
+        assert_eq!(
+            policy.evict_busy_wait,
+            std::time::Duration::from_secs(120)
         );
         assert_eq!(policy.idle_ttl, std::time::Duration::from_secs(300));
         let default = crate::config::RouterOptions::default().into_policy();

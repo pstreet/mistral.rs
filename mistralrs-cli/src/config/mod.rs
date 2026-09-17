@@ -72,6 +72,10 @@ pub struct RouterOptions {
     /// Seconds concurrent demand-loads wait on an in-flight load.
     #[serde(default)]
     pub load_wait_timeout_secs: Option<u64>,
+    /// Seconds a demand-load waits for busy residents to go idle before
+    /// failing. Zero disables the wait (fail fast).
+    #[serde(default)]
+    pub evict_busy_wait_secs: Option<u64>,
     /// Seconds of idleness before TTL eviction may unload an engine.
     /// Stored for the future TTL pass; no task reads it yet.
     #[serde(default)]
@@ -89,6 +93,9 @@ impl RouterOptions {
         }
         if let Some(secs) = self.load_wait_timeout_secs {
             policy.load_wait_timeout = std::time::Duration::from_secs(secs);
+        }
+        if let Some(secs) = self.evict_busy_wait_secs {
+            policy.evict_busy_wait = std::time::Duration::from_secs(secs);
         }
         if let Some(secs) = self.idle_ttl_secs {
             policy.idle_ttl = std::time::Duration::from_secs(secs);
@@ -154,9 +161,9 @@ pub struct ModelEntry {
     /// Named slice to load from the MatFormer config.
     #[serde(default)]
     pub matformer_slice_name: Option<String>,
-    /// Register without loading weights (multi-model `serve` only; the first
-    /// model seeds the instance and must stay eager). Lazy models load on
-    /// first request or explicit `/v1/models/reload`.
+    /// Register without loading weights (multi-model `serve` only). Lazy
+    /// models load on first request or explicit `/v1/models/reload`. When
+    /// every model is lazy the instance boots headless with no seed engine.
     #[serde(default)]
     pub lazy: bool,
     /// API-visible name for this model (like llama.cpp `--alias`). Defaults

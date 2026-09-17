@@ -40,6 +40,7 @@ cache_type = "Q8_0"
 auto_evict = true
 evict_headroom_mb = 2048
 load_wait_timeout_secs = 900
+evict_busy_wait_secs = 300
 idle_ttl_secs = 1800
 
 [runtime]
