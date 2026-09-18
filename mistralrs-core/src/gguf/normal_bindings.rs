@@ -15,10 +15,29 @@ pub(crate) fn build_normal_bindings(
     let mut bindings = GgufBindingMap::new();
     let block_count = native_block_count(archive, architecture)?;
     bind_root_tensors(archive, loader, architecture, &mut bindings);
+    let nextn_layer = if matches!(loader, NormalLoaderType::Qwen3Next) {
+        qwen3_next_nextn_layer(archive, architecture, block_count)?
+    } else {
+        None
+    };
     for name in archive.tensors().keys() {
         let Some((layer, role, suffix)) = parse_block_tensor(name) else {
             continue;
         };
+        if let Some(nextn_layer) = nextn_layer {
+            if layer == nextn_layer {
+                bind_qwen3_next_mtp(
+                    archive,
+                    architecture,
+                    layer,
+                    role,
+                    suffix,
+                    name,
+                    &mut bindings,
+                )?;
+                continue;
+            }
+        }
         if layer >= block_count {
             continue;
         }
@@ -35,6 +54,82 @@ pub(crate) fn build_normal_bindings(
     }
     bind_composite_tensors(archive, loader, architecture, block_count, &mut bindings)?;
     Ok(bindings)
+}
+
+fn qwen3_next_nextn_layer(
+    archive: &GgufArchive,
+    architecture: CanonicalGgufArchitecture,
+    block_count: usize,
+) -> Result<Option<usize>> {
+    let prefix = architecture.as_str();
+    let nextn =
+        metadata_optional_usize(archive, &format!("{prefix}.nextn_predict_layers"))?.unwrap_or(0);
+    if nextn == 0 {
+        return Ok(None);
+    }
+    if nextn != 1 {
+        bail!("Qwen3Next supports at most one nextn MTP block, got {nextn}");
+    }
+    let mtp_layer = block_count;
+    if !archive.contains_tensor(&format!("blk.{mtp_layer}.nextn.eh_proj.weight")) {
+        bail!(
+            "Qwen3Next GGUF declares `nextn_predict_layers={nextn}` but `blk.{mtp_layer}.nextn.eh_proj.weight` is missing"
+        );
+    }
+    Ok(Some(mtp_layer))
+}
+
+/// llama.cpp stores the MTP head as the last full-attention block plus `nextn.*` extras; the
+/// model reads them from `mtp.*`, sharing the main stack's embeddings and `lm_head`.
+fn bind_qwen3_next_mtp(
+    archive: &GgufArchive,
+    architecture: CanonicalGgufArchitecture,
+    layer: usize,
+    role: &str,
+    suffix: &str,
+    source: &str,
+    bindings: &mut GgufBindingMap,
+) -> Result<()> {
+    let p = "mtp.layers.0".to_string();
+    let target = match role {
+        "nextn.eh_proj" => Some("mtp.fc.weight".to_string()),
+        "nextn.enorm" => Some("mtp.pre_fc_norm_embedding.weight".to_string()),
+        "nextn.hnorm" => Some("mtp.pre_fc_norm_hidden.weight".to_string()),
+        "nextn.shared_head_norm" => Some("mtp.norm.weight".to_string()),
+        "attn_norm" => Some(format!("{p}.input_layernorm.{suffix}")),
+        "ffn_norm" | "post_attention_norm" => {
+            Some(format!("{p}.post_attention_layernorm.{suffix}"))
+        }
+        "attn_q" => Some(format!("{p}.self_attn.q_proj.{suffix}")),
+        "attn_k" => Some(format!("{p}.self_attn.k_proj.{suffix}")),
+        "attn_v" => Some(format!("{p}.self_attn.v_proj.{suffix}")),
+        "attn_output" => Some(format!("{p}.self_attn.o_proj.{suffix}")),
+        "attn_q_norm" => Some(format!("{p}.self_attn.q_norm.{suffix}")),
+        "attn_k_norm" => Some(format!("{p}.self_attn.k_norm.{suffix}")),
+        "ffn_gate_inp" => Some(format!("{p}.mlp.gate.{suffix}")),
+        "ffn_gate_exps" => Some(format!("{p}.mlp.experts.gate_proj.{suffix}")),
+        "ffn_up_exps" => Some(format!("{p}.mlp.experts.up_proj.{suffix}")),
+        "ffn_down_exps" => Some(format!("{p}.mlp.experts.down_proj.{suffix}")),
+        "ffn_gate_shexp" => Some(format!("{p}.mlp.shared_expert.gate_proj.{suffix}")),
+        "ffn_up_shexp" => Some(format!("{p}.mlp.shared_expert.up_proj.{suffix}")),
+        "ffn_down_shexp" => Some(format!("{p}.mlp.shared_expert.down_proj.{suffix}")),
+        "ffn_gate_inp_shexp" => Some(format!("{p}.mlp.shared_expert_gate.{suffix}")),
+        _ => None,
+    };
+    if let Some(target) = target {
+        let mut binding = GgufTensorBinding::tensor(source);
+        if role.contains("norm") {
+            binding = norm_binding(architecture, source, binding);
+        }
+        if role == "ffn_gate_inp_shexp" {
+            let shape = archive.tensor_info(source)?.shape();
+            if shape.len() == 1 {
+                binding = binding.reshape(vec![1, shape[0]]);
+            }
+        }
+        bindings.insert(target, binding);
+    }
+    Ok(())
 }
 
 fn bind_root_tensors(
