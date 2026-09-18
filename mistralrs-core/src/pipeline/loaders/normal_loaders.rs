@@ -5852,7 +5852,7 @@ impl DeviceMappedModelLoader for Qwen3NextLoader {
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::qwen3_next::Config = serde_json::from_str(config)?;
         let layer_types = cfg.layer_types();
-        let mut layer_sizes = Vec::with_capacity(cfg.num_hidden_layers);
+        let mut layer_sizes = Vec::with_capacity(cfg.num_hidden_layers + cfg.mtp_layers());
 
         for layer_type in &layer_types {
             let input_layernorm = cfg.hidden_size;
@@ -5904,20 +5904,40 @@ impl DeviceMappedModelLoader for Qwen3NextLoader {
 
             layer_sizes.push(per_layer_elems * dtype.size_in_bytes());
         }
+        // The built-in MTP head is one full-attention + MoE block after the main stack.
+        for _ in 0..cfg.mtp_layers() {
+            let hidden = cfg.hidden_size;
+            let q_dim = cfg.head_dim * cfg.num_attention_heads;
+            let kv_dim = cfg.head_dim * cfg.num_key_value_heads;
+            let attn_elems = hidden * q_dim * 2 / weight_pack_factor
+                + hidden * kv_dim / weight_pack_factor
+                + hidden * kv_dim / weight_pack_factor
+                + q_dim * hidden / weight_pack_factor
+                + cfg.head_dim * 2;
+            let moe_gate = cfg.hidden_size * cfg.num_experts;
+            let shared_expert =
+                3 * cfg.hidden_size * cfg.shared_expert_intermediate_size / weight_pack_factor;
+            let routed_experts = cfg.num_experts * 3 * cfg.hidden_size * cfg.moe_intermediate_size
+                / weight_pack_factor;
+            layer_sizes.push(
+                (hidden * 2 + attn_elems + moe_gate + shared_expert + routed_experts)
+                    * dtype.size_in_bytes(),
+            );
+        }
 
         Ok(layer_sizes)
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
         let cfg: crate::models::qwen3_next::Config = serde_json::from_str(config)?;
-        Ok(cfg.num_hidden_layers)
+        Ok(cfg.num_hidden_layers + cfg.mtp_layers())
     }
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
         let cfg: crate::models::qwen3_next::Config = serde_json::from_str(config)?;
 
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
-            num_layers: cfg.num_hidden_layers,
+            num_layers: cfg.num_hidden_layers + cfg.mtp_layers(),
             hidden_size: cfg.hidden_size,
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
