@@ -51,6 +51,11 @@ const EVICT_HEADROOM_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// How long concurrent demand-load waiters block for an in-flight load
 /// before giving up (single 30B-class GGUF loads take minutes).
 const LOAD_WAIT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// Upper bound on KV bytes counted for eviction estimates, mirroring the
+/// loader's unified-memory token cap. The loader min()s KV against free
+/// memory at load time regardless, so underestimating only shrinks context,
+/// never risks OOM.
+const UNIFIED_KV_TOKEN_CAP_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 /// How long a demand-load waits for busy residents to go idle before
 /// giving up (single generations can run minutes; the waiter holds the
 /// reload marker, so concurrent requesters pile onto the load-wait CV).
@@ -61,6 +66,9 @@ const EVICT_BUSY_POLL: Duration = Duration::from_millis(500);
 /// residents: the engine thread exits async on Terminate, so its weights and
 /// KV cache only show up in memory stats later.
 const EVICT_RECLAIM_GRACE: Duration = Duration::from_secs(10);
+/// Poll cadence when a demand-load hits the loader's own fit check with an
+/// eviction's teardown still in flight.
+const RELOAD_FIT_POLL: Duration = Duration::from_secs(1);
 /// Default idle time before the TTL task may unload an engine. Reserved for
 /// the idle-eviction pass; no task reads it yet.
 const DEFAULT_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
@@ -1962,7 +1970,10 @@ impl MistralRs {
                     return Err(e);
                 }
                 // Marker held: errors propagate, marker releases inside.
-                self.reload_claimed_blocking(&resolved_model_id)?;
+                if let Err(e) = self.reload_claimed_blocking(&resolved_model_id) {
+                    warn!("Demand-load of {resolved_model_id} failed during load: {e}");
+                    return Err(e);
+                }
                 self.touch_model(&resolved_model_id);
                 continue;
             }
@@ -2047,15 +2058,13 @@ impl MistralRs {
                 .get(model_id)
                 .ok_or_else(|| MistralRsError::ModelNotFound(model_id.to_string()))?;
             let device = state.loader_config.device.clone();
-            let available = MemoryUsage
-                .query(&device)
-                .map_err(|e| {
-                    MistralRsError::ReloadFailed(format!("Failed to query device memory: {e}"))
-                })?
-                .available() as u64;
+            let memory = MemoryUsage.query(&device).map_err(|e| {
+                MistralRsError::ReloadFailed(format!("Failed to query device memory: {e}"))
+            })?;
             let Some(need) = estimate_load_bytes(
                 &state.loader_config,
-                available,
+                memory.available() as u64,
+                memory.total() as u64,
                 self.router_policy.evict_headroom_bytes,
             ) else {
                 warn!("Model {model_id} footprint unknown; loading without eviction");
@@ -2075,6 +2084,11 @@ impl MistralRs {
                     MistralRsError::ReloadFailed(format!("Failed to query device memory: {e}"))
                 })?
                 .available() as u64;
+            info!(
+                "evict check {model_id}: available ~{} MB vs need ~{} MB",
+                available / 1024 / 1024,
+                need_bytes / 1024 / 1024
+            );
             if available >= need_bytes {
                 return Ok(());
             }
@@ -3159,9 +3173,12 @@ impl MistralRs {
             .build()
             .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to build loader: {e}")))?;
 
-        // Load the model
-        let pipeline = loader
-            .load_model_from_hf(
+        // Load the model. The loader runs its own fit check against current
+        // free memory, which can lag async eviction teardown; retry that
+        // specific refusal until the demand-load wait budget lapses.
+        let fit_deadline = Instant::now() + self.router_policy.evict_busy_wait;
+        let pipeline = loop {
+            match loader.load_model_from_hf(
                 loader_config.hf_revision.clone(),
                 loader_config.token_source.clone(),
                 &loader_config.dtype,
@@ -3170,8 +3187,25 @@ impl MistralRs {
                 loader_config.device_map_setting.clone(),
                 loader_config.isq,
                 loader_config.paged_attn_config,
-            )
-            .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to load model: {e}")))?;
+            ) {
+                Ok(pipeline) => break pipeline,
+                Err(e) => {
+                    let msg = e.to_string();
+                    let transient_fit = msg.contains("does not fit on the devices")
+                        || msg.contains("Num GPU blocks is 0");
+                    let reclaim_pending = Instant::now() < fit_deadline && transient_fit;
+                    if !reclaim_pending {
+                        return Err(MistralRsError::ReloadFailed(format!(
+                            "Failed to load model: {e}"
+                        )));
+                    }
+                    warn!(
+                        "Demand-load of {model_id}: loader fit check rejected (evicted memory still reclaiming), retrying in {RELOAD_FIT_POLL:?}"
+                    );
+                    tokio::time::sleep(RELOAD_FIT_POLL).await;
+                }
+            }
+        };
 
         let realized_cache_config = {
             let mut pipeline = pipeline.lock().await;
@@ -3417,19 +3451,41 @@ impl MistralRs {
 fn estimate_load_bytes(
     loader_config: &ModelLoaderConfig,
     available_now: u64,
+    total_bytes: u64,
     headroom_bytes: u64,
 ) -> Option<u64> {
     let weights = gguf_local_weight_bytes(&loader_config.model_selected)?;
+    // NO_MMAP shards read straight into a host Vec while the device copy
+    // catches up, so a load transiently holds weights twice. Charge it or the
+    // loader's own fit check runs against ~25 GB less than the gate saw.
+    let staging = if std::env::var("MISTRALRS_GGUF_NO_MMAP").ok().as_deref() == Some("1") {
+        weights
+    } else {
+        0
+    };
     let kv = match &loader_config.paged_attn_config {
         None => 0,
         Some(planned) => match planned.mem_gpu {
             MemoryGpuConfig::MbAmount(v) => v as u64 * 1024 * 1024,
             MemoryGpuConfig::BestEffortMbAmount { target_mb, .. } => target_mb as u64 * 1024 * 1024,
-            MemoryGpuConfig::Utilization(f) => (available_now as f64 * f as f64) as u64,
+            // Mirror the loader chain for Utilization KV: planned = total*f - weights
+            // (pre-load arm), and unified-memory devices cap KV at the model-context
+            // byte ceiling (observed 16 GiB for the deployed hybrid lineup). The
+            // loader min()s KV against post-load free memory at load time, so
+            // underestimating here only shrinks context window, never OOMs.
+            MemoryGpuConfig::Utilization(f) => {
+                let planned = (total_bytes as f64 * f as f64 - weights as f64).max(0.0) as u64;
+                planned.min(UNIFIED_KV_TOKEN_CAP_BYTES)
+            }
             MemoryGpuConfig::ContextSize(_) => return None,
         },
     };
-    Some(weights.saturating_add(kv).saturating_add(headroom_bytes))
+    Some(
+        weights
+            .saturating_add(staging)
+            .saturating_add(kv)
+            .saturating_add(headroom_bytes),
+    )
 }
 
 /// On-disk bytes of local GGUF weight files (shards + projector). `None`
