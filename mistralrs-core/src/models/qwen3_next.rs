@@ -784,7 +784,7 @@ impl FullAttention {
             self.k_norm.weight(),
             self.q_norm.eps(),
             self.k_norm.eps(),
-            positions,
+            &positions.reshape((b_sz * seq_len,))?,
         )?;
 
         let paged_attn = self.paged_attn.as_ref().ok_or_else(|| {
