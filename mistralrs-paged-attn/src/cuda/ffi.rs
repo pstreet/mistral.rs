@@ -118,7 +118,10 @@ extern "C" {
         stream: CUstream,
 
         dtype: u32,
-        cache_dtype: u32,
+        k_cache_dtype: u32,
+        v_cache_dtype: u32,
+        write_k: bool,
+        write_v: bool,
         k_scale: *const f32,
         v_scale: *const f32,
     );
@@ -126,6 +129,8 @@ extern "C" {
     /// Q8_0 block-quantize write path (llama.cpp Q8_0: int8 + fp32 scale per
     /// 32 elems). Payload caches are int8 with x = 16 packing; scales are
     /// fp32 sidecars shaped [num_blocks, num_heads, block_size, head_size/32].
+    /// Sides write independently: a masked-off side's payload pointer is
+    /// ignored, its scales pointer may be null.
     pub fn reshape_and_cache_q8(
         key: *const c_void,
         value: *const c_void,
@@ -145,11 +150,14 @@ extern "C" {
         stream: CUstream,
 
         dtype: u32,
+        write_k: bool,
+        write_v: bool,
     );
 
     /// Q4_0 block-quantize write path (nibbles + fp32 scale per 32 elems).
     /// Payload caches are U8 nibble packs; k_scales token-major, v_scales
-    /// transposed group-major (same sidecar scheme as Q8_0).
+    /// transposed group-major (same sidecar scheme as Q8_0). Sides write
+    /// independently like the Q8 path; residual sidecars may be null.
     pub fn reshape_and_cache_q4(
         key: *const c_void,
         value: *const c_void,
@@ -171,6 +179,8 @@ extern "C" {
         stream: CUstream,
 
         dtype: u32,
+        write_k: bool,
+        write_v: bool,
     );
 
     pub fn concat_and_cache_mla(
@@ -328,7 +338,8 @@ extern "C" {
         x: c_int,
         stream: CUstream,
         out_dtype: u32,
-        cache_dtype: u32,
+        k_cache_dtype: u32,
+        v_cache_dtype: u32,
     );
 
     pub fn paged_attention_v1_f16(
@@ -351,8 +362,11 @@ extern "C" {
         q_stride: c_int,
         kv_block_stride: c_int,
         kv_head_stride: c_int,
+        v_block_stride: c_int,
+        v_head_stride: c_int,
         stream: CUstream,
-        cache_dtype: u32,
+        k_cache_dtype: u32,
+        v_cache_dtype: u32,
         k_scale: *const f32,
         v_scale: *const f32,
         k_res: *const u8,
@@ -380,8 +394,11 @@ extern "C" {
         q_stride: c_int,
         kv_block_stride: c_int,
         kv_head_stride: c_int,
+        v_block_stride: c_int,
+        v_head_stride: c_int,
         stream: CUstream,
-        cache_dtype: u32,
+        k_cache_dtype: u32,
+        v_cache_dtype: u32,
         k_scale: *const f32,
         v_scale: *const f32,
         k_res: *const u8,
@@ -409,8 +426,11 @@ extern "C" {
         q_stride: c_int,
         kv_block_stride: c_int,
         kv_head_stride: c_int,
+        v_block_stride: c_int,
+        v_head_stride: c_int,
         stream: CUstream,
-        cache_dtype: u32,
+        k_cache_dtype: u32,
+        v_cache_dtype: u32,
         k_scale: *const f32,
         v_scale: *const f32,
         k_res: *const u8,
@@ -441,8 +461,11 @@ extern "C" {
         q_stride: c_int,
         kv_block_stride: c_int,
         kv_head_stride: c_int,
+        v_block_stride: c_int,
+        v_head_stride: c_int,
         stream: CUstream,
-        cache_dtype: u32,
+        k_cache_dtype: u32,
+        v_cache_dtype: u32,
         k_scale: *const f32,
         v_scale: *const f32,
         k_res: *const u8,
@@ -473,8 +496,11 @@ extern "C" {
         q_stride: c_int,
         kv_block_stride: c_int,
         kv_head_stride: c_int,
+        v_block_stride: c_int,
+        v_head_stride: c_int,
         stream: CUstream,
-        cache_dtype: u32,
+        k_cache_dtype: u32,
+        v_cache_dtype: u32,
         k_scale: *const f32,
         v_scale: *const f32,
         k_res: *const u8,
@@ -505,8 +531,11 @@ extern "C" {
         q_stride: c_int,
         kv_block_stride: c_int,
         kv_head_stride: c_int,
+        v_block_stride: c_int,
+        v_head_stride: c_int,
         stream: CUstream,
-        cache_dtype: u32,
+        k_cache_dtype: u32,
+        v_cache_dtype: u32,
         k_scale: *const f32,
         v_scale: *const f32,
         k_res: *const u8,

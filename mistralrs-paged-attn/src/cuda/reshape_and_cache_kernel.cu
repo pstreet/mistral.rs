@@ -34,18 +34,21 @@
 
 namespace vllm {
 
-template <typename scalar_t, typename cache_t, vllm::Fp8KVCacheDataType kv_dt>
+template <typename scalar_t>
 __global__ void reshape_and_cache_kernel(
     const scalar_t *__restrict__ key,   // [num_tokens, num_heads, head_size]
     const scalar_t *__restrict__ value, // [num_tokens, num_heads, head_size]
-    cache_t *__restrict__ key_cache,    // [num_blocks, num_heads, head_size/x,
-                                        // block_size, x]
-    cache_t *__restrict__ value_cache,  // [num_blocks, num_heads, head_size,
-                                        // block_size]
+    void *__restrict__ key_cache,    // [num_blocks, num_heads, head_size/x,
+                                     // block_size, x]
+    void *__restrict__ value_cache,  // [num_blocks, num_heads, head_size,
+                                     // block_size]
     const int64_t *__restrict__ slot_mapping, // [num_tokens]
     const int key_stride, const int value_stride, const int num_heads,
     const int head_size, const int block_size, const int x,
-    const float *k_scale, const float *v_scale) {
+    const float *k_scale, const float *v_scale,
+    const uint32_t k_cache_dtype, // 0/1/2 native, 3 fp8_e4m3
+    const uint32_t v_cache_dtype,
+    const bool write_k, const bool write_v) {
   const int64_t token_idx = blockIdx.x;
   const int64_t slot_idx = slot_mapping[token_idx];
   if (slot_idx < 0) {
@@ -76,28 +79,39 @@ __global__ void reshape_and_cache_kernel(
         block_offset;
     scalar_t tgt_key = key[src_key_idx];
     scalar_t tgt_value = value[src_value_idx];
-    if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kAuto) {
-      key_cache[tgt_key_idx] = tgt_key;
-      value_cache[tgt_value_idx] = tgt_value;
-    } else {
-      key_cache[tgt_key_idx] =
-          vllm::fp8::scaled_convert<cache_t, scalar_t, kv_dt>(tgt_key, *k_scale);
-      value_cache[tgt_value_idx] =
-          vllm::fp8::scaled_convert<cache_t, scalar_t, kv_dt>(tgt_value,
-                                                              *v_scale);
+    // Sides store independently for mixed K/V caches (uniform mask).
+    if (write_k) {
+      if (k_cache_dtype == 3) {
+        reinterpret_cast<uint8_t *>(key_cache)[tgt_key_idx] =
+            vllm::fp8::scaled_convert<uint8_t, scalar_t,
+                                      vllm::Fp8KVCacheDataType::kFp8E4M3>(
+                tgt_key, *k_scale);
+      } else {
+        reinterpret_cast<scalar_t *>(key_cache)[tgt_key_idx] = tgt_key;
+      }
+    }
+    if (write_v) {
+      if (v_cache_dtype == 3) {
+        reinterpret_cast<uint8_t *>(value_cache)[tgt_value_idx] =
+            vllm::fp8::scaled_convert<uint8_t, scalar_t,
+                                      vllm::Fp8KVCacheDataType::kFp8E4M3>(
+                tgt_value, *v_scale);
+      } else {
+        reinterpret_cast<scalar_t *>(value_cache)[tgt_value_idx] = tgt_value;
+      }
     }
   }
 }
 
-#define CALL_RESHAPE_AND_CACHE(KV_T, CACHE_T, KV_DTYPE)                        \
-  vllm::reshape_and_cache_kernel<KV_T, CACHE_T, KV_DTYPE>                      \
+#define CALL_RESHAPE_AND_CACHE(KV_T)                                            \
+  vllm::reshape_and_cache_kernel<KV_T>                                          \
       <<<grid, block, 0, stream>>>(                                            \
           reinterpret_cast<KV_T *>(key), reinterpret_cast<KV_T *>(value),      \
-          reinterpret_cast<CACHE_T *>(key_cache),                              \
-          reinterpret_cast<CACHE_T *>(value_cache), slot_mapping, key_stride,  \
+          key_cache, value_cache, slot_mapping, key_stride,                    \
           value_stride, num_heads, head_size, block_size, x,                   \
           reinterpret_cast<const float *>(k_scale),                            \
-          reinterpret_cast<const float *>(v_scale));
+          reinterpret_cast<const float *>(v_scale), k_cache_dtype,             \
+          v_cache_dtype, write_k, write_v);
 
 // Q8_0 block quantize + blocked write. One CUDA block per (token, head);
 // threads cooperatively reduce per-32 amax in shared memory, then quantize.
@@ -119,7 +133,8 @@ __global__ void reshape_and_cache_q8_kernel(
                                          // head_size/32, block_size]
     const int64_t *__restrict__ slot_mapping, // [num_tokens]
     const int key_stride, const int value_stride, const int num_heads,
-    const int head_size, const int block_size, const int x) {
+    const int head_size, const int block_size, const int x,
+    const bool write_k, const bool write_v) {
   const int64_t token_head = blockIdx.x;
   const int64_t token_idx = token_head / num_heads;
   const int head_idx = token_head % num_heads;
@@ -152,62 +167,79 @@ __global__ void reshape_and_cache_q8_kernel(
     }
   };
   // Phase 1: per-32 amax per tensor via integer atomicMax on non-negative
-  // float bits (integer order == float order for values >= 0).
+  // float bits (integer order == float order for values >= 0). Sides are
+  // independent; masked-off sides skip their half (pointers may be null).
   for (int d = threadIdx.x; d < head_size; d += blockDim.x) {
-    float a = to_float(key[key_base + d]);
-    a = a >= 0.f ? a : -a;
-    atomicMax(reinterpret_cast<unsigned int *>(&sh_kmax[d / 32]),
-              __float_as_uint(a));
-    float b = to_float(value[value_base + d]);
-    b = b >= 0.f ? b : -b;
-    atomicMax(reinterpret_cast<unsigned int *>(&sh_vmax[d / 32]),
-              __float_as_uint(b));
+    if (write_k) {
+      float a = to_float(key[key_base + d]);
+      a = a >= 0.f ? a : -a;
+      atomicMax(reinterpret_cast<unsigned int *>(&sh_kmax[d / 32]),
+                __float_as_uint(a));
+    }
+    if (write_v) {
+      float b = to_float(value[value_base + d]);
+      b = b >= 0.f ? b : -b;
+      atomicMax(reinterpret_cast<unsigned int *>(&sh_vmax[d / 32]),
+                __float_as_uint(b));
+    }
   }
   __syncthreads();
   if (threadIdx.x < G) {
-    float dk = sh_kmax[threadIdx.x] / 127.f;
-    float dv = sh_vmax[threadIdx.x] / 127.f;
-    const int64_t scale_idx =
-        ((block_idx * num_heads + head_idx) * block_size + block_offset) * G +
-        threadIdx.x;
-    k_scales[scale_idx] = dk != 0.f ? dk : 1.f;
-    const int64_t v_scale_idx =
-        ((block_idx * num_heads + head_idx) * G + threadIdx.x) * block_size +
-        block_offset;
-    v_scales[v_scale_idx] = dv != 0.f ? dv : 1.f;
+    if (write_k) {
+      float dk = sh_kmax[threadIdx.x] / 127.f;
+      const int64_t scale_idx =
+          ((block_idx * num_heads + head_idx) * block_size + block_offset) *
+              G +
+          threadIdx.x;
+      k_scales[scale_idx] = dk != 0.f ? dk : 1.f;
+    }
+    if (write_v) {
+      float dv = sh_vmax[threadIdx.x] / 127.f;
+      const int64_t v_scale_idx =
+          ((block_idx * num_heads + head_idx) * G + threadIdx.x) *
+              block_size +
+          block_offset;
+      v_scales[v_scale_idx] = dv != 0.f ? dv : 1.f;
+    }
   }
   __syncthreads();
 
   // Phase 2: quantize + scattered write.
   for (int d = threadIdx.x; d < head_size; d += blockDim.x) {
     const int c = d / vllm::q8::kQ8BlockSize;
-    const int64_t scale_idx =
-        ((block_idx * num_heads + head_idx) * block_size + block_offset) * G +
-        c;
-    float dk = k_scales[scale_idx];
-    float dv = v_scales[((block_idx * num_heads + head_idx) * G + c) *
-                            block_size +
-                        block_offset];
-    float fk = to_float(key[key_base + d]);
-    float fv = to_float(value[value_base + d]);
-    float qk = fk / dk;
-    float qv = fv / dv;
-    qk = qk > 127.f ? 127.f : (qk < -127.f ? -127.f : qk);
-    qv = qv > 127.f ? 127.f : (qv < -127.f ? -127.f : qv);
-    int8_t oqk = static_cast<int8_t>(qk >= 0.f ? qk + 0.5f : qk - 0.5f);
-    int8_t oqv = static_cast<int8_t>(qv >= 0.f ? qv + 0.5f : qv - 0.5f);
+    if (write_k) {
+      const int64_t scale_idx =
+          ((block_idx * num_heads + head_idx) * block_size + block_offset) *
+              G +
+          c;
+      float dk = k_scales[scale_idx];
+      float fk = to_float(key[key_base + d]);
+      float qk = fk / dk;
+      qk = qk > 127.f ? 127.f : (qk < -127.f ? -127.f : qk);
+      int8_t oqk = static_cast<int8_t>(qk >= 0.f ? qk + 0.5f : qk - 0.5f);
 
-    const int x_idx = d / x;
-    const int x_offset = d % x;
-    const int64_t tgt_key_idx =
-        block_idx * num_heads * (head_size / x) * block_size * x +
-        head_idx * (head_size / x) * block_size * x + x_idx * block_size * x +
-        block_offset * x + x_offset;
-    const int64_t tgt_value_idx =
-        block_idx * num_heads * head_size * block_size +
-        head_idx * head_size * block_size + d * block_size + block_offset;
-    key_cache[tgt_key_idx] = oqk;
-    value_cache[tgt_value_idx] = oqv;
+      const int x_idx = d / x;
+      const int x_offset = d % x;
+      const int64_t tgt_key_idx =
+          block_idx * num_heads * (head_size / x) * block_size * x +
+          head_idx * (head_size / x) * block_size * x +
+          x_idx * block_size * x + block_offset * x + x_offset;
+      key_cache[tgt_key_idx] = oqk;
+    }
+    if (write_v) {
+      float dv = v_scales[((block_idx * num_heads + head_idx) * G + c) *
+                              block_size +
+                          block_offset];
+      float fv = to_float(value[value_base + d]);
+      float qv = fv / dv;
+      qv = qv > 127.f ? 127.f : (qv < -127.f ? -127.f : qv);
+      int8_t oqv = static_cast<int8_t>(qv >= 0.f ? qv + 0.5f : qv - 0.5f);
+
+      const int64_t tgt_value_idx =
+          block_idx * num_heads * head_size * block_size +
+          head_idx * head_size * block_size + d * block_size + block_offset;
+      value_cache[tgt_value_idx] = oqv;
+    }
   }
 }
 
@@ -237,7 +269,8 @@ __global__ void reshape_and_cache_q4_kernel(
                                         // head_size/32, block_size, 4]
     const int64_t *__restrict__ slot_mapping, // [num_tokens]
     const int key_stride, const int value_stride, const int num_heads,
-    const int head_size, const int block_size, const int x) {
+    const int head_size, const int block_size, const int x,
+    const bool write_k, const bool write_v) {
   const int64_t token_head = blockIdx.x;
   const int64_t token_idx = token_head / num_heads;
   const int head_idx = token_head % num_heads;
@@ -283,12 +316,14 @@ __global__ void reshape_and_cache_q4_kernel(
   __shared__ uint8_t sh_rv[512];
   constexpr bool kDoWht =
       std::is_same<scalar_t, __nv_bfloat16>::value;
-  for (int d = threadIdx.x; d < head_size && d < 256; d += blockDim.x) {
-    wht_k[d] = to_float(key[key_base + d]);
+  if (write_k) {
+    for (int d = threadIdx.x; d < head_size && d < 256; d += blockDim.x) {
+      wht_k[d] = to_float(key[key_base + d]);
+    }
   }
   __syncthreads();
   const bool do_wht = kDoWht && vllm::wht::wht_supported(head_size);
-  if (do_wht) {
+  if (do_wht && write_k) {
     for (int d = threadIdx.x; d < 256; d += blockDim.x) {
       wht_k[d] *= vllm::wht::wht_sign(head_idx, d);
     }
@@ -300,11 +335,13 @@ __global__ void reshape_and_cache_q4_kernel(
   // only the quantized values rotate. Decode un-rotates once on the output
   // vector (pagedattention.cuh); gather inverse-rotates (prefill path).
   __shared__ float wht_v[256];
-  for (int d = threadIdx.x; d < head_size && d < 256; d += blockDim.x) {
-    wht_v[d] = to_float(value[value_base + d]);
+  if (write_v) {
+    for (int d = threadIdx.x; d < head_size && d < 256; d += blockDim.x) {
+      wht_v[d] = to_float(value[value_base + d]);
+    }
   }
   __syncthreads();
-  if (do_wht) {
+  if (do_wht && write_v) {
     for (int d = threadIdx.x; d < 256; d += blockDim.x) {
       wht_v[d] *= vllm::wht::wht_sign(head_idx, d);
     }
@@ -312,31 +349,39 @@ __global__ void reshape_and_cache_q4_kernel(
     vllm::wht::wht_inplace(wht_v, 256);
   }
   for (int d = threadIdx.x; d < head_size; d += blockDim.x) {
-    float a = do_wht ? wht_k[d] : to_float(key[key_base + d]);
-    a = a >= 0.f ? a : -a;
-    atomicMax(reinterpret_cast<unsigned int *>(&sh_kmax[d / 32]),
-              __float_as_uint(a));
-    float b = do_wht ? wht_v[d] : to_float(value[value_base + d]);
-    b = b >= 0.f ? b : -b;
-    atomicMax(reinterpret_cast<unsigned int *>(&sh_vmax[d / 32]),
-              __float_as_uint(b));
+    if (write_k) {
+      float a = do_wht ? wht_k[d] : to_float(key[key_base + d]);
+      a = a >= 0.f ? a : -a;
+      atomicMax(reinterpret_cast<unsigned int *>(&sh_kmax[d / 32]),
+                __float_as_uint(a));
+    }
+    if (write_v) {
+      float b = do_wht ? wht_v[d] : to_float(value[value_base + d]);
+      b = b >= 0.f ? b : -b;
+      atomicMax(reinterpret_cast<unsigned int *>(&sh_vmax[d / 32]),
+                __float_as_uint(b));
+    }
   }
   __syncthreads();
   if (threadIdx.x < G) {
     // LM codebook (WHT path) keeps d = amax so y = x/d = x/amax matches the
     // grid's fit distribution; plain Q4_0 keeps d = amax/7.
-    float dk = do_wht ? sh_kmax[threadIdx.x]
-                      : sh_kmax[threadIdx.x] / vllm::q4::kQ4MaxQ;
-    float dv = do_wht ? sh_vmax[threadIdx.x]
-                      : sh_vmax[threadIdx.x] / vllm::q4::kQ4MaxQ;
     const int64_t scale_idx =
         ((block_idx * num_heads + head_idx) * block_size + block_offset) * G +
         threadIdx.x;
-    k_scales[scale_idx] = dk != 0.f ? dk : 1.f;
     const int64_t v_scale_idx =
         ((block_idx * num_heads + head_idx) * G + threadIdx.x) * block_size +
         block_offset;
-    v_scales[v_scale_idx] = dv != 0.f ? dv : 1.f;
+    if (write_k) {
+      float dk = do_wht ? sh_kmax[threadIdx.x]
+                        : sh_kmax[threadIdx.x] / vllm::q4::kQ4MaxQ;
+      k_scales[scale_idx] = dk != 0.f ? dk : 1.f;
+    }
+    if (write_v) {
+      float dv = do_wht ? sh_vmax[threadIdx.x]
+                        : sh_vmax[threadIdx.x] / vllm::q4::kQ4MaxQ;
+      v_scales[v_scale_idx] = dv != 0.f ? dv : 1.f;
+    }
   }
   __syncthreads();
 
@@ -350,101 +395,125 @@ __global__ void reshape_and_cache_q4_kernel(
     const int64_t v_scale_idx =
         ((block_idx * num_heads + head_idx) * G + c) * block_size +
         block_offset;
-    float dk = k_scales[scale_idx];
-    float dv = v_scales[v_scale_idx];
-    float fk0 = do_wht ? wht_k[dd] : to_float(key[key_base + dd]);
-    float fk1 = do_wht ? wht_k[dd + 1] : to_float(key[key_base + dd + 1]);
-    float fv0 = do_wht ? wht_v[dd] : to_float(value[value_base + dd]);
-    float fv1 = do_wht ? wht_v[dd + 1] : to_float(value[value_base + dd + 1]);
-    float idk = 1.f / dk;
-    float idv = 1.f / dv;
-    float yk0 = fk0 * idk;
-    float yk1 = fk1 * idk;
-    float yv0 = fv0 * idv;
-    float yv1 = fv1 * idv;
-    uint8_t nk0, nk1, nv0, nv1;
-    if (do_wht) {
-      nk0 = vllm::q4::nearest_level_q4_lm(yk0);
-      nk1 = vllm::q4::nearest_level_q4_lm(yk1);
-      nv0 = vllm::q4::nearest_level_q4_lm(yv0);
-      nv1 = vllm::q4::nearest_level_q4_lm(yv1);
-      // QJL residual signs in the rotated domain: s = (x >= x_hat).
-      sh_rk[dd] = static_cast<uint8_t>(
-          fk0 >= vllm::q4::kQ4LmLevels[nk0] * dk ? 1u : 0u);
-      sh_rk[dd + 1] = static_cast<uint8_t>(
-          fk1 >= vllm::q4::kQ4LmLevels[nk1] * dk ? 1u : 0u);
-      sh_rv[dd] = static_cast<uint8_t>(
-          fv0 >= vllm::q4::kQ4LmLevels[nv0] * dv ? 1u : 0u);
-      sh_rv[dd + 1] = static_cast<uint8_t>(
-          fv1 >= vllm::q4::kQ4LmLevels[nv1] * dv ? 1u : 0u);
-    } else {
-      yk0 = yk0 > 7.f ? 7.f : (yk0 < -8.f ? -8.f : yk0);
-      yk1 = yk1 > 7.f ? 7.f : (yk1 < -8.f ? -8.f : yk1);
-      yv0 = yv0 > 7.f ? 7.f : (yv0 < -8.f ? -8.f : yv0);
-      yv1 = yv1 > 7.f ? 7.f : (yv1 < -8.f ? -8.f : yv1);
-      nk0 = static_cast<uint8_t>((yk0 >= 0.f ? yk0 + 0.5f : yk0 - 0.5f) + 8.f);
-      nk1 = static_cast<uint8_t>((yk1 >= 0.f ? yk1 + 0.5f : yk1 - 0.5f) + 8.f);
-      nv0 = static_cast<uint8_t>((yv0 >= 0.f ? yv0 + 0.5f : yv0 - 0.5f) + 8.f);
-      nv1 = static_cast<uint8_t>((yv1 >= 0.f ? yv1 + 0.5f : yv1 - 0.5f) + 8.f);
-    }
+    if (write_k) {
+      float dk = k_scales[scale_idx];
+      float fk0 = do_wht ? wht_k[dd] : to_float(key[key_base + dd]);
+      float fk1 = do_wht ? wht_k[dd + 1] : to_float(key[key_base + dd + 1]);
+      float idk = 1.f / dk;
+      float yk0 = fk0 * idk;
+      float yk1 = fk1 * idk;
+      uint8_t nk0, nk1;
+      if (do_wht) {
+        nk0 = vllm::q4::nearest_level_q4_lm(yk0);
+        nk1 = vllm::q4::nearest_level_q4_lm(yk1);
+        // QJL residual signs in the rotated domain: s = (x >= x_hat).
+        sh_rk[dd] = static_cast<uint8_t>(
+            fk0 >= vllm::q4::kQ4LmLevels[nk0] * dk ? 1u : 0u);
+        sh_rk[dd + 1] = static_cast<uint8_t>(
+            fk1 >= vllm::q4::kQ4LmLevels[nk1] * dk ? 1u : 0u);
+      } else {
+        yk0 = yk0 > 7.f ? 7.f : (yk0 < -8.f ? -8.f : yk0);
+        yk1 = yk1 > 7.f ? 7.f : (yk1 < -8.f ? -8.f : yk1);
+        nk0 =
+            static_cast<uint8_t>((yk0 >= 0.f ? yk0 + 0.5f : yk0 - 0.5f) + 8.f);
+        nk1 =
+            static_cast<uint8_t>((yk1 >= 0.f ? yk1 + 0.5f : yk1 - 0.5f) + 8.f);
+      }
 
-    // K: 16-byte chunks hold 32 elems; byte (dd/32 chunk, (dd%32)/2).
-    const int64_t tgt_key_idx =
-        block_idx * num_heads * (head_size / 32) * block_size * x +
-        head_idx * (head_size / 32) * block_size * x +
-        (dd / 32) * block_size * x + block_offset * x + (dd % 32) / 2;
-    key_cache[tgt_key_idx] =
-        static_cast<int8_t>(nk0 | (nk1 << 4));
-    // V: bytes (dd, off/2) and (dd+1, off/2); each shared with the paired
-    // slot, which owns the other nibble. Merge ours with atomic And/Or on
-    // disjoint bits: order-independent and recycled-block safe.
-    const int64_t v_byte_base =
-        block_idx * num_heads * head_size * v_row_bytes +
-        head_idx * head_size * v_row_bytes + block_offset / 2;
-    const unsigned int v_shift =
-        static_cast<unsigned int>(block_offset & 1) * 4u;
-    const int64_t v_byte0 = v_byte_base + dd * v_row_bytes;
-    unsigned int *word0 = reinterpret_cast<unsigned int *>(
-        value_cache + (v_byte0 & ~3LL));
-    unsigned int sh0 =
-        static_cast<unsigned int>(v_byte0 & 3LL) * 8u + v_shift;
-    atomicAnd(word0, ~(0xFu << sh0));
-    atomicOr(word0, static_cast<unsigned int>(nv0) << sh0);
-    const int64_t v_byte1 = v_byte0 + v_row_bytes;
-    unsigned int *word1 = reinterpret_cast<unsigned int *>(
-        value_cache + (v_byte1 & ~3LL));
-    unsigned int sh1 =
-        static_cast<unsigned int>(v_byte1 & 3LL) * 8u + v_shift;
-    atomicAnd(word1, ~(0xFu << sh1));
-    atomicOr(word1, static_cast<unsigned int>(nv1) << sh1);
+      // K: 16-byte chunks hold 32 elems; byte (dd/32 chunk, (dd%32)/2).
+      const int64_t tgt_key_idx =
+          block_idx * num_heads * (head_size / 32) * block_size * x +
+          head_idx * (head_size / 32) * block_size * x +
+          (dd / 32) * block_size * x + block_offset * x + (dd % 32) / 2;
+      key_cache[tgt_key_idx] = static_cast<int8_t>(nk0 | (nk1 << 4));
+    }
+    if (write_v) {
+      float dv = v_scales[v_scale_idx];
+      float fv0 = do_wht ? wht_v[dd] : to_float(value[value_base + dd]);
+      float fv1 = do_wht ? wht_v[dd + 1] : to_float(value[value_base + dd + 1]);
+      float idv = 1.f / dv;
+      float yv0 = fv0 * idv;
+      float yv1 = fv1 * idv;
+      uint8_t nv0, nv1;
+      if (do_wht) {
+        nv0 = vllm::q4::nearest_level_q4_lm(yv0);
+        nv1 = vllm::q4::nearest_level_q4_lm(yv1);
+        sh_rv[dd] = static_cast<uint8_t>(
+            fv0 >= vllm::q4::kQ4LmLevels[nv0] * dv ? 1u : 0u);
+        sh_rv[dd + 1] = static_cast<uint8_t>(
+            fv1 >= vllm::q4::kQ4LmLevels[nv1] * dv ? 1u : 0u);
+      } else {
+        yv0 = yv0 > 7.f ? 7.f : (yv0 < -8.f ? -8.f : yv0);
+        yv1 = yv1 > 7.f ? 7.f : (yv1 < -8.f ? -8.f : yv1);
+        nv0 =
+            static_cast<uint8_t>((yv0 >= 0.f ? yv0 + 0.5f : yv0 - 0.5f) + 8.f);
+        nv1 =
+            static_cast<uint8_t>((yv1 >= 0.f ? yv1 + 0.5f : yv1 - 0.5f) + 8.f);
+      }
+      // V: bytes (dd, off/2) and (dd+1, off/2); each shared with the paired
+      // slot, which owns the other nibble. Merge ours with atomic And/Or on
+      // disjoint bits: order-independent and recycled-block safe.
+      const int64_t v_byte_base =
+          block_idx * num_heads * head_size * v_row_bytes +
+          head_idx * head_size * v_row_bytes + block_offset / 2;
+      const unsigned int v_shift =
+          static_cast<unsigned int>(block_offset & 1) * 4u;
+      const int64_t v_byte0 = v_byte_base + dd * v_row_bytes;
+      unsigned int *word0 = reinterpret_cast<unsigned int *>(
+          value_cache + (v_byte0 & ~3LL));
+      unsigned int sh0 =
+          static_cast<unsigned int>(v_byte0 & 3LL) * 8u + v_shift;
+      atomicAnd(word0, ~(0xFu << sh0));
+      atomicOr(word0, static_cast<unsigned int>(nv0) << sh0);
+      const int64_t v_byte1 = v_byte0 + v_row_bytes;
+      unsigned int *word1 = reinterpret_cast<unsigned int *>(
+          value_cache + (v_byte1 & ~3LL));
+      unsigned int sh1 =
+          static_cast<unsigned int>(v_byte1 & 3LL) * 8u + v_shift;
+      atomicAnd(word1, ~(0xFu << sh1));
+      atomicOr(word1, static_cast<unsigned int>(nv1) << sh1);
+    }
   }
   // QJL residual sidecars: pack staged sign bits (byte b of group c holds
   // elems [8b, 8b+7], LSB-first) and write 4 bytes per group. K is
   // token-major, V transposed group-major, mirroring the scale sidecars.
-  // Null sidecars (QJL disabled) skip the write; decode falls back to LM.
-  if (do_wht && k_res != nullptr && v_res != nullptr) {
-    __syncthreads();
-    for (int cb = threadIdx.x; cb < G * 4; cb += blockDim.x) {
-      const int c = cb / 4;
-      const int b = cb % 4;
-      uint8_t kb = 0;
-      uint8_t vb = 0;
+  // Each side writes independently; null sidecars (QJL disabled) skip.
+  // Decode falls back to LM.
+  if (do_wht) {
+    if (write_k && k_res != nullptr) {
+      __syncthreads();
+      for (int cb = threadIdx.x; cb < G * 4; cb += blockDim.x) {
+        const int c = cb / 4;
+        const int b = cb % 4;
+        uint8_t kb = 0;
 #pragma unroll
-      for (int i = 0; i < 8; ++i) {
-        kb = static_cast<uint8_t>(kb | (sh_rk[c * 32 + b * 8 + i] << i));
-        vb = static_cast<uint8_t>(vb | (sh_rv[c * 32 + b * 8 + i] << i));
+        for (int i = 0; i < 8; ++i) {
+          kb = static_cast<uint8_t>(kb | (sh_rk[c * 32 + b * 8 + i] << i));
+        }
+        const int64_t k_res_idx =
+            ((block_idx * num_heads + head_idx) * block_size + block_offset) *
+                G * 4 +
+            c * 4 + b;
+        k_res[k_res_idx] = kb;
       }
-      const int64_t k_res_idx =
-          ((block_idx * num_heads + head_idx) * block_size + block_offset) *
-              G * 4 +
-          c * 4 + b;
-      k_res[k_res_idx] = kb;
-      const int64_t v_res_idx =
-          (((block_idx * num_heads + head_idx) * G + c) * block_size +
-           block_offset) *
-              4 +
-          b;
-      v_res[v_res_idx] = vb;
+    }
+    if (write_v && v_res != nullptr) {
+      __syncthreads();
+      for (int cb = threadIdx.x; cb < G * 4; cb += blockDim.x) {
+        const int c = cb / 4;
+        const int b = cb % 4;
+        uint8_t vb = 0;
+#pragma unroll
+        for (int i = 0; i < 8; ++i) {
+          vb = static_cast<uint8_t>(vb | (sh_rv[c * 32 + b * 8 + i] << i));
+        }
+        const int64_t v_res_idx =
+            (((block_idx * num_heads + head_idx) * G + c) * block_size +
+             block_offset) *
+                4 +
+            b;
+        v_res[v_res_idx] = vb;
+      }
     }
   }
 }
@@ -456,7 +525,7 @@ __global__ void reshape_and_cache_q4_kernel(
           reinterpret_cast<int8_t *>(key_cache),                               \
           reinterpret_cast<int8_t *>(value_cache), k_scales, v_scales, k_res,  \
           v_res, slot_mapping, key_stride, value_stride, num_heads, head_size, \
-          block_size, x);
+          block_size, x, write_k, write_v);
 
 // Q4_0 block-quantize write path. Payload is nibbles (x = 16 bytes cover 32
 // head-dim elems); scales are fp32 sidecars (k token-major, v transposed).
@@ -477,7 +546,8 @@ extern "C" void reshape_and_cache_q4(
     int32_t block_size, int32_t x, int32_t key_stride, int32_t value_stride,
     cudaStream_t stream,
 
-    uint32_t dtype) {  // 0 => f16; 1 => bf16; 2 => f32
+    uint32_t dtype, // 0 => f16; 1 => bf16; 2 => f32
+    bool write_k, bool write_v) {
   dim3 grid_q4(static_cast<unsigned int>(num_tokens) *
                static_cast<unsigned int>(num_heads));
   // 128 threads cover head_size <= 512 via paired stride loops.
@@ -506,39 +576,22 @@ extern "C" void reshape_and_cache(
     cudaStream_t stream,
 
     uint32_t dtype,       // 0 => f16; 1 => bf16; 2 => f32
-    uint32_t cache_dtype, // 0 => f16; 1 => bf16; 2 => f32; 3 => fp8_e4m3
-    // 4 => q8_0 block-int8 (served by reshape_and_cache_q8 below, which also
-    // takes fp32 per-32 scale sidecars); 5 => q4_0 nibbles (reshape_and_cache_q4)
+    uint32_t k_cache_dtype, // 0/1/2 native; 3 => fp8_e4m3 (quant sides use
+    uint32_t v_cache_dtype, // the q8/q4 writers below, never this kernel)
+    bool write_k, bool write_v,
     float *k_scale, float *v_scale) {
   dim3 grid(num_tokens);
   dim3 block(std::min(num_heads * head_size, 512));
 
-#ifdef ENABLE_FP8
-  if (cache_dtype == 3) {
-    // FP8 E4M3 cache
-    if (dtype == 0) {
-      CALL_RESHAPE_AND_CACHE(uint16_t, uint8_t,
-                             vllm::Fp8KVCacheDataType::kFp8E4M3);
-    } else if (dtype == 1) {
-      CALL_RESHAPE_AND_CACHE(__nv_bfloat16, uint8_t,
-                             vllm::Fp8KVCacheDataType::kFp8E4M3);
-    } else if (dtype == 2) {
-      CALL_RESHAPE_AND_CACHE(float, uint8_t,
-                             vllm::Fp8KVCacheDataType::kFp8E4M3);
-    }
-  } else
-#endif
-  {
-    // Non-FP8 cache
-    if (dtype == 0) {
-      CALL_RESHAPE_AND_CACHE(uint16_t, uint16_t,
-                             vllm::Fp8KVCacheDataType::kAuto);
-    } else if (dtype == 1) {
-      CALL_RESHAPE_AND_CACHE(__nv_bfloat16, __nv_bfloat16,
-                             vllm::Fp8KVCacheDataType::kAuto);
-    } else if (dtype == 2) {
-      CALL_RESHAPE_AND_CACHE(float, float, vllm::Fp8KVCacheDataType::kAuto);
-    }
+  // One instantiation serves every native/fp8 (k, v) pair; the kernel
+  // branches per side. x is the K-side packing (native 16/sizeof, fp8 16);
+  // the V address math never uses x.
+  if (dtype == 0) {
+    CALL_RESHAPE_AND_CACHE(uint16_t);
+  } else if (dtype == 1) {
+    CALL_RESHAPE_AND_CACHE(__nv_bfloat16);
+  } else if (dtype == 2) {
+    CALL_RESHAPE_AND_CACHE(float);
   }
   CUDA_CHECK(cudaGetLastError());
 }
@@ -553,7 +606,7 @@ extern "C" void reshape_and_cache(
           reinterpret_cast<int8_t *>(key_cache),                               \
           reinterpret_cast<int8_t *>(value_cache), k_scales, v_scales,         \
           slot_mapping, key_stride, value_stride, num_heads, head_size,        \
-          block_size, x);
+          block_size, x, write_k, write_v);
 extern "C" void reshape_and_cache_q8(
     void *key,         // [num_tokens, num_heads, head_size]
     void *value,       // [num_tokens, num_heads, head_size]
@@ -567,7 +620,8 @@ extern "C" void reshape_and_cache_q8(
     int32_t block_size, int32_t x, int32_t key_stride, int32_t value_stride,
     cudaStream_t stream,
 
-    uint32_t dtype) {  // 0 => f16; 1 => bf16; 2 => f32
+    uint32_t dtype, // 0 => f16; 1 => bf16; 2 => f32
+    bool write_k, bool write_v) {
   dim3 grid_q8(static_cast<unsigned int>(num_tokens) *
                static_cast<unsigned int>(num_heads));
   // 128 threads cover head_size <= 512 via stride loops (head_size % 32 == 0).

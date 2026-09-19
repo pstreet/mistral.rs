@@ -25,6 +25,21 @@ impl BlockQuantKind {
     }
 }
 
+/// Runtime kernel dtype code for one KV side: 0/1/2 native f16/bf16/f32,
+/// 3 fp8_e4m3, 4/5 via the block kind. `None` for anything else.
+pub fn side_cache_dtype(dtype: candle_core::DType, kind: Option<BlockQuantKind>) -> Option<u32> {
+    if let Some(kind) = kind {
+        return Some(kind.cache_dtype());
+    }
+    match dtype {
+        candle_core::DType::F16 => Some(0),
+        candle_core::DType::BF16 => Some(1),
+        candle_core::DType::F32 => Some(2),
+        candle_core::DType::F8E4M3 => Some(3),
+        _ => None,
+    }
+}
+
 #[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "rocm"))]
 mod cuda;
 #[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "rocm"))]

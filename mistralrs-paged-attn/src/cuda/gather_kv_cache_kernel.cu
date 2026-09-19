@@ -58,12 +58,15 @@ __device__ __forceinline__ float q8_out_cast<float>(float v) {
 /// K cache layout: [num_blocks, kv_heads, head_size/x, block_size, x]
 /// V cache layout: [num_blocks, kv_heads, head_size, block_size]
 /// K/V output:     [num_tokens, kv_heads, head_size]
-template <typename cache_t, typename out_t, Fp8KVCacheDataType kv_dt>
+///
+/// K and V dtypes are runtime codes (0/1/2 native, 3 fp8, 4 q8, 5 q4):
+/// one instantiation serves every pair. x is the K-side packing.
+template <typename out_t>
 __global__ void gather_kv_cache_kernel(
-    const cache_t *__restrict__ key_cache,   // [num_blocks, kv_heads,
-                                             //  head_size/x, block_size, x]
-    const cache_t *__restrict__ value_cache, // [num_blocks, kv_heads,
-                                             //  head_size, block_size]
+    const void *__restrict__ key_cache,   // [num_blocks, kv_heads,
+                                          //  head_size/x, block_size, x]
+    const void *__restrict__ value_cache, // [num_blocks, kv_heads,
+                                          //  head_size, block_size]
     out_t *__restrict__ k_out,         // [num_tokens, kv_heads, head_size]
     out_t *__restrict__ v_out,         // [num_tokens, kv_heads, head_size]
     const float *__restrict__ k_scale, // scalar or nullptr
@@ -74,7 +77,8 @@ __global__ void gather_kv_cache_kernel(
     const int32_t *__restrict__ cu_seq_lens, // [batch + 1]
     const int32_t num_tokens, const int32_t num_seqs, const int32_t block_size,
     const int32_t block_table_stride, const int32_t num_kv_heads,
-    const int32_t head_size, const int32_t x) {
+    const int32_t head_size, const int32_t x, const uint32_t k_cache_dtype,
+    const uint32_t v_cache_dtype) {
   const int32_t token_id = blockIdx.x;
   if (token_id >= num_tokens) {
     return;
@@ -125,7 +129,7 @@ __global__ void gather_kv_cache_kernel(
   // so dequantize each head row then inverse-rotate (H is self-inverse;
   // signs go after the transform). V is plain RTN: handled below as usual.
   // Non-256 head sizes use the identity path in the main loop.
-  if constexpr (kv_dt == Fp8KVCacheDataType::kQ4_0) {
+  if (k_cache_dtype == 5) {
     if (head_size == 256) {
       __shared__ float wht_row[256];
       for (int32_t h = 0; h < num_kv_heads; ++h) {
@@ -170,7 +174,7 @@ __global__ void gather_kv_cache_kernel(
   // Q4_0 V incoherence (mirror of the K prepass above): the cache holds
   // head-dim-rotated V. Gather feeds original-domain consumers, so dequant
   // each head row then inverse-rotate (signs after the transform).
-  if constexpr (kv_dt == Fp8KVCacheDataType::kQ4_0) {
+  if (v_cache_dtype == 5) {
     if (head_size == 256) {
       __shared__ float wht_vrow[256];
       for (int32_t h = 0; h < num_kv_heads; ++h) {
@@ -230,10 +234,7 @@ __global__ void gather_kv_cache_kernel(
     const int64_t v_src_idx = static_cast<int64_t>(block_id) * v_block_stride +
                               head_idx * v_head_stride + d * block_size + slot;
 
-    if constexpr (kv_dt == Fp8KVCacheDataType::kAuto) {
-      k_out[out_base + i] = key_cache[k_src_idx];
-      v_out[out_base + i] = value_cache[v_src_idx];
-    } else if constexpr (kv_dt == Fp8KVCacheDataType::kQ8_0) {
+    if (k_cache_dtype == 4) {
       // Q8_0 block-int8: int8 payload, fp32 per-32 scales in sidecars. k is
       // token-major [blocks, heads, block_size, groups]; v is transposed to
       // [blocks, heads, groups, block_size], so the v lookup strides here
@@ -243,23 +244,13 @@ __global__ void gather_kv_cache_kernel(
                                     block_size +
                                 slot;
       const float k_deq = vllm::q8::dequantize_q8_0(
-          key_cache[k_src_idx],
+          reinterpret_cast<const int8_t *>(key_cache)[k_src_idx],
           k_scale[scale_row * q8_groups + d / vllm::q8::kQ8BlockSize]);
-      const int64_t v_scale_idx =
-          ((static_cast<int64_t>(block_id) * num_kv_heads + head_idx) *
-               q8_groups +
-           d / vllm::q8::kQ8BlockSize) *
-              block_size +
-          slot;
-      const float v_deq = vllm::q8::dequantize_q8_0(value_cache[v_src_idx],
-                                                   v_scale[v_scale_idx]);
       k_out[out_base + i] = q8_out_cast<out_t>(k_deq);
-      v_out[out_base + i] = q8_out_cast<out_t>(v_deq);
-    } else if constexpr (kv_dt == Fp8KVCacheDataType::kQ4_0) {
+    } else if (k_cache_dtype == 5) {
       // Q4_0 nibbles (+8 bias): K packs along head-dim (byte holds the
-      // (d, d+1) pair, d even selects lo), V packs along slots (byte holds
-      // the (slot, slot+1) pair). Scales share the Q8_0 scheme (k
-      // token-major, v transposed group-major).
+      // (d, d+1) pair, d even selects lo). Scales share the Q8_0 scheme (k
+      // token-major).
       const int64_t k_q4_idx = static_cast<int64_t>(block_id) *
                                    k_block_stride +
                                head_idx * k_head_stride +
@@ -269,6 +260,38 @@ __global__ void gather_kv_cache_kernel(
       const uint8_t k_nib =
           (d & 1) ? static_cast<uint8_t>((k_packed >> 4) & 0xFu)
                   : static_cast<uint8_t>(k_packed & 0xFu);
+      const int64_t scale_row = (static_cast<int64_t>(block_id) * num_kv_heads +
+                                 head_idx) *
+                                    block_size +
+                                slot;
+      const float k_deq = vllm::q4::dequantize_q4<false>(
+          k_nib, k_scale[scale_row * q8_groups + d / vllm::q4::kQ4BlockSize]);
+      if (head_size != 256) {
+        k_out[out_base + i] = q8_out_cast<out_t>(k_deq);
+      }  // else K already inverse-rotated by the prepass above
+    } else if (k_cache_dtype == 3) {
+      k_out[out_base + i] = fp8::scaled_convert<out_t, uint8_t,
+                                                Fp8KVCacheDataType::kFp8E4M3>(
+          reinterpret_cast<const uint8_t *>(key_cache)[k_src_idx], *k_scale);
+    } else {
+      k_out[out_base + i] =
+          reinterpret_cast<const out_t *>(key_cache)[k_src_idx];
+    }
+
+    if (v_cache_dtype == 4) {
+      const int64_t v_scale_idx =
+          ((static_cast<int64_t>(block_id) * num_kv_heads + head_idx) *
+               q8_groups +
+           d / vllm::q8::kQ8BlockSize) *
+              block_size +
+          slot;
+      const float v_deq = vllm::q8::dequantize_q8_0(
+          reinterpret_cast<const int8_t *>(value_cache)[v_src_idx],
+          v_scale[v_scale_idx]);
+      v_out[out_base + i] = q8_out_cast<out_t>(v_deq);
+    } else if (v_cache_dtype == 5) {
+      // Q4_0: V packs along slots (byte holds the (slot, slot+1) pair).
+      // v scales are transposed group-major, shared with Q8_0.
       const int64_t v_q4_idx = (static_cast<int64_t>(block_id) * num_kv_heads +
                                 head_idx) *
                                    head_size * (block_size / 2) +
@@ -278,49 +301,41 @@ __global__ void gather_kv_cache_kernel(
       const uint8_t v_nib =
           (slot & 1) ? static_cast<uint8_t>((v_packed >> 4) & 0xFu)
                      : static_cast<uint8_t>(v_packed & 0xFu);
-      const int64_t scale_row = (static_cast<int64_t>(block_id) * num_kv_heads +
-                                 head_idx) *
-                                    block_size +
-                                slot;
       const int64_t v_scale_idx =
           ((static_cast<int64_t>(block_id) * num_kv_heads + head_idx) *
                q8_groups +
            d / vllm::q4::kQ4BlockSize) *
               block_size +
           slot;
-       const float k_deq = vllm::q4::dequantize_q4<false>(
-           k_nib, k_scale[scale_row * q8_groups + d / vllm::q4::kQ4BlockSize]);
-       const float v_deq =
-           vllm::q4::dequantize_q4<false>(v_nib, v_scale[v_scale_idx]);
-      if (head_size != 256) {
-        k_out[out_base + i] = q8_out_cast<out_t>(k_deq);
-      }  // else K already inverse-rotated by the prepass above
+      const float v_deq =
+          vllm::q4::dequantize_q4<false>(v_nib, v_scale[v_scale_idx]);
       if (head_size != 256) {
         v_out[out_base + i] = q8_out_cast<out_t>(v_deq);
       }  // else V already inverse-rotated by the prepass above
+    } else if (v_cache_dtype == 3) {
+      v_out[out_base + i] = fp8::scaled_convert<out_t, uint8_t,
+                                                Fp8KVCacheDataType::kFp8E4M3>(
+          reinterpret_cast<const uint8_t *>(value_cache)[v_src_idx], *v_scale);
     } else {
-      k_out[out_base + i] = fp8::scaled_convert<out_t, cache_t, kv_dt>(
-          key_cache[k_src_idx], *k_scale);
-      v_out[out_base + i] = fp8::scaled_convert<out_t, cache_t, kv_dt>(
-          value_cache[v_src_idx], *v_scale);
+      v_out[out_base + i] =
+          reinterpret_cast<const out_t *>(value_cache)[v_src_idx];
     }
   }
 }
 
 } // namespace vllm
 
-#define CALL_GATHER_KV_CACHE(OUT_T, CACHE_T, KV_DTYPE)                         \
-  vllm::gather_kv_cache_kernel<CACHE_T, OUT_T, KV_DTYPE>                       \
+#define CALL_GATHER_KV_CACHE(OUT_T)                                             \
+  vllm::gather_kv_cache_kernel<OUT_T>                                          \
       <<<grid, block, 0, stream>>>(                                            \
-          reinterpret_cast<CACHE_T *>(key_cache),                              \
-          reinterpret_cast<CACHE_T *>(value_cache),                            \
+          key_cache, value_cache,                                              \
           reinterpret_cast<OUT_T *>(k_out), reinterpret_cast<OUT_T *>(v_out),  \
           reinterpret_cast<const float *>(k_scale),                            \
           reinterpret_cast<const float *>(v_scale),                            \
           reinterpret_cast<const uint8_t *>(k_res),                            \
           reinterpret_cast<const uint8_t *>(v_res), block_table, cu_seq_lens,  \
           num_tokens, num_seqs, block_size, block_table_stride, num_kv_heads,  \
-          head_size, x);
+          head_size, x, k_cache_dtype, v_cache_dtype);
 
 extern "C" void gather_kv_cache(
     void *key_cache,   // [num_blocks, kv_heads, head_size/x, block_size, x]
@@ -337,8 +352,10 @@ extern "C" void gather_kv_cache(
     int32_t block_table_stride, int32_t num_kv_heads, int32_t head_size,
     int32_t x, cudaStream_t stream,
     uint32_t out_dtype,  // 0 => f16; 1 => bf16; 2 => f32
-    uint32_t cache_dtype // 0 => f16; 1 => bf16; 2 => f32; 3 => fp8_e4m3
-                         // 4 => q8_0 block-int8; 5 => q4_0 nibbles
+    // Per-side codes, each 0/1/2 native or 3 fp8_e4m3, 4 q8_0, 5 q4_0.
+    // One instantiation serves every (k, v) pair; the kernel branches
+    // per side. x is the K-side packing.
+    uint32_t k_cache_dtype, uint32_t v_cache_dtype
 ) {
   if (num_tokens <= 0) {
     return;
@@ -346,52 +363,12 @@ extern "C" void gather_kv_cache(
   dim3 grid(num_tokens);
   dim3 block(std::min(num_kv_heads * head_size, 512));
 
-#ifdef ENABLE_FP8
-  if (cache_dtype == 3) {
-    // FP8 E4M3 cache -> dequantize to out_dtype
-    if (out_dtype == 0) {
-      CALL_GATHER_KV_CACHE(uint16_t, uint8_t,
-                           vllm::Fp8KVCacheDataType::kFp8E4M3);
-    } else if (out_dtype == 1) {
-      CALL_GATHER_KV_CACHE(__nv_bfloat16, uint8_t,
-                           vllm::Fp8KVCacheDataType::kFp8E4M3);
-    } else if (out_dtype == 2) {
-      CALL_GATHER_KV_CACHE(float, uint8_t, vllm::Fp8KVCacheDataType::kFp8E4M3);
-    }
-  } else
-#endif
-  if (cache_dtype == 4) {
-    // Q8_0 cache -> dequantize to out_dtype
-    if (out_dtype == 0) {
-      CALL_GATHER_KV_CACHE(uint16_t, int8_t, vllm::Fp8KVCacheDataType::kQ8_0);
-    } else if (out_dtype == 1) {
-      CALL_GATHER_KV_CACHE(__nv_bfloat16, int8_t,
-                           vllm::Fp8KVCacheDataType::kQ8_0);
-    } else if (out_dtype == 2) {
-      CALL_GATHER_KV_CACHE(float, int8_t, vllm::Fp8KVCacheDataType::kQ8_0);
-    }
-  } else
-  if (cache_dtype == 5) {
-    // Q4_0 cache -> dequantize to out_dtype
-    if (out_dtype == 0) {
-      CALL_GATHER_KV_CACHE(uint16_t, int8_t, vllm::Fp8KVCacheDataType::kQ4_0);
-    } else if (out_dtype == 1) {
-      CALL_GATHER_KV_CACHE(__nv_bfloat16, int8_t,
-                           vllm::Fp8KVCacheDataType::kQ4_0);
-    } else if (out_dtype == 2) {
-      CALL_GATHER_KV_CACHE(float, int8_t, vllm::Fp8KVCacheDataType::kQ4_0);
-    }
-  } else
-  {
-    // Non-FP8 cache: cache_t == out_t
-    if (out_dtype == 0) {
-      CALL_GATHER_KV_CACHE(uint16_t, uint16_t, vllm::Fp8KVCacheDataType::kAuto);
-    } else if (out_dtype == 1) {
-      CALL_GATHER_KV_CACHE(__nv_bfloat16, __nv_bfloat16,
-                           vllm::Fp8KVCacheDataType::kAuto);
-    } else if (out_dtype == 2) {
-      CALL_GATHER_KV_CACHE(float, float, vllm::Fp8KVCacheDataType::kAuto);
-    }
+  if (out_dtype == 0) {
+    CALL_GATHER_KV_CACHE(uint16_t);
+  } else if (out_dtype == 1) {
+    CALL_GATHER_KV_CACHE(__nv_bfloat16);
+  } else if (out_dtype == 2) {
+    CALL_GATHER_KV_CACHE(float);
   }
   CUDA_CHECK(cudaGetLastError());
 }

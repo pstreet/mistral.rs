@@ -13,34 +13,16 @@ extern "C" void paged_attention_v1_bf16(
 
     int32_t num_seqs, int32_t num_heads, int32_t head_size,
     int32_t max_num_blocks_per_seq, int32_t q_stride, int32_t kv_block_stride,
-    int32_t kv_head_stride, cudaStream_t stream,
+    int32_t kv_head_stride, int32_t v_block_stride, int32_t v_head_stride,
+    cudaStream_t stream,
 
-    uint32_t cache_dtype, // 0 => f16; 1 => bf16; 2 => f32; 3 => fp8_e4m3
-                             // 4 => q8_0 block-int8; 5 => q4_0 nibbles
+    // Per-side codes, each 0/1/2 native or 3 fp8_e4m3, 4 q8_0, 5 q4_0.
+    // One instantiation serves every (k, v) pair; the kernel branches
+    // per side at launch-uniform runtime codes.
+    uint32_t k_cache_dtype, uint32_t v_cache_dtype,
     float *k_scale, float *v_scale, const uint8_t *k_res, const uint8_t *v_res,
     const float *sinks) {
 
-#ifdef ENABLE_FP8
-  if (cache_dtype == 3) {
-    // FP8 cache
-    CALL_V1_LAUNCHER_BLOCK_SIZE(__nv_bfloat16, uint8_t,
-                                vllm::Fp8KVCacheDataType::kFp8E4M3);
-  } else
-#endif
-  if (cache_dtype == 4) {
-    // Q8_0 cache: int8 payload, fp32 per-32 scales via k_scale/v_scale.
-    CALL_V1_LAUNCHER_BLOCK_SIZE(__nv_bfloat16, int8_t,
-                                vllm::Fp8KVCacheDataType::kQ8_0);
-  } else
-  if (cache_dtype == 5) {
-    // Q4_0 cache: nibble payload, fp32 per-32 scales via k_scale/v_scale.
-    CALL_V1_LAUNCHER_BLOCK_SIZE(__nv_bfloat16, int8_t,
-                                vllm::Fp8KVCacheDataType::kQ4_0);
-  } else
-  {
-    // Non-FP8 cache
-    CALL_V1_LAUNCHER_BLOCK_SIZE(__nv_bfloat16, __nv_bfloat16,
-                                vllm::Fp8KVCacheDataType::kAuto);
-  }
+  CALL_V1_LAUNCHER_BLOCK_SIZE(__nv_bfloat16);
   CUDA_CHECK(cudaGetLastError());
 }

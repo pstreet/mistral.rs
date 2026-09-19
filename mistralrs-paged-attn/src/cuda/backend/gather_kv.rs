@@ -9,42 +9,39 @@ use float8::F8E4M3;
 
 use crate::{KvCacheScales, DEFAULT_FP8_KV_CACHE_SCALES};
 
-fn validate_cache_scales(
+fn validate_side_scales(
     cache_dtype: DType,
-    k_scale: Option<&Tensor>,
-    v_scale: Option<&Tensor>,
+    scale: Option<&Tensor>,
+    side: &str,
+    op: &str,
 ) -> Result<()> {
-    match (cache_dtype, k_scale, v_scale) {
-        (DType::F8E4M3, Some(k_scale), Some(v_scale)) => {
-            if k_scale.dtype() != DType::F32
-                || v_scale.dtype() != DType::F32
-                || k_scale.elem_count() != 1
-                || v_scale.elem_count() != 1
-            {
+    match (cache_dtype, scale) {
+        (DType::F8E4M3, Some(scale)) => {
+            if scale.dtype() != DType::F32 || scale.elem_count() != 1 {
+                candle_core::bail!("{op} requires a scalar f32 {side} scale for an f8e4m3 cache");
+            }
+        }
+        (DType::F8E4M3, None) => {
+            candle_core::bail!("{op} requires an explicit {side} scale for an f8e4m3 cache")
+        }
+        (DType::U8, Some(scale)) => {
+            // Block-quantized (Q8_0/Q4_0): fp32 per-32 scale sidecar, not scalar.
+            if scale.dtype() != DType::F32 {
                 candle_core::bail!(
-                    "gather_kv_cache requires scalar f32 K/V scales for an f8e4m3 cache"
+                    "{op} requires an f32 {side} scale sidecar for a block-quantized cache"
                 );
             }
         }
-        (DType::F8E4M3, _, _) => {
-            candle_core::bail!("gather_kv_cache requires explicit K/V scales for an f8e4m3 cache")
-        }
-        (DType::U8, Some(k_scale), Some(v_scale)) => {
-            // Block-quantized (Q8_0/Q4_0): fp32 per-32 scale sidecars, not scalars.
-            if k_scale.dtype() != DType::F32 || v_scale.dtype() != DType::F32 {
-                candle_core::bail!(
-                    "gather_kv_cache requires f32 K/V scale sidecars for a block-quantized cache"
-                );
-            }
-        }
-        (DType::U8, _, _) => {
+        (DType::U8, None) => {
             candle_core::bail!(
-                "gather_kv_cache requires explicit K/V scale sidecars for a block-quantized cache"
+                "{op} requires an explicit {side} scale sidecar for a block-quantized cache"
             )
         }
-        (_, None, None) => {}
-        (_, _, _) => {
-            candle_core::bail!("gather_kv_cache only accepts K/V scales for an f8e4m3 cache")
+        (_, None) => {}
+        _ => {
+            candle_core::bail!(
+                "{op} only accepts a {side} scale for an f8e4m3 or block-quantized cache"
+            )
         }
     }
     Ok(())
@@ -80,17 +77,11 @@ pub fn gather_kv_cache(
     cu_seq_lens: &Tensor, // [batch + 1]
     num_tokens: usize,    // cu_seq_lens[-1]
     out_dtype: DType,
-    quant: Option<BlockQuantKind>,
+    k_quant: Option<BlockQuantKind>,
+    v_quant: Option<BlockQuantKind>,
 ) -> Result<(Tensor, Tensor)> {
-    let cache_dtype = key_cache.dtype();
-    if value_cache.dtype() != cache_dtype {
-        candle_core::bail!(
-            "gather_kv_cache expects matching cache dtypes, got {:?} and {:?}",
-            cache_dtype,
-            value_cache.dtype()
-        );
-    }
-    validate_cache_scales(cache_dtype, k_scale, v_scale)?;
+    validate_side_scales(key_cache.dtype(), k_scale, "K", "gather_kv_cache")?;
+    validate_side_scales(value_cache.dtype(), v_scale, "V", "gather_kv_cache")?;
     #[cfg(not(feature = "rocm"))]
     if is_flashinfer_cache(key_cache, value_cache) {
         return gather_kv_cache_flashinfer(
@@ -100,7 +91,7 @@ pub fn gather_kv_cache(
             cu_seq_lens,
             num_tokens,
             out_dtype,
-            flashinfer_cache_scales(cache_dtype, k_scale, v_scale)?,
+            flashinfer_cache_scales(key_cache.dtype(), k_scale, v_scale)?,
         );
     }
 
@@ -120,15 +111,16 @@ pub fn gather_kv_cache(
         );
     }
 
-    // Extract dimensions from cache shapes. Q4_0 packs 2 elems per byte, so
-    // its head_size/x covers twice the head dim of the byte count.
+    // Extract dimensions from the K cache shapes. Q4_0 packs 2 elems per
+    // byte, so its head_size/x covers twice the head dim of the byte count.
+    // head_size/block_size are shared across sides; x is the K-side packing.
     let k_dims = key_cache.dims5()?;
     let num_kv_heads = k_dims.1;
     let head_size_over_x = k_dims.2;
     let block_size = k_dims.3;
     let x = k_dims.4;
-    let is_q4 = quant == Some(BlockQuantKind::Q4_0);
-    let head_size = head_size_over_x * x * if is_q4 { 2 } else { 1 };
+    let k_is_q4 = k_quant == Some(BlockQuantKind::Q4_0);
+    let head_size = head_size_over_x * x * if k_is_q4 { 2 } else { 1 };
 
     let cu_seq_lens_len = cu_seq_lens.dims1()?;
     let num_seqs = cu_seq_lens_len
@@ -164,16 +156,18 @@ pub fn gather_kv_cache(
             "gather_kv_cache only supports f16, bf16, f32 output (got {other:?})"
         ),
     };
-    let cache_dtype_code: u32 = match cache_dtype {
-        DType::F16 => 0,
-        DType::BF16 => 1,
-        DType::F32 => 2,
-        DType::F8E4M3 => 3,
-        DType::U8 => quant.map(|q| q.cache_dtype()).unwrap_or(4),
-        other => candle_core::bail!(
-            "gather_kv_cache only supports f16, bf16, f32, f8e4m3, q8_0, q4_0 cache (got {other:?})"
-        ),
+    let cache_dtype_code = |dtype: DType,
+                            quant: Option<BlockQuantKind>,
+                            side: &str|
+     -> Result<u32> {
+        crate::side_cache_dtype(dtype, quant).ok_or_else(|| {
+            candle_core::Error::msg(format!(
+                "gather_kv_cache only supports f16, bf16, f32, f8e4m3, q8_0, q4_0 {side} cache (got {dtype:?})"
+            ))
+        })
     };
+    let k_cache_dtype_code = cache_dtype_code(key_cache.dtype(), k_quant, "K")?;
+    let v_cache_dtype_code = cache_dtype_code(value_cache.dtype(), v_quant, "V")?;
 
     // Scope all storage borrows so k_out/v_out can be moved in the return.
     {
@@ -189,24 +183,24 @@ pub fn gather_kv_cache(
         };
 
         // Get cache pointers - handle FP8/block-quantized vs regular dtype
-        let (kc_ptr, _kc_guard) = if cache_dtype_code == 3 {
+        let (kc_ptr, _kc_guard) = if k_cache_dtype_code == 3 {
             slice_ptr(kc_s.as_cuda_slice::<F8E4M3>()?, kc_l.start_offset())
-        } else if matches!(cache_dtype_code, 4 | 5) {
+        } else if matches!(k_cache_dtype_code, 4 | 5) {
             slice_ptr(kc_s.as_cuda_slice::<u8>()?, kc_l.start_offset())
         } else {
-            match cache_dtype {
+            match key_cache.dtype() {
                 DType::F16 => slice_ptr(kc_s.as_cuda_slice::<half::f16>()?, kc_l.start_offset()),
                 DType::BF16 => slice_ptr(kc_s.as_cuda_slice::<half::bf16>()?, kc_l.start_offset()),
                 DType::F32 => slice_ptr(kc_s.as_cuda_slice::<f32>()?, kc_l.start_offset()),
                 _ => unreachable!(),
             }
         };
-        let (vc_ptr, _vc_guard) = if cache_dtype_code == 3 {
+        let (vc_ptr, _vc_guard) = if v_cache_dtype_code == 3 {
             slice_ptr(vc_s.as_cuda_slice::<F8E4M3>()?, vc_l.start_offset())
-        } else if matches!(cache_dtype_code, 4 | 5) {
+        } else if matches!(v_cache_dtype_code, 4 | 5) {
             slice_ptr(vc_s.as_cuda_slice::<u8>()?, vc_l.start_offset())
         } else {
-            match cache_dtype {
+            match value_cache.dtype() {
                 DType::F16 => slice_ptr(vc_s.as_cuda_slice::<half::f16>()?, vc_l.start_offset()),
                 DType::BF16 => slice_ptr(vc_s.as_cuda_slice::<half::bf16>()?, vc_l.start_offset()),
                 DType::F32 => slice_ptr(vc_s.as_cuda_slice::<f32>()?, vc_l.start_offset()),
@@ -329,7 +323,8 @@ pub fn gather_kv_cache(
                 x as i32,
                 dev.cuda_stream().cu_stream(),
                 out_dtype_code,
-                cache_dtype_code,
+                k_cache_dtype_code,
+                v_cache_dtype_code,
             );
         }
     }
