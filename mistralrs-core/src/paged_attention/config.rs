@@ -177,6 +177,22 @@ pub trait ModelConfigLike {
             .filter_map(|idx| self.layer_kv_cache_elements_per_token(idx))
             .sum()
     }
+    /// Paged KV bytes per token with split K/V widths: K holds
+    /// kv_heads * k_head_dim logical elems at k_bits_per_elem, V likewise.
+    /// Bit granularity covers sub-byte packs (Q4_0 = 4). Matches
+    /// total_kv_cache_elements_per_token * size exactly when both sides share
+    /// a width, since head dims are multiples of 32 (no rounding).
+    fn kv_cache_bytes_per_token(&self, k_bits_per_elem: usize, v_bits_per_elem: usize) -> usize {
+        (0..self.num_layers())
+            .filter(|idx| self.layer_has_paged_kv_cache(*idx))
+            .map(|idx| {
+                let heads = self.num_kv_heads_for_layer(idx);
+                (heads * self.k_head_dim_for_layer(idx) * k_bits_per_elem
+                    + heads * self.v_head_dim_for_layer(idx) * v_bits_per_elem)
+                    / 8
+            })
+            .sum()
+    }
     fn kv_cache_group_ids(&self) -> Vec<u32> {
         if self.has_kv_cache_sharing() {
             self.kv_cache_topology().group_ids()

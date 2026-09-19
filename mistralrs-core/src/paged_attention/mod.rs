@@ -203,6 +203,8 @@ pub struct PagedAttentionConfig {
     pub(crate) block_size: Option<usize>,
     pub(crate) mem_gpu: MemoryGpuConfig,
     pub(crate) cache_type: PagedCacheType,
+    pub(crate) k_cache_type: Option<PagedCacheType>,
+    pub(crate) v_cache_type: Option<PagedCacheType>,
     pub(crate) serving_capacity: Option<usize>,
     pub(crate) base_device_memory_reservation_bytes: usize,
     pub(crate) primary_activation_memory_reservation_bytes: usize,
@@ -229,6 +231,8 @@ impl PagedAttentionConfig {
             block_size,
             mem_gpu,
             cache_type,
+            k_cache_type: None,
+            v_cache_type: None,
             serving_capacity: None,
             base_device_memory_reservation_bytes: 0,
             primary_activation_memory_reservation_bytes: 0,
@@ -246,6 +250,28 @@ impl PagedAttentionConfig {
         }
         self.serving_capacity = Some(serving_capacity);
         Ok(self)
+    }
+
+    /// Per-side KV cache type override (`None` inherits `cache_type`).
+    pub fn with_k_cache_type(mut self, k_cache_type: Option<PagedCacheType>) -> Self {
+        self.k_cache_type = k_cache_type;
+        self
+    }
+
+    /// Per-side KV cache type override (`None` inherits `cache_type`).
+    pub fn with_v_cache_type(mut self, v_cache_type: Option<PagedCacheType>) -> Self {
+        self.v_cache_type = v_cache_type;
+        self
+    }
+
+    /// Effective K cache type: override when set, else the base `cache_type`.
+    pub fn k_type(&self) -> PagedCacheType {
+        self.k_cache_type.unwrap_or(self.cache_type)
+    }
+
+    /// Effective V cache type: override when set, else the base `cache_type`.
+    pub fn v_type(&self) -> PagedCacheType {
+        self.v_cache_type.unwrap_or(self.cache_type)
     }
 
     /// Reserves primary-device memory for components loaded after the paged cache is sized.
@@ -328,14 +354,14 @@ fn trim_cuda_mempool(device: &Device) -> candle_core::Result<()> {
 const SIZE_IN_MB: usize = 1024 * 1024;
 
 macro_rules! mb_to_blocks {
-    ($mb_size:expr, $dtype_size:expr, $block_size:expr, $config:expr) => {
-        $mb_size / $dtype_size / $block_size / $config.total_kv_cache_elements_per_token()
+    ($mb_size:expr, $bytes_per_token:expr, $block_size:expr) => {
+        $mb_size / $bytes_per_token / $block_size
     };
 }
 
 macro_rules! ctxt_to_blocks {
-    ($context_len:expr, $dtype_size:expr, $block_size:expr, $config:expr) => {
-        $context_len * $dtype_size * $config.total_kv_cache_elements_per_token()
+    ($context_len:expr, $bytes_per_token:expr) => {
+        $context_len * $bytes_per_token
     };
 }
 
@@ -387,6 +413,8 @@ pub fn calculate_cache_config(
     block_size: Option<usize>,
     dtype: DType,
     cache_type: PagedCacheType,
+    k_cache_type: Option<PagedCacheType>,
+    v_cache_type: Option<PagedCacheType>,
     config: &dyn ModelConfigLike,
     device: &Device,
     layer_devices: &[Option<Device>],
@@ -401,9 +429,23 @@ pub fn calculate_cache_config(
     cache_type
         .validate(dtype, config, device, layer_devices)
         .map_err(anyhow::Error::msg)?;
+    let k_type = k_cache_type.unwrap_or(cache_type);
+    let v_type = v_cache_type.unwrap_or(cache_type);
+    if k_type != cache_type {
+        k_type
+            .validate(dtype, config, device, layer_devices)
+            .map_err(anyhow::Error::msg)?;
+    }
+    if v_type != cache_type {
+        v_type
+            .validate(dtype, config, device, layer_devices)
+            .map_err(anyhow::Error::msg)?;
+    }
     let model_dtype = dtype;
-    let dtype = cache_type.to_dtype(dtype);
-    let dtype_size = dtype.size_in_bytes();
+    // Block budget in bytes/token honors split K/V widths (bit-exact for
+    // homogeneous configs: head dims are multiples of 32, so no rounding).
+    let bytes_per_token =
+        config.kv_cache_bytes_per_token(k_type.bits_per_elem(dtype), v_type.bits_per_elem(dtype));
 
     let mut cache_devices = Vec::new();
     for layer_device in layer_devices {
@@ -504,7 +546,7 @@ pub fn calculate_cache_config(
             }
             MemoryGpuConfig::ContextSize(toks) => {
                 // ContextSize is demand-driven (bytes needed for N tokens), not a memory budget, so model weight does not apply here.
-                ctxt_to_blocks!(toks, dtype_size, block_size, config).div_ceil(SIZE_IN_MB)
+                ctxt_to_blocks!(toks, bytes_per_token).div_ceil(SIZE_IN_MB)
             }
         };
         if let Some(memory) = post_load_memory {
@@ -537,8 +579,7 @@ pub fn calculate_cache_config(
         let max_tokens = max_num_tokens
             .filter(|&n| n > 0)
             .unwrap_or(config.max_seq_len());
-        let mem_for_tokens =
-            ctxt_to_blocks!(max_tokens, dtype_size, block_size, config) / SIZE_IN_MB;
+        let mem_for_tokens = ctxt_to_blocks!(max_tokens, bytes_per_token) / SIZE_IN_MB;
         if mem_for_tokens < mem_gpu {
             if !silent {
                 info!(
@@ -550,7 +591,7 @@ pub fn calculate_cache_config(
         }
     }
 
-    let num_gpu_blocks = mb_to_blocks!(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
+    let num_gpu_blocks = mb_to_blocks!(mem_gpu * SIZE_IN_MB, bytes_per_token, block_size);
     if num_gpu_blocks == 0 {
         anyhow::bail!("Num GPU blocks is 0. This means there is not enough memory. Either reduce the memory amount/utilization/context size or disable PagedAttention.");
     }
@@ -558,13 +599,19 @@ pub fn calculate_cache_config(
     if !silent {
         let available_context_tokens = num_gpu_blocks.saturating_sub(1) * block_size;
         info!("Allocating {mem_gpu} MB for PagedAttention KV cache per GPU");
-        info!("PagedAttention KV cache type is {cache_type:?} (payload {dtype:?})");
+        if k_type == v_type {
+            info!("PagedAttention KV cache type is {k_type:?}");
+        } else {
+            info!("PagedAttention KV cache types are K={k_type:?} V={v_type:?}");
+        }
         info!("Using PagedAttention with block size {block_size} and {num_gpu_blocks} GPU blocks: available context length is {available_context_tokens} tokens");
     }
     Ok(CacheConfig {
         block_size,
         num_gpu_blocks,
         cache_type,
+        k_cache_type,
+        v_cache_type,
         kv_cache_group_ids: config.kv_cache_group_ids(),
     })
 }

@@ -88,6 +88,18 @@ impl PagedCacheType {
         }
     }
 
+    /// Logical bits per KV element, packing included (Q4_0 = 4). Feeds the
+    /// block-budget math through `kv_cache_bytes_per_token`.
+    pub fn bits_per_elem(&self, act_dtype: DType) -> usize {
+        match self {
+            PagedCacheType::BF16 => 16,
+            PagedCacheType::F8E4M3 => 8,
+            PagedCacheType::Q8_0 => 8,
+            PagedCacheType::Q4_0 => 4,
+            PagedCacheType::Auto => act_dtype.size_in_bytes() * 8,
+        }
+    }
+
     pub fn validate(
         &self,
         act_dtype: DType,
@@ -186,7 +198,25 @@ pub struct CacheConfig {
     pub block_size: usize,
     pub num_gpu_blocks: usize,
     pub cache_type: PagedCacheType,
+    pub k_cache_type: Option<PagedCacheType>,
+    pub v_cache_type: Option<PagedCacheType>,
     pub kv_cache_group_ids: Vec<u32>,
+}
+
+impl CacheConfig {
+    /// Effective K/V types: per-side override when set, else `cache_type`.
+    /// `cache_type` stays the single knob; the k/v keys only diverge from it.
+    pub fn k_type(&self) -> PagedCacheType {
+        self.k_cache_type.unwrap_or(self.cache_type)
+    }
+
+    pub fn v_type(&self) -> PagedCacheType {
+        self.v_cache_type.unwrap_or(self.cache_type)
+    }
+
+    pub fn is_split(&self) -> bool {
+        self.k_type() != self.v_type()
+    }
 }
 
 pub type KVCache = (Tensor, Tensor);
@@ -210,13 +240,53 @@ impl CacheEngine {
             .cache_type
             .validate(dtype, model_config, device, &layer_devices)
             .map_err(candle_core::Error::msg)?;
-        let dtype = cache_config.cache_type.to_dtype(dtype);
-        let (gpu_cache, q8_scales) =
-            Self::allocate_gpu_cache(model_config, cache_config, dtype, device, layer_devices)?;
-        if matches!(
-            cache_config.cache_type,
-            PagedCacheType::Q8_0 | PagedCacheType::Q4_0
-        ) {
+        let k_type = cache_config.k_type();
+        let v_type = cache_config.v_type();
+        if k_type != cache_config.cache_type {
+            k_type
+                .validate(dtype, model_config, device, &layer_devices)
+                .map_err(candle_core::Error::msg)?;
+        }
+        if v_type != cache_config.cache_type {
+            v_type
+                .validate(dtype, model_config, device, &layer_devices)
+                .map_err(candle_core::Error::msg)?;
+        }
+        // Split K/V only runs on the Standard layout (no FlashInfer/FA3/MLA
+        // kernels) and only on CUDA/ROCm (other backends assume one dtype).
+        if cache_config.is_split() {
+            for layer_idx in 0..model_config.num_layers() {
+                if !model_config.layer_has_paged_kv_cache(layer_idx) {
+                    continue;
+                }
+                if !matches!(
+                    model_config.kv_cache_layout_for_layer(layer_idx),
+                    KvCacheLayout::Standard | KvCacheLayout::StandardNoFlashInfer
+                ) {
+                    candle_core::bail!("Split K/V cache types require the Standard paged layout");
+                }
+                let layer_device = layer_devices
+                    .get(layer_idx)
+                    .and_then(Option::as_ref)
+                    .unwrap_or(device);
+                if !layer_device.is_cuda() {
+                    candle_core::bail!("Split K/V cache types are only supported on CUDA/ROCm");
+                }
+            }
+        }
+        let k_dtype = k_type.to_dtype(dtype);
+        let v_dtype = v_type.to_dtype(dtype);
+        let (gpu_cache, q8_scales) = Self::allocate_gpu_cache(
+            model_config,
+            cache_config,
+            k_dtype,
+            v_dtype,
+            device,
+            layer_devices,
+        )?;
+        if matches!(k_type, PagedCacheType::Q8_0 | PagedCacheType::Q4_0)
+            || matches!(v_type, PagedCacheType::Q8_0 | PagedCacheType::Q4_0)
+        {
             for ((key_cache, _), scales) in gpu_cache.iter().zip(q8_scales.iter()) {
                 if let Some(s) = scales {
                     register_block_scales(key_cache, s.clone())?;
@@ -273,11 +343,19 @@ impl CacheEngine {
         if !layer_device.is_cuda() {
             candle_core::bail!("Block-quantized KV cache is only supported on CUDA/ROCm");
         }
-        let kind = match cache_config.cache_type {
-            PagedCacheType::Q8_0 => mistralrs_paged_attn::BlockQuantKind::Q8_0,
-            PagedCacheType::Q4_0 => mistralrs_paged_attn::BlockQuantKind::Q4_0,
-            _ => return Ok(None),
+        let k_kind = match cache_config.k_type() {
+            PagedCacheType::Q8_0 => Some(mistralrs_paged_attn::BlockQuantKind::Q8_0),
+            PagedCacheType::Q4_0 => Some(mistralrs_paged_attn::BlockQuantKind::Q4_0),
+            _ => None,
         };
+        let v_kind = match cache_config.v_type() {
+            PagedCacheType::Q8_0 => Some(mistralrs_paged_attn::BlockQuantKind::Q8_0),
+            PagedCacheType::Q4_0 => Some(mistralrs_paged_attn::BlockQuantKind::Q4_0),
+            _ => None,
+        };
+        if k_kind.is_none() && v_kind.is_none() {
+            return Ok(None);
+        }
         let kv_heads = model_config.num_kv_heads_for_layer(layer_idx);
         let k_dim = model_config.k_head_dim_for_layer(layer_idx);
         let v_dim = model_config.v_head_dim_for_layer(layer_idx);
@@ -287,42 +365,53 @@ impl CacheEngine {
             );
         }
         let block = cache_config.block_size;
-        let k = Tensor::zeros(
-            (num_gpu_blocks, kv_heads, block, k_dim / 32),
-            DType::F32,
-            layer_device,
-        )?;
-        let v = Tensor::zeros(
-            (num_gpu_blocks, kv_heads, v_dim / 32, block),
-            DType::F32,
-            layer_device,
-        )?;
-        // QJL residual bits (Q4_0 only, opt-in via MISTRALRS_Q4_QJL):
+        // Native sides get no sidecar (None); the kernels skip them.
+        let k = k_kind
+            .map(|_| {
+                Tensor::zeros(
+                    (num_gpu_blocks, kv_heads, block, k_dim / 32),
+                    DType::F32,
+                    layer_device,
+                )
+            })
+            .transpose()?;
+        let v = v_kind
+            .map(|_| {
+                Tensor::zeros(
+                    (num_gpu_blocks, kv_heads, v_dim / 32, block),
+                    DType::F32,
+                    layer_device,
+                )
+            })
+            .transpose()?;
+        // QJL residual bits (Q4_0 sides only, opt-in via MISTRALRS_Q4_QJL):
         // 4 bytes per 32-elem group, same grouping as the scales
         // (k token-major, v transposed group-major). Off by default;
         // kernels fall back to the plain LM grid on null sidecars.
-        let (k_res, v_res) = if kind == mistralrs_paged_attn::BlockQuantKind::Q4_0
-            && super::block_scales::qjl_enabled()
-        {
-            (
-                Some(Tensor::zeros(
+        let qjl = super::block_scales::qjl_enabled();
+        let k_res = (k_kind == Some(mistralrs_paged_attn::BlockQuantKind::Q4_0) && qjl)
+            .then(|| {
+                Tensor::zeros(
                     (num_gpu_blocks, kv_heads, block, k_dim / 32, 4),
                     DType::U8,
                     layer_device,
-                )?),
-                Some(Tensor::zeros(
+                )
+            })
+            .transpose()?;
+        let v_res = (v_kind == Some(mistralrs_paged_attn::BlockQuantKind::Q4_0) && qjl)
+            .then(|| {
+                Tensor::zeros(
                     (num_gpu_blocks, kv_heads, v_dim / 32, block, 4),
                     DType::U8,
                     layer_device,
-                )?),
-            )
-        } else {
-            (None, None)
-        };
+                )
+            })
+            .transpose()?;
         Ok(Some(BlockQuantScales {
             k,
             v,
-            kind,
+            k_kind,
+            v_kind,
             k_res,
             v_res,
         }))
@@ -331,7 +420,8 @@ impl CacheEngine {
     fn allocate_gpu_cache(
         model_config: &dyn ModelConfigLike,
         cache_config: &CacheConfig,
-        dtype: DType,
+        k_dtype: DType,
+        v_dtype: DType,
         device: &Device,
         layer_devices: Vec<Option<Device>>,
     ) -> Result<(Vec<KVCache>, Vec<Option<BlockQuantScales>>)> {
@@ -364,16 +454,16 @@ impl CacheEngine {
                 KvCacheLayout::Standard | KvCacheLayout::StandardNoFlashInfer => {
                     let key_block_shape = Self::calculate_key_block_shape(
                         model_config,
-                        dtype,
+                        k_dtype,
                         cache_config.block_size,
                         layer_idx,
-                        cache_config.cache_type,
+                        cache_config.k_type(),
                     );
                     let value_block_shape = Self::calculate_value_block_shape(
                         model_config,
                         cache_config.block_size,
                         layer_idx,
-                        cache_config.cache_type,
+                        cache_config.v_type(),
                     );
                     #[allow(unused)]
                     let key_blocks = if let Device::Metal(dev) = &device {
@@ -386,12 +476,12 @@ impl CacheEngine {
                                 * key_block_shape.1
                                 * key_block_shape.2
                                 * key_block_shape.3;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "k_cache")?;
+                            let buffer = dev.new_private_buffer(elem_count, k_dtype, "k_cache")?;
                             let storage = Storage::Metal(MetalStorage::new(
                                 buffer,
                                 dev.clone(),
                                 elem_count,
-                                dtype,
+                                k_dtype,
                             ));
                             Tensor::from((
                                 storage,
@@ -419,7 +509,7 @@ impl CacheEngine {
                                     key_block_shape.2,
                                     key_block_shape.3,
                                 ),
-                                dtype,
+                                k_dtype,
                                 device,
                             )?
                         }
@@ -434,12 +524,12 @@ impl CacheEngine {
                                 * value_block_shape.0
                                 * value_block_shape.1
                                 * value_block_shape.2;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "v_cache")?;
+                            let buffer = dev.new_private_buffer(elem_count, v_dtype, "v_cache")?;
                             let storage = Storage::Metal(MetalStorage::new(
                                 buffer,
                                 dev.clone(),
                                 elem_count,
-                                dtype,
+                                k_dtype,
                             ));
                             Tensor::from((
                                 storage,
@@ -465,7 +555,7 @@ impl CacheEngine {
                                     value_block_shape.1,
                                     value_block_shape.2,
                                 ),
-                                dtype,
+                                v_dtype,
                                 device,
                             )?
                         }
@@ -488,12 +578,12 @@ impl CacheEngine {
                                 * key_block_shape.0
                                 * key_block_shape.1
                                 * key_block_shape.2;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "k_cache")?;
+                            let buffer = dev.new_private_buffer(elem_count, k_dtype, "k_cache")?;
                             let storage = Storage::Metal(MetalStorage::new(
                                 buffer,
                                 dev.clone(),
                                 elem_count,
-                                dtype,
+                                k_dtype,
                             ));
                             Tensor::from((
                                 storage,
@@ -519,7 +609,7 @@ impl CacheEngine {
                                     key_block_shape.1,
                                     key_block_shape.2,
                                 ),
-                                dtype,
+                                k_dtype,
                                 device,
                             )?
                         }
@@ -532,7 +622,7 @@ impl CacheEngine {
                                 key_block_shape.1,
                                 key_block_shape.2,
                             ),
-                            dtype,
+                            k_dtype,
                             device,
                         )?
                     };
@@ -550,12 +640,12 @@ impl CacheEngine {
 
                             let elem_count =
                                 num_gpu_blocks * cache_config.block_size * kv_lora_rank;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "k_cache")?;
+                            let buffer = dev.new_private_buffer(elem_count, k_dtype, "k_cache")?;
                             let storage = Storage::Metal(MetalStorage::new(
                                 buffer,
                                 dev.clone(),
                                 elem_count,
-                                dtype,
+                                k_dtype,
                             ));
                             Tensor::from((
                                 storage,
@@ -575,7 +665,7 @@ impl CacheEngine {
                         unsafe {
                             uninit_block(
                                 (num_gpu_blocks, cache_config.block_size, kv_lora_rank),
-                                dtype,
+                                k_dtype,
                                 device,
                             )?
                         }
@@ -588,12 +678,12 @@ impl CacheEngine {
 
                             let elem_count =
                                 num_gpu_blocks * cache_config.block_size * kpe_head_dim;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "v_cache")?;
+                            let buffer = dev.new_private_buffer(elem_count, v_dtype, "v_cache")?;
                             let storage = Storage::Metal(MetalStorage::new(
                                 buffer,
                                 dev.clone(),
                                 elem_count,
-                                dtype,
+                                k_dtype,
                             ));
                             Tensor::from((
                                 storage,
@@ -613,7 +703,7 @@ impl CacheEngine {
                         unsafe {
                             uninit_block(
                                 (num_gpu_blocks, cache_config.block_size, kpe_head_dim),
-                                dtype,
+                                k_dtype,
                                 device,
                             )?
                         }
@@ -623,7 +713,10 @@ impl CacheEngine {
             };
             gpu_cache.push((key_blocks, value_blocks));
             if matches!(
-                cache_config.cache_type,
+                cache_config.k_type(),
+                PagedCacheType::Q8_0 | PagedCacheType::Q4_0
+            ) || matches!(
+                cache_config.v_type(),
                 PagedCacheType::Q8_0 | PagedCacheType::Q4_0
             ) {
                 // `device` is already the resolved per-layer device here.
@@ -782,6 +875,80 @@ mod tests {
     }
 
     #[test]
+    fn kv_type_resolution_defaults_to_base() {
+        let base = CacheConfig {
+            block_size: 32,
+            num_gpu_blocks: 2,
+            cache_type: PagedCacheType::Q8_0,
+            k_cache_type: None,
+            v_cache_type: None,
+            kv_cache_group_ids: vec![0],
+        };
+        assert_eq!(base.k_type(), PagedCacheType::Q8_0);
+        assert_eq!(base.v_type(), PagedCacheType::Q8_0);
+        assert!(!base.is_split());
+
+        let split = CacheConfig {
+            k_cache_type: Some(PagedCacheType::Q8_0),
+            v_cache_type: Some(PagedCacheType::Q4_0),
+            ..base.clone()
+        };
+        assert_eq!(split.k_type(), PagedCacheType::Q8_0);
+        assert_eq!(split.v_type(), PagedCacheType::Q4_0);
+        assert!(split.is_split());
+
+        let half = CacheConfig {
+            v_cache_type: Some(PagedCacheType::Auto),
+            ..base.clone()
+        };
+        assert_eq!(half.k_type(), PagedCacheType::Q8_0);
+        assert_eq!(half.v_type(), PagedCacheType::Auto);
+        assert!(half.is_split());
+    }
+
+    #[test]
+    fn split_shapes_follow_each_side() {
+        let model = model_config(KvCacheLayout::Standard);
+        // K=Q8_0: (heads, head/16, block, 16); V=Q4_0: (heads, head, block/2).
+        let k =
+            CacheEngine::calculate_key_block_shape(&model, DType::U8, 32, 0, PagedCacheType::Q8_0);
+        assert_eq!(k, (4, 8, 32, 16));
+        let v = CacheEngine::calculate_value_block_shape(&model, 32, 0, PagedCacheType::Q4_0);
+        assert_eq!(v, (4, 128, 16));
+        // Native BF16 K packs 8 per 16-byte chunk.
+        let k = CacheEngine::calculate_key_block_shape(
+            &model,
+            DType::BF16,
+            32,
+            0,
+            PagedCacheType::BF16,
+        );
+        assert_eq!(k, (4, 16, 32, 8));
+    }
+
+    #[test]
+    fn kv_bytes_match_elements_for_homogeneous() {
+        let model = model_config(KvCacheLayout::Standard);
+        let total_elems = model.total_kv_cache_elements_per_token();
+        assert_eq!(total_elems, 2 * 2 * 4 * 128);
+        assert_eq!(
+            model.kv_cache_bytes_per_token(8, 8),
+            total_elems,
+            "Q8/Q8 must equal the old elements-times-size math exactly"
+        );
+        assert_eq!(
+            model.kv_cache_bytes_per_token(16, 16),
+            total_elems * 2,
+            "BF16/BF16 must equal the old math exactly"
+        );
+        assert_eq!(
+            model.kv_cache_bytes_per_token(8, 4),
+            total_elems / 2 + total_elems / 4,
+            "K8/V4: full K bytes plus half V bytes"
+        );
+    }
+
+    #[test]
     fn q8_0_parses_and_validates() {
         assert_eq!(
             "q8_0".parse(),
@@ -863,6 +1030,8 @@ mod tests {
             block_size: 32,
             num_gpu_blocks: 2,
             cache_type: PagedCacheType::F8E4M3,
+            k_cache_type: None,
+            v_cache_type: None,
             kv_cache_group_ids: vec![0],
         };
         let engine = CacheEngine::new(

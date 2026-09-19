@@ -212,11 +212,12 @@ fn cache_input_can_write_directly(tensor: &Tensor) -> Result<bool> {
 
 // Block-quantized (Q8_0/Q4_0) read support: per-layer scale sidecars resolve
 // from the engine registry by cache identity (mirrors write_kv_cache).
-// `None` unless the cache payload is U8.
+// `None` unless either cache side holds a quantized payload.
 fn block_layer_scales(
     key_cache: &Tensor,
+    value_cache: &Tensor,
 ) -> Result<Option<crate::paged_attention::block_scales::BlockQuantScales>> {
-    if key_cache.dtype() != DType::U8 {
+    if key_cache.dtype() != DType::U8 && value_cache.dtype() != DType::U8 {
         return Ok(None);
     }
     Ok(Some(
@@ -226,6 +227,30 @@ fn block_layer_scales(
             )
         })?,
     ))
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum KvSideWriter {
+    Float,
+    Q8,
+    Q4,
+}
+
+fn side_writer(
+    cache_dtype: DType,
+    kind: Option<mistralrs_paged_attn::BlockQuantKind>,
+    side: &str,
+) -> Result<KvSideWriter> {
+    match kind {
+        Some(mistralrs_paged_attn::BlockQuantKind::Q8_0) => Ok(KvSideWriter::Q8),
+        Some(mistralrs_paged_attn::BlockQuantKind::Q4_0) => Ok(KvSideWriter::Q4),
+        None => {
+            if cache_dtype == DType::U8 {
+                candle_core::bail!("{side} cache is U8 with no registered block kind");
+            }
+            Ok(KvSideWriter::Float)
+        }
+    }
 }
 
 fn write_kv_cache(
@@ -252,68 +277,165 @@ fn write_kv_cache(
             .reshape(cache_input_shape(value)?)?;
         &value_packed
     };
-    // Block-quantized write: scales resolve from the engine registry by
-    // cache identity, so no model call-site changes are needed.
-    if key_cache.dtype() == DType::U8 {
-        let scales = crate::paged_attention::block_scales::lookup_block_scales(key_cache)?
-            .ok_or_else(|| {
-                candle_core::Error::msg(
-                    "Block-quantized KV cache has no registered scale tensors for this layer",
-                )
-            })?;
-        if scales.kind == mistralrs_paged_attn::BlockQuantKind::Q4_0 {
-            // Residual sidecars are `Some` only with MISTRALRS_Q4_QJL=1;
-            // `None` (default) runs the store without the residual write
-            // and decode falls back to the plain LM grid.
-            return mistralrs_paged_attn::reshape_and_cache_q4(
-                key,
-                value,
-                key_cache,
-                value_cache,
-                &scales.k,
-                &scales.v,
-                scales.k_res.as_ref(),
-                scales.v_res.as_ref(),
-                slot_mapping,
-            );
+    // Block-quantized scale sidecars resolve from the engine registry by
+    // cache identity, so no model call-site changes are needed. Present when
+    // either side is quantized (native sides carry None sidecars).
+    let bq = match (key_cache.dtype(), value_cache.dtype()) {
+        (DType::U8, _) | (_, DType::U8) => Some(
+            crate::paged_attention::block_scales::lookup_block_scales(key_cache)?.ok_or_else(
+                || {
+                    candle_core::Error::msg(
+                        "Block-quantized KV cache has no registered scale tensors for this layer",
+                    )
+                },
+            )?,
+        ),
+        _ => None,
+    };
+    // Residual sidecars are `Some` only with MISTRALRS_Q4_QJL=1;
+    // `None` (default) runs the store without the residual write
+    // and decode falls back to the plain LM grid.
+    let k_kind = bq.as_ref().and_then(|bq| bq.k_kind);
+    let v_kind = bq.as_ref().and_then(|bq| bq.v_kind);
+    let k_writer = side_writer(key_cache.dtype(), k_kind, "K")?;
+    let v_writer = side_writer(value_cache.dtype(), v_kind, "V")?;
+    match (k_writer, v_writer) {
+        (KvSideWriter::Float, KvSideWriter::Float) => {
+            match AttentionBackendKind::from_cache(key_cache, value_cache) {
+                AttentionBackendKind::FlashInfer => {
+                    #[cfg(all(feature = "cuda", target_family = "unix"))]
+                    {
+                        reshape_and_cache_flashinfer(
+                            key,
+                            value,
+                            key_cache,
+                            value_cache,
+                            slot_mapping,
+                            scales.flashinfer(key_cache),
+                        )
+                    }
+                    #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+                    {
+                        unreachable!("FlashInfer cache is only available with CUDA")
+                    }
+                }
+                AttentionBackendKind::Standard => reshape_and_cache(
+                    key,
+                    value,
+                    scales.k,
+                    scales.v,
+                    key_cache,
+                    value_cache,
+                    slot_mapping,
+                    true,
+                    true,
+                ),
+            }
         }
-        return mistralrs_paged_attn::reshape_and_cache_q8(
+        (KvSideWriter::Q8, KvSideWriter::Q8) => mistralrs_paged_attn::reshape_and_cache_q8(
             key,
             value,
             key_cache,
             value_cache,
-            &scales.k,
-            &scales.v,
+            bq.as_ref().and_then(|bq| bq.k.as_ref()),
+            bq.as_ref().and_then(|bq| bq.v.as_ref()),
             slot_mapping,
-        );
-    }
-    match AttentionBackendKind::from_cache(key_cache, value_cache) {
-        AttentionBackendKind::FlashInfer => {
-            #[cfg(all(feature = "cuda", target_family = "unix"))]
-            {
-                reshape_and_cache_flashinfer(
+            true,
+            true,
+        ),
+        (KvSideWriter::Q4, KvSideWriter::Q4) => mistralrs_paged_attn::reshape_and_cache_q4(
+            key,
+            value,
+            key_cache,
+            value_cache,
+            bq.as_ref().and_then(|bq| bq.k.as_ref()),
+            bq.as_ref().and_then(|bq| bq.v.as_ref()),
+            bq.as_ref().and_then(|bq| bq.k_res.as_ref()),
+            bq.as_ref().and_then(|bq| bq.v_res.as_ref()),
+            slot_mapping,
+            true,
+            true,
+        ),
+        // Split K/V: one masked call per side. The float writer also takes
+        // masks; its scales stay None on native sides per validation.
+        _ => {
+            let bq_ref = bq.as_ref();
+            match k_writer {
+                KvSideWriter::Float => reshape_and_cache(
+                    key,
+                    value,
+                    scales.k,
+                    scales.v,
+                    key_cache,
+                    value_cache,
+                    slot_mapping,
+                    true,
+                    false,
+                )?,
+                KvSideWriter::Q8 => mistralrs_paged_attn::reshape_and_cache_q8(
                     key,
                     value,
                     key_cache,
                     value_cache,
+                    bq_ref.and_then(|bq| bq.k.as_ref()),
+                    bq_ref.and_then(|bq| bq.v.as_ref()),
                     slot_mapping,
-                    scales.flashinfer(key_cache),
-                )
+                    true,
+                    false,
+                )?,
+                KvSideWriter::Q4 => mistralrs_paged_attn::reshape_and_cache_q4(
+                    key,
+                    value,
+                    key_cache,
+                    value_cache,
+                    bq_ref.and_then(|bq| bq.k.as_ref()),
+                    bq_ref.and_then(|bq| bq.v.as_ref()),
+                    bq_ref.and_then(|bq| bq.k_res.as_ref()),
+                    bq_ref.and_then(|bq| bq.v_res.as_ref()),
+                    slot_mapping,
+                    true,
+                    false,
+                )?,
             }
-            #[cfg(not(all(feature = "cuda", target_family = "unix")))]
-            {
-                unreachable!("FlashInfer cache is only available with CUDA")
+            match v_writer {
+                KvSideWriter::Float => reshape_and_cache(
+                    key,
+                    value,
+                    scales.k,
+                    scales.v,
+                    key_cache,
+                    value_cache,
+                    slot_mapping,
+                    false,
+                    true,
+                )?,
+                KvSideWriter::Q8 => mistralrs_paged_attn::reshape_and_cache_q8(
+                    key,
+                    value,
+                    key_cache,
+                    value_cache,
+                    bq_ref.and_then(|bq| bq.k.as_ref()),
+                    bq_ref.and_then(|bq| bq.v.as_ref()),
+                    slot_mapping,
+                    false,
+                    true,
+                )?,
+                KvSideWriter::Q4 => mistralrs_paged_attn::reshape_and_cache_q4(
+                    key,
+                    value,
+                    key_cache,
+                    value_cache,
+                    bq_ref.and_then(|bq| bq.k.as_ref()),
+                    bq_ref.and_then(|bq| bq.v.as_ref()),
+                    bq_ref.and_then(|bq| bq.k_res.as_ref()),
+                    bq_ref.and_then(|bq| bq.v_res.as_ref()),
+                    slot_mapping,
+                    false,
+                    true,
+                )?,
             }
+            Ok(())
         }
-        AttentionBackendKind::Standard => reshape_and_cache(
-            key,
-            value,
-            scales.k,
-            scales.v,
-            key_cache,
-            value_cache,
-            slot_mapping,
-        ),
     }
 }
 
@@ -347,11 +469,14 @@ fn gather_kv_cache_for_layout(
         }
         AttentionBackendKind::Standard => {
             // Block-quantized sidecars ride the scale args into the
-            // dequantizing gather; the kind selects the kernel branch.
-            let bq_scales = block_layer_scales(key_cache)?;
-            let quant = bq_scales.as_ref().map(|bq| bq.kind);
+            // dequantizing gather; each side selects its kernel branch.
+            let bq_scales = block_layer_scales(key_cache, value_cache)?;
+            let (k_quant, v_quant) = match bq_scales.as_ref() {
+                Some(bq) => (bq.k_kind, bq.v_kind),
+                None => (None, None),
+            };
             let (k, v) = match bq_scales.as_ref() {
-                Some(bq) => (Some(&bq.k), Some(&bq.v)),
+                Some(bq) => (bq.k.as_ref(), bq.v.as_ref()),
                 None => (scales.k, scales.v),
             };
             mistralrs_paged_attn::gather_kv_cache(
@@ -365,7 +490,8 @@ fn gather_kv_cache_for_layout(
                 cu_kv,
                 num_tokens,
                 dtype,
-                quant,
+                k_quant,
+                v_quant,
             )
         }
     }
@@ -1222,7 +1348,8 @@ impl PagedAttention {
         let prefill_plan_input = PrefixPrefillPlanInput {
             device_is_cuda: tensors.query.device().is_cuda(),
             dtype: tensors.query.dtype(),
-            cache_dtype: key_cache.as_ref().unwrap().dtype(),
+            k_cache_dtype: key_cache.as_ref().unwrap().dtype(),
+            v_cache_dtype: value_cache.as_ref().unwrap().dtype(),
             has_alibi: ctx.alibi_slopes.is_some(),
             has_sinks: ctx.sdpa_params.sinks.is_some(),
             has_custom_mask: tensors.attention_mask.is_custom(),
@@ -2119,11 +2246,14 @@ impl PagedAttention {
     ) -> Result<Tensor> {
         let scales = self.cache_scales(key_cache);
         // Block-quantized sidecars ride the scale args into the native
-        // block-int decode kernel; the kind selects the kernel branch.
-        let bq_scales = block_layer_scales(key_cache)?;
-        let quant = bq_scales.as_ref().map(|bq| bq.kind);
+        // block-int decode kernel; each side selects its kernel branch.
+        let bq_scales = block_layer_scales(key_cache, value_cache)?;
+        let (k_quant, v_quant) = match bq_scales.as_ref() {
+            Some(bq) => (bq.k_kind, bq.v_kind),
+            None => (None, None),
+        };
         let (k, v) = match bq_scales.as_ref() {
-            Some(bq) => (Some(&bq.k), Some(&bq.v)),
+            Some(bq) => (bq.k.as_ref(), bq.v.as_ref()),
             None => (scales.k, scales.v),
         };
         paged_attention(
@@ -2145,7 +2275,8 @@ impl PagedAttention {
             ctx.sdpa_params.softmax_scale,
             ctx.sdpa_params.softcap.unwrap_or(1.0f32),
             ctx.sdpa_params.sinks.as_ref(),
-            quant,
+            k_quant,
+            v_quant,
         )
     }
 

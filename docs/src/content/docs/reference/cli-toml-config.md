@@ -103,6 +103,8 @@ The MCP *client* configuration (`mcp_config`) lives under `[runtime]`, not `[ser
 | `memory_fraction` | `--pa-memory-fraction` | not set | KV cache budget as fraction of VRAM (0.0 to 1.0). Conflicts with `context_len` and `memory_mb`. |
 | `block_size` | `--pa-block-size` | not set | Tokens per block. |
 | `cache_type` | `--pa-cache-type` | `auto` | KV cache quantization type: `auto`, `bf16`, `f8e4m3`, `q8_0`, or `q4_0` (ROCm only, see [paged attention](/guides/perf/paged-attention/)). |
+| `k_cache_type` | `--pa-k-cache-type` | not set | K cache type override (inherits `cache_type` when unset). |
+| `v_cache_type` | `--pa-v-cache-type` | not set | V cache type override (inherits `cache_type` when unset). Split K/V (e.g. K `q8_0` + V `q4_0`) needs the Standard paged layout on CUDA/ROCm. |
 
 ## `[router]` section (`serve` only)
 

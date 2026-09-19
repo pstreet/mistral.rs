@@ -97,6 +97,8 @@ fn split_paged_config(
     };
 
     let mut split = PagedAttentionConfig::new(config.block_size, mem_gpu, config.cache_type)?;
+    split.k_cache_type = config.k_cache_type;
+    split.v_cache_type = config.v_cache_type;
     split.serving_capacity = config.serving_capacity;
     split.base_device_memory_reservation_bytes = config.base_device_memory_reservation_bytes;
     split.primary_activation_memory_reservation_bytes =

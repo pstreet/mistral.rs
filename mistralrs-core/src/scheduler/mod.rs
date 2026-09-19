@@ -274,6 +274,8 @@ mod tests {
             block_size: 32,
             num_gpu_blocks,
             cache_type: PagedCacheType::Auto,
+            k_cache_type: None,
+            v_cache_type: None,
             kv_cache_group_ids: vec![0, 1],
         }
     }

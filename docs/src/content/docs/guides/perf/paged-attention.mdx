@@ -78,7 +78,8 @@ When none are set, the pool defaults to 90% of available VRAM.
 Two more flags tune the cache itself:
 
 - `--pa-block-size <n>`: block size (default 32).
-- `--pa-cache-type`: KV cache quantization (`auto`, `f8e4m3`, or `q8_0`). This is separate from model-weight quantization (`--quant`/`--isq`); the two are chosen independently.
+- `--pa-cache-type`: KV cache quantization (`auto`, `bf16`, `f8e4m3`, `q8_0`, or `q4_0`). This is separate from model-weight quantization (`--quant`/`--isq`); the two are chosen independently.
+- `--pa-k-cache-type` / `--pa-v-cache-type`: per-side K/V overrides (each defaults to `--pa-cache-type`). Split pairs like K `q8_0` + V `q4_0` run one masked write per side through the same kernels, so each side is bit-identical to its homogeneous run. Split needs the Standard paged layout on CUDA/ROCm (no FlashInfer/FA3/MLA) and matching-side equality on other backends.
 
 Scheduler memory and latency are controlled independently:
 

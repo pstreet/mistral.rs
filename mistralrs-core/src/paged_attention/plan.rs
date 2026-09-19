@@ -14,7 +14,8 @@ use crate::flashinfer::{self, FlashInferDecodePlan, FlashInferDecodePlanInput};
 pub(crate) struct PrefixPrefillPlanInput {
     pub device_is_cuda: bool,
     pub dtype: DType,
-    pub cache_dtype: DType,
+    pub k_cache_dtype: DType,
+    pub v_cache_dtype: DType,
     pub has_alibi: bool,
     pub has_sinks: bool,
     pub has_custom_mask: bool,
@@ -50,7 +51,8 @@ impl PrefixPrefillPlan {
         let _ = (
             input.device_is_cuda,
             input.dtype,
-            input.cache_dtype,
+            input.k_cache_dtype,
+            input.v_cache_dtype,
             input.has_alibi,
             input.has_sinks,
             input.has_custom_mask,
@@ -78,7 +80,8 @@ impl PrefixPrefillPlan {
         #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
         if input.device_is_cuda
             && matches!(input.dtype, DType::F16 | DType::BF16)
-            && input.cache_dtype == input.dtype
+            && input.k_cache_dtype == input.dtype
+            && input.v_cache_dtype == input.dtype
             && !input.has_alibi
             && !input.has_sinks
             && !input.has_custom_mask
@@ -104,7 +107,8 @@ pub(crate) fn fa3_paged_prefill_supported(input: PrefixPrefillPlanInput) -> bool
     input.fa3_supported
         && input.device_is_cuda
         && input.dtype == DType::BF16
-        && input.cache_dtype == DType::F8E4M3
+        && input.k_cache_dtype == DType::F8E4M3
+        && input.v_cache_dtype == DType::F8E4M3
         && input.writes_cache
         && !input.has_alibi
         && !input.has_sinks
@@ -127,7 +131,8 @@ pub(crate) fn fa3_paged_prefill_supported(input: PrefixPrefillPlanInput) -> bool
 #[allow(dead_code)]
 pub(crate) struct PromptPrefillWorkspaceInput<'a> {
     pub activation_dtype: DType,
-    pub cache_dtype: DType,
+    pub k_cache_dtype: DType,
+    pub v_cache_dtype: DType,
     pub device_is_cuda: bool,
     pub block_size: usize,
     pub query_lens: &'a [usize],
@@ -556,7 +561,8 @@ pub(crate) fn prompt_prefill_workspace(
                 plan_input: plan_input.unwrap_or(PrefixPrefillPlanInput {
                     device_is_cuda: false,
                     dtype: input.activation_dtype,
-                    cache_dtype: input.cache_dtype,
+                    k_cache_dtype: input.k_cache_dtype,
+                    v_cache_dtype: input.v_cache_dtype,
                     has_alibi: false,
                     has_sinks: false,
                     has_custom_mask: true,
@@ -605,7 +611,8 @@ fn prompt_plan_input(
     PrefixPrefillPlanInput {
         device_is_cuda: input.device_is_cuda || fa3_num_sm.is_some(),
         dtype: input.activation_dtype,
-        cache_dtype: input.cache_dtype,
+        k_cache_dtype: input.k_cache_dtype,
+        v_cache_dtype: input.v_cache_dtype,
         has_alibi: features.has_alibi,
         has_sinks: features.has_sinks,
         has_custom_mask: input.has_custom_mask,
@@ -784,7 +791,8 @@ mod tests {
     ) -> PromptPrefillWorkspaceInput<'a> {
         PromptPrefillWorkspaceInput {
             activation_dtype: DType::BF16,
-            cache_dtype: DType::F8E4M3,
+            k_cache_dtype: DType::F8E4M3,
+            v_cache_dtype: DType::F8E4M3,
             device_is_cuda: true,
             block_size: 32,
             query_lens,
@@ -813,7 +821,8 @@ mod tests {
         PrefixPrefillPlan::choose(PrefixPrefillPlanInput {
             device_is_cuda: true,
             dtype: DType::F16,
-            cache_dtype: DType::F16,
+            k_cache_dtype: DType::F16,
+            v_cache_dtype: DType::F16,
             has_alibi: false,
             has_sinks: false,
             has_custom_mask: false,
@@ -851,7 +860,8 @@ mod tests {
         let plan = PrefixPrefillPlan::choose(PrefixPrefillPlanInput {
             device_is_cuda: true,
             dtype: DType::BF16,
-            cache_dtype: DType::F8E4M3,
+            k_cache_dtype: DType::F8E4M3,
+            v_cache_dtype: DType::F8E4M3,
             has_alibi: false,
             has_sinks: false,
             has_custom_mask: false,
@@ -879,7 +889,8 @@ mod tests {
         let input = PrefixPrefillPlanInput {
             device_is_cuda: true,
             dtype: DType::BF16,
-            cache_dtype: DType::F8E4M3,
+            k_cache_dtype: DType::F8E4M3,
+            v_cache_dtype: DType::F8E4M3,
             has_alibi: false,
             has_sinks: false,
             has_custom_mask: false,

@@ -54,6 +54,8 @@ mistralrs tune [OPTIONS] [COMMAND]
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
+| `--pa-k-cache-type <CACHE_TYPE>` | not set | K cache type override (inherits `--pa-cache-type`) |
+| `--pa-v-cache-type <CACHE_TYPE>` | not set | V cache type override (inherits `--pa-cache-type`) |
 | `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
 | `--max-edge <MAX_EDGE>` |  | Maximum edge length for image resizing (aspect ratio preserved) |
 | `--max-num-images <MAX_NUM_IMAGES>` |  | Maximum number of images per request |
@@ -111,6 +113,8 @@ mistralrs tune auto [OPTIONS] --model-id <MODEL_ID>
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
+| `--pa-k-cache-type <CACHE_TYPE>` | not set | K cache type override (inherits `--pa-cache-type`) |
+| `--pa-v-cache-type <CACHE_TYPE>` | not set | V cache type override (inherits `--pa-cache-type`) |
 | `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
 | `--max-edge <MAX_EDGE>` |  | Maximum edge length for image resizing (aspect ratio preserved) |
 | `--max-num-images <MAX_NUM_IMAGES>` |  | Maximum number of images per request |
@@ -165,6 +169,8 @@ mistralrs tune text [OPTIONS] --model-id <MODEL_ID>
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
+| `--pa-k-cache-type <CACHE_TYPE>` | not set | K cache type override (inherits `--pa-cache-type`) |
+| `--pa-v-cache-type <CACHE_TYPE>` | not set | V cache type override (inherits `--pa-cache-type`) |
 
 ## mistralrs tune multimodal
 
@@ -210,6 +216,8 @@ mistralrs tune multimodal [OPTIONS] --model-id <MODEL_ID>
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
+| `--pa-k-cache-type <CACHE_TYPE>` | not set | K cache type override (inherits `--pa-cache-type`) |
+| `--pa-v-cache-type <CACHE_TYPE>` | not set | V cache type override (inherits `--pa-cache-type`) |
 | `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
 | `--max-edge <MAX_EDGE>` |  | Maximum edge length for image resizing (aspect ratio preserved) |
 | `--max-num-images <MAX_NUM_IMAGES>` |  | Maximum number of images per request |
@@ -300,4 +308,6 @@ mistralrs tune embedding [OPTIONS] --model-id <MODEL_ID>
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
+| `--pa-k-cache-type <CACHE_TYPE>` | not set | K cache type override (inherits `--pa-cache-type`) |
+| `--pa-v-cache-type <CACHE_TYPE>` | not set | V cache type override (inherits `--pa-cache-type`) |
 

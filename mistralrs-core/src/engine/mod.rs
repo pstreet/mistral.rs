@@ -1624,22 +1624,29 @@ impl Engine {
                         let (
                             model_metadata,
                             activation_dtype,
-                            cache_dtype,
+                            k_cache_dtype,
+                            v_cache_dtype,
                             device_is_cuda,
                             has_sliding_window,
                             fa3_num_sm_by_layer,
                         ) = {
                             let pipeline = get_mut_arcmutex!(self.pipeline);
                             let metadata = pipeline.get_metadata();
-                            let cache_dtype = metadata
+                            let (k_cache_dtype, v_cache_dtype) = metadata
                                 .cache_config
                                 .as_ref()
-                                .map(|config| config.cache_type.to_dtype(metadata.activation_dtype))
-                                .unwrap_or(metadata.activation_dtype);
+                                .map(|config| {
+                                    (
+                                        config.k_type().to_dtype(metadata.activation_dtype),
+                                        config.v_type().to_dtype(metadata.activation_dtype),
+                                    )
+                                })
+                                .unwrap_or((metadata.activation_dtype, metadata.activation_dtype));
                             (
                                 metadata.model_metadata.clone(),
                                 metadata.activation_dtype,
-                                cache_dtype,
+                                k_cache_dtype,
+                                v_cache_dtype,
                                 pipeline
                                     .execution_devices()
                                     .iter()
@@ -1718,7 +1725,8 @@ impl Engine {
                                     model_metadata.as_deref(),
                                     crate::paged_attention::plan::PromptPrefillWorkspaceInput {
                                         activation_dtype,
-                                        cache_dtype,
+                                        k_cache_dtype,
+                                        v_cache_dtype,
                                         device_is_cuda,
                                         block_size,
                                         query_lens: &query_lens,

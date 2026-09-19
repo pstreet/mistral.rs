@@ -315,6 +315,10 @@ pub struct MistralRsForServerBuilder {
     /// PagedAttention KV cache type
     paged_cache_type: PagedCacheType,
 
+    /// Per-side KV cache type overrides (`None` inherits `paged_cache_type`)
+    paged_k_cache_type: Option<PagedCacheType>,
+    paged_v_cache_type: Option<PagedCacheType>,
+
     /// Optional MTP assistant configuration.
     mtp_config: Option<MtpConfig>,
     /// Fallback MTP config for per-entry `mtp = true` opt-ins when the
@@ -377,6 +381,8 @@ impl Default for MistralRsForServerBuilder {
             search_callback: defaults::SEARCH_CALLBACK,
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
+            paged_k_cache_type: None,
+            paged_v_cache_type: None,
             mtp_config: defaults::MTP_CONFIG,
             mtp_entry_fallback: None,
             router_policy: mistralrs_core::RouterPolicy::default(),
@@ -756,6 +762,17 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Per-side KV cache type overrides (`None` inherits the base type).
+    pub fn with_paged_attn_kv_cache_types(
+        mut self,
+        k_cache_type: Option<PagedCacheType>,
+        v_cache_type: Option<PagedCacheType>,
+    ) -> Self {
+        self.paged_k_cache_type = k_cache_type;
+        self.paged_v_cache_type = v_cache_type;
+        self
+    }
+
     /// Attach an MTP assistant after the target model loads.
     pub fn with_mtp_config(mut self, config: MtpConfig) -> Self {
         self.mtp_config = Some(config);
@@ -935,6 +952,8 @@ impl MistralRsForServerBuilder {
                 self.paged_attn_gpu_mem_usage,
                 self.paged_ctxt_len,
                 self.paged_cache_type,
+                self.paged_k_cache_type,
+                self.paged_v_cache_type,
                 !paged_attn,
             )?
             .map(|config| config.with_serving_capacity(self.max_seqs))
@@ -1326,6 +1345,8 @@ impl MistralRsForServerBuilder {
             self.paged_attn_gpu_mem_usage,
             self.paged_ctxt_len,
             self.paged_cache_type,
+            self.paged_k_cache_type,
+            self.paged_v_cache_type,
             !paged_attn,
         )?
         .map(|config| config.with_serving_capacity(self.max_seqs))
@@ -1734,6 +1755,8 @@ impl MistralRsForServerBuilder {
             self.paged_attn_gpu_mem_usage,
             self.paged_ctxt_len,
             self.paged_cache_type,
+            self.paged_k_cache_type,
+            self.paged_v_cache_type,
             !paged_attn,
         )?
         .map(|config| config.with_serving_capacity(self.max_seqs))
@@ -1893,8 +1916,15 @@ fn init_cache_config(
     paged_attn_gpu_mem_usage: Option<f32>,
     paged_ctxt_len: Option<usize>,
     cache_type: PagedCacheType,
+    k_cache_type: Option<PagedCacheType>,
+    v_cache_type: Option<PagedCacheType>,
     no_paged_attn: bool,
 ) -> Result<Option<PagedAttentionConfig>> {
+    let with_types = |config: PagedAttentionConfig| {
+        config
+            .with_k_cache_type(k_cache_type)
+            .with_v_cache_type(v_cache_type)
+    };
     match (
         paged_attn_block_size,
         paged_attn_gpu_mem,
@@ -1903,51 +1933,43 @@ fn init_cache_config(
         paged_attn_supported(),
         no_paged_attn,
     ) {
-        (block_size, None, None, None, true, false) => Ok(Some(PagedAttentionConfig::new(
-            block_size,
-            MemoryGpuConfig::Utilization(0.9),
-            cache_type,
-        )?)),
-        (block_size, None, None, Some(ctxt), true, false) => Ok(Some(PagedAttentionConfig::new(
-            block_size,
-            MemoryGpuConfig::ContextSize(ctxt),
-            cache_type,
-        )?)),
-        (block_size, None, Some(f), None, true, false) => Ok(Some(PagedAttentionConfig::new(
-            block_size,
-            MemoryGpuConfig::Utilization(f),
-            cache_type,
-        )?)),
-        (block_size, Some(m), None, None, true, false) => Ok(Some(PagedAttentionConfig::new(
-            block_size,
-            MemoryGpuConfig::MbAmount(m),
-            cache_type,
-        )?)),
+        (block_size, None, None, None, true, false) => Ok(Some(with_types(
+            PagedAttentionConfig::new(block_size, MemoryGpuConfig::Utilization(0.9), cache_type)?,
+        ))),
+        (block_size, None, None, Some(ctxt), true, false) => Ok(Some(with_types(
+            PagedAttentionConfig::new(block_size, MemoryGpuConfig::ContextSize(ctxt), cache_type)?,
+        ))),
+        (block_size, None, Some(f), None, true, false) => Ok(Some(with_types(
+            PagedAttentionConfig::new(block_size, MemoryGpuConfig::Utilization(f), cache_type)?,
+        ))),
+        (block_size, Some(m), None, None, true, false) => Ok(Some(with_types(
+            PagedAttentionConfig::new(block_size, MemoryGpuConfig::MbAmount(m), cache_type)?,
+        ))),
         (block_size, Some(_m), Some(f), None, true, false) => {
             warn!("Both memory size and usage were specified, defaulting to the usage value.");
-            Ok(Some(PagedAttentionConfig::new(
+            Ok(Some(with_types(PagedAttentionConfig::new(
                 block_size,
                 MemoryGpuConfig::Utilization(f),
                 cache_type,
-            )?))
+            )?)))
         }
         (block_size, Some(_m), None, Some(ctxt), true, false) => {
             warn!(
                 "Both memory size and context length were specified, defaulting to context length."
             );
-            Ok(Some(PagedAttentionConfig::new(
+            Ok(Some(with_types(PagedAttentionConfig::new(
                 block_size,
                 MemoryGpuConfig::ContextSize(ctxt),
                 cache_type,
-            )?))
+            )?)))
         }
         (block_size, None, Some(f), Some(_ctxt), true, false) => {
             warn!("Both context length and usage were specified, defaulting to the usage value.");
-            Ok(Some(PagedAttentionConfig::new(
+            Ok(Some(with_types(PagedAttentionConfig::new(
                 block_size,
                 MemoryGpuConfig::Utilization(f),
                 cache_type,
-            )?))
+            )?)))
         }
         (_, _, _, _, _, _) => Ok(None),
     }

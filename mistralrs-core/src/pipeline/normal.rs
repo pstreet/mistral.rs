@@ -225,6 +225,8 @@ pub(crate) fn build_normal_pipeline(
             paged_attn_config.block_size,
             dtype,
             paged_attn_config.cache_type,
+            paged_attn_config.k_cache_type,
+            paged_attn_config.v_cache_type,
             model_metadata.as_ref(),
             &device,
             &mapper

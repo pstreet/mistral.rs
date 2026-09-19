@@ -45,6 +45,16 @@ pub struct PagedAttentionOptions {
     #[arg(long = "pa-cache-type", default_value = "auto", value_parser = parse_cache_type)]
     #[serde(default)]
     pub cache_type: PagedCacheType,
+
+    /// K cache quantization type override (`cache_type` when unset)
+    #[arg(long = "pa-k-cache-type", value_parser = parse_cache_type)]
+    #[serde(default)]
+    pub k_cache_type: Option<PagedCacheType>,
+
+    /// V cache quantization type override (`cache_type` when unset)
+    #[arg(long = "pa-v-cache-type", value_parser = parse_cache_type)]
+    #[serde(default)]
+    pub v_cache_type: Option<PagedCacheType>,
 }
 
 impl Default for PagedAttentionOptions {
@@ -56,6 +66,8 @@ impl Default for PagedAttentionOptions {
             memory_fraction: None,
             block_size: None,
             cache_type: PagedCacheType::Auto,
+            k_cache_type: None,
+            v_cache_type: None,
         }
     }
 }
@@ -89,6 +101,8 @@ impl PagedAttentionOptions {
             self.context_len,
             self.block_size,
             self.cache_type,
+            self.k_cache_type,
+            self.v_cache_type,
         )
     }
 }
@@ -99,10 +113,12 @@ fn parse_cache_type(s: &str) -> Result<PagedCacheType, String> {
 
 /// PagedAttention builder flags type alias
 pub type PagedAttnBuilderFlags = (
-    Option<bool>,   // paged_attn enable flag
-    Option<usize>,  // gpu_mem (MBs)
-    Option<f32>,    // gpu_mem_usage (fraction)
-    Option<usize>,  // context_len
-    Option<usize>,  // block_size
-    PagedCacheType, // cache_type
+    Option<bool>,           // paged_attn enable flag
+    Option<usize>,          // gpu_mem (MBs)
+    Option<f32>,            // gpu_mem_usage (fraction)
+    Option<usize>,          // context_len
+    Option<usize>,          // block_size
+    PagedCacheType,         // cache_type
+    Option<PagedCacheType>, // k_cache_type override
+    Option<PagedCacheType>, // v_cache_type override
 );

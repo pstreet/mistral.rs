@@ -20,9 +20,10 @@ use candle_core::{Result, Storage, Tensor};
 
 #[derive(Clone)]
 pub(crate) struct BlockQuantScales {
-    pub k: Tensor,
-    pub v: Tensor,
-    pub kind: mistralrs_paged_attn::BlockQuantKind,
+    pub k: Option<Tensor>,
+    pub v: Option<Tensor>,
+    pub k_kind: Option<mistralrs_paged_attn::BlockQuantKind>,
+    pub v_kind: Option<mistralrs_paged_attn::BlockQuantKind>,
     // QJL 1-bit residual sidecars (Q4_0 only): U8 bit packs, 4 bytes per
     // 32-elem group. `Some` only when `MISTRALRS_Q4_QJL=1`; otherwise the
     // kernels fall back to the plain LM grid. `None` for Q8_0.

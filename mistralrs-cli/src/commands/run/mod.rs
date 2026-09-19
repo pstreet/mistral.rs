@@ -63,6 +63,8 @@ pub async fn run_interactive(
         paged_ctxt_len,
         paged_attn_block_size,
         paged_cache_type,
+        paged_k_cache_type,
+        paged_v_cache_type,
     ) = extract_paged_attn_settings(&model_type);
     let (cpu, device_layers) = extract_device_settings(&model_type);
     let isq = extract_isq_setting(&model_type);
@@ -106,6 +108,7 @@ pub async fn run_interactive(
         .with_max_model_len_optional(max_model_len)
         .with_hf_config_overrides_optional(hf_config_overrides)
         .with_paged_attn_cache_type(paged_cache_type)
+        .with_paged_attn_kv_cache_types(paged_k_cache_type, paged_v_cache_type)
         .with_prefill_chunk_size_optional(if runtime.prefill_chunk_size == 0 {
             None
         } else {

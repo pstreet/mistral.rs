@@ -1541,6 +1541,8 @@ mod tests {
                 block_size: 8,
                 num_gpu_blocks: 128,
                 cache_type: PagedCacheType::Auto,
+                k_cache_type: None,
+                v_cache_type: None,
                 kv_cache_group_ids: vec![0],
             },
         )
@@ -2248,6 +2250,8 @@ mod tests {
                 block_size: 8,
                 num_gpu_blocks: 2,
                 cache_type: PagedCacheType::Auto,
+                k_cache_type: None,
+                v_cache_type: None,
                 kv_cache_group_ids: vec![0],
             },
         );
@@ -2292,6 +2296,8 @@ mod tests {
                 block_size: 8,
                 num_gpu_blocks: 5,
                 cache_type: PagedCacheType::Auto,
+                k_cache_type: None,
+                v_cache_type: None,
                 kv_cache_group_ids: vec![0],
             },
         );
@@ -4050,6 +4056,8 @@ mod tests {
                 block_size: 8,
                 num_gpu_blocks: 8,
                 cache_type: PagedCacheType::Auto,
+                k_cache_type: None,
+                v_cache_type: None,
                 kv_cache_group_ids: vec![0],
             },
         );
@@ -4181,6 +4189,8 @@ mod tests {
                 block_size: 8,
                 num_gpu_blocks: 4,
                 cache_type: PagedCacheType::Auto,
+                k_cache_type: None,
+                v_cache_type: None,
                 kv_cache_group_ids: vec![0],
             },
         );

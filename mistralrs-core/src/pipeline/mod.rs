@@ -448,12 +448,10 @@ fn paged_kv_bytes_per_token(
     dtype: DType,
     model_config: &dyn ModelConfigLike,
 ) -> Result<usize> {
-    paged_attn_config
-        .cache_type
-        .to_dtype(dtype)
-        .size_in_bytes()
-        .checked_mul(model_config.total_kv_cache_elements_per_token())
-        .ok_or_else(|| anyhow::anyhow!("PagedAttention token memory size overflow"))
+    Ok(model_config.kv_cache_bytes_per_token(
+        paged_attn_config.k_type().bits_per_elem(dtype),
+        paged_attn_config.v_type().bits_per_elem(dtype),
+    ))
 }
 
 fn automatic_recurrent_checkpoint_lanes(

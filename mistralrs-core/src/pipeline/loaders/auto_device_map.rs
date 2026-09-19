@@ -165,6 +165,8 @@ fn calculate_key_block_shape(
     block_size: usize,
     cache_type: PagedCacheType,
 ) -> (usize, usize, usize, usize) {
+    // Identical to the engine's shape math; keep in sync (k/v split passes
+    // the resolved per-side type).
     let element_size = dtype.size_in_bytes();
     let x = 16 / element_size;
     // Q4_0 packs 2 elems per byte: 16-byte chunks cover 32 head-dim elems.
@@ -320,6 +322,8 @@ pub fn get_device_layers(
                 Some(cfg.block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE)),
                 dtype,
                 cfg.cache_type,
+                cfg.k_cache_type,
+                cfg.v_cache_type,
                 &*model_cfg,
                 &devices[0],
                 &devices.iter().map(|d| Some(d.clone())).collect::<Vec<_>>(),
@@ -328,11 +332,11 @@ pub fn get_device_layers(
                 Some(max_seq_len * max_batch_size),
             )?;
             let key_shape =
-                calculate_key_block_shape(&*model_cfg, dtype, cache.block_size, cfg.cache_type);
+                calculate_key_block_shape(&*model_cfg, dtype, cache.block_size, cache.k_type());
             let key_sz =
                 cache.num_gpu_blocks * key_shape.0 * key_shape.1 * key_shape.2 * key_shape.3;
             let val_shape =
-                calculate_value_block_shape(&*model_cfg, cache.block_size, cfg.cache_type);
+                calculate_value_block_shape(&*model_cfg, cache.block_size, cache.v_type());
             let val_sz = cache.num_gpu_blocks * val_shape.0 * val_shape.1 * val_shape.2;
             key_sz + val_sz
         }
