@@ -51,6 +51,18 @@ pub struct ModelConfig {
     /// for the first model and lazy entries only.
     #[serde(default)]
     pub mtp: Option<bool>,
+    /// Per-model KV cache type. `None` inherits the global `[paged_attn]`
+    /// base; setting it also resets inherited global K/V side overrides
+    /// unless the side is set explicitly below.
+    #[serde(default)]
+    pub cache_type: Option<PagedCacheType>,
+    /// Per-model K cache type. `None` inherits the global side override,
+    /// else the effective base.
+    #[serde(default)]
+    pub k_cache_type: Option<PagedCacheType>,
+    /// Per-model V cache type. Same inheritance as `k_cache_type`.
+    #[serde(default)]
+    pub v_cache_type: Option<PagedCacheType>,
 }
 
 impl ModelConfig {
@@ -68,6 +80,9 @@ impl ModelConfig {
             encoder_cache_memory_bytes: None,
             lazy: false,
             mtp: None,
+            cache_type: None,
+            k_cache_type: None,
+            v_cache_type: None,
         }
     }
 
@@ -78,6 +93,21 @@ impl ModelConfig {
 
     pub fn with_mtp(mut self, mtp: bool) -> Self {
         self.mtp = Some(mtp);
+        self
+    }
+
+    pub fn with_cache_type(mut self, cache_type: PagedCacheType) -> Self {
+        self.cache_type = Some(cache_type);
+        self
+    }
+
+    pub fn with_k_cache_type(mut self, k_cache_type: PagedCacheType) -> Self {
+        self.k_cache_type = Some(k_cache_type);
+        self
+    }
+
+    pub fn with_v_cache_type(mut self, v_cache_type: PagedCacheType) -> Self {
+        self.v_cache_type = Some(v_cache_type);
         self
     }
 
@@ -425,7 +455,7 @@ fn resolve_entry_mtp_config(
 struct LazyRegisterShared<'a> {
     mistralrs: &'a mistralrs_core::MistralRs,
     device: &'a Device,
-    requested_cache_config: Option<PagedAttentionConfig>,
+    no_paged_attn: bool,
     search_embedding_model: Option<SearchEmbeddingModel>,
 }
 impl MistralRsForServerBuilder {
@@ -1096,6 +1126,42 @@ impl MistralRsForServerBuilder {
         )
     }
 
+    /// Resolve the effective paged cache config for one entry. A per-entry
+    /// `cache_type` resets side inheritance to that base; a per-entry side
+    /// falls back to the global side override, else the effective base.
+    fn resolve_entry_cache_config(
+        &self,
+        model_config: &ModelConfig,
+        no_paged_attn: bool,
+    ) -> Result<Option<PagedAttentionConfig>> {
+        let (base_type, inherit_k, inherit_v) = match model_config.cache_type {
+            Some(base) => (base, None, None),
+            None => (
+                self.paged_cache_type,
+                self.paged_k_cache_type,
+                self.paged_v_cache_type,
+            ),
+        };
+        let Some(config) = init_cache_config(
+            self.paged_attn_block_size,
+            self.paged_attn_gpu_mem,
+            self.paged_attn_gpu_mem_usage,
+            self.paged_ctxt_len,
+            base_type,
+            model_config.k_cache_type.or(inherit_k),
+            model_config.v_cache_type.or(inherit_v),
+            no_paged_attn,
+        )?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(
+            config
+                .with_serving_capacity(self.max_seqs)?
+                .with_recurrent_prefix_capacity(self.prefix_cache_n),
+        ))
+    }
+
     /// Register one lazy entry as unloaded (weights load on first request).
     /// Mirrors the eager path's addressability: alias or config key resolves
     /// from boot; the pipeline name is unknown until first load.
@@ -1158,7 +1224,9 @@ impl MistralRsForServerBuilder {
 
         // Full requested budget, not a fair-share slice (none was
         // reserved above). Reload swaps in the realized config.
-        let scheduler_config = match shared.requested_cache_config {
+        let entry_cache_config =
+            self.resolve_entry_cache_config(model_config, shared.no_paged_attn)?;
+        let scheduler_config = match entry_cache_config {
             Some(config) => SchedulerConfig::PagedAttentionPlanned {
                 max_num_seqs: self.max_seqs,
                 max_num_batched_tokens: self.max_num_batched_tokens.get(),
@@ -1199,7 +1267,7 @@ impl MistralRsForServerBuilder {
             device: shared.device.clone(),
             device_map_setting: mapper_for_config,
             isq,
-            paged_attn_config: shared.requested_cache_config,
+            paged_attn_config: entry_cache_config,
             silent: false,
             chat_template,
             jinja_explicit,
@@ -1256,7 +1324,7 @@ impl MistralRsForServerBuilder {
     }
 
     /// Build a multi-model instance
-    pub async fn build_multi_model(mut self) -> Result<SharedMistralRsState> {
+    async fn build_multi_model(mut self) -> Result<SharedMistralRsState> {
         if self.models.is_empty() {
             anyhow::bail!("No models configured for multi-model mode");
         }
@@ -1339,27 +1407,26 @@ impl MistralRsForServerBuilder {
         let mapper_for_config = mapper.clone();
         let paged_attn = configure_paged_attn(&device, self.paged_attn);
 
-        let requested_cache_config = init_cache_config(
-            self.paged_attn_block_size,
-            self.paged_attn_gpu_mem,
-            self.paged_attn_gpu_mem_usage,
-            self.paged_ctxt_len,
-            self.paged_cache_type,
-            self.paged_k_cache_type,
-            self.paged_v_cache_type,
-            !paged_attn,
-        )?
-        .map(|config| config.with_serving_capacity(self.max_seqs))
-        .transpose()?
-        .map(|config| config.with_recurrent_prefix_capacity(self.prefix_cache_n));
+        let entry_cache_configs: Vec<Option<PagedAttentionConfig>> = self
+            .models
+            .iter()
+            .map(|m| {
+                if m.lazy {
+                    Ok(None)
+                } else {
+                    self.resolve_entry_cache_config(m, !paged_attn)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
         let mut paged_kv_plan = plan_paged_kv(
             &self
                 .models
                 .iter()
+                .zip(&entry_cache_configs)
                 // Lazy models hold no KV cache until loaded; giving them a
                 // fair-share slice would shrink every eager model's budget.
-                .map(|m| PagedKvModelRequest {
-                    paged_attn: if m.lazy { None } else { requested_cache_config },
+                .map(|(m, config)| PagedKvModelRequest {
+                    paged_attn: if m.lazy { None } else { *config },
                     max_num_seqs: self.max_seqs,
                 })
                 .collect::<Vec<_>>(),
@@ -1516,7 +1583,7 @@ impl MistralRsForServerBuilder {
                 let shared = LazyRegisterShared {
                     mistralrs: &mistralrs,
                     device: &device,
-                    requested_cache_config,
+                    no_paged_attn: !paged_attn,
                     search_embedding_model,
                 };
                 self.register_lazy_entry(
@@ -1735,7 +1802,7 @@ impl MistralRsForServerBuilder {
 
     /// All-lazy boot: no seed engine. Every entry registers unloaded, so
     /// metadata routes answer immediately and weights load on first request.
-    async fn build_all_lazy(mut self) -> Result<SharedMistralRsState> {
+    async fn build_all_lazy(self) -> Result<SharedMistralRsState> {
         if mistralrs_core::distributed::is_daemon() {
             anyhow::bail!(
                 "All-lazy boot cannot seed a daemon replicator; put an eager model first."
@@ -1749,19 +1816,6 @@ impl MistralRsForServerBuilder {
             init_device(self.cpu, self.seed)?
         };
         let paged_attn = configure_paged_attn(&device, self.paged_attn);
-        let requested_cache_config = init_cache_config(
-            self.paged_attn_block_size,
-            self.paged_attn_gpu_mem,
-            self.paged_attn_gpu_mem_usage,
-            self.paged_ctxt_len,
-            self.paged_cache_type,
-            self.paged_k_cache_type,
-            self.paged_v_cache_type,
-            !paged_attn,
-        )?
-        .map(|config| config.with_serving_capacity(self.max_seqs))
-        .transpose()?
-        .map(|config| config.with_recurrent_prefix_capacity(self.prefix_cache_n));
 
         let mistralrs =
             mistralrs_core::MistralRs::new_headless(self.router_policy, self.log.clone());
@@ -1770,7 +1824,7 @@ impl MistralRsForServerBuilder {
         let shared = LazyRegisterShared {
             mistralrs: &mistralrs,
             device: &device,
-            requested_cache_config,
+            no_paged_attn: !paged_attn,
             search_embedding_model,
         };
         let mut registered_ids = HashSet::new();
@@ -2033,5 +2087,74 @@ pub fn get_search_embedding_model(
         Some(search_embedding_model.unwrap_or_default())
     } else {
         None
+    }
+}
+
+#[cfg(all(
+    test,
+    any(
+        all(feature = "cuda", target_family = "unix"),
+        feature = "rocm",
+        feature = "metal"
+    )
+))]
+mod tests {
+    use super::*;
+
+    fn resolve(entry: ModelConfig, no_paged_attn: bool) -> Option<PagedAttentionConfig> {
+        let builder = MistralRsForServerBuilder::new()
+            .with_paged_attn_cache_type(PagedCacheType::Q8_0)
+            .with_paged_attn_kv_cache_types(None, Some(PagedCacheType::Q4_0));
+        builder
+            .resolve_entry_cache_config(&entry, no_paged_attn)
+            .unwrap()
+    }
+
+    fn entry() -> ModelConfig {
+        ModelConfig::new(
+            "test".to_string(),
+            ModelSelected::Toml {
+                file: "unused.toml".to_string(),
+            },
+        )
+    }
+
+    #[test]
+    fn entry_without_overrides_inherits_global_sides() {
+        let config = resolve(entry(), false).unwrap();
+        assert_eq!(config.k_type(), PagedCacheType::Q8_0);
+        assert_eq!(config.v_type(), PagedCacheType::Q4_0);
+    }
+
+    #[test]
+    fn entry_base_resets_inherited_sides() {
+        let config = resolve(entry().with_cache_type(PagedCacheType::BF16), false).unwrap();
+        assert_eq!(config.k_type(), PagedCacheType::BF16);
+        assert_eq!(config.v_type(), PagedCacheType::BF16);
+    }
+
+    #[test]
+    fn entry_side_override_keeps_other_global_side() {
+        let config = resolve(entry().with_k_cache_type(PagedCacheType::Q4_0), false).unwrap();
+        assert_eq!(config.k_type(), PagedCacheType::Q4_0);
+        assert_eq!(config.v_type(), PagedCacheType::Q4_0);
+    }
+
+    #[test]
+    fn entry_base_and_side_combine() {
+        let config = resolve(
+            entry()
+                .with_cache_type(PagedCacheType::Q4_0)
+                .with_v_cache_type(PagedCacheType::Q8_0),
+            false,
+        )
+        .unwrap();
+        assert_eq!(config.k_type(), PagedCacheType::Q4_0);
+        assert_eq!(config.v_type(), PagedCacheType::Q8_0);
+    }
+
+    #[test]
+    fn paged_attn_disabled_yields_none() {
+        assert!(resolve(entry(), true).is_none());
     }
 }

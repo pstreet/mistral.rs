@@ -81,6 +81,8 @@ Two more flags tune the cache itself:
 - `--pa-cache-type`: KV cache quantization (`auto`, `bf16`, `f8e4m3`, `q8_0`, or `q4_0`). This is separate from model-weight quantization (`--quant`/`--isq`); the two are chosen independently.
 - `--pa-k-cache-type` / `--pa-v-cache-type`: per-side K/V overrides (each defaults to `--pa-cache-type`). Split pairs like K `q8_0` + V `q4_0` run one masked write per side through the same kernels, so each side is bit-identical to its homogeneous run. Split needs the Standard paged layout on CUDA/ROCm (no FlashInfer/FA3/MLA) and matching-side equality on other backends.
 
+In multi-model TOML configs, each `[[models]]` entry can also set `cache_type`, `k_cache_type`, and `v_cache_type` to override the global `[paged_attn]` types for that model alone. Unset fields inherit the global values; a per-entry `cache_type` resets the inherited side overrides to that base. See the [TOML config reference](/reference/cli-toml-config/).
+
 Scheduler memory and latency are controlled independently:
 
 - `--max-num-batched-tokens <n>`: total scheduler-step token budget (default 4096).

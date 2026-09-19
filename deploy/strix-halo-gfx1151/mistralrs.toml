@@ -5,7 +5,7 @@
 # WorkingDirectory there and the wrapper cds there; cd there for manual runs).
 #
 # Differences vs models.ini:
-#   - ACTIVE default: Qwen3.6-35B (eager, top entry); Qwen3.8-27B is now lazy.
+#   - ACTIVE default: Qwen3.8-27B (orcarouter); Qwen3.6-35B is now lazy.
 #   - Only the first [[models]] entry loads at boot (it seeds the instance);
 #     the rest use `lazy = true` (registered, demand-loaded on first request).
 #     Demand-loads LRU-evict idle residents to fit (plus headroom) and evict
@@ -22,7 +22,7 @@
 
 command = "serve"
 # Single active model -> clients address it as "default".
-default_model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
+default_model_id = "models/orcarouter/Qwen3.8-27B-Uncensored-GGUF"
 
 [server]
 host = "127.0.0.1"
@@ -31,6 +31,8 @@ no_ui = true
 
 [paged_attn]
 cache_type = "Q8_0"
+k_cache_type = "Q8_0"
+v_cache_type = "Q4_0"
 
 # Demand-load policy for lazy models (router commits 7ba9f430f-1ea83644c).
 # Values below are the code defaults, pinned explicitly.

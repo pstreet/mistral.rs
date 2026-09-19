@@ -402,6 +402,15 @@ async fn build_model_configs(
         if let Some(mtp) = entry.mtp {
             config = config.with_mtp(mtp);
         }
+        if let Some(cache_type) = entry.cache_type {
+            config = config.with_cache_type(cache_type);
+        }
+        if let Some(k_cache_type) = entry.k_cache_type {
+            config = config.with_k_cache_type(k_cache_type);
+        }
+        if let Some(v_cache_type) = entry.v_cache_type {
+            config = config.with_v_cache_type(v_cache_type);
+        }
         if let Some(max_model_len) = entry.max_model_len {
             config = config.with_max_model_len(max_model_len);
         }
@@ -521,6 +530,66 @@ lora = [
         .unwrap();
         assert_eq!(models.len(), 1);
         assert!(!cpu);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn from_config_threads_per_model_cache_types() {
+        let root = std::env::temp_dir().join(format!("mistralrs-gguf-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("model-Q4_K_M.gguf"), []).unwrap();
+        let input = format!(
+            r#"
+command = "serve"
+
+[[models]]
+model_id = "{}/a"
+lazy = true
+cache_type = "Q8_0"
+v_cache_type = "Q4_0"
+
+[models.format]
+quantized_file = "model-Q4_K_M.gguf"
+
+[[models]]
+model_id = "{}/b"
+lazy = true
+k_cache_type = "BF16"
+
+[models.format]
+quantized_file = "model-Q4_K_M.gguf"
+"#,
+            root.display(),
+            root.display()
+        );
+        let config: CliConfig = toml::from_str(&input).unwrap();
+        let CliConfig::Serve(config) = config else {
+            unreachable!()
+        };
+
+        let (models, _) = build_model_configs(
+            &config.models,
+            &config.runtime,
+            &mistralrs_core::TokenSource::None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            models[0].cache_type,
+            Some(mistralrs_core::PagedCacheType::Q8_0)
+        );
+        assert_eq!(models[0].k_cache_type, None);
+        assert_eq!(
+            models[0].v_cache_type,
+            Some(mistralrs_core::PagedCacheType::Q4_0)
+        );
+        assert_eq!(models[1].cache_type, None);
+        assert_eq!(
+            models[1].k_cache_type,
+            Some(mistralrs_core::PagedCacheType::BF16)
+        );
+        assert_eq!(models[1].v_cache_type, None);
 
         fs::remove_dir_all(root).unwrap();
     }

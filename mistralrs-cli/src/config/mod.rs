@@ -12,7 +12,7 @@ use crate::args::{
     ModelType, MultimodalAdapterOptions, MultimodalOptions, PagedAttentionOptions,
     QuantizationOptions, RuntimeOptions, SandboxOptions, ServerOptions,
 };
-use mistralrs_core::{ModelDType, NormalLoaderType, ReasoningEffort, TokenSource};
+use mistralrs_core::{ModelDType, NormalLoaderType, PagedCacheType, ReasoningEffort, TokenSource};
 
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "kebab-case")]
@@ -175,6 +175,18 @@ pub struct ModelEntry {
     /// entries (a headless model fails at load, not at boot, when lazy).
     #[serde(default)]
     pub mtp: Option<bool>,
+    /// Per-entry KV cache type. `None` inherits the global `[paged_attn]`
+    /// base. Setting it resets inherited global K/V side overrides unless
+    /// the side is set explicitly below.
+    #[serde(default)]
+    pub cache_type: Option<PagedCacheType>,
+    /// Per-entry K cache type. `None` inherits the global side override,
+    /// else the effective base.
+    #[serde(default)]
+    pub k_cache_type: Option<PagedCacheType>,
+    /// Per-entry V cache type. Same inheritance as `k_cache_type`.
+    #[serde(default)]
+    pub v_cache_type: Option<PagedCacheType>,
 }
 
 #[derive(Deserialize, Default, Clone)]

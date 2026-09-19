@@ -150,6 +150,9 @@ Each entry defines one loaded model.
 | `alias` | string | no | API-visible name for this model (like llama.cpp `--alias`). Defaults to `model_id`. |
 | `lazy` | boolean | no | Register without loading weights (`serve` with 2+ models only; the first model must stay eager). Lazy models load on first request or explicit `/v1/models/reload`. |
 | `mtp` | boolean | no | MTP speculative decoding for this model. Defaults to the global `[runtime] mtp` flag. Honored for the first model and lazy entries only; a headless model fails at load (at first request when lazy). |
+| `cache_type` | enum | no | Per-model KV cache type (same values as `[paged_attn] cache_type`). Unset inherits the global base. Setting it also resets inherited global `k_cache_type`/`v_cache_type` overrides for this model. |
+| `k_cache_type` | enum | no | Per-model K cache type. Unset inherits the global `[paged_attn] k_cache_type` override, else the effective base. |
+| `v_cache_type` | enum | no | Per-model V cache type. Same inheritance as `k_cache_type`. |
 
 Each `[[models]]` entry can carry nested sections whose field shapes mirror the corresponding CLI flags:
 
