@@ -31,8 +31,6 @@ no_ui = true
 
 [paged_attn]
 cache_type = "Q8_0"
-k_cache_type = "Q8_0"
-v_cache_type = "Q4_0"
 
 # Demand-load policy for lazy models (router commits 7ba9f430f-1ea83644c).
 # Values below are the code defaults, pinned explicitly.
@@ -94,6 +92,9 @@ quantized_file = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
 model_id = "models/orcarouter/Qwen3.8-27B-Uncensored-GGUF"
 alias = "qwen3.8-27b"
 lazy = true
+# Per-model split KV: K=Q8_0 V=Q4_0 while the global default stays Q8_0.
+k_cache_type = "Q8_0"
+v_cache_type = "Q4_0"
 #mtp = false (multimodal MTP target+verify verified on this model)
 
 [models.format]
