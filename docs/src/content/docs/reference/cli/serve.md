@@ -48,14 +48,14 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA/ROCm, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
 | `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA/ROCm) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
-| `--pa-k-cache-type <CACHE_TYPE>` | not set | K cache type override (inherits `--pa-cache-type`) |
-| `--pa-v-cache-type <CACHE_TYPE>` | not set | V cache type override (inherits `--pa-cache-type`) |
+| `--pa-k-cache-type <K_CACHE_TYPE>` |  | K cache quantization type override (`cache_type` when unset) |
+| `--pa-v-cache-type <V_CACHE_TYPE>` |  | V cache quantization type override (`cache_type` when unset) |
 | `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
 | `--max-edge <MAX_EDGE>` |  | Maximum edge length for image resizing (aspect ratio preserved) |
 | `--max-num-images <MAX_NUM_IMAGES>` |  | Maximum number of images per request |
@@ -77,6 +77,7 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `--max-decode-steps-before-prefill <MAX_DECODE_STEPS_BEFORE_PREFILL>` | `8` | Maximum decode steps before a waiting prefill batch is admitted |
 | `--no-kv-cache` | `false` | Disable KV cache entirely |
 | `--prefix-cache-n <PREFIX_CACHE_N>` | `16` | Number of prefix caches to hold (0 to disable) |
+| `--prefill-chunk-size <PREFILL_CHUNK_SIZE>` | `0` | Prefill chunk size in tokens for paged attention (0 to use default of 4096) |
 | `-c, --chat-template <CHAT_TEMPLATE>` |  | Custom chat template file (.json or .jinja) |
 | `-j, --jinja-explicit <JINJA_EXPLICIT>` |  | Explicit JINJA template override |
 | `--matformer-config-path <MATFORMER_CONFIG_PATH>` |  | Path to a MatFormer config (CSV/JSON describing available slices). See model card |
@@ -149,14 +150,14 @@ mistralrs serve auto [OPTIONS] --model-id <MODEL_ID>
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA/ROCm, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
 | `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA/ROCm) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
-| `--pa-k-cache-type <CACHE_TYPE>` | not set | K cache type override (inherits `--pa-cache-type`) |
-| `--pa-v-cache-type <CACHE_TYPE>` | not set | V cache type override (inherits `--pa-cache-type`) |
+| `--pa-k-cache-type <K_CACHE_TYPE>` |  | K cache quantization type override (`cache_type` when unset) |
+| `--pa-v-cache-type <V_CACHE_TYPE>` |  | V cache quantization type override (`cache_type` when unset) |
 | `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
 | `--max-edge <MAX_EDGE>` |  | Maximum edge length for image resizing (aspect ratio preserved) |
 | `--max-num-images <MAX_NUM_IMAGES>` |  | Maximum number of images per request |
@@ -205,14 +206,14 @@ mistralrs serve text [OPTIONS] --model-id <MODEL_ID>
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA/ROCm, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
 | `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA/ROCm) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
-| `--pa-k-cache-type <CACHE_TYPE>` | not set | K cache type override (inherits `--pa-cache-type`) |
-| `--pa-v-cache-type <CACHE_TYPE>` | not set | V cache type override (inherits `--pa-cache-type`) |
+| `--pa-k-cache-type <K_CACHE_TYPE>` |  | K cache quantization type override (`cache_type` when unset) |
+| `--pa-v-cache-type <V_CACHE_TYPE>` |  | V cache quantization type override (`cache_type` when unset) |
 
 ## mistralrs serve multimodal
 
@@ -252,14 +253,14 @@ mistralrs serve multimodal [OPTIONS] --model-id <MODEL_ID>
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA/ROCm, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
 | `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA/ROCm) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
-| `--pa-k-cache-type <CACHE_TYPE>` | not set | K cache type override (inherits `--pa-cache-type`) |
-| `--pa-v-cache-type <CACHE_TYPE>` | not set | V cache type override (inherits `--pa-cache-type`) |
+| `--pa-k-cache-type <K_CACHE_TYPE>` |  | K cache quantization type override (`cache_type` when unset) |
+| `--pa-v-cache-type <V_CACHE_TYPE>` |  | V cache quantization type override (`cache_type` when unset) |
 | `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
 | `--max-edge <MAX_EDGE>` |  | Maximum edge length for image resizing (aspect ratio preserved) |
 | `--max-num-images <MAX_NUM_IMAGES>` |  | Maximum number of images per request |
@@ -344,12 +345,12 @@ mistralrs serve embedding [OPTIONS] --model-id <MODEL_ID>
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA/ROCm, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
 | `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA/ROCm) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
-| `--pa-k-cache-type <CACHE_TYPE>` | not set | K cache type override (inherits `--pa-cache-type`) |
-| `--pa-v-cache-type <CACHE_TYPE>` | not set | V cache type override (inherits `--pa-cache-type`) |
+| `--pa-k-cache-type <K_CACHE_TYPE>` |  | K cache quantization type override (`cache_type` when unset) |
+| `--pa-v-cache-type <V_CACHE_TYPE>` |  | V cache quantization type override (`cache_type` when unset) |
 
