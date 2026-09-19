@@ -54,6 +54,11 @@ shll = "shll"
 "layrnorm" = "layrnorm"
 "ot" = "ot"
 "thr" = "thr"
+"wht" = "wht"
+"Wht" = "Wht"
+"WHT" = "WHT"
+"hsa" = "hsa"
+"HSA" = "HSA"
 "worl" = "worl"
 
 [default.extend-identifiers]
