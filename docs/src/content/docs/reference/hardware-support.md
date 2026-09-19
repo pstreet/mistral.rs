@@ -13,6 +13,7 @@ Use this page to check whether a prebuilt binary exists for your accelerator. If
 | Linux aarch64 + NVIDIA GPU | CUDA (Grace: GH200/GB200/GB10) | yes, sm90/100/121, per driver CUDA support |
 | Apple Silicon (macOS arm64) | Metal | yes |
 | Linux x86_64 / aarch64, no GPU | CPU | yes |
+| Linux x86_64 + AMD GPU | ROCm (HIP) | no, [source build](/guides/deploy/rocm/) |
 | Windows x86_64 | CPU | yes |
 | Intel Mac, unlisted GPU | source build | no |
 

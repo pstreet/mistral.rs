@@ -18,6 +18,7 @@ mistral.rs uses Cargo features to gate platform-specific and optional functional
 | `accelerate` | as above | Apple Accelerate framework for CPU math. |
 | `mkl` | as above | Intel MKL for CPU math. |
 | `nccl` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-server-core` | NCCL single-machine CUDA multi-GPU support. Requires the NCCL runtime library at build and runtime. |
+| `rocm` | `mistralrs-cli`, `mistralrs-core`, `mistralrs-server-core` | AMD ROCm (HIP) acceleration, including paged attention. Source build only: needs a ROCm toolkit, `CANDLE_ROCM_ARCH`, and a ROCm-capable Candle checkout. See [deploy on ROCm](/guides/deploy/rocm/). |
 
 Typical combinations:
 
