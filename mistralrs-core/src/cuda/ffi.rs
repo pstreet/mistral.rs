@@ -55,6 +55,7 @@ extern "C" {
         dst_rows: *const u32,
         rows: i32,
         row_elements: i64,
+        dst_row_capacity: i64,
         stream: i64,
     ) -> i32;
     pub(crate) fn indexed_row_copy_f16(
@@ -63,6 +64,7 @@ extern "C" {
         dst_rows: *const u32,
         rows: i32,
         row_elements: i64,
+        dst_row_capacity: i64,
         stream: i64,
     ) -> i32;
     pub(crate) fn indexed_row_copy_f32(
@@ -71,6 +73,14 @@ extern "C" {
         dst_rows: *const u32,
         rows: i32,
         row_elements: i64,
+        dst_row_capacity: i64,
+        stream: i64,
+    ) -> i32;
+    pub(crate) fn clamp_u32_index_table(
+        table: *mut u32,
+        len: i32,
+        capacity: u32,
+        replacement: u32,
         stream: i64,
     ) -> i32;
     pub(crate) fn pack_completion_input_u32(

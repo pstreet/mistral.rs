@@ -1373,6 +1373,19 @@ impl HybridCache {
         host: Vec<u32>,
         mut tensors: Vec<(Device, Tensor)>,
     ) {
+        let physical_rows = self
+            .caches
+            .iter()
+            .filter_map(HybridLayerCache::as_recurrent_pool)
+            .next()
+            .map(|pool| pool.conv_state.dim(0).unwrap_or(usize::MAX))
+            .unwrap_or(usize::MAX);
+        for &slot in &host {
+            assert!(
+                (slot as usize) < physical_rows,
+                "graph state slot {slot} exceeds recurrent pool rows {physical_rows}"
+            );
+        }
         let physical_lanes = self.physical_checkpoint_lanes();
         self.logical_state_indices_host = Some(
             host.iter()
@@ -2187,6 +2200,18 @@ impl HybridCache {
         &mut self,
         sequence_slots: &[(usize, usize)],
     ) -> Result<()> {
+        if tracing::enabled!(target: "mistralrs_nan_hunt", tracing::Level::DEBUG) {
+            tracing::debug!(
+                target: "mistralrs_nan_hunt",
+                "install-slots seqs={} cap={}",
+                sequence_slots
+                    .iter()
+                    .map(|(id, slot)| format!("{id}:{slot}"))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                self.recurrent_capacity()
+            );
+        }
         self.validate_sequence_slots(sequence_slots)?;
         let logical_slots = sequence_slots
             .iter()
@@ -2253,6 +2278,29 @@ impl HybridCache {
         mapping: RecurrentBatchMapping,
         preferred_device: Option<Device>,
     ) -> Result<()> {
+        // The kernels do no bounds checks, so refuse a mapping with
+        // out-of-range slots here, loudly, rather than risk a wild write.
+        let logical_capacity = self.slot_owners.len();
+        let physical_rows = self
+            .caches
+            .iter()
+            .filter_map(HybridLayerCache::as_recurrent_pool)
+            .next()
+            .map(|pool| pool.conv_state.dim(0))
+            .transpose()?
+            .unwrap_or(usize::MAX);
+        for &slot in &mapping.logical_slots {
+            if (slot as usize) >= logical_capacity {
+                candle_core::bail!(
+                    "recurrent logical slot {slot} exceeds capacity {logical_capacity}"
+                );
+            }
+        }
+        for &slot in &mapping.physical_slots {
+            if (slot as usize) >= physical_rows {
+                candle_core::bail!("recurrent physical slot {slot} exceeds rows {physical_rows}");
+            }
+        }
         let device = preferred_device.or_else(|| self.recurrent_devices().into_iter().next());
         self.state_indices = match device {
             Some(device) => Some(Tensor::from_vec(

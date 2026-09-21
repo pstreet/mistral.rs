@@ -3,6 +3,7 @@ use candle_core::{CpuStorage, CudaStorage, DType, InplaceOp3, Layout, Result, Te
 struct IndexedRowCopy {
     rows: i32,
     row_elements: i64,
+    dst_row_capacity: i64,
 }
 
 impl InplaceOp3 for IndexedRowCopy {
@@ -55,6 +56,7 @@ impl InplaceOp3 for IndexedRowCopy {
                         rows_ptr as *const u32,
                         self.rows,
                         self.row_elements,
+                        self.dst_row_capacity,
                         stream.cu_stream() as i64,
                     )
                 };
@@ -124,8 +126,78 @@ pub(crate) fn copy_rows(src: &Tensor, dst: &Tensor, dst_rows: &Tensor) -> Result
         .map_err(|_| candle_core::Error::msg("indexed row copy row count exceeds i32"))?;
     let row_elements = i64::try_from(row_elements)
         .map_err(|_| candle_core::Error::msg("indexed row copy row size exceeds i64"))?;
+    let dst_row_capacity = i64::try_from(dst_dims[0])
+        .map_err(|_| candle_core::Error::msg("indexed row copy capacity exceeds i64"))?;
 
-    dst.inplace_op3(src, dst_rows, &IndexedRowCopy { rows, row_elements })
+    dst.inplace_op3(
+        src,
+        dst_rows,
+        &IndexedRowCopy {
+            rows,
+            row_elements,
+            dst_row_capacity,
+        },
+    )
+}
+
+/// Clamp a device u32 slot table in place to `[0, capacity)`, replacing
+/// out-of-range entries with `replacement`. Valid tables are untouched.
+/// No-op on CPU tensors (host paths validate separately).
+pub(crate) fn clamp_slot_table(slots: &Tensor, capacity: u32, replacement: u32) -> Result<()> {
+    struct ClampU32Table {
+        len: i32,
+        capacity: u32,
+        replacement: u32,
+    }
+    impl candle_core::InplaceOp1 for ClampU32Table {
+        fn name(&self) -> &'static str {
+            "clamp-u32-index-table"
+        }
+        fn cpu_fwd(&self, _storage: &mut CpuStorage, _layout: &Layout) -> Result<()> {
+            candle_core::bail!("clamp-u32-index-table requires CUDA storage")
+        }
+        fn cuda_fwd(&self, storage: &mut CudaStorage, layout: &Layout) -> Result<()> {
+            use candle_core::backend::BackendStorage;
+            use candle_core::cuda_backend::cudarc::driver::DevicePtrMut;
+            if !layout.is_contiguous() {
+                candle_core::bail!("clamp-u32-index-table requires a contiguous table");
+            }
+            let dev = storage.device();
+            let stream = dev.cuda_stream();
+            let slice = storage.as_cuda_slice_mut::<u32>()?;
+            let mut sub = slice.slice_mut(layout.start_offset()..);
+            let (ptr, _guard) = sub.device_ptr_mut(&stream);
+            let status = unsafe {
+                crate::cuda::ffi::clamp_u32_index_table(
+                    ptr as *mut u32,
+                    self.len,
+                    self.capacity,
+                    self.replacement,
+                    stream.cu_stream() as i64,
+                )
+            };
+            if status != 0 {
+                candle_core::bail!("clamp_u32_index_table failed with status {status}");
+            }
+            Ok(())
+        }
+    }
+    if !slots.device().is_cuda() {
+        return Ok(());
+    }
+    if slots.dtype() != DType::U32 {
+        candle_core::bail!("slot table clamp expected u32 indices");
+    }
+    let len = i32::try_from(slots.elem_count())
+        .map_err(|_| candle_core::Error::msg("slot table too long to clamp"))?;
+    if len == 0 {
+        return Ok(());
+    }
+    slots.inplace_op1(&ClampU32Table {
+        len,
+        capacity,
+        replacement,
+    })
 }
 
 #[cfg(test)]

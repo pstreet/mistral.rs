@@ -71,6 +71,19 @@ impl GdnLayerCache {
     /// pool in place through the slot table; elsewhere this is a gathered copy that `commit` scatters back.
     pub fn checkout(pool: &RecurrentStatePool, indices: &Tensor) -> Result<Self> {
         if pool.device().is_cuda() {
+            // Clamp the slot table to the pool's physical rows first: the
+            // kernels below do no bounds checks, so a stale/garbage slot
+            // would otherwise become a wild heap write. Valid tables are
+            // untouched; the pad sentinel is preserved.
+            if indices.dtype() == DType::U32 {
+                if let Ok(rows) = pool.conv_state.dim(0) {
+                    if let Ok(cap) = u32::try_from(rows) {
+                        if cap > 0 && indices.is_contiguous() {
+                            crate::cuda::indexed_copy::clamp_slot_table(indices, cap, cap - 1)?;
+                        }
+                    }
+                }
+            }
             let mut cache = Self::pooled(
                 pool.conv_state.clone(),
                 pool.recurrent_state.clone(),

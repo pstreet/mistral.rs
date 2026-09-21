@@ -2971,6 +2971,23 @@ pub fn speculative_conv_checkpoints_cuda(
                 "GDN speculative convolution has query length {seq_len}, checkpoint lane count {checkpoint_lanes}"
             );
         }
+        // Verify no slot's checkpoint base + seq_len exceeds pool capacity.
+        // base_slot = (slot / checkpoint_lanes) * checkpoint_lanes; writes at base + 0..seq_len-1.
+        if active_slots.dims1()? == batch_size {
+            let slots = active_slots.to_vec1::<u32>().unwrap_or_default();
+            for &slot in &slots {
+                if slot == 0xffffffff {
+                    continue;
+                }
+                let base = (slot / checkpoint_lanes as u32) * checkpoint_lanes as u32;
+                if (base as usize).saturating_add(seq_len) > capacity {
+                    candle::bail!(
+                        "GDN speculative convolution: slot base {} + seq_len {} exceeds capacity {}",
+                        base, seq_len, capacity
+                    );
+                }
+            }
+        }
         if !capacity.is_multiple_of(checkpoint_lanes) {
             candle::bail!(
                 "GDN speculative convolution capacity {capacity} is not divisible by {checkpoint_lanes} checkpoint lanes"
@@ -3301,6 +3318,29 @@ pub fn speculative_recurrence_checkpoints_cuda(
             candle::bail!(
                 "GDN speculative recurrence has query length {seq_len}, checkpoint lane count {checkpoint_lanes}"
             );
+        }
+        // The checkpoint base for a slot is (active_slot / checkpoint_lanes) * checkpoint_lanes.
+        // When active_slot is in the last checkpoint-lane group, base_slot + seq_len can exceed capacity.
+        // E.g. capacity=33, checkpoint_lanes=3, active_slot=32 -> base_slot=30, seq_len=3 writes index 33 (OOB).
+        // Verify this cannot happen: active_slot must have room for seq_len checkpoints from its lane base.
+        if active_slots.dims1()? != batch_size {
+            candle::bail!("active_slots dim mismatch");
+        }
+        let slots = active_slots.to_vec1::<u32>()?;
+        for (idx, &slot) in slots.iter().enumerate() {
+            if slot == 0xffffffff {
+                continue;
+            }
+            let base = (slot / checkpoint_lanes as u32) * checkpoint_lanes as u32;
+            if (base as usize).saturating_add(seq_len) > capacity {
+                candle::bail!(
+                    "GDN speculative recurrence: slot {} base {} + seq_len {} exceeds capacity {}",
+                    idx,
+                    base,
+                    seq_len,
+                    capacity
+                );
+            }
         }
         if !capacity.is_multiple_of(checkpoint_lanes) {
             candle::bail!(
