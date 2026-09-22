@@ -75,6 +75,7 @@ impl GdnLayerCache {
             // kernels below do no bounds checks, so a stale/garbage slot
             // would otherwise become a wild heap write. Valid tables are
             // untouched; the pad sentinel is preserved.
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
             if indices.dtype() == DType::U32 {
                 if let Ok(rows) = pool.conv_state.dim(0) {
                     if let Ok(cap) = u32::try_from(rows) {

@@ -5,9 +5,10 @@ use std::{
 
 use candle_core::{Result, Storage, Tensor};
 
+use mistralrs_paged_attn::BlockQuantKind;
+
 // Block-quantized (Q8_0/Q4_0) per-layer scale sidecars, keyed by the owning
 // K-cache tensor identity.
-//
 // Rationale: `PagedAttention::forward` receives resolved per-layer cache
 // tensors but no layer index (45+ model call sites destructure
 // `ctx.paged_layer(idx)`), so threading scale tensors through the model API
@@ -22,8 +23,8 @@ use candle_core::{Result, Storage, Tensor};
 pub(crate) struct BlockQuantScales {
     pub k: Option<Tensor>,
     pub v: Option<Tensor>,
-    pub k_kind: Option<mistralrs_paged_attn::BlockQuantKind>,
-    pub v_kind: Option<mistralrs_paged_attn::BlockQuantKind>,
+    pub k_kind: Option<BlockQuantKind>,
+    pub v_kind: Option<BlockQuantKind>,
     // QJL 1-bit residual sidecars (Q4_0 only): U8 bit packs, 4 bytes per
     // 32-elem group. `Some` only when `MISTRALRS_Q4_QJL=1`; otherwise the
     // kernels fall back to the plain LM grid. `None` for Q8_0.
