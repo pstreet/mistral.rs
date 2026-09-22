@@ -54,14 +54,17 @@ TTFT@1024 921ms; glimmer TTFT@128 1746ms -> 539ms (3.2x). Decode unchanged
 (seq_len=1 skips CK by design). Gemma-4 full layers (head_dim 512) stay eager;
 only hdim 128/256 kernels exist.
 
-### 2. Bigger-Model Bench 🟡 **HIGH**
-**Why:** At 0.6B decode is overhead-dominated; the profile shifts toward
-memory-bound with larger models, where this stack is more competitive.
-Validates whether optimization effort should target launch overhead vs bandwidth.
-
-**Tasks:**
-- [ ] Bench Qwen3-8B (or similar) BF16 on gfx1151, same matrix as above
-- [ ] Compare TPOT scaling vs 0.6B to identify the crossover point
+### 2. Bigger-Model Bench ✅ **ANSWERED (2026-09-22)**
+Profiled the serving default, Qwen3.8-27B (hybrid GDN + full attn every 4th
+layer, 65 layers, Q6_K, ~19.2GB weights/token):
+- Decode is ~100% GPU busy, no host slack, no BLAS mistakes, no router, no
+  eager attention. Aggregate ~186 GB/s = 73% of the 256 GB/s theoretical peak.
+- The MLP fused_glu kernel alone hits ~216 GB/s (84% of practical peak):
+  near-optimal. The projection GEMVs sit at ~170-190 GB/s; heroic tuning
+  there caps at ~10% total.
+- Verdict: kernel work on this model is exhausted. The only real levers are
+  bytes/token (Q4_K_XL ~13GB -> ~65-70ms/token, ~45% faster, re-test quality)
+  and MTP n=2 (already on, +36%).
 
 ### 3. FlashInfer ROCm Integration ⚪ **DEPRIORITIZED**
 **Why:** Not viable on gfx1151 (RDNA lacks MFMA; AMD fork targets gfx942/CDNA
