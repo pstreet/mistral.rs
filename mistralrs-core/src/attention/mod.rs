@@ -307,6 +307,9 @@ impl Sdpa {
                 1
             };
             let gather_exact = kv_len <= seq_len || (!is_custom && q.dim(0)? <= 1);
+            // Sliding windows ride the same CK mask machinery with a bounded
+            // lookback; non-causal sliding has no CK form, so it stays eager.
+            let sliding_ok = sdpa_params.sliding_window.is_none_or(|_| mask_type != 0);
             let dbg = std::env::var("MRS_DEBUG_CK").is_ok();
 
             if q.device().is_cuda()
@@ -316,7 +319,7 @@ impl Sdpa {
                 && matches!(head_dim, 128 | 256)
                 && seq_len > 1
                 && sdpa_params.softcap.is_none_or(|x| x == 1.0)
-                && sdpa_params.sliding_window.is_none()
+                && sliding_ok
                 && gather_exact
             {
                 if let Some(out) = crate::rocm::ck_flash_attn(
@@ -325,6 +328,7 @@ impl Sdpa {
                     v,
                     sdpa_params.softmax_scale as f32,
                     mask_type,
+                    sdpa_params.sliding_window,
                 )? {
                     if dbg {
                         eprintln!("[CK FA] dispatch: HIT, returning output");

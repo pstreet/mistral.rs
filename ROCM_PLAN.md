@@ -43,18 +43,16 @@ Conclusions:
 
 ## High-Impact Additions (Priority Order, Revised Per Measurements)
 
-### 1. CK Sliding-Window Support 🟡 **HIGH**
-**Why:** Mistral/Mixtral never hit the fast prefill path (dispatch requires
-`sliding_window.is_none()`). CK tile library supports masks; this is a
-dispatch + kernel-instantiation job, no MFMA needed, works on RDNA.
-
-**Location:** `mistralrs-core/src/attention/mod.rs` (dispatch),
-`mistralrs-core/src/rocm_ck_flash_attn/` (kernel instantiations)
-
-**Tasks:**
-- [ ] Add sliding-window mask support to CK dispatch (extend `mask_type` handling)
-- [ ] Generate CK kernel instantiations with windowed masks for head_dim 128/256
-- [ ] Benchmark Mistral-7B prefill before/after on gfx1151
+### 1. CK Sliding-Window Support ✅ **DONE (2026-09-22)**
+CK's generic mask already honored `window_size_left/right`; only the args
+(`-1` hardcoded) and the dispatch gate (`sliding_window.is_none()`) blocked it.
+Threaded the window through the C ABI, Rust FFI, and `ck_flash_attn`; causal
+sliding dispatches, non-causal sliding stays eager. GPU reference test extended
+with square + gathered sliding cases.
+Measured (release, gfx1151): gemma-4 TTFT@128 1082ms -> 382ms (2.8x),
+TTFT@1024 921ms; glimmer TTFT@128 1746ms -> 539ms (3.2x). Decode unchanged
+(seq_len=1 skips CK by design). Gemma-4 full layers (head_dim 512) stay eager;
+only hdim 128/256 kernels exist.
 
 ### 2. Bigger-Model Bench 🟡 **HIGH**
 **Why:** At 0.6B decode is overhead-dominated; the profile shifts toward

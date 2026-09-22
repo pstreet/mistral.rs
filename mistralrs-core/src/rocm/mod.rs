@@ -9,6 +9,7 @@ use crate::cuda::ffi::ck_flash_attn_fwd;
 /// Q, K, V must be BSHD (batch, heads, seq_len, head_dim).
 /// `mask_type`: 0 = none, 1 = causal top-left, 2 = causal bottom-right
 /// (for gathered prefixes where kv_len > q_len).
+/// `sliding_window`: None = full attention, Some(w) = causal lookback of w.
 /// Returns `Ok(Some(output))` on success, `Ok(None)` if unsupported.
 #[allow(clippy::cast_possible_truncation)]
 pub(crate) fn ck_flash_attn(
@@ -17,6 +18,7 @@ pub(crate) fn ck_flash_attn(
     v: &Tensor,
     softmax_scale: f32,
     mask_type: i32,
+    sliding_window: Option<usize>,
 ) -> Result<Option<Tensor>> {
     let (b_sz, n_attn_heads, seq_len, head_dim) = q.dims4()?;
     let (_, n_kv_heads, kv_len, k_head_dim) = k.dims4()?;
@@ -34,6 +36,13 @@ pub(crate) fn ck_flash_attn(
     if q.dtype() != DType::BF16 || k.dtype() != DType::BF16 || v.dtype() != DType::BF16 {
         return Ok(None);
     }
+    // CK takes the lookback (W-1); a zero window is meaningless.
+    let window_size_left = match sliding_window {
+        None => -1,
+        Some(0) => return Ok(None),
+        Some(w) => i32::try_from(w - 1)
+            .map_err(|_| candle_core::Error::msg("sliding window does not fit i32"))?,
+    };
 
     let dev = q.device().as_cuda_device()?;
 
@@ -90,8 +99,8 @@ pub(crate) fn ck_flash_attn(
 
     if std::env::var("MRS_DEBUG_CK").is_ok() {
         eprintln!(
-            "[CK FA] b={} q_heads={} kv_heads={} seq_q={} seq_k={} hdim={} mask_type={} scale={}",
-            b_sz, n_attn_heads, n_kv_heads, seq_len, kv_len, head_dim, mask_type, softmax_scale
+            "[CK FA] b={} q_heads={} kv_heads={} seq_q={} seq_k={} hdim={} mask_type={} scale={} window={:?}",
+            b_sz, n_attn_heads, n_kv_heads, seq_len, kv_len, head_dim, mask_type, softmax_scale, sliding_window
         );
     }
 
@@ -123,6 +132,7 @@ pub(crate) fn ck_flash_attn(
             q_stride[0] as i64,
             softmax_scale,
             mask_type,
+            window_size_left,
             stream_i64,
         );
     }
@@ -142,28 +152,40 @@ pub(crate) fn ck_flash_attn(
 mod tests {
     use candle_core::{DType, Device, Tensor};
 
-    // reference attention: mode 0 = full, 1 = causal top-left, 2 = causal bottom-right
+    // reference attention: mode 0 = full, 1 = causal top-left, 2 = causal bottom-right.
+    // `window` bounds the causal lookback, mirroring CK's left-window.
     fn ref_attention(
         q: &Tensor,
         k: &Tensor,
         v: &Tensor,
         scale: f64,
         mode: u8,
+        window: Option<usize>,
     ) -> candle_core::Result<Tensor> {
         let (_, _, sq, _) = q.dims4()?;
         let (_, _, sk, _) = k.dims4()?;
         let kt = k.transpose(2, 3)?;
         let scores = (scale * &q.matmul(&kt)?)?;
         let mut mask = Vec::with_capacity(sq * sk);
+        let offset = if mode == 2 { sk.saturating_sub(sq) } else { 0 };
         for i in 0..sq {
             for j in 0..sk {
-                let valid = match mode {
+                let causal_ok = match mode {
                     0 => true,
                     1 => j <= i,
-                    2 => j <= i + (sk - sq),
+                    2 => j <= i + offset,
                     _ => unreachable!(),
                 };
-                mask.push(if valid { 0f32 } else { f32::NEG_INFINITY });
+                let window_ok = match window {
+                    None => true,
+                    // `causal_ok` is checked first, so the subtraction cannot underflow.
+                    Some(w) => !causal_ok || i + offset - j < w,
+                };
+                mask.push(if causal_ok && window_ok {
+                    0f32
+                } else {
+                    f32::NEG_INFINITY
+                });
             }
         }
         let mask = Tensor::from_vec(mask, (sq, sk), q.device())?;
@@ -179,16 +201,17 @@ mod tests {
         dim: usize,
         scale: f64,
         mode: u8,
+        window: Option<usize>,
     ) -> candle_core::Result<()> {
         let q = Tensor::rand(-1.0, 1.0, (1, heads, sq, dim), dev)?.to_dtype(DType::BF16)?;
         let k = Tensor::rand(-1.0, 1.0, (1, heads, sk, dim), dev)?.to_dtype(DType::BF16)?;
         let v = Tensor::rand(-1.0, 1.0, (1, heads, sk, dim), dev)?.to_dtype(DType::BF16)?;
-        let out = super::ck_flash_attn(&q, &k, &v, scale as f32, mode as i32)?
+        let out = super::ck_flash_attn(&q, &k, &v, scale as f32, mode as i32, window)?
             .ok_or_else(|| candle_core::Error::msg("ck_flash_attn returned none"))?;
         let qf = q.to_dtype(DType::F32)?;
         let kf = k.to_dtype(DType::F32)?;
         let vf = v.to_dtype(DType::F32)?;
-        let ref_out = ref_attention(&qf, &kf, &vf, scale, mode)?;
+        let ref_out = ref_attention(&qf, &kf, &vf, scale, mode, window)?;
         let max_abs = (out.to_dtype(DType::F32)? - &ref_out)?.abs()?.max_all()?;
         let ref_max = ref_out.abs()?.max_all()?.to_scalar::<f32>()?.max(1e-6);
         let rel = max_abs.to_scalar::<f32>()? / ref_max;
@@ -204,12 +227,16 @@ mod tests {
         let dev = Device::new_cuda(0)?;
         let scale = 1.0f64 / (128f64.sqrt());
         // fresh prompt: kv_len == q_len, causal top-left
-        check_case(&dev, 4, 4, 2, 128, scale, 1)?;
+        check_case(&dev, 4, 4, 2, 128, scale, 1, None)?;
         // full (non-causal) attention
-        check_case(&dev, 4, 4, 2, 128, scale, 0)?;
+        check_case(&dev, 4, 4, 2, 128, scale, 0, None)?;
         // gathered prefix: kv_len > q_len, causal bottom-right
-        check_case(&dev, 4, 12, 2, 128, scale, 2)?;
-        check_case(&dev, 7, 19, 2, 128, scale, 2)?;
+        check_case(&dev, 4, 12, 2, 128, scale, 2, None)?;
+        check_case(&dev, 7, 19, 2, 128, scale, 2, None)?;
+        // causal sliding window: the mask carries causality, the window bounds it
+        check_case(&dev, 16, 16, 2, 128, scale, 1, Some(4))?;
+        check_case(&dev, 16, 16, 2, 128, scale, 1, Some(8))?;
+        check_case(&dev, 12, 20, 2, 128, scale, 2, Some(6))?;
         Ok(())
     }
 }

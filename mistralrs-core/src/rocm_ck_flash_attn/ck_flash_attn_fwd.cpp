@@ -125,6 +125,7 @@ extern "C" float ck_flash_attn_fwd(
     int64_t batch_stride_o,
     float scale_s,
     int32_t mask_type,
+    int32_t window_size_left,
     int64_t stream)
 {
     fmha_fwd_args a;
@@ -194,7 +195,7 @@ extern "C" float ck_flash_attn_fwd(
     a.batch_stride_k_descale = 0;
     a.batch_stride_v_descale = 0;
 
-    a.window_size_left  = -1;
+    a.window_size_left  = window_size_left;
     // causal needs a zero right-window; -1 would widen it to full attention
     a.window_size_right = (mask_type != 0) ? 0 : -1;
     a.sink_size         = 0;

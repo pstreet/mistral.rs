@@ -31,6 +31,7 @@ extern "C" {
         batch_stride_o: i64,
         scale_s: f32,
         mask_type: i32,
+        window_size_left: i32,
         stream: i64,
     ) -> f32;
 
