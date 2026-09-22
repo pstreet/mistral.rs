@@ -20,7 +20,9 @@ use crate::gguf::{
     get_gguf_chat_template, get_gguf_chat_template_from_metadata,
     multimodal_bindings::build_gemma4_bindings,
     multimodal_config::supports_standalone_assets,
+    multimodal_config::synthesize_gemma4_preprocessor,
     multimodal_config::synthesize_multimodal_config,
+    multimodal_config::synthesize_muse_glimmer_preprocessor,
     multimodal_config::synthesize_qwen35_preprocessor,
     multimodal_vision_registry::resolve_native_multimodal_gguf,
     muse_glimmer_bindings::normalize_muse_glimmer_config,
@@ -217,6 +219,20 @@ fn prepare_native_multimodal_config(
     let config = super::isq::sanitize_quantized_weight_source_config(config)?;
     let config = normalize_qwen_multimodal_config(loader_type, &config)?;
     normalize_muse_glimmer_config(loader_type, &config)
+}
+
+fn synthesize_native_preprocessor(
+    loader_type: &MultimodalLoaderType,
+    metadata: &HashMap<String, candle_core::quantized::gguf_file::Value>,
+) -> Result<String> {
+    match loader_type {
+        MultimodalLoaderType::Qwen3_5 => synthesize_qwen35_preprocessor(metadata),
+        MultimodalLoaderType::Gemma4 => synthesize_gemma4_preprocessor(metadata),
+        MultimodalLoaderType::MuseGlimmer => synthesize_muse_glimmer_preprocessor(metadata),
+        loader => anyhow::bail!(
+            "multimodal loader `{loader:?}` cannot synthesize a preprocessor config; pass `--tok-model-id <original-model-id>`"
+        ),
+    }
 }
 
 struct NativeNormalLoadArgs<'a> {
@@ -878,14 +894,18 @@ impl GGUFLoader {
             }
         };
         validate_native_dynamic_lora(self.dynamic_lora.as_ref(), rope_pairing, &architecture)?;
-        let tensor_names = archive.tensors().keys().cloned().collect::<Vec<_>>();
+        let tensor_shapes = archive
+            .tensors()
+            .iter()
+            .map(|(name, info)| (name.clone(), info.shape().to_vec()))
+            .collect::<HashMap<_, _>>();
         let (raw_config, synthesized) = if paths.get_config_filename().as_os_str().is_empty() {
             (
                 synthesize_multimodal_config(
                     &loader_type,
                     &architecture,
                     archive.metadata(),
-                    &tensor_names,
+                    &tensor_shapes,
                 )?,
                 true,
             )
@@ -924,7 +944,10 @@ impl GGUFLoader {
             .transpose()?
         {
             Some(config) => Some(config),
-            None if synthesized => Some(synthesize_qwen35_preprocessor(archive.metadata())?),
+            None if synthesized => Some(synthesize_native_preprocessor(
+                &loader_type,
+                archive.metadata(),
+            )?),
             None => None,
         };
         let mut source_weight_files = paths.get_weight_filenames().to_vec();
@@ -1061,6 +1084,13 @@ impl GGUFLoader {
             }
             return Ok(None);
         };
+        if config_missing && Self::standalone_cover(&model_archive, &projector_archives) {
+            warn!(
+                "Multimodal GGUF `config.json` is synthesized from GGUF metadata; not fetching \
+                 `{inferred_model_id}` from Hugging Face"
+            );
+            return Ok(None);
+        }
 
         let revision = "main";
         let api = match build_api(token_source, !silent) {
