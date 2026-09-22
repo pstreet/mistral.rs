@@ -507,11 +507,35 @@ impl SparseMoeBlock {
         })
     }
 
+    fn router_logits(&self, xs_flat: &Tensor) -> Result<Tensor> {
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
+        if self.gate_lora.is_none() {
+            if let Some(logits) = crate::ops::moe_router_gemv(xs_flat, self.gate.weight())? {
+                return Ok(logits);
+            }
+        }
+        self.gate.forward(xs_flat)
+    }
+
+    fn shared_gate_logits(&self, xs_flat: &Tensor) -> Result<Tensor> {
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
+        if self.shared_expert_gate_lora.is_none() {
+            if let Some(logits) =
+                crate::ops::moe_router_gemv(xs_flat, self.shared_expert_gate.weight())?
+            {
+                // The BLAS path produces the weight dtype; keep downstream
+                // dtypes identical.
+                return logits.to_dtype(xs_flat.dtype());
+            }
+        }
+        self.shared_expert_gate.forward(xs_flat)
+    }
+
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
-        let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = self.router_logits(&xs_flat)?;
         let router_logits = match &self.gate_lora {
             Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, router_logits)?,
             None => router_logits,
@@ -537,7 +561,7 @@ impl SparseMoeBlock {
         // 3. Shared expert with sigmoid gating
         let shared_out = self.shared_expert.forward(xs)?;
 
-        let shared_gate = self.shared_expert_gate.forward(&xs_flat)?;
+        let shared_gate = self.shared_gate_logits(&xs_flat)?;
         let shared_gate = match &self.shared_expert_gate_lora {
             Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, shared_gate)?,
             None => shared_gate,

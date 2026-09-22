@@ -123,17 +123,28 @@ PagedAttn FP8 path works; quant-specific kernels don't.
 
 ---
 
-### 3. MoE Kernels: Cutlass/DeepGEMM Alternatives for ROCm 🟡 **HIGH** (was #5)
-**Why:** MoE models (Mixtral, Qwen3-MoE, DeepSeek) need expert routing + fused gemm. Current CUDA kernels use Cutlass/DeepGEMM.
-
-**Location:** `mistralrs-quant/src/moe/`, `mistralrs-core/src/cuda/moe*.cu`
-
-**Tasks:**
-- [ ] Evaluate `hipblaslt` + `rocblas` for MoE gemm on ROCm
-- [ ] Investigate AMD's **Composable Kernel (CK)** library for MoE operations
-- [ ] Port `moe_gemm.cu` / `moe_gemm_wmma.cu` to use CK or hipBLASLt
-- [ ] Add ROCm-specific MoE kernel selection in `mistralrs-quant/src/moe/mod.rs`
-- [ ] Benchmark against CUDA Cutlass baseline
+### 3. MoE Kernels on ROCm 🟡 **MEASURED, REDIRECTED (2026-09-22)**
+rocprofv3 decode-only slice (Qwen3-16B, 64 tok @ d128, gfx1151):
+- `moe_gemv` expert kernels: 6.4ms/token, 113 GB/s vs 256 GB/s peak (44%).
+  Q2_K gate_up is the laggard (~101 GB/s); Q4_K down ~131 GB/s. Headroom is
+  real but dequant-bound: est. 1.5-2.5ms/token for kernel tuning (7-12% TPOT).
+- **The planned CK grouped-GEMM port is dead for this fleet**: decode already
+  uses custom quantized GEMV kernels (`moe_gemv.cu`); CK grouped GEMM targets
+  the BF16 path GGUF models never take at decode.
+- **Bigger fish found (FIXED 2026-09-22)**: the MoE router GEMV ran through
+  candle Linear -> rocBLAS, which picked a 128x128x32 tile GEMM for a 1-row
+  GEMV: 65.8us/call, 48 calls/token = 3.16ms/token (15% of decode GPU busy)
+  to read 512KB (~8 GB/s). Added `moe_router_gemv` (block-reduce dot-product
+  kernel in sort.cu, FFI, `ops::moe_router_gemv` fast path for <=16 rows,
+  mixed F32/BF16/F16 xs/weight, leading dims folded). Wired: qwen3_moe,
+  qwen3_next (router + shared-expert gate), mixtral, gemma4 router.
+  Measured TPOT: Qwen3-16B 20.78 -> 17.87ms (14%), Qwen3.6-35B 32.5 -> 24.0ms
+  (26%), gemma-4 30.4 -> 28.0ms (8%), Llama-30B flat (its BLAS heuristic
+  already picked a sane skinny GEMV). rocprof confirms the tile-GEMM router
+  calls are gone (0.6% residue from prefill fallback).
+- Follow-up: attention projections (`mmvq`/`mul_mat_q`) run ~7.3ms/token at
+  ~40 GB/s effective on Q2_K weights; worth its own pass later. Same for
+  gemma-4's parallel dense MLP matmuls (still BLAS tile GEMMs at decode).
 
 ---
 

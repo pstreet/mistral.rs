@@ -237,6 +237,8 @@ struct SparseMoeBlock {
     gate: Arc<dyn QuantMethod>,
     experts: MoEExperts,
     num_experts_per_tok: usize,
+    #[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
+    gate_weight: Option<Tensor>,
 }
 
 impl SparseMoeBlock {
@@ -253,6 +255,15 @@ impl SparseMoeBlock {
             &cfg.quantization_config,
             vb.pp("gate"),
         )?;
+        // ISQ re-quantizes the gate in place; a plain copy would diverge.
+        let gate_weight = if loading_isq {
+            None
+        } else {
+            vb.pp("gate")
+                .get((cfg.num_local_experts, cfg.hidden_size), "weight")
+                .ok()
+                .filter(|w| w.device().is_cuda())
+        };
         let moe_cfg = MoEExpertsConfig {
             num_experts: cfg.num_local_experts,
             num_experts_per_tok: cfg.num_experts_per_tok,
@@ -273,7 +284,20 @@ impl SparseMoeBlock {
             gate,
             experts,
             num_experts_per_tok: cfg.num_experts_per_tok,
+            gate_weight,
         })
+    }
+}
+
+impl SparseMoeBlock {
+    fn router_logits(&self, xs_flat: &Tensor) -> Result<Tensor> {
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
+        if let Some(w) = &self.gate_weight {
+            if let Some(logits) = crate::ops::moe_router_gemv(xs_flat, w)? {
+                return Ok(logits);
+            }
+        }
+        self.gate.forward(xs_flat)
     }
 }
 
@@ -282,7 +306,7 @@ impl Module for SparseMoeBlock {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
-        let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = self.router_logits(&xs_flat)?;
         let topk = crate::ops::moe_router_topk(
             &router_logits,
             crate::ops::MoeRouterTopKConfig {

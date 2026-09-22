@@ -2649,3 +2649,62 @@ extern "C" void categorical_large_f32_packed_batched(
       input, inv_temperatures, uniforms, block_values, block_sums, packed_out,
       ncols, chunk_size, nblocks);
 }
+
+// MoE router GEMV: logits[row, expert] = xs[row, :] . w[expert, :].
+// The router Linear goes through the BLAS GEMM tile path, which is sized
+// for large tiles; at decode's single row that costs an order of magnitude
+// more than the weight read itself.
+template <typename XST, typename WT>
+__global__ void moe_router_gemv_kernel(const XST *__restrict__ xs,
+                                       const WT *__restrict__ w,
+                                       float *__restrict__ logits,
+                                       const int hidden,
+                                       const int n_experts) {
+  const int expert = blockIdx.x;
+  const size_t row = blockIdx.y;
+  const XST *__restrict__ xrow = xs + row * static_cast<size_t>(hidden);
+  const WT *__restrict__ wrow = w + static_cast<size_t>(expert) * hidden;
+
+  float acc = 0.0f;
+  for (int i = threadIdx.x; i < hidden; i += blockDim.x) {
+    acc += router_to_float(xrow[i]) * router_to_float(wrow[i]);
+  }
+  acc = block_reduce_sum_f32(acc);
+  if (threadIdx.x == 0) {
+    logits[row * static_cast<size_t>(n_experts) + expert] = acc;
+  }
+}
+
+template <typename XST, typename WT>
+void launch_moe_router_gemv(const void *xs, const void *w, float *logits,
+                            int hidden, int n_experts, int n_rows,
+                            cudaStream_t custream) {
+  const dim3 grid(n_experts, n_rows, 1);
+  moe_router_gemv_kernel<XST, WT>
+      <<<grid, 256, 0, custream>>>(static_cast<const XST *>(xs),
+                                   static_cast<const WT *>(w), logits,
+                                   hidden, n_experts);
+}
+
+// xs_dtype / w_dtype: 0 = F32, 1 = BF16, 2 = F16.
+extern "C" void moe_router_gemv(const void *xs, const void *w, float *logits,
+                                int hidden, int n_experts, int n_rows,
+                                int xs_dtype, int w_dtype, int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+#define GEMV_COMBINE(XST, WT, XS_CODE, W_CODE)                                 \
+  if (xs_dtype == XS_CODE && w_dtype == W_CODE) {                              \
+    launch_moe_router_gemv<XST, WT>(xs, w, logits, hidden, n_experts,         \
+                                    n_rows, custream);                         \
+    return;                                                                    \
+  }
+  GEMV_COMBINE(float, float, 0, 0)
+  GEMV_COMBINE(float, __nv_bfloat16, 0, 1)
+  GEMV_COMBINE(float, __half, 0, 2)
+  GEMV_COMBINE(__nv_bfloat16, float, 1, 0)
+  GEMV_COMBINE(__nv_bfloat16, __nv_bfloat16, 1, 1)
+  GEMV_COMBINE(__nv_bfloat16, __half, 1, 2)
+  GEMV_COMBINE(__half, float, 2, 0)
+  GEMV_COMBINE(__half, __nv_bfloat16, 2, 1)
+  GEMV_COMBINE(__half, __half, 2, 2)
+#undef GEMV_COMBINE
+}

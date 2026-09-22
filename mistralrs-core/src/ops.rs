@@ -349,11 +349,117 @@ const MOE_ROUTER_MAX_POWER_OF_TWO_EXPERTS: usize = 512;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 const MOE_ROUTER_EXTRA_EXPERT_COUNTS: &[usize] = &[576];
 
+/// Fused MoE router GEMV for decode-sized batches: `logits[r, e] = xs[r, :] . w[e, :]`.
+/// Returns `Ok(None)` when the shapes/dtypes/device are outside the fast path.
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[allow(clippy::cast_possible_truncation)]
+pub fn moe_router_gemv(xs: &Tensor, w: &Tensor) -> Result<Option<Tensor>> {
+    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+    use candle_core::cuda_backend::CudaStorageSlice;
+    use candle_core::Storage;
+    use std::ffi::c_void;
+
+    if !xs.device().is_cuda()
+        || !w.device().is_cuda()
+        || xs.device().location() != w.device().location()
+    {
+        return Ok(None);
+    }
+    // Routers see [tokens, hidden] or [batch, seq, hidden]; fold leading dims.
+    let Some((hidden, leading)) = xs.dims().split_last() else {
+        return Ok(None);
+    };
+    let hidden = *hidden;
+    let n_rows = leading.iter().product::<usize>();
+    let (n_experts, w_hidden) = match w.dims() {
+        [n_experts, w_hidden] => (*n_experts, *w_hidden),
+        _ => return Ok(None),
+    };
+    if hidden != w_hidden || hidden == 0 || n_rows == 0 || n_rows > MOE_ROUTER_GEMV_MAX_ROWS {
+        return Ok(None);
+    }
+    let dtype_code = |dtype: DType| match dtype {
+        DType::F32 => Some(0),
+        DType::BF16 => Some(1),
+        DType::F16 => Some(2),
+        _ => None,
+    };
+    let (Some(xs_code), Some(w_code)) = (dtype_code(xs.dtype()), dtype_code(w.dtype())) else {
+        return Ok(None);
+    };
+
+    let xs = xs.contiguous()?;
+    let w = w.contiguous()?;
+    let dev = xs.device().as_cuda_device()?;
+    let stream = dev.cuda_stream();
+    let stream_raw = stream.cu_stream() as i64;
+
+    let (xs_storage, xs_layout) = xs.storage_and_layout();
+    let Storage::Cuda(xs_cuda) = &*xs_storage else {
+        candle_core::bail!("moe_router_gemv requires CUDA xs");
+    };
+    let (w_storage, w_layout) = w.storage_and_layout();
+    let Storage::Cuda(w_cuda) = &*w_storage else {
+        candle_core::bail!("moe_router_gemv requires CUDA weights");
+    };
+
+    macro_rules! const_ptr {
+        ($slice:expr, $layout:expr, $dtype:expr) => {{
+            let ptr = match &$slice {
+                CudaStorageSlice::F32(s) => s.device_ptr(&stream).0,
+                CudaStorageSlice::BF16(s) => s.device_ptr(&stream).0,
+                CudaStorageSlice::F16(s) => s.device_ptr(&stream).0,
+                _ => candle_core::bail!("moe_router_gemv unsupported dtype"),
+            };
+            unsafe {
+                (ptr as *const u8).add($layout.start_offset() * $dtype.size_in_bytes())
+                    as *const c_void
+            }
+        }};
+    }
+    let xs_ptr = const_ptr!(xs_cuda.slice, xs_layout, xs.dtype());
+    let w_ptr = const_ptr!(w_cuda.slice, w_layout, w.dtype());
+
+    let mut logits = unsafe { dev.alloc::<f32>(n_rows * n_experts)? };
+    let (logits_ptr, logits_guard) = logits.device_ptr_mut(&stream);
+
+    unsafe {
+        ffi::moe_router_gemv(
+            xs_ptr,
+            w_ptr,
+            logits_ptr as *mut c_void,
+            hidden as i32,
+            n_experts as i32,
+            n_rows as i32,
+            xs_code,
+            w_code,
+            stream_raw,
+        );
+    }
+    drop(logits_guard);
+
+    let logits_storage = candle_core::cuda_backend::CudaStorage {
+        slice: CudaStorageSlice::F32(logits),
+        device: dev.clone(),
+    };
+    let mut out_dims = leading.to_vec();
+    out_dims.push(n_experts);
+    Ok(Some(Tensor::from((
+        candle_core::Storage::Cuda(logits_storage),
+        Shape::from_dims(&out_dims),
+    ))))
+}
+
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn cuda_moe_router_topk_supports_experts(n_experts: usize) -> bool {
     (n_experts.is_power_of_two() && n_experts <= MOE_ROUTER_MAX_POWER_OF_TWO_EXPERTS)
         || MOE_ROUTER_EXTRA_EXPERT_COUNTS.contains(&n_experts)
 }
+
+// The router GEMV targets decode-sized row counts; the BLAS path wins again
+// once the matmul has real tiles to fill.
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+const MOE_ROUTER_GEMV_MAX_ROWS: usize = 16;
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn cuda_moe_router_topk_if_supported(
@@ -8494,6 +8600,49 @@ mod tests {
         let actual = super::cuda_top1_logits_f32_cached(&logits, &mut workspace)?;
 
         assert!(actual.iter().all(|value| value.is_nan()));
+        Ok(())
+    }
+
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[test]
+    fn moe_router_gemv_matches_matmul() -> candle_core::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let (hidden, n_experts) = (2048usize, 64usize);
+        for (xs_dt, w_dt) in [
+            (DType::F32, DType::F32),
+            (DType::BF16, DType::F32),
+            (DType::BF16, DType::BF16),
+        ] {
+            for n_rows in [1usize, 2, 5] {
+                let xs = Tensor::rand(-1.0, 1.0, (n_rows, hidden), &device)?.to_dtype(xs_dt)?;
+                let w = Tensor::rand(-1.0, 1.0, (n_experts, hidden), &device)?.to_dtype(w_dt)?;
+                let logits = super::moe_router_gemv(&xs, &w)?
+                    .ok_or_else(|| candle_core::Error::msg("moe_router_gemv returned None"))?;
+                assert_eq!(logits.dtype(), DType::F32);
+                let reference = xs
+                    .to_dtype(DType::F32)?
+                    .matmul(&w.to_dtype(DType::F32)?.t()?)?;
+                let logits = logits.to_dtype(DType::F32)?;
+                let diff = logits
+                    .sub(&reference)?
+                    .abs()?
+                    .max_all()?
+                    .to_scalar::<f32>()?;
+                assert!(
+                    diff < 2e-2,
+                    "{xs_dt:?}/{w_dt:?} rows={n_rows}: max diff {diff}"
+                );
+            }
+        }
+        // [batch, seq, hidden] routers fold their leading dims.
+        let xs = Tensor::rand(-1.0, 1.0, (1, 1, hidden), &device)?.to_dtype(DType::BF16)?;
+        let w = Tensor::rand(-1.0, 1.0, (n_experts, hidden), &device)?.to_dtype(DType::BF16)?;
+        let logits = super::moe_router_gemv(&xs, &w)?.unwrap();
+        assert_eq!(logits.dims(), &[1, 1, n_experts]);
+        // Large batches fall back to the Linear path.
+        let xs = Tensor::rand(-1.0, 1.0, (17, hidden), &device)?;
+        let w = Tensor::rand(-1.0, 1.0, (n_experts, hidden), &device)?;
+        assert!(super::moe_router_gemv(&xs, &w)?.is_none());
         Ok(())
     }
 }

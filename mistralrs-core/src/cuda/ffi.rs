@@ -712,6 +712,18 @@ extern "C" {
         stream: i64,
     );
 
+    pub(crate) fn moe_router_gemv(
+        xs: *const c_void,
+        w: *const c_void,
+        logits: *mut c_void,
+        hidden: i32,
+        n_experts: i32,
+        n_rows: i32,
+        xs_dtype: i32,
+        w_dtype: i32,
+        stream: i64,
+    );
+
     pub(crate) fn topk_large_f32(
         input: *const f32,
         block_values: *mut f32,

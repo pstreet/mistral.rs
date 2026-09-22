@@ -238,11 +238,21 @@ impl Gemma4Router {
         })
     }
 
+    fn router_logits(&self, router_input: &Tensor) -> Result<Tensor> {
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
+        if self.proj_lora.is_none() {
+            if let Some(logits) = crate::ops::moe_router_gemv(router_input, self.proj.weight())? {
+                return Ok(logits);
+            }
+        }
+        router_input.apply(&self.proj)
+    }
+
     fn forward(&self, xs: &Tensor, per_expert_scale: &Tensor) -> Result<(Tensor, Tensor)> {
         let normed = xs.apply(&self.norm)?;
 
         let router_input = normed.to_dtype(self.proj.weight().dtype())?;
-        let logits = router_input.apply(&self.proj)?;
+        let logits = self.router_logits(&router_input)?;
         let logits = match &self.proj_lora {
             Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &router_input, logits)?,
             None => logits,
