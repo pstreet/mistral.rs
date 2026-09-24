@@ -2439,6 +2439,7 @@ impl MultimodalPipeline {
                     }
                     Ok(logits)
                 },
+                &mut *state,
             )?;
             Ok((
                 live_logits,

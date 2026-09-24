@@ -730,7 +730,7 @@ pub(crate) enum ForwardMaskCache<'a> {
     Paged(&'a [usize]),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RecurrentBatchKind {
     Prefill,
     Decode,

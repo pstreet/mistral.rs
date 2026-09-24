@@ -2134,6 +2134,7 @@ impl NormalPipeline {
                     .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
                     self.model.forward(graph_input_ids, &mut ctx)
                 },
+                &mut *state,
             )?;
             Ok((live_logits, entry))
         })();

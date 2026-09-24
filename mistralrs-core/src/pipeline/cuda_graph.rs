@@ -1026,6 +1026,28 @@ pub(crate) struct CudaDecodeGraphKey {
     decode_rows: Option<DecodePagedRowsGraphKey>,
 }
 
+// Stable capture-shape identity for arena sizing: batch width, query length,
+// dtype size, and batch kind drive capture-time allocations, while context
+// lengths and block tables do not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct DecodeArenaBucketKey {
+    batch: usize,
+    seq_len: usize,
+    dtype_bytes: usize,
+    kind: RecurrentBatchKind,
+}
+
+impl CudaDecodeGraphKey {
+    fn arena_bucket(&self) -> DecodeArenaBucketKey {
+        DecodeArenaBucketKey {
+            batch: self.input_shape.first().copied().unwrap_or(0),
+            seq_len: self.input_shape.get(1).copied().unwrap_or(0),
+            dtype_bytes: self.input_dtype.size_in_bytes(),
+            kind: self.recurrent_batch_kind,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CudaGraphTensorKey {
     name: &'static str,
@@ -1981,6 +2003,7 @@ pub(crate) struct CudaDecodeGraphState {
     suspended: bool,
     eager_retry_blocked: bool,
     recurrent_storage_generation: Option<u64>,
+    arena_observations: HashMap<DecodeArenaBucketKey, usize>,
 }
 
 impl Default for CudaDecodeGraphState {
@@ -1993,6 +2016,7 @@ impl Default for CudaDecodeGraphState {
             suspended: false,
             eager_retry_blocked: false,
             recurrent_storage_generation: None,
+            arena_observations: HashMap::new(),
         }
     }
 }
@@ -2006,6 +2030,33 @@ impl Drop for CudaDecodeGraphState {
 impl CudaDecodeGraphState {
     pub(crate) fn ensure_capacity(&mut self, capacity: usize) {
         self.capacity = self.capacity.max(capacity);
+    }
+
+    pub(crate) fn record_arena_observation(
+        &mut self,
+        bucket: DecodeArenaBucketKey,
+        consumed_bytes: usize,
+    ) {
+        if consumed_bytes == 0 {
+            return;
+        }
+        let slot = self.arena_observations.entry(bucket).or_insert(0);
+        *slot = (*slot).max(consumed_bytes);
+    }
+
+    pub(crate) fn estimated_arena_bytes(
+        &self,
+        bucket: &DecodeArenaBucketKey,
+        warmup_bytes: usize,
+    ) -> usize {
+        match self.arena_observations.get(bucket) {
+            Some(&observed) => observed
+                .saturating_add(observed / 8)
+                .saturating_add(DECODE_GRAPH_MIN_ARENA_BYTES),
+            None => warmup_bytes
+                .saturating_mul(6)
+                .saturating_add(DECODE_GRAPH_MIN_ARENA_BYTES),
+        }
     }
 
     pub(crate) fn disabled(&self) -> bool {
@@ -2345,9 +2396,43 @@ fn release_cuda_graph_entries(entries: Vec<CudaDecodeGraphEntry>) {
     }
 }
 
+// Clamp a computed decode-graph arena to what the device can actually provide.
+// A pathological dry-run sum must not turn into an impossible allocation;
+// the overflow regrow path sizes back up if the clamp undershoots.
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+fn clamp_decode_arena_bytes(
+    requested_bytes: usize,
+    available_bytes: usize,
+    device: &Device,
+) -> usize {
+    requested_bytes.min(crate::paged_attention::device_memory_cap(
+        available_bytes,
+        device,
+    ))
+}
+
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+fn clamp_decode_arena_to_device(
+    device: &Device,
+    requested_bytes: usize,
+) -> candle_core::Result<usize> {
+    let available = crate::MemoryUsage.query(device)?.available();
+    let clamped = clamp_decode_arena_bytes(requested_bytes, available, device);
+    if clamped < requested_bytes {
+        tracing::debug!(
+            requested_bytes,
+            clamped_bytes = clamped,
+            available_bytes = available,
+            "Clamping CUDA decode graph arena to available device memory"
+        );
+    }
+    Ok(clamped)
+}
+
 pub(crate) fn capture_cuda_decode_graph<F>(
     ctx: CudaDecodeGraphCaptureCtx<'_>,
     mut forward: F,
+    state: &mut CudaDecodeGraphState,
 ) -> candle_core::Result<CudaDecodeGraphEntry>
 where
     F: FnMut(&Tensor, &PagedAttentionInputMetadata) -> candle_core::Result<Tensor>,
@@ -2403,12 +2488,19 @@ where
     // copies kept live in the graph; the dry run reuses pool memory so it
     // under-measures, and the true need is found by re-capturing on overflow.
     let warmup_bytes = arena_bytes;
-    let arena_bytes = warmup_bytes * 6 + DECODE_GRAPH_MIN_ARENA_BYTES;
+    let arena_bytes = state.estimated_arena_bytes(&key.arena_bucket(), warmup_bytes);
     #[cfg(all(feature = "rocm", not(feature = "cuda")))]
-    let arena_bytes = std::env::var("MRS_DECODE_ARENA_OVERRIDE")
+    let arena_bytes = match std::env::var("MRS_DECODE_ARENA_OVERRIDE")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(arena_bytes);
+    {
+        // Explicit override is expert mode: use as-is.
+        Some(explicit) => explicit,
+        // The dry-run sum times the headroom multiplier can exceed the device;
+        // clamp to what is actually available and let the overflow regrow path
+        // size back up if the clamp undershoots.
+        None => clamp_decode_arena_to_device(graph_input_ids.device(), arena_bytes)?,
+    };
     eprintln!(
         "[cudarc] CAPTURE begin warmup={warmup_bytes} arena={arena_bytes} t={}",
         dbg_nanos()
@@ -2514,6 +2606,14 @@ where
             "captured CUDA graph logits do not match the contiguous warmup output",
         ));
     }
+
+    // Read consumption before end_capture resets the bookkeeping, and remember
+    // it so the next capture of this bucket sizes from measurement.
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    let captured_consumed_bytes = stream.capture_arena_consumed();
+    #[cfg(not(all(feature = "rocm", not(feature = "cuda"))))]
+    let captured_consumed_bytes = 0;
+    state.record_arena_observation(key.arena_bucket(), captured_consumed_bytes);
 
     #[cfg_attr(all(feature = "rocm", not(feature = "cuda")), allow(unused_mut))]
     let mut graph = match CudaGraphHandle::end_capture(&stream) {
@@ -3763,6 +3863,54 @@ fn copy_rope_positions(
 mod tests {
     use super::*;
 
+    #[test]
+    fn arena_estimate_uses_recordings_then_falls_back() {
+        let bucket = DecodeArenaBucketKey {
+            batch: 8,
+            seq_len: 1,
+            dtype_bytes: 2,
+            kind: RecurrentBatchKind::Decode,
+        };
+        let mut state = CudaDecodeGraphState::default();
+        assert_eq!(
+            state.estimated_arena_bytes(&bucket, 100),
+            100 * 6 + DECODE_GRAPH_MIN_ARENA_BYTES
+        );
+        state.record_arena_observation(bucket, 1000);
+        assert_eq!(
+            state.estimated_arena_bytes(&bucket, 100),
+            1000 + 1000 / 8 + DECODE_GRAPH_MIN_ARENA_BYTES
+        );
+        state.record_arena_observation(bucket, 0);
+        state.record_arena_observation(bucket, 500);
+        assert_eq!(
+            state.estimated_arena_bytes(&bucket, 100),
+            1000 + 1000 / 8 + DECODE_GRAPH_MIN_ARENA_BYTES
+        );
+    }
+
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    #[test]
+    fn decode_arena_clamp_never_exceeds_device_cap() -> candle_core::Result<()> {
+        let device = Device::Cpu;
+        assert_eq!(
+            super::clamp_decode_arena_bytes(usize::MAX, 10_000, &device),
+            10_000
+        );
+        assert_eq!(super::clamp_decode_arena_bytes(1024, 10_000, &device), 1024);
+        assert_eq!(
+            super::clamp_decode_arena_bytes(10_000, 10_000, &device),
+            10_000
+        );
+        assert_eq!(super::clamp_decode_arena_bytes(0, 10_000, &device), 0);
+        let total = crate::MemoryUsage.query(&device)?.total();
+        assert!(
+            super::clamp_decode_arena_to_device(&device, usize::MAX)? <= total,
+            "clamped arena must fit in total device memory"
+        );
+        Ok(())
+    }
+
     fn spec_usage(bytes: &[(usize, usize)]) -> CudaGraphSpecStateUsage {
         CudaGraphSpecStateUsage {
             bytes: bytes
@@ -4818,6 +4966,7 @@ mod tests {
         let initial_ids = Tensor::from_vec(vec![1u32], (1, 1), &device)?;
         let key = CudaDecodeGraphKey::new(&initial_ids, &metadata, 32, RecurrentBatchKind::Decode)?;
         let warmup_logits = initial_ids.to_dtype(DType::F32)?;
+        let mut state = CudaDecodeGraphState::default();
         let entry = capture_cuda_decode_graph(
             CudaDecodeGraphCaptureCtx {
                 key: key.clone(),
@@ -4835,8 +4984,8 @@ mod tests {
                 arena_bytes: 0,
             },
             |input_ids, _| input_ids.to_dtype(DType::F32),
+            &mut state,
         )?;
-        let mut state = CudaDecodeGraphState::default();
         state.insert(entry);
 
         let step = |token: u32| -> candle_core::Result<CudaGraphDecodeStep> {
