@@ -23,6 +23,37 @@ fn matches_dummy_regex(make_dummy_regexes: &Option<Arc<Vec<Regex>>>, path: &str)
         .is_some_and(|regexes| regexes.iter().any(|regex| regex.is_match(path)))
 }
 
+pub(crate) const ENV_MANAGED_WEIGHTS: &str = "MISTRALRS_MANAGED_WEIGHTS";
+
+pub(crate) fn managed_weights_enabled() -> bool {
+    std::env::var(ENV_MANAGED_WEIGHTS).is_ok_and(|value| value == "1")
+}
+
+// Weight-only upload: route host bytes through managed memory when opted in.
+// Activations and intermediates keep using Tensor::from_slice/from_vec.
+fn tensor_from_host<T: WithDType>(data: &[T], shape: &[usize], device: &Device) -> Result<Tensor> {
+    #[cfg(feature = "rocm")]
+    if let Device::Cuda(dev) = device {
+        if managed_weights_enabled() {
+            let storage = dev.storage_from_slice_managed(data)?;
+            return Ok(Tensor::from((Storage::Cuda(storage), shape)));
+        }
+    }
+    Tensor::from_slice(data, shape, device)
+}
+
+fn tensor_vec_from_host<T: WithDType>(
+    data: Vec<T>,
+    shape: &[usize],
+    device: &Device,
+) -> Result<Tensor> {
+    #[cfg(feature = "rocm")]
+    if device.is_cuda() && managed_weights_enabled() {
+        return tensor_from_host(&data, shape, device);
+    }
+    Tensor::from_vec(data, shape, device)
+}
+
 fn convert_slice<T: WithDType>(data: &[u8], shape: &[usize], device: &Device) -> Result<Tensor> {
     let size_in_bytes = T::DTYPE.size_in_bytes();
     let elem_count = data.len() / size_in_bytes;
@@ -31,7 +62,7 @@ fn convert_slice<T: WithDType>(data: &[u8], shape: &[usize], device: &Device) ->
         // was correctly aligned.
         let data: &[T] =
             unsafe { std::slice::from_raw_parts(data.as_ptr() as *const T, elem_count) };
-        Tensor::from_slice(data, shape, device)
+        tensor_from_host(data, shape, device)
     } else {
         // XXX: We need to specify `T` here, otherwise the compiler will infer u8 because of the following cast
         // Making this vector too small to fit a full f16/f32/f64 weights, resulting in out-of-bounds access
@@ -44,7 +75,7 @@ fn convert_slice<T: WithDType>(data: &[u8], shape: &[usize], device: &Device) ->
             std::ptr::copy_nonoverlapping(data.as_ptr(), c.as_mut_ptr() as *mut u8, data.len());
             c.set_len(elem_count)
         }
-        Tensor::from_slice(&c, shape, device)
+        tensor_from_host(&c, shape, device)
     }
 }
 
@@ -62,7 +93,7 @@ fn convert_slice_with_cast<T: Sized + Copy, U: WithDType, F: Fn(T) -> Result<U>>
         let data: &[T] =
             unsafe { std::slice::from_raw_parts(data.as_ptr() as *const T, elem_count) };
         let data = data.iter().map(|t| conv(*t)).collect::<Result<Vec<_>>>()?;
-        Tensor::from_vec(data, shape, device)
+        tensor_vec_from_host(data, shape, device)
     } else {
         // XXX: We need to specify `T` here, otherwise the compiler will infer u8 because of the following cast
         // Making this vector too small to fit a full f16/f32/f64 weights, resulting in out-of-bounds access
@@ -76,7 +107,7 @@ fn convert_slice_with_cast<T: Sized + Copy, U: WithDType, F: Fn(T) -> Result<U>>
             c.set_len(elem_count)
         }
         let c = c.into_iter().map(conv).collect::<Result<Vec<_>>>()?;
-        Tensor::from_vec(c, shape, device)
+        tensor_vec_from_host(c, shape, device)
     }
 }
 
@@ -856,5 +887,39 @@ impl Backend for ShardedSafeTensors {
                 b.as_ref().contains_tensor(name)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "rocm")]
+    use super::*;
+
+    #[cfg(feature = "rocm")]
+    #[test]
+    fn managed_safetensors_upload_roundtrip() -> Result<()> {
+        use safetensors::tensor::{Dtype as SafeDtype, TensorView};
+        use std::collections::HashMap;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("weights.safetensors");
+        let data: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0];
+        let tensors = HashMap::from([(
+            "w",
+            TensorView::new(SafeDtype::F32, vec![4], bytemuck::cast_slice(&data))
+                .map_err(Error::msg)?,
+        )]);
+        safetensors::serialize_to_file(tensors, None, &path).map_err(Error::msg)?;
+
+        std::env::set_var(ENV_MANAGED_WEIGHTS, "1");
+        let got = (|| -> Result<Vec<f32>> {
+            let mmaped = unsafe { MmapedSafetensors::new(&path)? };
+            let device = Device::new_cuda(0)?;
+            let t = mmaped.load("w", &device, Some(DType::F32))?;
+            t.to_vec1::<f32>()
+        })();
+        std::env::remove_var(ENV_MANAGED_WEIGHTS);
+        assert_eq!(got?, data);
+        Ok(())
     }
 }
