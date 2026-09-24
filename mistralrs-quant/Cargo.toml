@@ -25,6 +25,7 @@ indicatif.workspace = true
 indexmap.workspace = true
 rayon.workspace = true
 libc.workspace = true
+libmimalloc-sys.workspace = true
 byteorder.workspace = true
 bytemuck.workspace = true
 float8.workspace = true

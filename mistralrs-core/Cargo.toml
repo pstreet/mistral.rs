@@ -37,7 +37,6 @@ half.workspace = true
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
 tracing.workspace = true
-libmimalloc-sys.workspace = true
 rand.workspace = true
 rand_distr.workspace = true
 regex-automata.workspace = true

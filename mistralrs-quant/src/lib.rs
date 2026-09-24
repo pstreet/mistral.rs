@@ -32,6 +32,7 @@ mod fp8;
 pub mod gemv;
 mod gguf;
 mod gptq;
+pub mod host_alloc;
 mod hqq;
 mod imatrix;
 mod isq_executor;

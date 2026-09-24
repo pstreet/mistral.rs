@@ -39,7 +39,10 @@ const SPLIT_PREFIX: &str = "split.";
 const MMPROJ_TYPE: &str = "mmproj";
 const ENV_GGUF_NO_MMAP: &str = "MISTRALRS_GGUF_NO_MMAP";
 const ENV_GGUF_DROP_HOST_AFTER_LOAD: &str = "MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD";
-const ENV_MANAGED_WEIGHTS: &str = "MISTRALRS_MANAGED_WEIGHTS";
+
+fn gguf_no_mmap_enabled() -> bool {
+    std::env::var(ENV_GGUF_NO_MMAP).is_ok_and(|x| x == "1")
+}
 
 // Tell the kernel the shard file pages are no longer needed. Weights live in
 // device/managed memory by the time this runs, so dropping clean file pages
@@ -337,7 +340,7 @@ impl AsRef<[u8]> for GgufTensorData<'_> {
 }
 
 fn load_shard_storage(mut file: File, path: &Path) -> Result<ShardStorage> {
-    if std::env::var(ENV_GGUF_NO_MMAP).is_ok_and(|x| x == "1") {
+    if gguf_no_mmap_enabled() {
         let len = file
             .metadata()
             .map_err(|err| Error::wrap(err).with_path(path))?
@@ -637,7 +640,7 @@ impl GgufArchive {
     }
 
     pub fn managed_weights_enabled() -> bool {
-        std::env::var(ENV_MANAGED_WEIGHTS).is_ok_and(|value| value == "1")
+        crate::safetensors::managed_weights_enabled()
     }
 
     pub fn release_host_shard(&self, shard_index: usize) {
@@ -654,6 +657,11 @@ impl GgufArchive {
         // into page cache. Best effort: eviction failure must not fail serving.
         for shard in &self.shards {
             evict_path_from_page_cache(&shard.path);
+        }
+        // The read() path parks whole shards on the Rust heap; hand the freed
+        // pages back now, before later staging can fragment them into place.
+        if gguf_no_mmap_enabled() {
+            crate::host_alloc::collect();
         }
     }
 
@@ -1416,6 +1424,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use super::*;
+    use crate::safetensors::ENV_MANAGED_WEIGHTS;
 
     struct TestTensor {
         name: &'static str,
