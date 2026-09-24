@@ -12,24 +12,28 @@ if [ -f "$LOCALAI_ROOT/.rocm-env.sh" ]; then
 fi
 
 # Decode graphs. Two ROCm capture bugs were fixed in cuda_graph.rs; override
-# with MISTRALRS_CUDA_GRAPHS=0 if a crash recurs. NOTE 2026-09-13: rocprof
-# showed zero graph launches on this ROCm path (all eager), so this flag is
-# currently a no-op here; the earlier +2.4% reading may have been noise.
+# with MISTRALRS_CUDA_GRAPHS=0 if a crash recurs. A/B 2026-09-24, qwen3.8-27b
+# essay 600tok temp0.3 decode T/s, 3 trials each: on 13.89, off 12.54, on
+# retest 13.39 (third trials sag with heat soak). Verdict: ~+7-10% real; the
+# old +2.4% dated from when launches were silently zero. /metrics showed
+# 1183 replay vs 3 eager dispatches. Keep on.
 export RUST_LOG=mistralrs_core=info
 export HIP_VISIBLE_DEVICES=0
-# Read GGUF shards via read() instead of mmap: on this Strix Halo the iGPU
-# shares system RAM, so the ~23 GB file-cache copy of the weights is duplicated
-# by the device-side copy. Set 0 to restore mmap behavior.
+# Read GGUF shards into heap buffers instead of mmap: with MANAGED_WEIGHTS the
+# upload has no device-side duplicate, and DROP_HOST_AFTER_LOAD below releases
+# the buffers and purges the allocator heap, so the transient is handed back
+# instead of retained. Set 0 to restore mmap behavior.
 export MISTRALRS_GGUF_NO_MMAP=1
-# Release GGUF host shard buffers once weights are on-device: with NO_MMAP the
-# ~23 GB Owned copy would otherwise stay resident next to the device copy.
+# Release GGUF host shard buffers once weights are on-device, and evict the
+# shard pages from file cache: keeps the single managed copy as the only copy.
 export MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD=1
-# Device-only GGUF weight tensors (plain HIP device alloc + host->device copy):
-# on this shared-memory APU the pages still come from system RAM, but they
-# are not CPU-mapped, so they stay out of process RSS / cgroup / OOM
-# accounting. Costs a load-time 2x spike during the copy. Set 1 to restore
-# managed (host-visible, prefetch) weights.
-export MISTRALRS_MANAGED_WEIGHTS=0
+# HIP managed (host-visible, prefetched) weight upload instead of device-only
+# alloc + host->device copy: on this shared-memory APU the weights end up as
+# a single copy in system RAM rather than a host copy plus a device copy.
+# Fill still doubles transiently; DROP_HOST_AFTER_LOAD above releases the
+# host side after upload. Trade-off: managed pages are CPU-mapped, so they
+# count toward process RSS / cgroup / OOM accounting. ROCm-only.
+export MISTRALRS_MANAGED_WEIGHTS=1
 export MISTRALRS_CUDA_GRAPHS=1
 # hipBLASLt with F32 accumulate: COMPUTE_16F fails heuristically (error 6,
 # INTERNAL_ERROR) on some shapes on gfx1151 RDNA3.5, and 32F accum is faster
