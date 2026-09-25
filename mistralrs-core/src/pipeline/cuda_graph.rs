@@ -2140,7 +2140,7 @@ impl CudaDecodeGraphState {
         }
         let graph_event =
             CudaGraphEventGuard::new(CudaGraphComponent::Target, CudaGraphEvent::Replay);
-        let prelaunch = (|| -> candle_core::Result<_> {
+        let prelaunch_fn = || -> candle_core::Result<_> {
             match input {
                 CudaDecodeGraphReplayInput::Host => {
                     entry.input_ids.set(&step.input_ids).map_err(|err| {
@@ -2199,16 +2199,24 @@ impl CudaDecodeGraphState {
                 ))
             })?;
             Ok(Some((replay_epoch, replay)))
-        })();
+        };
+        // A panicking prelaunch must not lose the LRU entry or poison the graph lock; fall back to eager.
+        let prelaunch = std::panic::catch_unwind(std::panic::AssertUnwindSafe(prelaunch_fn));
         let (replay_epoch, mut replay) = match prelaunch {
-            Ok(Some(prelaunch)) => prelaunch,
-            Ok(None) => {
+            Ok(Ok(Some(prelaunch))) => prelaunch,
+            Ok(Ok(None)) => {
                 self.entries.push(entry);
                 return Ok(None);
             }
-            Err(err) => {
+            Ok(Err(err)) => {
                 self.entries.push(entry);
                 return Err(err);
+            }
+            Err(_) => {
+                self.entries.push(entry);
+                return Err(candle_core::Error::msg(
+                    "CUDA decode graph replay prelaunch panicked",
+                ));
             }
         };
         let (_, timing_rows) = step.input_ids.dims2()?;
@@ -2546,7 +2554,20 @@ where
     let mut logits = None;
     for attempt in 0..2 {
         tracing::debug!(target: "mistralrs", "[cudarc] CAPTURE forward attempt={attempt}");
-        let result = forward(&graph_input_ids, &metadata);
+        // A panicking forward must still discard the in-flight capture; the caller falls back to eager.
+        let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            forward(&graph_input_ids, &metadata)
+        })) {
+            Ok(result) => result,
+            Err(_) => {
+                end_cuda_capture_discard(&stream);
+                restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(
+                    candle_core::Error::msg("CUDA graph captured forward panicked")
+                        .context("CUDA graph captured forward failed"),
+                );
+            }
+        };
         // The dry run under-measures what capture records (recorded buffers
         // outlive the step plus graph-only copies). Overflowed arena allocs are
         // non-fatal to the forward, so a successful forward can still leave a
@@ -5039,6 +5060,196 @@ mod tests {
             .graph_stream()
             .synchronize()?;
         assert_eq!(lookahead.logits.to_vec2::<f32>()?, vec![vec![7.0]]);
+        Ok(())
+    }
+
+    struct BatchFixtures {
+        metadata: PagedAttentionInputMetadata,
+        input_ids: Tensor,
+        warmup_logits: Tensor,
+        key: CudaDecodeGraphKey,
+    }
+
+    fn batch_fixtures(device: &Device, batch: usize) -> anyhow::Result<BatchFixtures> {
+        let metadata = Arc::new(DecodePagedRows {
+            slot_mappings: (0..batch as i64).map(|row| vec![row]).collect(),
+            block_tables: BlockTableSnapshot::from_owned_sequence_tables(
+                (0..batch).map(|row| vec![row]).collect(),
+                1,
+            ),
+            context_lens: vec![1; batch],
+            full_context_lens: vec![1; batch],
+            query_len: 1,
+            block_size: 32,
+            use_standard_metadata: false,
+            max_paged_context_len: 32,
+            sliding_window: None,
+            decode_window: 1,
+            devices: vec![device.clone()],
+            num_kv_heads: 1,
+        })
+        .build_materialized()?;
+        let input_ids =
+            Tensor::from_vec((1..=batch as u32).collect::<Vec<_>>(), (batch, 1), device)?;
+        let warmup_logits = input_ids.to_dtype(DType::F32)?;
+        let key = CudaDecodeGraphKey::new(&input_ids, &metadata, 32, RecurrentBatchKind::Decode)?;
+        Ok(BatchFixtures {
+            metadata,
+            input_ids,
+            warmup_logits,
+            key,
+        })
+    }
+
+    fn capture_identity(
+        fixtures: &BatchFixtures,
+        batch: usize,
+        state: &mut CudaDecodeGraphState,
+    ) -> candle_core::Result<CudaDecodeGraphEntry> {
+        capture_cuda_decode_graph(
+            CudaDecodeGraphCaptureCtx {
+                key: fixtures.key.clone(),
+                input_ids: &fixtures.input_ids,
+                seqlen_offsets: &vec![0; batch],
+                position_ids: &vec![1; batch],
+                block_size: 32,
+                kv_cache: &[],
+                metadata: &fixtures.metadata,
+                model_metadata: None,
+                activation_dtype: DType::F32,
+                warmup_logits: &fixtures.warmup_logits,
+                state_indices: None,
+                real_batch: batch,
+                arena_bytes: 0,
+            },
+            |input_ids, _| input_ids.to_dtype(DType::F32),
+            state,
+        )
+    }
+
+    fn decode_step(
+        device: &Device,
+        metadata: &PagedAttentionInputMetadata,
+        batch: usize,
+        token: u32,
+    ) -> candle_core::Result<CudaGraphDecodeStep> {
+        Ok(CudaGraphDecodeStep {
+            input_ids: Tensor::from_vec(vec![token; batch], (batch, 1), device)?,
+            seqlen_offsets: vec![0; batch],
+            context_lens: vec![(0, 1); batch],
+            position_ids: vec![1; batch],
+            metadata: metadata.clone(),
+            state_indices: None,
+            real_batch: batch,
+        })
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn prelaunch_panic_keeps_the_lru_entry_and_reports() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let fixtures = batch_fixtures(&device, 1)?;
+        let mut state = CudaDecodeGraphState::default();
+        let entry = capture_identity(&fixtures, 1, &mut state)?;
+        state.insert(entry);
+        let pos = state
+            .entries
+            .iter()
+            .position(|entry| entry.key == fixtures.key)
+            .expect("inserted entry missing");
+        state.entries[pos].replay_epoch = u64::MAX;
+        let step = decode_step(&device, &fixtures.metadata, 1, 7)?;
+        match state.replay(&fixtures.key, &step, CudaDecodeGraphReplayInput::Host) {
+            Err(err) => assert!(
+                err.to_string().contains("panicked"),
+                "unexpected error: {err:?}"
+            ),
+            Ok(_) => anyhow::bail!("prelaunch panic escaped as success"),
+        }
+        assert!(state.contains(&fixtures.key));
+        assert_eq!(state.entries.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    fn arena_overflow_regrows_and_records_the_observation() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let fixtures = batch_fixtures(&device, 1)?;
+        let mut state = CudaDecodeGraphState::default();
+        drop(capture_identity(&fixtures, 1, &mut state)?);
+        let bucket = fixtures.key.arena_bucket();
+        let observed = state.arena_observations.get(&bucket).copied().unwrap_or(0);
+        assert!(
+            observed > 2,
+            "capture should observe a nonzero need, got {observed}"
+        );
+        std::env::set_var("MRS_DECODE_ARENA_OVERRIDE", (observed / 2).to_string());
+        let regrown = capture_identity(&fixtures, 1, &mut state);
+        std::env::remove_var("MRS_DECODE_ARENA_OVERRIDE");
+        state.insert(regrown?);
+        assert!(
+            state.arena_observations.get(&bucket).copied().unwrap_or(0) >= observed,
+            "regrow should observe at least as much"
+        );
+        let step = decode_step(&device, &fixtures.metadata, 1, 7)?;
+        let replay = state
+            .replay(&fixtures.key, &step, CudaDecodeGraphReplayInput::Host)?
+            .expect("regrown graph missing");
+        replay
+            .launch
+            .as_ref()
+            .unwrap()
+            .graph_stream()
+            .synchronize()?;
+        assert_eq!(replay.logits.to_vec2::<f32>()?, vec![vec![7.0]]);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn memory_pressure_eviction_releases_the_oldest_graph_first() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let mut state = CudaDecodeGraphState::default();
+        let mut batches = Vec::new();
+        for batch in 1..=3usize {
+            let fixtures = batch_fixtures(&device, batch)?;
+            let entry = capture_identity(&fixtures, batch, &mut state)?;
+            state.insert(entry);
+            batches.push(fixtures);
+        }
+        assert_eq!(state.entries.len(), 3);
+        assert_eq!(state.evict_lru_for_memory_pressure(1), 1);
+        assert_eq!(state.entries.len(), 2);
+        assert!(!state.contains(&batches[0].key));
+        assert!(state.contains(&batches[1].key));
+        assert!(state.contains(&batches[2].key));
+        let step = decode_step(&device, &batches[1].metadata, 2, 7)?;
+        let replay = state
+            .replay(&batches[1].key, &step, CudaDecodeGraphReplayInput::Host)?
+            .expect("surviving graph missing");
+        replay
+            .launch
+            .as_ref()
+            .unwrap()
+            .graph_stream()
+            .synchronize()?;
+        assert_eq!(replay.logits.to_vec2::<f32>()?, vec![vec![7.0], vec![7.0]]);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    fn arena_clamp_never_exceeds_device_memory() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        // Available memory moves between queries, so assert properties, not exact values.
+        let clamped = clamp_decode_arena_to_device(&device, usize::MAX)?;
+        assert!(clamped > 0);
+        assert!(clamped < usize::MAX);
+        let small = 1024 * 1024;
+        assert!(clamp_decode_arena_to_device(&device, small)? <= small);
         Ok(())
     }
 }
