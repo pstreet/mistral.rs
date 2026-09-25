@@ -497,9 +497,14 @@ mod tests {
     use candle_core::{Device, Tensor};
 
     use super::{
-        SparseSpeculativeProbs, SpeculativePrefillCaptureLayout, SpeculativeProposal,
-        SpeculativeTapRouting, SpeculativeTapSpan, SpeculativeTokens,
+        sample_draft_rows, SparseSpeculativeProbs, SpeculativePrefillCaptureLayout,
+        SpeculativeProposal, SpeculativeTapRouting, SpeculativeTapSpan, SpeculativeTokens,
     };
+    use crate::sampler::Sampler;
+    use crate::sequence::{SeqStepType, Sequence, SequenceGroup, SequenceRecognizer};
+    use rand_isaac::Isaac64Rng;
+    use std::collections::HashMap;
+    use tokio::sync::mpsc::channel;
 
     #[test]
     fn dense_speculative_tap_routing_preserves_target_batch_rows() {
@@ -631,5 +636,96 @@ mod tests {
     fn device_tokens_require_one_row() {
         let tensor = Tensor::zeros((1, 3), candle_core::DType::U32, &Device::Cpu).unwrap();
         assert!(SpeculativeTokens::from_device(tensor).is_err());
+    }
+
+    fn greedy_test_sequence(seed: u64) -> Sequence {
+        let (tx, _rx) = channel(1);
+        let sampler = Sampler::new(
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            32,
+            1.0,
+            0.0,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
+        let group = std::sync::Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
+            1, false, true, None,
+        )));
+
+        Sequence::new_waiting(
+            vec![1, 2, 3, 4],
+            "prompt".to_string(),
+            0,
+            0,
+            0,
+            tx,
+            sampler,
+            vec![],
+            vec![],
+            None,
+            false,
+            false,
+            group,
+            0,
+            0,
+            SequenceRecognizer::None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SeqStepType::PromptAndDecode,
+            None,
+            None,
+            None,
+            false,
+            false,
+            vec![],
+            Some(seed),
+        )
+    }
+
+    fn test_rng() -> std::sync::Arc<std::sync::Mutex<Isaac64Rng>> {
+        std::sync::Arc::new(std::sync::Mutex::new(rand::SeedableRng::seed_from_u64(0)))
+    }
+
+    #[test]
+    fn sample_draft_rows_picks_row_argmax_and_appends_contexts() {
+        let logits = Tensor::from_vec(
+            vec![0.1f32, 0.2, 3.0, -1.0, 0.0, 5.0, 0.3, 0.1],
+            (2, 4),
+            &Device::Cpu,
+        )
+        .unwrap();
+        let seq_a = greedy_test_sequence(11);
+        let seq_b = greedy_test_sequence(12);
+        let mut contexts = vec![vec![9u32], vec![7u32, 8]];
+        let sampled =
+            sample_draft_rows(&logits, &[&seq_a, &seq_b], &mut contexts, &test_rng()).unwrap();
+        // Greedy drafts carry the argmax softmax probability as q, not 1.0.
+        assert_eq!(sampled[0].0, 2u32);
+        assert!((sampled[0].1 - 0.8817184).abs() < 1e-6);
+        assert_eq!(sampled[1].0, 1);
+        assert!((sampled[1].1 - 0.9772499).abs() < 1e-6);
+        assert_eq!(contexts, vec![vec![9, 2], vec![7, 8, 1]]);
+    }
+
+    #[test]
+    fn sample_draft_rows_rejects_batch_mismatch() {
+        let logits = Tensor::zeros((1, 4), candle_core::DType::F32, &Device::Cpu).unwrap();
+        let seq = greedy_test_sequence(0);
+        let mut contexts: Vec<Vec<u32>> = vec![Vec::new(), Vec::new()];
+        let err = sample_draft_rows(&logits, &[&seq], &mut contexts, &test_rng()).unwrap_err();
+        assert!(err.to_string().contains("draft sampling batch mismatch"));
     }
 }

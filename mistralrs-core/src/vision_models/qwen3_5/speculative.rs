@@ -907,6 +907,7 @@ impl Qwen3_5Model {
     }
 }
 
+#[derive(Debug)]
 struct CaptureView {
     hidden: Tensor,
     mrope: Vec<Vec<Vec<u32>>>,
@@ -1254,7 +1255,10 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
 
 #[cfg(test)]
 mod tests {
-    use super::{capture_view, resolve_dflash_n_predict, SpecCapture};
+    use super::{
+        capture_view, dflash_speculative_batch, mrope_at, resolve_dflash_n_predict, SpecCapture,
+    };
+    use crate::speculative::dflash::DFlashProposalBatch;
     use candle_core::{DType, Device, Tensor};
 
     #[test]
@@ -1271,6 +1275,89 @@ mod tests {
             view.mrope,
             vec![expected.clone(), expected.clone(), expected]
         );
+    }
+
+    #[test]
+    fn multimodal_capture_positions_pass_through_one_plane_per_dim() {
+        let device = Device::Cpu;
+        let capture = SpecCapture {
+            hidden: Tensor::zeros((2, 2, 4), DType::F32, &device).unwrap(),
+            positions: Tensor::from_vec((1..=12u32).collect(), (3, 2, 2), &device).unwrap(),
+            taps: Vec::new(),
+        };
+        let view = capture_view(&capture).unwrap();
+        assert_eq!(
+            view.mrope,
+            vec![
+                vec![vec![1, 2], vec![3, 4]],
+                vec![vec![5, 6], vec![7, 8]],
+                vec![vec![9, 10], vec![11, 12]],
+            ]
+        );
+    }
+
+    #[test]
+    fn gdn_capture_hidden_unsqueezes_a_row_dimension() {
+        let device = Device::Cpu;
+        let capture = SpecCapture {
+            hidden: Tensor::from_vec(vec![1.0f32, 2.0, 3.0, 4.0], (2, 2), &device).unwrap(),
+            positions: Tensor::from_vec(vec![0u32, 1, 2, 3], (2, 2), &device).unwrap(),
+            taps: Vec::new(),
+        };
+        let view = capture_view(&capture).unwrap();
+        assert_eq!(view.hidden.dims(), vec![2, 1, 2]);
+    }
+
+    #[test]
+    fn capture_view_rejects_unexpected_ranks() {
+        let device = Device::Cpu;
+        let rank1_hidden = SpecCapture {
+            hidden: Tensor::from_vec(vec![0f32, 1.0], 2, &device).unwrap(),
+            positions: Tensor::from_vec(vec![0u32, 1], (1, 2), &device).unwrap(),
+            taps: Vec::new(),
+        };
+        assert!(capture_view(&rank1_hidden)
+            .unwrap_err()
+            .to_string()
+            .contains("unexpected MTP hidden rank 1"));
+        let rank1_positions = SpecCapture {
+            hidden: Tensor::zeros((1, 1, 2), DType::F32, &device).unwrap(),
+            positions: Tensor::from_vec(vec![0u32, 1], 2, &device).unwrap(),
+            taps: Vec::new(),
+        };
+        assert!(capture_view(&rank1_positions)
+            .unwrap_err()
+            .to_string()
+            .contains("unexpected MTP position rank 1"));
+    }
+
+    #[test]
+    fn mrope_at_reads_each_dim_and_reports_missing_slots() {
+        let mrope = vec![
+            vec![vec![1u32, 2], vec![3, 4]],
+            vec![vec![5u32, 6], vec![7, 8]],
+            vec![vec![9u32, 10], vec![11, 12]],
+        ];
+        assert_eq!(mrope_at(&mrope, 0, 1).unwrap(), [2, 6, 10]);
+        assert_eq!(mrope_at(&mrope, 1, 0).unwrap(), [3, 7, 11]);
+        assert!(mrope_at(&mrope, 2, 0)
+            .unwrap_err()
+            .to_string()
+            .contains("missing for batch 2 row 0"));
+        assert!(mrope_at(&mrope, 0, 2)
+            .unwrap_err()
+            .to_string()
+            .contains("missing for batch 0 row 2"));
+    }
+
+    #[test]
+    fn dflash_host_token_batches_become_one_proposal_per_row() {
+        let batch =
+            dflash_speculative_batch(DFlashProposalBatch::Tokens(vec![vec![7, 8], Vec::new()]))
+                .unwrap();
+        assert_eq!(batch.proposals.len(), 2);
+        assert_eq!(batch.proposals[0].tokens.as_host(), Some(&[7u32, 8][..]));
+        assert_eq!(batch.proposals[1].tokens.as_host(), Some(&[][..]));
     }
 
     #[test]
