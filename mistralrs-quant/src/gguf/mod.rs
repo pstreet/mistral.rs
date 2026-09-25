@@ -324,6 +324,7 @@ impl GgufMatMul {
         if flat_batch > fast_mmvq::MMVQ_MAX_BATCH
             && std::env::var("MRS_NO_FAST_MMQ").is_err()
             && std::env::var("CANDLE_NO_FAST_MMQ").is_err()
+            && fast_mmq::batch_supported(q.dtype(), flat_batch)
         {
             return Ok(Some(fast_mmq::plain(q, a)?));
         }

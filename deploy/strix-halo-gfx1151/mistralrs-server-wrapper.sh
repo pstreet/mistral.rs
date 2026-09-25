@@ -44,19 +44,15 @@ export MISTRALRS_CUDA_GRAPHS=1
 # dense BF16 safetensors model. No-op today, insurance for that case; keep.
 export ROCBLAS_USE_HIPBLASLT=1
 
-# Large-batch quantized GEMMs: MMQ off -> dequant-to-F16 + hipBLASLt routing.
-# Restored 2026-09-25: the fast_mmq removal tried that morning helped the 35B
-# (MoE Q4/Q8: 60tok 896 vs 762, +15%) but was a REGRESSION on the 27B dense
-# Q6_K default: 18k cold prefill 426 T/s (MMQ off) vs 243 T/s (on) = -43%.
-# rocprofv3 shows mul_mat_q<q6_k> at 82.5% of the 27B's prefill GPU time
-# (~11 effective TFLOPS vs ~30 via dequant+Lt). Decode (b*m <= 8) uses the
-# fused MMVQ kernels either way. Drop this trio again once the per-dtype
-# dispatch (Q6_K -> dequant, Q4_K/Q5_K/Q8_0 -> mmq) lands and is verified.
-export MRS_NO_FAST_MMQ=1
-export CANDLE_NO_FAST_MMQ=1
-# Minimum rows for the dequant-to-F16 GEMM path; prefill chunks (4096) clear
-# it, decode rows (1-8) stay on MMVQ.
-export CANDLE_DMM_F16_MIN=8
+# Large-batch quantized GEMMs: fast_mmq on by default; the kernel dispatch is
+# per-dtype since 2026-09-25 - Q6K hands batches > 256 rows to candle's
+# dequant-to-F16 + hipBLASLt path (MMQ Q6K plateaus ~11 effective TFLOPS on
+# gfx1151 vs ~30 dequantized; 27B dense 18k prefill 426 vs 240 T/s) while
+# keeping MMQ below that (dequant overhead dominates small batches: 199 vs
+# 82 T/s at ~112 rows) and for Q4K/Q5K/Q8_0 at every batch (35B: +15% short,
+# tie long). No env vars needed; MRS_NO_FAST_MMQ/CANDLE_NO_FAST_MMQ/
+# CANDLE_DMM_F16_MIN remain available as overrides.
+# Decode (b*m <= 8) uses the fused MMVQ kernels either way.
 # CANDLE_LT_COMPUTE removed 2026-09-25: an 80-shape hipBLASLt sweep
 # (candle-core example lt_probe; b=1 m 256-8192 k/n 2048-16384, odd shapes,
 # b 3-16 batched; 16F vs 32F compute) found zero heuristic failures on the

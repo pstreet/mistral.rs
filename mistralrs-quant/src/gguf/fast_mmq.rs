@@ -66,6 +66,15 @@ pub fn supports(dtype: GgmlDType) -> bool {
     )
 }
 
+// Q6K MMQ plateaus ~11 effective TFLOPS on gfx1151 while dequant-to-F16 +
+// hipBLASLt reaches ~30; above this batch, hand Q6K to candle's dequant GEMM
+// (which engages at b*m > 256). Below it MMQ wins (dequant overhead dominates).
+pub const Q6K_DEQUANT_MIN_BATCH: usize = 256;
+
+pub fn batch_supported(dtype: GgmlDType, flat_batch: usize) -> bool {
+    supports(dtype) && !(dtype == GgmlDType::Q6K && flat_batch > Q6K_DEQUANT_MIN_BATCH)
+}
+
 /// qk (block quantization size) per dtype.
 fn qk_for(dtype: GgmlDType) -> usize {
     match dtype {
