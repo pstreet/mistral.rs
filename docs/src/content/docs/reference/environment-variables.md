@@ -72,7 +72,7 @@ See [CPU threads and affinity](/guides/perf/throughput-tuning/#cpu-threads-and-a
 |---|---|
 | `MISTRALRS_CUDA_GRAPHS` | CUDA graph acceleration is enabled by default when supported. Set to `0`, `false`, `no`, or `off` to disable. See [CUDA graphs](/guides/perf/paged-attention/#cuda-graphs). |
 | `MISTRALRS_CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES` | Absolute byte budget for resident decode-graph entries, overriding the default (10x the largest entry, clamped to 4-8% of device memory). Lower it if cached graphs squeeze the KV cache; raise it to keep more batch-shape entries resident instead of recapturing. |
-| `MRS_DECODE_ARENA_OVERRIDE` | ROCm only. Overrides the decode-graph capture arena size in bytes (default: 6x the warmup allocation plus 32 MiB). Raise it if capture fails with an arena overflow; the size actually needed is printed on the `[cudarc] CAPTURE` log line. |
+| `MRS_DECODE_ARENA_OVERRIDE` | ROCm only. Overrides the decode-graph capture arena size in bytes (default: 6x the warmup allocation plus 32 MiB). Raise it if capture fails with an arena overflow; the size actually needed is emitted on the `[cudarc] CAPTURE` debug log line (visible with `-v` / debug logging). |
 | `MISTRALRS_DFLASH_ADAPTIVE` | Set to `1` or `true` to use full DFlash draft depth for batches up to 2 and depth 1 above that. Only applies when `--mtp-n-predict` is not set. |
 | `MISTRALRS_DFLASH_ISQ` | ISQ type for DFlash drafter weights (`q4k`, `q6k`, ... or `none` for bf16); defaults to the target's in-situ quantization type. |
 | `MISTRALRS_FLASHINFER_DECODE` | Disables FlashInfer decode acceleration when set to `0`, `false`, `no`, or `off`. Use only for compatibility troubleshooting. |

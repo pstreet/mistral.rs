@@ -918,7 +918,8 @@ impl CudaGraphHandle {
                 .context("CUDA graph stream end capture failed"));
         }
         #[cfg(all(feature = "rocm", not(feature = "cuda")))]
-        eprintln!(
+        tracing::debug!(
+            target: "mistralrs",
             "[cudarc] END raw: is_capturing={} arena_active={} consumed={} (before reset)",
             stream.is_capturing(),
             stream.capture_arena_active(),
@@ -928,7 +929,8 @@ impl CudaGraphHandle {
         // which would route later eager allocs into the stale arena and OOM.
         stream.reset_capture_bookkeeping();
         #[cfg(all(feature = "rocm", not(feature = "cuda")))]
-        eprintln!(
+        tracing::debug!(
+            target: "mistralrs",
             "[cudarc] END raw: is_capturing={} arena_active={} (after reset)",
             stream.is_capturing(),
             stream.capture_arena_active()
@@ -2501,7 +2503,8 @@ where
         // size back up if the clamp undershoots.
         None => clamp_decode_arena_to_device(graph_input_ids.device(), arena_bytes)?,
     };
-    eprintln!(
+    tracing::debug!(
+        target: "mistralrs",
         "[cudarc] CAPTURE begin warmup={warmup_bytes} arena={arena_bytes} t={}",
         dbg_nanos()
     );
@@ -2542,7 +2545,7 @@ where
 
     let mut logits = None;
     for attempt in 0..2 {
-        eprintln!("[cudarc] CAPTURE forward attempt={attempt}");
+        tracing::debug!(target: "mistralrs", "[cudarc] CAPTURE forward attempt={attempt}");
         let result = forward(&graph_input_ids, &metadata);
         // The dry run under-measures what capture records (recorded buffers
         // outlive the step plus graph-only copies). Overflowed arena allocs are
@@ -2552,7 +2555,8 @@ where
         let overflowed = stream.capture_arena_overflowed();
         #[cfg(not(all(feature = "rocm", not(feature = "cuda"))))]
         let overflowed = false;
-        eprintln!(
+        tracing::debug!(
+            target: "mistralrs",
             "[cudarc] CAPTURE forward done attempt={attempt} ok={} overflowed={} consumed={} t={}",
             result.is_ok(),
             overflowed,
@@ -2565,7 +2569,6 @@ where
                 graph_input_ids.device().synchronize()?;
                 let consumed = stream.capture_arena_consumed();
                 let new_bytes = consumed + consumed / 8 + DECODE_GRAPH_MIN_ARENA_BYTES;
-                eprintln!("[cudarc] CAPTURE grew arena -> {new_bytes}");
                 tracing::debug!("CUDA decode graph arena grew {arena_bytes} -> {new_bytes} bytes");
                 let arena: Arc<CudaSlice<u8>> = Arc::new(
                     unsafe { cuda_device.alloc::<u8>(new_bytes) }
