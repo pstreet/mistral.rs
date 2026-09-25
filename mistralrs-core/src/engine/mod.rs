@@ -2103,7 +2103,8 @@ impl Engine {
                         let mut guards_mut =
                             guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
 
-                        if std::env::var("MRS_PROFILE").is_ok() {
+                        static PROFILE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+                        if *PROFILE.get_or_init(|| std::env::var("MRS_PROFILE").is_ok()) {
                             let profile_tokens: usize = scheduled_token_counts.iter().sum();
                             eprintln!(
                                 "[mrs-profile] {} batch={} tokens={} step_ms={:.1}",

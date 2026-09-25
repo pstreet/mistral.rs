@@ -34,6 +34,11 @@ use crate::{
 
 static UNCALIBRATED_FP8_ATTENTION_WARNING: Once = Once::new();
 
+fn debug_pa() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("MRS_DEBUG_PA").is_ok())
+}
+
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 #[derive(Clone, Copy)]
 struct Fa3DecodeCandidate {
@@ -1202,7 +1207,7 @@ impl PagedAttention {
         value_cache: &mut Option<Tensor>,
         write_cache: bool,
     ) -> Result<Option<Tensor>> {
-        let dbg = std::env::var("MRS_DEBUG_PA").is_ok();
+        let dbg = debug_pa();
         if dbg {
             eprintln!(
                 "[PA] try_prefix_gather_prefill: seq_len={}, is_first={}, has_cached={}, mask={:?}",
@@ -1814,7 +1819,7 @@ impl PagedAttention {
         value_cache: &mut Option<Tensor>,
         write_cache: bool,
     ) -> Result<Option<Tensor>> {
-        let dbg = std::env::var("MRS_DEBUG_PA").is_ok();
+        let dbg = debug_pa();
         let single_token_first_prompt =
             write_cache && ctx.input_metadata.is_first_prompt_chunk && ctx.dims.seq_len == 1;
         let custom_decode = tensors.attention_mask.is_custom()
@@ -2387,7 +2392,7 @@ impl PagedAttention {
         {
             return Ok(out);
         }
-        if std::env::var("MRS_DEBUG_PA").is_ok() {
+        if debug_pa() {
             eprintln!(
                 "[PA] forward_impl: falling through to run_decode (seq_len={})",
                 ctx.dims.seq_len

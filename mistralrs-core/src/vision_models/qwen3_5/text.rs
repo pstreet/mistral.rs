@@ -806,8 +806,13 @@ impl DecoderLayer {
 }
 
 // NAN_PROBE=1: log the first tensors whose sum is NaN, to locate a bad layer/component.
+fn nan_probe_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("NAN_PROBE").is_ok())
+}
+
 fn nan_probe(tag: &str, layer: i64, t: &candle_core::Tensor) {
-    if std::env::var("NAN_PROBE").is_err() {
+    if !nan_probe_enabled() {
         return;
     }
     let Ok(s) = t.sum_all() else {
@@ -2343,7 +2348,9 @@ impl Qwen3_5TextModel {
         visual_pos_masks: Option<&Tensor>,
         deepstack_visual_embeds: Option<&[Tensor]>,
     ) -> Result<Tensor> {
-        nan_probe("embed", -1, &xs);
+        if nan_probe_enabled() {
+            nan_probe("embed", -1, &xs);
+        }
         let mut hybrid_cache = self.cache.hybrid();
         let checkpoint_lanes = hybrid_cache.checkpoint_lanes();
         let batch_size = xs.dim(0)?;

@@ -54,9 +54,13 @@ enum PrefillRecurrenceKernel {
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 fn select_prefill_recurrence_kernel(dims: &GdnDims, seq_len: usize) -> PrefillRecurrenceKernel {
     // MRS_GDN_KERNEL=warp|chunked|tiled overrides auto dispatch for tuning
-    match std::env::var("MRS_GDN_KERNEL")
-        .ok()
-        .filter(|s| !s.is_empty())
+    static KERNEL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    match KERNEL
+        .get_or_init(|| {
+            std::env::var("MRS_GDN_KERNEL")
+                .ok()
+                .filter(|s| !s.is_empty())
+        })
         .as_deref()
     {
         Some("warp") => PrefillRecurrenceKernel::Warp,

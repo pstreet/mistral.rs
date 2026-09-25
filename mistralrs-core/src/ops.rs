@@ -6795,6 +6795,18 @@ impl MergedDenseProjection {
 }
 
 /// Feed-forward path for quantized gate/up/down projections.
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+fn fused_ffn_disabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISABLED.get_or_init(|| std::env::var("MRS_NO_FUSED_FFN").is_ok())
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+fn fused_qkv_disabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISABLED.get_or_init(|| std::env::var("MRS_NO_FUSED_QKV").is_ok())
+}
+
 pub(crate) fn quantized_ffn(
     xs: &Tensor,
     gate: &dyn mistralrs_quant::QuantMethod,
@@ -6803,7 +6815,7 @@ pub(crate) fn quantized_ffn(
     act: Activation,
 ) -> Result<Tensor> {
     #[cfg(any(feature = "cuda", feature = "rocm"))]
-    if std::env::var("MRS_NO_FUSED_FFN").is_err() {
+    if !fused_ffn_disabled() {
         if let Some(activation_type) = glu_activation_type(act) {
             if let Some(out) =
                 mistralrs_quant::try_fused_quantized_ffn(xs, gate, up, down, activation_type)?
@@ -6849,7 +6861,7 @@ pub(crate) fn qkv_projections(
     v_proj: &dyn mistralrs_quant::QuantMethod,
 ) -> Result<(Tensor, Tensor, Tensor)> {
     #[cfg(any(feature = "cuda", feature = "rocm"))]
-    if std::env::var("MRS_NO_FUSED_QKV").is_err() {
+    if !fused_qkv_disabled() {
         if let Some(qkv) = mistralrs_quant::try_fused_quantized_qkv(xs, q_proj, k_proj, v_proj)? {
             return Ok(qkv);
         }

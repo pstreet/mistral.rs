@@ -4,6 +4,12 @@ use crate::{attention::backends::cpu, pipeline::text_models_inputs_processor::Fl
 
 use candle_core::{DType, Device, Result, Tensor};
 
+#[cfg(feature = "rocm")]
+pub(crate) fn debug_ck() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("MRS_DEBUG_CK").is_ok())
+}
+
 /// Attention mask passed to [`Sdpa::run_attention`].
 ///
 /// Encodes both the mask data and the *intent*, whether the attention layer
@@ -310,7 +316,7 @@ impl Sdpa {
             // Sliding windows ride the same CK mask machinery with a bounded
             // lookback; non-causal sliding has no CK form, so it stays eager.
             let sliding_ok = sdpa_params.sliding_window.is_none_or(|_| mask_type != 0);
-            let dbg = std::env::var("MRS_DEBUG_CK").is_ok();
+            let dbg = debug_ck();
 
             if q.device().is_cuda()
                 && q.dtype() == DType::BF16

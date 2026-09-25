@@ -97,7 +97,7 @@ pub(crate) fn ck_flash_attn(
         p
     };
 
-    if std::env::var("MRS_DEBUG_CK").is_ok() {
+    if crate::attention::debug_ck() {
         eprintln!(
             "[CK FA] b={} q_heads={} kv_heads={} seq_q={} seq_k={} hdim={} mask_type={} scale={} window={:?}",
             b_sz, n_attn_heads, n_kv_heads, seq_len, kv_len, head_dim, mask_type, softmax_scale, sliding_window
