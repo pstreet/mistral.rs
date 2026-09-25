@@ -10,10 +10,6 @@ use std::{
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 
-// MRS_TRACE_LAYERS=1 + first-attention-layer probes: async checksums of q/k/v in, y out,
-// flushed by the end-of-forward dump to localize nondeterminism inside the attention path.
-static ATTN_PROBE: std::sync::Mutex<Vec<(&'static str, Tensor)>> =
-    std::sync::Mutex::new(Vec::new());
 use mistralrs_quant::{
     ActivationQuantizationScheme, ActivationScaleLayout, ColumnParallelLayer, PackedOutputLayout,
     QuantMethod, QuantizedActivation, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
@@ -378,14 +374,6 @@ impl FullAttention {
             tokens_first,
         )?;
 
-        let prof = std::env::var("MRS_TRACE_LAYERS").is_ok();
-        if prof {
-            if let Ok(mut qkv) = ATTN_PROBE.lock() {
-                qkv.push(("q", q.sum_all()?));
-                qkv.push(("k", k.sum_all()?));
-                qkv.push(("v", v.sum_all()?));
-            }
-        }
         if let Some((layer, qlen)) = trace {
             trace_layer_nan(&q, layer, "attn-q", qlen);
             trace_layer_nan(&k, layer, "attn-k", qlen);
@@ -443,11 +431,6 @@ impl FullAttention {
         } else {
             y.reshape((b_sz, seq_len, ()))?
         };
-        if prof {
-            if let Ok(mut qkv) = ATTN_PROBE.lock() {
-                qkv.push(("y", y.sum_all()?));
-            }
-        }
         if let Some((layer, qlen)) = trace {
             trace_layer_nan(&y, layer, "attn-y", qlen);
         }
