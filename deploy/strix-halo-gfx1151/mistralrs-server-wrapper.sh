@@ -37,21 +37,25 @@ export MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD=1
 # count toward process RSS / cgroup / OOM accounting. ROCm-only.
 export MISTRALRS_MANAGED_WEIGHTS=1
 export MISTRALRS_CUDA_GRAPHS=1
-# hipBLASLt with F32 accumulate: COMPUTE_16F fails heuristically (error 6,
-# INTERNAL_ERROR) on some shapes on gfx1151 RDNA3.5, and 32F accum is faster
-# anyway. candle falls back to plain rocBLAS on any LT error, so residual
-# failures cost speed, not availability.
+# Route rocBLAS's own GEMMs through hipBLASLt. Serving A/B 2026-09-25
+# (35B Q4_K_XL): flat (decode profile has zero BLAS kernels; all-quantized
+# weights never reach plain rocBLAS). Microbench (lt_probe, 78 shapes/dtype)
+# says it is worth +13% f16 / +19% bf16 when GEMMs DO reach rocBLAS, e.g. a
+# dense BF16 safetensors model. No-op today, insurance for that case; keep.
 export ROCBLAS_USE_HIPBLASLT=1
 
-# Prefill GEMMs: keep llama MMQ off so large-batch quantized GEMMs run as
-# dequantize+hipBLASLt (~125 TFLOPS vs ~15 for MMQ on gfx1151). 23k prefill
-# went 268 -> 410 T/s with the MMQ fix (2535aa399). Decode and small batches
-# (<= 8 tokens) still use the fused MMVQ kernels, so decode is unaffected.
-export MRS_NO_FAST_MMQ=1
-export CANDLE_NO_FAST_MMQ=1
-export CANDLE_DMM_F16_MIN=8
-# LT compute: 32 = F32 accum (stable on RDNA, required).
-export CANDLE_LT_COMPUTE=32
+# Large-batch quantized GEMMs: fast_mmq back on (defaults). A/B 2026-09-25,
+# 35B Q4_K_XL, cold prefill, 3 trials short / cold long, fast_mmq vs the old
+# dequant+hipBLASLt routing: 60tok 896 vs 762 (+15%), 1629tok 1462 vs 1417
+# (+3%), 18ktok 1492 vs 1492 (tie). The old MMQ-off decision predates the
+# fork's mmq_gguf work (~15 TFLOPS then); quality arms all ran fast_mmq on.
+# Decode (b*m <= 8) uses the fused MMVQ kernels either way.
+# CANDLE_LT_COMPUTE removed 2026-09-25: an 80-shape hipBLASLt sweep
+# (candle-core example lt_probe; b=1 m 256-8192 k/n 2048-16384, odd shapes,
+# b 3-16 batched; 16F vs 32F compute) found zero heuristic failures on the
+# current stack and 16F is not slower (mean +1.2%). The old "COMPUTE_16F
+# fails with INTERNAL_ERROR, 32F required/faster" claim dated from the
+# pre-TheRock hipBLASLt and does not apply.
 
 MISTRALRS="$LOCALAI_ROOT/mistral.rs/target/release/mistralrs"
 CONFIG="$LOCALAI_ROOT/models/mistralrs.toml"
