@@ -1039,8 +1039,11 @@ impl MistralRsForServerBuilder {
         info!("Model loaded.");
 
         if let Some(mtp_config) = self.mtp_config.clone() {
+            let draft_head_isq = mtp_config.draft_lm_head_isq.or(isq);
             pipeline.lock().await.attach_speculative_with_runtime(
-                mistralrs_core::SpeculativeConfig::Mtp(mtp_config.with_draft_lm_head_isq(isq)),
+                mistralrs_core::SpeculativeConfig::Mtp(
+                    mtp_config.with_draft_lm_head_isq(draft_head_isq),
+                ),
                 mtp_runtime,
             )?;
         }
@@ -1469,8 +1472,11 @@ impl MistralRsForServerBuilder {
             first_cache_config,
         )?;
         if let Some(mtp_config) = first_mtp_config.clone() {
+            let draft_head_isq = mtp_config.draft_lm_head_isq.or(isq);
             pipeline.lock().await.attach_speculative_with_runtime(
-                mistralrs_core::SpeculativeConfig::Mtp(mtp_config.with_draft_lm_head_isq(isq)),
+                mistralrs_core::SpeculativeConfig::Mtp(
+                    mtp_config.with_draft_lm_head_isq(draft_head_isq),
+                ),
                 mtp_runtime,
             )?;
         }

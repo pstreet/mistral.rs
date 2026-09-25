@@ -655,6 +655,13 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub mtp_draft_sampling: MtpDraftSamplingArg,
 
+    /// ISQ type for a draft-only copy of lm_head (e.g. Q4K). Smaller draft
+    /// head reads cut proposer latency; the target still verifies with the
+    /// checkpoint head, so only the acceptance rate can move.
+    #[arg(skip)]
+    #[serde(default)]
+    pub mtp_draft_lm_head_isq: Option<mistralrs_core::IsqType>,
+
     /// Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset.
     #[arg(long)]
     #[serde(default)]
@@ -927,12 +934,14 @@ impl RuntimeOptions {
         if self.mtp {
             return Some(
                 mistralrs_core::MtpConfig::builtin(self.mtp_n_predict)
-                    .with_draft_sampling_method(self.mtp_draft_sampling.into()),
+                    .with_draft_sampling_method(self.mtp_draft_sampling.into())
+                    .with_draft_lm_head_isq(self.mtp_draft_lm_head_isq),
             );
         }
         self.mtp_model.clone().map(|model| {
             mistralrs_core::MtpConfig::new(model, self.mtp_n_predict)
                 .with_draft_sampling_method(self.mtp_draft_sampling.into())
+                .with_draft_lm_head_isq(self.mtp_draft_lm_head_isq)
         })
     }
 }
@@ -1006,6 +1015,7 @@ impl Default for RuntimeOptions {
             mtp_model: None,
             mtp_n_predict: None,
             mtp_draft_sampling: MtpDraftSamplingArg::default(),
+            mtp_draft_lm_head_isq: None,
             mcp_config: None,
             agent: false,
             enable_search: false,
