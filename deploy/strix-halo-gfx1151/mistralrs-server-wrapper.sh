@@ -19,11 +19,13 @@ fi
 # 1183 replay vs 3 eager dispatches. Keep on.
 export RUST_LOG=mistralrs_core=info
 export HIP_VISIBLE_DEVICES=0
-# Read GGUF shards into heap buffers instead of mmap: with MANAGED_WEIGHTS the
-# upload has no device-side duplicate, and DROP_HOST_AFTER_LOAD below releases
-# the buffers and purges the allocator heap, so the transient is handed back
-# instead of retained. Set 0 to restore mmap behavior.
-export MISTRALRS_GGUF_NO_MMAP=1
+# mmap GGUF shards instead of heap buffers: with MANAGED_WEIGHTS the upload
+# still lands in a single host-visible allocation, DROP_HOST_AFTER_LOAD below
+# evicts the file pages after upload (same steady state as heap), but the load
+# transient is ~1x weights instead of ~2x, so big quants fit device mapping
+# (Q8_0 37.8GB verified 2026-09-25; heap staging needed ~76GB and bailed).
+# Set 1 to restore heap-buffer behavior.
+export MISTRALRS_GGUF_NO_MMAP=0
 # Release GGUF host shard buffers once weights are on-device, and evict the
 # shard pages from file cache: keeps the single managed copy as the only copy.
 export MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD=1
