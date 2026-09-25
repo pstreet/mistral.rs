@@ -865,3 +865,37 @@ pub enum ModelSelected {
         hf_cache_path: Option<PathBuf>,
     },
 }
+
+#[cfg(test)]
+impl ModelSelected {
+    /// Minimal local-GGUF selection for router estimator tests.
+    pub(crate) fn gguf_for_tests(
+        dir: &std::path::Path,
+        quantized_filename: &str,
+        mmproj_filename: Option<&str>,
+    ) -> Self {
+        Self::GGUF {
+            tok_model_id: None,
+            quantized_model_id: dir.to_string_lossy().into_owned(),
+            quantized_filename: quantized_filename.to_string(),
+            tokenizer_json: None,
+            mmproj_filename: mmproj_filename.map(str::to_string),
+            lora_adapters: Vec::new(),
+            lora_runtime_config: None,
+            dtype: ModelDType::Auto,
+            topology: None,
+            organization: None,
+            write_uqff: None,
+            imatrix: None,
+            calibration_file: None,
+            max_edge: None,
+            max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
+            max_num_images: None,
+            max_image_length: None,
+            hf_cache_path: None,
+            matformer_config_path: None,
+            matformer_slice_name: None,
+        }
+    }
+}

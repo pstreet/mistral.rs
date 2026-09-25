@@ -3600,4 +3600,243 @@ mod tests {
             Err(MistralRsError::EnginePoisoned)
         ));
     }
+
+    // P0-4: demand-load router estimator coverage. estimate_load_bytes gates
+    // every lazy load; these pin its arithmetic with local fixtures, no GPU.
+
+    static ESTIMATE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Force MISTRALRS_GGUF_NO_MMAP on/off for one test, restoring the
+    /// previous value on drop. The estimator reads process env, and Rust
+    /// runs tests in one process, so callers must hold ESTIMATE_ENV_LOCK.
+    struct NoMmapEnv {
+        prev: Option<String>,
+    }
+
+    impl NoMmapEnv {
+        fn set(value: Option<&str>) -> Self {
+            let key = "MISTRALRS_GGUF_NO_MMAP";
+            let prev = std::env::var(key).ok();
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+            Self { prev }
+        }
+    }
+
+    impl Drop for NoMmapEnv {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var("MISTRALRS_GGUF_NO_MMAP", v),
+                None => std::env::remove_var("MISTRALRS_GGUF_NO_MMAP"),
+            }
+        }
+    }
+
+    fn write_sized(dir: &std::path::Path, name: &str, bytes: usize) {
+        std::fs::write(dir.join(name), vec![0xABu8; bytes]).unwrap();
+    }
+
+    fn gguf_loader_config(
+        dir: &std::path::Path,
+        files: &str,
+        mmproj: Option<&str>,
+        paged: Option<PagedAttentionConfig>,
+    ) -> ModelLoaderConfig {
+        ModelLoaderConfig {
+            model_selected: ModelSelected::gguf_for_tests(dir, files, mmproj),
+            token_source: TokenSource::None,
+            hf_revision: None,
+            dtype: ModelDType::Auto,
+            device: Device::Cpu,
+            device_map_setting: DeviceMapSetting::Auto(AutoDeviceMapParams::Text {
+                max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+                max_batch_size: AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
+            }),
+            isq: None,
+            paged_attn_config: paged,
+            silent: true,
+            chat_template: None,
+            jinja_explicit: None,
+            max_model_len: None,
+            hf_config_overrides: None,
+            mtp_config: None,
+            encoder_cache_memory_bytes: None,
+        }
+    }
+
+    fn mb_paged_config(mem_gpu: MemoryGpuConfig) -> PagedAttentionConfig {
+        PagedAttentionConfig::new(None, mem_gpu, PagedCacheType::Q8_0).unwrap()
+    }
+
+    const EST_WEIGHT_BYTES: u64 = 10 * 1024 * 1024;
+    const EST_HEADROOM_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+    #[test]
+    fn estimate_weights_plus_headroom_without_paged() {
+        let _lock = ESTIMATE_ENV_LOCK.lock().unwrap();
+        let _env = NoMmapEnv::set(None);
+        let dir = tempfile::tempdir().unwrap();
+        write_sized(dir.path(), "w.gguf", EST_WEIGHT_BYTES as usize);
+        let cfg = gguf_loader_config(dir.path(), "w.gguf", None, None);
+        assert_eq!(
+            estimate_load_bytes(&cfg, u64::MAX, u64::MAX, EST_HEADROOM_BYTES),
+            Some(EST_WEIGHT_BYTES + EST_HEADROOM_BYTES)
+        );
+    }
+
+    #[test]
+    fn estimate_heap_staging_doubles_weights() {
+        let _lock = ESTIMATE_ENV_LOCK.lock().unwrap();
+        let _env = NoMmapEnv::set(Some("1"));
+        let dir = tempfile::tempdir().unwrap();
+        write_sized(dir.path(), "w.gguf", EST_WEIGHT_BYTES as usize);
+        let cfg = gguf_loader_config(dir.path(), "w.gguf", None, None);
+        assert_eq!(
+            estimate_load_bytes(&cfg, u64::MAX, u64::MAX, EST_HEADROOM_BYTES),
+            Some(2 * EST_WEIGHT_BYTES + EST_HEADROOM_BYTES)
+        );
+    }
+
+    #[test]
+    fn estimate_sums_shards_and_mmproj() {
+        let _lock = ESTIMATE_ENV_LOCK.lock().unwrap();
+        let _env = NoMmapEnv::set(None);
+        let dir = tempfile::tempdir().unwrap();
+        write_sized(dir.path(), "a.gguf", 6 * 1024 * 1024);
+        write_sized(dir.path(), "b.gguf", 4 * 1024 * 1024);
+        write_sized(dir.path(), "p.gguf", 2 * 1024 * 1024);
+        let cfg = gguf_loader_config(dir.path(), "a.gguf;b.gguf", Some("p.gguf"), None);
+        assert_eq!(
+            estimate_load_bytes(&cfg, u64::MAX, u64::MAX, EST_HEADROOM_BYTES),
+            Some(12 * 1024 * 1024 + EST_HEADROOM_BYTES)
+        );
+    }
+
+    #[test]
+    fn estimate_mb_kv_budget() {
+        let _lock = ESTIMATE_ENV_LOCK.lock().unwrap();
+        let _env = NoMmapEnv::set(None);
+        let dir = tempfile::tempdir().unwrap();
+        write_sized(dir.path(), "w.gguf", EST_WEIGHT_BYTES as usize);
+        let paged = mb_paged_config(MemoryGpuConfig::MbAmount(512));
+        let cfg = gguf_loader_config(dir.path(), "w.gguf", None, Some(paged));
+        assert_eq!(
+            estimate_load_bytes(&cfg, u64::MAX, u64::MAX, EST_HEADROOM_BYTES),
+            Some(EST_WEIGHT_BYTES + 512 * 1024 * 1024 + EST_HEADROOM_BYTES)
+        );
+    }
+
+    #[test]
+    fn estimate_best_effort_kv_uses_target() {
+        let _lock = ESTIMATE_ENV_LOCK.lock().unwrap();
+        let _env = NoMmapEnv::set(None);
+        let dir = tempfile::tempdir().unwrap();
+        write_sized(dir.path(), "w.gguf", EST_WEIGHT_BYTES as usize);
+        let paged = mb_paged_config(MemoryGpuConfig::BestEffortMbAmount {
+            target_mb: 1024,
+            min_mb: Some(256),
+        });
+        let cfg = gguf_loader_config(dir.path(), "w.gguf", None, Some(paged));
+        assert_eq!(
+            estimate_load_bytes(&cfg, u64::MAX, u64::MAX, EST_HEADROOM_BYTES),
+            Some(EST_WEIGHT_BYTES + 1024 * 1024 * 1024 + EST_HEADROOM_BYTES)
+        );
+    }
+
+    #[test]
+    fn estimate_utilization_below_cap() {
+        let _lock = ESTIMATE_ENV_LOCK.lock().unwrap();
+        let _env = NoMmapEnv::set(None);
+        let dir = tempfile::tempdir().unwrap();
+        write_sized(dir.path(), "w.gguf", EST_WEIGHT_BYTES as usize);
+        let paged = mb_paged_config(MemoryGpuConfig::Utilization(0.5));
+        let cfg = gguf_loader_config(dir.path(), "w.gguf", None, Some(paged));
+        let total = 8u64 * 1024 * 1024 * 1024;
+        let kv = (total as f64 * 0.5 - EST_WEIGHT_BYTES as f64).max(0.0) as u64;
+        assert!(kv < 16 * 1024 * 1024 * 1024);
+        assert_eq!(
+            estimate_load_bytes(&cfg, total, total, EST_HEADROOM_BYTES),
+            Some(EST_WEIGHT_BYTES + kv + EST_HEADROOM_BYTES)
+        );
+    }
+
+    #[test]
+    fn estimate_utilization_capped_at_16gib() {
+        let _lock = ESTIMATE_ENV_LOCK.lock().unwrap();
+        let _env = NoMmapEnv::set(None);
+        let dir = tempfile::tempdir().unwrap();
+        write_sized(dir.path(), "w.gguf", EST_WEIGHT_BYTES as usize);
+        let paged = mb_paged_config(MemoryGpuConfig::Utilization(0.9));
+        let cfg = gguf_loader_config(dir.path(), "w.gguf", None, Some(paged));
+        let total = 200u64 * 1024 * 1024 * 1024;
+        assert_eq!(
+            estimate_load_bytes(&cfg, total, total, EST_HEADROOM_BYTES),
+            Some(EST_WEIGHT_BYTES + 16 * 1024 * 1024 * 1024 + EST_HEADROOM_BYTES)
+        );
+    }
+
+    #[test]
+    fn estimate_contextsize_is_unknown() {
+        let _lock = ESTIMATE_ENV_LOCK.lock().unwrap();
+        let _env = NoMmapEnv::set(None);
+        let dir = tempfile::tempdir().unwrap();
+        write_sized(dir.path(), "w.gguf", EST_WEIGHT_BYTES as usize);
+        let paged = mb_paged_config(MemoryGpuConfig::ContextSize(131_072));
+        let cfg = gguf_loader_config(dir.path(), "w.gguf", None, Some(paged));
+        assert_eq!(
+            estimate_load_bytes(&cfg, u64::MAX, u64::MAX, EST_HEADROOM_BYTES),
+            None
+        );
+    }
+
+    #[test]
+    fn estimate_missing_file_is_unknown() {
+        let _lock = ESTIMATE_ENV_LOCK.lock().unwrap();
+        let _env = NoMmapEnv::set(None);
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = gguf_loader_config(dir.path(), "nope.gguf", None, None);
+        assert_eq!(
+            estimate_load_bytes(&cfg, u64::MAX, u64::MAX, EST_HEADROOM_BYTES),
+            None
+        );
+    }
+
+    #[test]
+    fn estimate_missing_dir_is_unknown() {
+        let _lock = ESTIMATE_ENV_LOCK.lock().unwrap();
+        let _env = NoMmapEnv::set(None);
+        let missing = std::path::Path::new("/definitely/not/here-xyz");
+        let cfg = gguf_loader_config(missing, "w.gguf", None, None);
+        assert_eq!(
+            estimate_load_bytes(&cfg, u64::MAX, u64::MAX, EST_HEADROOM_BYTES),
+            None
+        );
+    }
+
+    #[test]
+    fn evict_for_request_respects_disabled_policy() {
+        let mut state = empty_state();
+        state.router_policy.auto_evict = false;
+        assert!(state.evict_for_request("anything").is_ok());
+    }
+
+    #[test]
+    fn evict_for_request_unknown_model_is_not_found() {
+        let state = empty_state();
+        assert!(matches!(
+            state.evict_for_request("ghost"),
+            Err(MistralRsError::ModelNotFound(m)) if m == "ghost"
+        ));
+    }
+
+    #[test]
+    fn evict_idle_empty_state_is_noop() {
+        let mut state = empty_state();
+        state.router_policy.idle_ttl = Duration::ZERO;
+        assert!(state.evict_idle("anything").is_ok());
+        state.router_policy.idle_ttl = Duration::from_secs(60);
+        assert!(state.evict_idle("anything").is_ok());
+    }
 }
