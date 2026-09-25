@@ -53,8 +53,4 @@ jobs:
         run: cargo check -p mistralrs --features rocm
 
       - name: Test paged-attn (rocm)
-        # copy_blocks_uses_device_metadata_and_view_offsets fails on ROCm
-        # (stream-affinity check trips under the HIP fork; deterministic and
-        # unrelated to PR content). Skipped until the paged-attn ROCm GPU
-        # test pass lands; the remaining tests (incl. the CPU mirror) run.
-        run: cargo test -p mistralrs-paged-attn --features rocm -- --skip copy_blocks_uses_device_metadata_and_view_offsets
+        run: cargo test -p mistralrs-paged-attn --features rocm

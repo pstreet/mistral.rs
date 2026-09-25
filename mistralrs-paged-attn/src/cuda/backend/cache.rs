@@ -15,7 +15,9 @@ fn ensure_allocation_stream<T>(
     layer: usize,
     cache: &str,
 ) -> Result<()> {
-    if !Arc::ptr_eq(slice.stream(), stream) {
+    // Compare stream handles, not Arc identity: the HIP fork clones the
+    // stream into a fresh Arc per allocation.
+    if slice.stream().cu_stream() != stream.cu_stream() {
         candle_core::bail!(
             "copy_blocks {cache} cache layer {layer} was allocated on a different CUDA stream"
         );

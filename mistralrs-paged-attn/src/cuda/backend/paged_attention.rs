@@ -1466,3 +1466,253 @@ pub fn reshape_and_cache(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cuda::backend::gather_kv::gather_kv_cache;
+
+    const T_HEADS: usize = 2;
+    const T_HEAD: usize = 64;
+    const T_BLOCKS: usize = 2;
+    const T_BLOCK: usize = 4;
+    const T_TOKENS: usize = 2;
+
+    fn test_inputs(device: &candle::Device) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
+        let vals: Vec<f32> = (0..T_TOKENS * T_HEADS * T_HEAD)
+            .map(|i| i as f32 / (T_TOKENS * T_HEADS * T_HEAD) as f32 - 0.5)
+            .collect();
+        let key = Tensor::from_vec(vals.clone(), (T_TOKENS, T_HEADS, T_HEAD), device)?;
+        let value = Tensor::from_vec(vals, (T_TOKENS, T_HEADS, T_HEAD), device)?;
+        let slots = Tensor::from_vec(vec![0i64, 1i64], T_TOKENS, device)?;
+        let block_table = Tensor::from_vec(vec![0u32], (1, 1), device)?;
+        let cu_seq_lens = Tensor::from_vec(vec![0u32, T_TOKENS as u32], 2, device)?;
+        Ok((key, value, slots, block_table, cu_seq_lens))
+    }
+
+    fn max_abs_diff(out: &Tensor, expected: &Tensor) -> Result<f32> {
+        Ok(out.sub(expected)?.abs()?.max_all()?.to_scalar::<f32>()?)
+    }
+
+    #[test]
+    fn reshape_gather_q8_roundtrip_matches_inputs() -> Result<()> {
+        let Ok(device) = candle::Device::new_cuda(0) else {
+            return Ok(());
+        };
+        let (key, value, slots, block_table, cu_seq_lens) = test_inputs(&device)?;
+        let key_cache = Tensor::zeros(
+            (T_BLOCKS, T_HEADS, T_HEAD / 16, T_BLOCK, 16),
+            DType::U8,
+            &device,
+        )?;
+        let value_cache = Tensor::zeros((T_BLOCKS, T_HEADS, T_HEAD, T_BLOCK), DType::U8, &device)?;
+        let k_scales = Tensor::zeros(
+            (T_BLOCKS, T_HEADS, T_BLOCK, T_HEAD / 32),
+            DType::F32,
+            &device,
+        )?;
+        let v_scales = Tensor::zeros(
+            (T_BLOCKS, T_HEADS, T_HEAD / 32, T_BLOCK),
+            DType::F32,
+            &device,
+        )?;
+        reshape_and_cache_q8(
+            &key,
+            &value,
+            &key_cache,
+            &value_cache,
+            Some(&k_scales),
+            Some(&v_scales),
+            &slots,
+            true,
+            true,
+        )?;
+        device.synchronize()?;
+        let (k_out, v_out) = gather_kv_cache(
+            &key_cache,
+            &value_cache,
+            Some(&k_scales),
+            Some(&v_scales),
+            None,
+            None,
+            &block_table,
+            &cu_seq_lens,
+            T_TOKENS,
+            DType::F32,
+            Some(BlockQuantKind::Q8_0),
+            Some(BlockQuantKind::Q8_0),
+        )?;
+        device.synchronize()?;
+        assert!(max_abs_diff(&k_out, &key)? < 0.01);
+        assert!(max_abs_diff(&v_out, &value)? < 0.01);
+        Ok(())
+    }
+
+    #[test]
+    fn reshape_gather_q4_roundtrip_matches_inputs() -> Result<()> {
+        let Ok(device) = candle::Device::new_cuda(0) else {
+            return Ok(());
+        };
+        let (key, value, slots, block_table, cu_seq_lens) = test_inputs(&device)?;
+        let key_cache = Tensor::zeros(
+            (T_BLOCKS, T_HEADS, T_HEAD / 32, T_BLOCK, 16),
+            DType::U8,
+            &device,
+        )?;
+        let value_cache =
+            Tensor::zeros((T_BLOCKS, T_HEADS, T_HEAD, T_BLOCK / 2), DType::U8, &device)?;
+        let k_scales = Tensor::zeros(
+            (T_BLOCKS, T_HEADS, T_BLOCK, T_HEAD / 32),
+            DType::F32,
+            &device,
+        )?;
+        let v_scales = Tensor::zeros(
+            (T_BLOCKS, T_HEADS, T_HEAD / 32, T_BLOCK),
+            DType::F32,
+            &device,
+        )?;
+        reshape_and_cache_q4(
+            &key,
+            &value,
+            &key_cache,
+            &value_cache,
+            Some(&k_scales),
+            Some(&v_scales),
+            None,
+            None,
+            &slots,
+            true,
+            true,
+        )?;
+        device.synchronize()?;
+        let (k_out, v_out) = gather_kv_cache(
+            &key_cache,
+            &value_cache,
+            Some(&k_scales),
+            Some(&v_scales),
+            None,
+            None,
+            &block_table,
+            &cu_seq_lens,
+            T_TOKENS,
+            DType::F32,
+            Some(BlockQuantKind::Q4_0),
+            Some(BlockQuantKind::Q4_0),
+        )?;
+        device.synchronize()?;
+        assert!(max_abs_diff(&k_out, &key)? < 0.1);
+        assert!(max_abs_diff(&v_out, &value)? < 0.1);
+        Ok(())
+    }
+
+    #[test]
+    fn reshape_gather_q4_qjl_roundtrip_matches_inputs() -> Result<()> {
+        let Ok(device) = candle::Device::new_cuda(0) else {
+            return Ok(());
+        };
+        let (key, value, slots, block_table, cu_seq_lens) = test_inputs(&device)?;
+        let key_cache = Tensor::zeros(
+            (T_BLOCKS, T_HEADS, T_HEAD / 32, T_BLOCK, 16),
+            DType::U8,
+            &device,
+        )?;
+        let value_cache =
+            Tensor::zeros((T_BLOCKS, T_HEADS, T_HEAD, T_BLOCK / 2), DType::U8, &device)?;
+        let k_scales = Tensor::zeros(
+            (T_BLOCKS, T_HEADS, T_BLOCK, T_HEAD / 32),
+            DType::F32,
+            &device,
+        )?;
+        let v_scales = Tensor::zeros(
+            (T_BLOCKS, T_HEADS, T_HEAD / 32, T_BLOCK),
+            DType::F32,
+            &device,
+        )?;
+        let k_res = Tensor::zeros(
+            (T_BLOCKS, T_HEADS, T_BLOCK, T_HEAD / 32, 4),
+            DType::U8,
+            &device,
+        )?;
+        let v_res = Tensor::zeros(
+            (T_BLOCKS, T_HEADS, T_HEAD / 32, T_BLOCK, 4),
+            DType::U8,
+            &device,
+        )?;
+        reshape_and_cache_q4(
+            &key,
+            &value,
+            &key_cache,
+            &value_cache,
+            Some(&k_scales),
+            Some(&v_scales),
+            Some(&k_res),
+            Some(&v_res),
+            &slots,
+            true,
+            true,
+        )?;
+        device.synchronize()?;
+        let (k_out, v_out) = gather_kv_cache(
+            &key_cache,
+            &value_cache,
+            Some(&k_scales),
+            Some(&v_scales),
+            Some(&k_res),
+            Some(&v_res),
+            &block_table,
+            &cu_seq_lens,
+            T_TOKENS,
+            DType::F32,
+            Some(BlockQuantKind::Q4_0),
+            Some(BlockQuantKind::Q4_0),
+        )?;
+        device.synchronize()?;
+        assert!(max_abs_diff(&k_out, &key)? < 0.1);
+        assert!(max_abs_diff(&v_out, &value)? < 0.1);
+        Ok(())
+    }
+
+    #[test]
+    fn reshape_gather_native_f32_roundtrip_is_exact() -> Result<()> {
+        let Ok(device) = candle::Device::new_cuda(0) else {
+            return Ok(());
+        };
+        let (key, value, slots, block_table, cu_seq_lens) = test_inputs(&device)?;
+        let key_cache = Tensor::zeros(
+            (T_BLOCKS, T_HEADS, T_HEAD / 4, T_BLOCK, 4),
+            DType::F32,
+            &device,
+        )?;
+        let value_cache = Tensor::zeros((T_BLOCKS, T_HEADS, T_HEAD, T_BLOCK), DType::F32, &device)?;
+        reshape_and_cache(
+            &key,
+            &value,
+            None,
+            None,
+            &key_cache,
+            &value_cache,
+            &slots,
+            true,
+            true,
+        )?;
+        device.synchronize()?;
+        let (k_out, v_out) = gather_kv_cache(
+            &key_cache,
+            &value_cache,
+            None,
+            None,
+            None,
+            None,
+            &block_table,
+            &cu_seq_lens,
+            T_TOKENS,
+            DType::F32,
+            None,
+            None,
+        )?;
+        device.synchronize()?;
+        assert_eq!(max_abs_diff(&k_out, &key)?, 0.0);
+        assert_eq!(max_abs_diff(&v_out, &value)?, 0.0);
+        Ok(())
+    }
+}

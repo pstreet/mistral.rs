@@ -38,10 +38,12 @@ __device__ __forceinline__ void quantize_block_q4_0(const float *vals,
     q0 = q0 > kQ4MaxQ ? kQ4MaxQ : (q0 < -8.f ? -8.f : q0);
     q1 = q1 > kQ4MaxQ ? kQ4MaxQ : (q1 < -8.f ? -8.f : q1);
     // Round-half-away (same as the Q8_0 helper), then bias into a nibble.
+    // Truncate while still signed: uint8_t truncation of negatives rounds
+    // the wrong way.
     uint8_t n0 = static_cast<uint8_t>(
-        (q0 >= 0.f ? q0 + 0.5f : q0 - 0.5f) + 8.f);
+        static_cast<int>(q0 >= 0.f ? q0 + 0.5f : q0 - 0.5f) + 8);
     uint8_t n1 = static_cast<uint8_t>(
-        (q1 >= 0.f ? q1 + 0.5f : q1 - 0.5f) + 8.f);
+        static_cast<int>(q1 >= 0.f ? q1 + 0.5f : q1 - 0.5f) + 8);
     out[i] = static_cast<uint8_t>(n0 | (n1 << 4));
   }
   *scale = d != 0.f ? d : 1.f;

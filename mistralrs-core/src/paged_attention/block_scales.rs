@@ -85,3 +85,54 @@ pub(crate) fn unregister_block_scales(key_cache: &Tensor) -> Result<()> {
         .remove(&key);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::{DType, Device};
+
+    fn test_scales() -> BlockQuantScales {
+        BlockQuantScales {
+            k: None,
+            v: None,
+            k_kind: Some(BlockQuantKind::Q8_0),
+            v_kind: Some(BlockQuantKind::Q8_0),
+            k_res: None,
+            v_res: None,
+        }
+    }
+
+    #[test]
+    fn register_lookup_unregister_roundtrip() -> Result<()> {
+        let cache = Tensor::zeros((2, 2), DType::U8, &Device::Cpu)?;
+        assert!(lookup_block_scales(&cache)?.is_none());
+        register_block_scales(&cache, test_scales())?;
+        let found = lookup_block_scales(&cache)?.expect("registered scales missing");
+        assert_eq!(found.k_kind, Some(BlockQuantKind::Q8_0));
+        assert_eq!(found.v_kind, Some(BlockQuantKind::Q8_0));
+        unregister_block_scales(&cache)?;
+        assert!(lookup_block_scales(&cache)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn clones_resolve_but_offset_views_do_not() -> Result<()> {
+        let cache = Tensor::zeros((4, 4), DType::U8, &Device::Cpu)?;
+        register_block_scales(&cache, test_scales())?;
+        assert!(lookup_block_scales(&cache.clone())?.is_some());
+        assert!(lookup_block_scales(&cache.narrow(0, 0, 2)?)?.is_some());
+        assert!(lookup_block_scales(&cache.narrow(0, 1, 2)?)?.is_none());
+        unregister_block_scales(&cache)?;
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_tensors_never_collide() -> Result<()> {
+        let a = Tensor::zeros((2, 2), DType::U8, &Device::Cpu)?;
+        let b = Tensor::zeros((2, 2), DType::U8, &Device::Cpu)?;
+        register_block_scales(&a, test_scales())?;
+        assert!(lookup_block_scales(&b)?.is_none());
+        unregister_block_scales(&a)?;
+        Ok(())
+    }
+}

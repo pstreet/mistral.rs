@@ -111,11 +111,17 @@ __global__ void gather_kv_cache_kernel(
   const int64_t out_base =
       static_cast<int64_t>(token_id) * num_kv_heads * head_size;
 
-  // Precompute strides
+  // Precompute strides. Q4_0 packs 32 elems per 16-byte chunk, so its
+  // packed K strides differ from the elementwise x-math of the Q8/native
+  // path (which the shared k_block_stride/k_head_stride serve).
   const int64_t k_block_stride =
       static_cast<int64_t>(num_kv_heads) * (head_size / x) * block_size * x;
   const int64_t k_head_stride =
       static_cast<int64_t>(head_size / x) * block_size * x;
+  const int64_t k_q4_block_stride =
+      static_cast<int64_t>(num_kv_heads) * (head_size / 32) * block_size * x;
+  const int64_t k_q4_head_stride =
+      static_cast<int64_t>(head_size / 32) * block_size * x;
   const int64_t v_block_stride =
       static_cast<int64_t>(num_kv_heads) * head_size * block_size;
   const int64_t v_head_stride = static_cast<int64_t>(head_size) * block_size;
@@ -145,8 +151,8 @@ __global__ void gather_kv_cache_kernel(
         }
         for (int32_t d = threadIdx.x; d < 256; d += blockDim.x) {
           const int64_t k_q4_idx =
-              static_cast<int64_t>(block_id) * k_block_stride +
-              h * k_head_stride + (d / 32) * block_size * x + slot * x +
+              static_cast<int64_t>(block_id) * k_q4_block_stride +
+              h * k_q4_head_stride + (d / 32) * block_size * x + slot * x +
               (d % 32) / 2;
           const uint8_t k_packed =
               reinterpret_cast<const uint8_t *>(key_cache)[k_q4_idx];
@@ -252,8 +258,8 @@ __global__ void gather_kv_cache_kernel(
       // (d, d+1) pair, d even selects lo). Scales share the Q8_0 scheme (k
       // token-major).
       const int64_t k_q4_idx = static_cast<int64_t>(block_id) *
-                                   k_block_stride +
-                               head_idx * k_head_stride +
+                                   k_q4_block_stride +
+                               head_idx * k_q4_head_stride +
                                (d / 32) * block_size * x + slot * x + (d % 32) / 2;
       const uint8_t k_packed =
           reinterpret_cast<const uint8_t *>(key_cache)[k_q4_idx];

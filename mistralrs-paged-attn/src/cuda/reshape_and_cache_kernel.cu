@@ -414,10 +414,12 @@ __global__ void reshape_and_cache_q4_kernel(
       } else {
         yk0 = yk0 > 7.f ? 7.f : (yk0 < -8.f ? -8.f : yk0);
         yk1 = yk1 > 7.f ? 7.f : (yk1 < -8.f ? -8.f : yk1);
-        nk0 =
-            static_cast<uint8_t>((yk0 >= 0.f ? yk0 + 0.5f : yk0 - 0.5f) + 8.f);
-        nk1 =
-            static_cast<uint8_t>((yk1 >= 0.f ? yk1 + 0.5f : yk1 - 0.5f) + 8.f);
+        // Truncate the signed rounded value before biasing: truncating a
+        // negative float to uint8_t rounds the wrong way (and is UB < -1).
+        nk0 = static_cast<uint8_t>(
+            static_cast<int>(yk0 >= 0.f ? yk0 + 0.5f : yk0 - 0.5f) + 8);
+        nk1 = static_cast<uint8_t>(
+            static_cast<int>(yk1 >= 0.f ? yk1 + 0.5f : yk1 - 0.5f) + 8);
       }
 
       // K: 16-byte chunks hold 32 elems; byte (dd/32 chunk, (dd%32)/2).
@@ -445,10 +447,10 @@ __global__ void reshape_and_cache_q4_kernel(
       } else {
         yv0 = yv0 > 7.f ? 7.f : (yv0 < -8.f ? -8.f : yv0);
         yv1 = yv1 > 7.f ? 7.f : (yv1 < -8.f ? -8.f : yv1);
-        nv0 =
-            static_cast<uint8_t>((yv0 >= 0.f ? yv0 + 0.5f : yv0 - 0.5f) + 8.f);
-        nv1 =
-            static_cast<uint8_t>((yv1 >= 0.f ? yv1 + 0.5f : yv1 - 0.5f) + 8.f);
+        nv0 = static_cast<uint8_t>(
+            static_cast<int>(yv0 >= 0.f ? yv0 + 0.5f : yv0 - 0.5f) + 8);
+        nv1 = static_cast<uint8_t>(
+            static_cast<int>(yv1 >= 0.f ? yv1 + 0.5f : yv1 - 0.5f) + 8);
       }
       // V: bytes (dd, off/2) and (dd+1, off/2); each shared with the paired
       // slot, which owns the other nibble. Merge ours with atomic And/Or on
