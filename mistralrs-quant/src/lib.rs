@@ -1924,9 +1924,7 @@ impl Module for dyn QuantMethod {
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 fn fast_mmq_allowed() -> bool {
     static ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ALLOWED.get_or_init(|| {
-        std::env::var("MRS_NO_FAST_MMQ").is_err() && std::env::var("CANDLE_NO_FAST_MMQ").is_err()
-    })
+    *ALLOWED.get_or_init(|| std::env::var("MISTRALRS_NO_FAST_MMQ").is_err())
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]

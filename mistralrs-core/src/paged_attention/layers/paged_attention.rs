@@ -36,7 +36,7 @@ static UNCALIBRATED_FP8_ATTENTION_WARNING: Once = Once::new();
 
 fn debug_pa() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var("MRS_DEBUG_PA").is_ok())
+    *ENABLED.get_or_init(|| std::env::var("MISTRALRS_DEBUG_PA").is_ok())
 }
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]

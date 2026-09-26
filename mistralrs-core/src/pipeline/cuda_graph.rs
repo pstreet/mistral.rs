@@ -2500,7 +2500,7 @@ where
     let warmup_bytes = arena_bytes;
     let arena_bytes = state.estimated_arena_bytes(&key.arena_bucket(), warmup_bytes);
     #[cfg(all(feature = "rocm", not(feature = "cuda")))]
-    let arena_bytes = match std::env::var("MRS_DECODE_ARENA_OVERRIDE")
+    let arena_bytes = match std::env::var("MISTRALRS_DECODE_ARENA_OVERRIDE")
         .ok()
         .and_then(|v| v.parse().ok())
     {
@@ -5186,9 +5186,12 @@ mod tests {
             observed > 2,
             "capture should observe a nonzero need, got {observed}"
         );
-        std::env::set_var("MRS_DECODE_ARENA_OVERRIDE", (observed / 2).to_string());
+        std::env::set_var(
+            "MISTRALRS_DECODE_ARENA_OVERRIDE",
+            (observed / 2).to_string(),
+        );
         let regrown = capture_identity(&fixtures, 1, &mut state);
-        std::env::remove_var("MRS_DECODE_ARENA_OVERRIDE");
+        std::env::remove_var("MISTRALRS_DECODE_ARENA_OVERRIDE");
         state.insert(regrown?);
         assert!(
             state.arena_observations.get(&bucket).copied().unwrap_or(0) >= observed,

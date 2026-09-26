@@ -1929,11 +1929,11 @@ impl Model {
             ONCE.call_once(|| {
                 eprintln!(
                     "[layer-prof-init] LAYER_PROFILE={:?}",
-                    std::env::var("LAYER_PROFILE")
+                    std::env::var("MISTRALRS_LAYER_PROFILE")
                 );
             });
         }
-        let layer_prof = std::env::var("LAYER_PROFILE").is_ok();
+        let layer_prof = std::env::var("MISTRALRS_LAYER_PROFILE").is_ok();
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             x = self.mapper.map(x, layer_idx)?;
             let layer_is_linear = matches!(layer.layer_impl, LayerImpl::LinearAttention(_));

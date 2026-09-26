@@ -7,7 +7,7 @@ use candle_core::{DType, Device, Result, Tensor};
 #[cfg(feature = "rocm")]
 pub(crate) fn debug_ck() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var("MRS_DEBUG_CK").is_ok())
+    *ENABLED.get_or_init(|| std::env::var("MISTRALRS_DEBUG_CK").is_ok())
 }
 
 /// Attention mask passed to [`Sdpa::run_attention`].

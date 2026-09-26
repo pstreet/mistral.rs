@@ -671,7 +671,7 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
         let (workspace, _workspace_guard) = workspace.device_ptr(self.stream());
         // MRS_ZERO_WS=1: zero the persistent Lt workspace before each matmul to test
         // whether stale scratch feeds split-K atomic accumulation in ROCm Tensile kernels.
-        if std::env::var("MRS_ZERO_WS").as_deref() == Ok("1") {
+        if std::env::var("MISTRALRS_ZERO_WS").as_deref() == Ok("1") {
             unsafe {
                 let rc = sys::hipMemsetAsync(
                     workspace as *mut _,

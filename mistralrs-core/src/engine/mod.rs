@@ -2104,7 +2104,7 @@ impl Engine {
                             guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
 
                         static PROFILE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-                        if *PROFILE.get_or_init(|| std::env::var("MRS_PROFILE").is_ok()) {
+                        if *PROFILE.get_or_init(|| std::env::var("MISTRALRS_PROFILE").is_ok()) {
                             let profile_tokens: usize = scheduled_token_counts.iter().sum();
                             eprintln!(
                                 "[mrs-profile] {} batch={} tokens={} step_ms={:.1}",

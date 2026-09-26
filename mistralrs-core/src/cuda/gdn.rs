@@ -1296,7 +1296,7 @@ enum RecurrenceKernel {
 pub(crate) fn probe_tensors_debug(tag: &str, qlen: usize, tensors: &[&Tensor]) {
     use std::sync::OnceLock;
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    if !*ENABLED.get_or_init(|| std::env::var("MRS_NAN_TRACE").is_ok()) {
+    if !*ENABLED.get_or_init(|| std::env::var("MISTRALRS_NAN_TRACE").is_ok()) {
         return;
     }
     let report = (|| -> candle_core::Result<(u64, u64, f32)> {

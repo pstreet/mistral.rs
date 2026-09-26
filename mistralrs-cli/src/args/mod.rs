@@ -662,7 +662,7 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub mtp_draft_lm_head_isq: Option<mistralrs_core::IsqType>,
 
-    /// Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset.
+    /// Path to an MCP client configuration JSON. Also reads `MISTRALRS_MCP_CONFIG_PATH` if unset.
     #[arg(long)]
     #[serde(default)]
     pub mcp_config: Option<PathBuf>,

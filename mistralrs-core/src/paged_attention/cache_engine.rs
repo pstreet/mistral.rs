@@ -51,7 +51,7 @@ fn uninit_block(
     device: &Device,
 ) -> Result<Tensor> {
     static POISON: OnceLock<bool> = OnceLock::new();
-    if *POISON.get_or_init(|| std::env::var("MRS_POISON_NAN").is_ok()) {
+    if *POISON.get_or_init(|| std::env::var("MISTRALRS_POISON_NAN").is_ok()) {
         // Build the NaN on CPU and copy-broadcast it: avoids passing NaN
         // through GPU fill/cast kernels.
         let one = Tensor::from_slice(&[f32::NAN], 1, &Device::Cpu)?.to_dtype(dtype)?;

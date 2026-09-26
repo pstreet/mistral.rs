@@ -67,12 +67,13 @@ pub fn supports(dtype: GgmlDType) -> bool {
 }
 
 // Q6K MMQ plateaus ~11 effective TFLOPS on gfx1151 while dequant-to-F16 +
-// hipBLASLt reaches ~30; above this batch, hand Q6K to candle's dequant GEMM
-// (which engages at b*m > 256). Below it MMQ wins (dequant overhead dominates).
-pub const Q6K_DEQUANT_MIN_BATCH: usize = 256;
-
+// hipBLASLt reaches ~30; above candle's dequant-GEMM row threshold (resolved
+// from CANDLE_DMM_F16_MIN), hand Q6K off so it lands on that path. Below it
+// MMQ wins (dequant overhead dominates small batches).
 pub fn batch_supported(dtype: GgmlDType, flat_batch: usize) -> bool {
-    supports(dtype) && !(dtype == GgmlDType::Q6K && flat_batch > Q6K_DEQUANT_MIN_BATCH)
+    supports(dtype)
+        && !(dtype == GgmlDType::Q6K
+            && flat_batch > candle_core::quantized::cuda::dequant_f16_min_rows())
 }
 
 /// qk (block quantization size) per dtype.
@@ -424,7 +425,7 @@ impl DenseMmqRun<'_> {
             let (nrows, _) = weight.shape().dims2()?;
             let (weight_ptr, _weight_guard) = weight.device_ptr_with_guard(self.stream)?;
             let mut out = unsafe { self.dev.alloc::<T>(nrows * self.batch_size)? };
-            if std::env::var("MRS_MMQ_DEBUG").is_ok() {
+            if std::env::var("MISTRALRS_MMQ_DEBUG").is_ok() {
                 let d = &self.device_info;
                 eprintln!(
                     "[mmqq] w_rows={nrows} k={} b={} cc={} nsm={} smpbo={} warp={}",

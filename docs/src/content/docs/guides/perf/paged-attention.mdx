@@ -165,7 +165,7 @@ They require a CUDA build and a CUDA device, and they apply to decode, not promp
 
 ROCm builds support decode graphs on the same terms: capture-once, replay per single-token
 decode step, disabled with `MISTRALRS_CUDA_GRAPHS=0`. Two knobs tune the ROCm path (see the
-[environment reference](/reference/environment-variables/)): `MRS_DECODE_ARENA_OVERRIDE`
+[environment reference](/reference/environment-variables/)): `MISTRALRS_DECODE_ARENA_OVERRIDE`
 overrides the capture arena size when capture fails with an arena overflow, and
 `MISTRALRS_CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES` caps how many captured entries stay resident
 before the least-recently-used ones are evicted and recaptured.

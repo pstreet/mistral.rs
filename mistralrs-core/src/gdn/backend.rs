@@ -57,7 +57,7 @@ fn select_prefill_recurrence_kernel(dims: &GdnDims, seq_len: usize) -> PrefillRe
     static KERNEL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     match KERNEL
         .get_or_init(|| {
-            std::env::var("MRS_GDN_KERNEL")
+            std::env::var("MISTRALRS_GDN_KERNEL")
                 .ok()
                 .filter(|s| !s.is_empty())
         })

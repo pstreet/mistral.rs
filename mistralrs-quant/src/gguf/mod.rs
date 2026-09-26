@@ -315,15 +315,14 @@ impl GgufMatMul {
 
         // Batch 1-8: use MMVQ (decode kernel)
         if (1..=fast_mmvq::MMVQ_MAX_BATCH).contains(&flat_batch)
-            && std::env::var("MRS_NO_FAST_MMVQ").is_err()
+            && std::env::var("MISTRALRS_NO_FAST_MMVQ").is_err()
         {
             return Ok(Some(fast_mmvq::plain(q, a)?));
         }
 
         // Batch > 8: use MMQ (prompt kernel)
         if flat_batch > fast_mmvq::MMVQ_MAX_BATCH
-            && std::env::var("MRS_NO_FAST_MMQ").is_err()
-            && std::env::var("CANDLE_NO_FAST_MMQ").is_err()
+            && std::env::var("MISTRALRS_NO_FAST_MMQ").is_err()
             && fast_mmq::batch_supported(q.dtype(), flat_batch)
         {
             return Ok(Some(fast_mmq::plain(q, a)?));

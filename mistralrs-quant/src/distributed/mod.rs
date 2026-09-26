@@ -28,7 +28,7 @@ pub struct RingConfig {
 impl RingConfig {
     /// Loads the ring backend config from a path at `RING_CONFIG`
     pub fn load() -> Self {
-        let config_json = std::env::var("RING_CONFIG").expect("RING_CONFIG must be set");
+        let config_json = std::env::var("MISTRALRS_RING_CONFIG").expect("RING_CONFIG must be set");
         let config: RingConfig = serde_json::from_reader(
             &File::open(config_json).expect("Could not access Ring config JSON"),
         )
@@ -131,7 +131,7 @@ fn parse_env_usize(name: &str) -> Option<usize> {
 }
 
 pub fn use_ring() -> bool {
-    cfg!(feature = "ring") && std::env::var("RING_CONFIG").is_ok()
+    cfg!(feature = "ring") && std::env::var("MISTRALRS_RING_CONFIG").is_ok()
 }
 
 // Unified Comm enum

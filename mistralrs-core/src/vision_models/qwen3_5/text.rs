@@ -109,7 +109,7 @@ fn trace_layer_nan(xs: &Tensor, layer: usize, tag: &'static str, query_len: usiz
 
 fn trace_state_indices(indices: &Tensor, layer: usize, query_len: usize) {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    if !*ENABLED.get_or_init(|| std::env::var("MRS_NAN_TRACE").is_ok()) {
+    if !*ENABLED.get_or_init(|| std::env::var("MISTRALRS_NAN_TRACE").is_ok()) {
         return;
     }
     match indices.to_vec1::<u32>() {
@@ -577,7 +577,7 @@ impl DecoderLayerOutput {
 impl DecoderLayer {
     fn input_quantization_plan(&self, input: &Tensor) -> Option<LayerInputQuantizationPlan> {
         static DISABLED: OnceLock<bool> = OnceLock::new();
-        if *DISABLED.get_or_init(|| std::env::var("MRS_NO_ACT_QUANT").is_ok()) {
+        if *DISABLED.get_or_init(|| std::env::var("MISTRALRS_NO_ACT_QUANT").is_ok()) {
             return None;
         }
         if input.dtype() != DType::BF16 || !input.device().is_cuda() {
@@ -808,7 +808,7 @@ impl DecoderLayer {
 // NAN_PROBE=1: log the first tensors whose sum is NaN, to locate a bad layer/component.
 fn nan_probe_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var("NAN_PROBE").is_ok())
+    *ENABLED.get_or_init(|| std::env::var("MISTRALRS_NAN_PROBE").is_ok())
 }
 
 fn nan_probe(tag: &str, layer: i64, t: &candle_core::Tensor) {

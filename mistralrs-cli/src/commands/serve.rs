@@ -1163,11 +1163,13 @@ fn is_confident_gguf_artifact_repo(model_id: &str, files: &[String]) -> bool {
     })
 }
 
-/// Load an MCP client config from `--mcp-config` (or `MCP_CONFIG_PATH` if no path given).
+/// Load an MCP client config from `--mcp-config` (or `MISTRALRS_MCP_CONFIG_PATH` if no path given).
 pub(crate) fn load_mcp_config(path: Option<&Path>) -> Result<Option<McpClientConfig>> {
     let resolved = match path {
         Some(p) => Some(p.to_path_buf()),
-        None => std::env::var("MCP_CONFIG_PATH").ok().map(Into::into),
+        None => std::env::var("MISTRALRS_MCP_CONFIG_PATH")
+            .ok()
+            .map(Into::into),
     };
     let Some(path) = resolved else {
         return Ok(None);

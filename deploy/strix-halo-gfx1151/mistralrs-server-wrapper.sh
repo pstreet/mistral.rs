@@ -34,8 +34,12 @@ export MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD=1
 # a single copy in system RAM rather than a host copy plus a device copy.
 # Fill still doubles transiently; DROP_HOST_AFTER_LOAD above releases the
 # host side after upload. Trade-off: managed pages are CPU-mapped, so they
-# count toward process RSS / cgroup / OOM accounting. ROCm-only.
+# count toward process RSS / cgroup / OOM accounting. ROCm-only. The two
+# names split repo ownership: MISTRALRS_ gates the mistral.rs loader,
+# CANDLE_ gates candle's allocator; the wrapper sets both so the deployment
+# gets managed weights end to end.
 export MISTRALRS_MANAGED_WEIGHTS=1
+export CANDLE_MANAGED_WEIGHTS=1
 export MISTRALRS_CUDA_GRAPHS=1
 # Route rocBLAS's own GEMMs through hipBLASLt. Serving A/B 2026-09-25
 # (35B Q4_K_XL): flat (decode profile has zero BLAS kernels; all-quantized
@@ -45,13 +49,14 @@ export MISTRALRS_CUDA_GRAPHS=1
 export ROCBLAS_USE_HIPBLASLT=1
 
 # Large-batch quantized GEMMs: fast_mmq on by default; the kernel dispatch is
-# per-dtype since 2026-09-25 - Q6K hands batches > 256 rows to candle's
-# dequant-to-F16 + hipBLASLt path (MMQ Q6K plateaus ~11 effective TFLOPS on
-# gfx1151 vs ~30 dequantized; 27B dense 18k prefill 426 vs 240 T/s) while
-# keeping MMQ below that (dequant overhead dominates small batches: 199 vs
-# 82 T/s at ~112 rows) and for Q4K/Q5K/Q8_0 at every batch (35B: +15% short,
-# tie long). No env vars needed; MRS_NO_FAST_MMQ/CANDLE_NO_FAST_MMQ/
-# CANDLE_DMM_F16_MIN remain available as overrides.
+# per-dtype since 2026-09-25 - Q6K hands batches above candle's dequant-GEMM
+# row threshold (CANDLE_DMM_F16_MIN, default 256) to the dequant-to-F16 +
+# hipBLASLt path (MMQ Q6K plateaus ~11 effective TFLOPS on gfx1151 vs ~30
+# dequantized; 27B dense 18k prefill 426 vs 240 T/s) while keeping MMQ below
+# it (dequant overhead dominates small batches: 199 vs 82 T/s at ~112 rows)
+# and for Q4K/Q5K/Q8_0 at every batch (35B: +15% short, tie long). No env
+# vars needed; MISTRALRS_NO_FAST_MMQ (mistral.rs dispatch) and
+# CANDLE_NO_FAST_MMQ (candle's own fast path) remain as overrides.
 # Decode (b*m <= 8) uses the fused MMVQ kernels either way.
 # CANDLE_LT_COMPUTE removed 2026-09-25: an 80-shape hipBLASLt sweep
 # (candle-core example lt_probe; b=1 m 256-8192 k/n 2048-16384, odd shapes,

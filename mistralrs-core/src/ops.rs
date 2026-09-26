@@ -6798,13 +6798,13 @@ impl MergedDenseProjection {
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 fn fused_ffn_disabled() -> bool {
     static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *DISABLED.get_or_init(|| std::env::var("MRS_NO_FUSED_FFN").is_ok())
+    *DISABLED.get_or_init(|| std::env::var("MISTRALRS_NO_FUSED_FFN").is_ok())
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 fn fused_qkv_disabled() -> bool {
     static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *DISABLED.get_or_init(|| std::env::var("MRS_NO_FUSED_QKV").is_ok())
+    *DISABLED.get_or_init(|| std::env::var("MISTRALRS_NO_FUSED_QKV").is_ok())
 }
 
 pub(crate) fn quantized_ffn(

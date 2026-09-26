@@ -16,7 +16,7 @@ pub(crate) fn maybe_synchronize(device: &Device) -> Result<()> {
     // MRS_ATTENTION_SYNC: 0 never, 1 always, unset = sync only under memory pressure.
     static FORCE: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
     let force = *FORCE.get_or_init(|| {
-        std::env::var("MRS_ATTENTION_SYNC")
+        std::env::var("MISTRALRS_ATTENTION_SYNC")
             .ok()
             .and_then(|v| match v.as_str() {
                 "0" => Some(Some(false)),
@@ -34,7 +34,7 @@ pub(crate) fn maybe_synchronize(device: &Device) -> Result<()> {
     let avail = MemoryUsage.query(device)?.available();
     let do_sync = force.unwrap_or(avail < FOUR_GIB);
     if do_sync {
-        if std::env::var("MRS_ATTENTION_DEBUG").is_ok() {
+        if std::env::var("MISTRALRS_ATTENTION_DEBUG").is_ok() {
             use std::sync::atomic::{AtomicBool, Ordering};
             static ONCE: AtomicBool = AtomicBool::new(false);
             if !ONCE.swap(true, Ordering::Relaxed) {

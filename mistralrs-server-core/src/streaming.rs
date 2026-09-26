@@ -182,7 +182,7 @@ pub(crate) fn base_create_streamer<R, C, D>(
 
 /// Gets the keep-alive interval for SSE streams from environment or default.
 pub fn get_keep_alive_interval() -> u64 {
-    env::var("KEEP_ALIVE_INTERVAL")
+    env::var("MISTRALRS_KEEP_ALIVE_INTERVAL")
         .map(|val| {
             val.parse::<u64>().unwrap_or_else(|e| {
                 tracing::warn!("Failed to parse KEEP_ALIVE_INTERVAL: {}. Using default.", e);

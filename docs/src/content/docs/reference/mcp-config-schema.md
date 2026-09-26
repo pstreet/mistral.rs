@@ -141,4 +141,4 @@ Pass it on the CLI:
 mistralrs serve --mcp-config mcp.json -m Qwen/Qwen3-4B
 ```
 
-The same path can be supplied via the `MCP_CONFIG_PATH` environment variable.
+The same path can be supplied via the `MISTRALRS_MCP_CONFIG_PATH` environment variable.

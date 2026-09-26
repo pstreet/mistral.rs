@@ -119,13 +119,13 @@ live in the [environment variables reference](/reference/environment-variables/)
 
 | Variable | Effect |
 |---|---|
-| `MISTRALRS_MANAGED_WEIGHTS=1` | HIP managed (host-visible, prefetched) weights instead of device-only allocations. On unified-memory APUs the device-only default keeps weights out of process RSS. |
+| `MISTRALRS_MANAGED_WEIGHTS=1` + `CANDLE_MANAGED_WEIGHTS=1` | HIP managed (host-visible, prefetched) weights instead of device-only allocations; the mistral.rs flag gates its loader, the candle flag gates candle's allocator, so a deployment sets both. On unified-memory APUs the device-only default keeps weights out of process RSS. |
 | `MISTRALRS_GGUF_NO_MMAP=1` | Read GGUF shards with `read()` instead of `mmap`; avoids a duplicate file-cache copy on shared-memory machines. |
 | `MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD=1` | Release host shard buffers once weights are on-device (pairs with `NO_MMAP`). |
 | `MISTRALRS_CUDA_GRAPHS=0` | Disable decode-graph capture on the ROCm path if a capture crash recurs. |
-| `MRS_DECODE_ARENA_OVERRIDE=<bytes>` | Raise the decode-graph capture arena if capture fails with an overflow; the log prints the size actually needed. |
+| `MISTRALRS_DECODE_ARENA_OVERRIDE=<bytes>` | Raise the decode-graph capture arena if capture fails with an overflow; the log prints the size actually needed. |
 | `CANDLE_LT_COMPUTE=32` | Force F32 accumulation in F16 hipBLASLt GEMMs. The F16 heuristic failures that once required this on RDNA parts no longer occur on current ROCm stacks, and F32 is performance-neutral; keep only as a fallback for old stacks. |
-| `MRS_NO_FAST_MMQ=1` / `CANDLE_NO_FAST_MMQ=1` | Override the per-dtype MMQ dispatch: route every supported dtype's large-batch quantized GEMMs through dequantize + hipBLASLt. By default only Q6K batches above 256 rows take that path (MMQ Q6K plateaus far below the dequant GEMM at large batches); Q4K/Q5K/Q8_0 and small batches use the fused MMQ kernels. |
+| `MISTRALRS_NO_FAST_MMQ=1` | Override the per-dtype MMQ dispatch: route every supported dtype's large-batch quantized GEMMs through dequantize + hipBLASLt. By default only Q6K batches above candle's dequant-GEMM row threshold (`CANDLE_DMM_F16_MIN`, default 256) take that path (MMQ Q6K plateaus far below the dequant GEMM at large batches); Q4K/Q5K/Q8_0 and small batches use the fused MMQ kernels. |
 | `CANDLE_DMM_F16_MIN=<rows>` | Minimum `b*m` rows for the dequantize-to-F16 GEMM path (default 256). |
 
 ## Verify
@@ -149,7 +149,7 @@ throughput with MTP on and off to confirm the draft head is helping; see
 - **Wrong-architecture kernels (launch failures at runtime):**
   `CANDLE_ROCM_ARCH` did not match the serving GPU. Rebuild with the
   right `gfxXXX` value; the arch is baked in at compile time.
-- **Decode-graph capture overflow:** raise `MRS_DECODE_ARENA_OVERRIDE`
+- **Decode-graph capture overflow:** raise `MISTRALRS_DECODE_ARENA_OVERRIDE`
   to the size printed on the `[cudarc] CAPTURE` log line, or set
   `MISTRALRS_CUDA_GRAPHS=0` to run eager.
 - **hipBLASLt `INTERNAL_ERROR` on some shapes:** set
