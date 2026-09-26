@@ -193,6 +193,7 @@ mod tests {
         att.matmul(v)
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     fn check_case(
         dev: &Device,
         sq: usize,

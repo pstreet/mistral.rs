@@ -2335,7 +2335,7 @@ mod tests {
             .dequantize(&Device::Cpu)?
             .flatten_all()?
             .to_vec1::<f32>()?;
-        let reference: Vec<f32> = vec![4u8; 32]
+        let reference: Vec<f32> = [4u8; 32]
             .chunks_exact(4)
             .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
             .collect();

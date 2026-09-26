@@ -5070,6 +5070,7 @@ mod tests {
         key: CudaDecodeGraphKey,
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn batch_fixtures(device: &Device, batch: usize) -> anyhow::Result<BatchFixtures> {
         let metadata = Arc::new(DecodePagedRows {
             slot_mappings: (0..batch as i64).map(|row| vec![row]).collect(),

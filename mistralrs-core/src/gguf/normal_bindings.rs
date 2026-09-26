@@ -84,7 +84,7 @@ fn qwen3_next_nextn_layer(
 fn bind_qwen3_next_mtp(
     archive: &GgufArchive,
     architecture: CanonicalGgufArchitecture,
-    layer: usize,
+    _layer: usize,
     role: &str,
     suffix: &str,
     source: &str,

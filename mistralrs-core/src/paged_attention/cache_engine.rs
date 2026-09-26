@@ -359,7 +359,7 @@ impl CacheEngine {
         let kv_heads = model_config.num_kv_heads_for_layer(layer_idx);
         let k_dim = model_config.k_head_dim_for_layer(layer_idx);
         let v_dim = model_config.v_head_dim_for_layer(layer_idx);
-        if k_dim % 32 != 0 || v_dim % 32 != 0 || k_dim > 512 || v_dim > 512 {
+        if !k_dim.is_multiple_of(32) || !v_dim.is_multiple_of(32) || k_dim > 512 || v_dim > 512 {
             candle_core::bail!(
                 "Block-quantized KV cache requires head dims % 32 == 0 and <= 512, got k={k_dim} v={v_dim}"
             );
@@ -614,18 +614,16 @@ impl CacheEngine {
                             )?
                         }
                     };
-                    let value_blocks = unsafe {
-                        uninit_block(
-                            (
-                                num_gpu_blocks,
-                                key_block_shape.0,
-                                key_block_shape.1,
-                                key_block_shape.2,
-                            ),
-                            k_dtype,
-                            device,
-                        )?
-                    };
+                    let value_blocks = uninit_block(
+                        (
+                            num_gpu_blocks,
+                            key_block_shape.0,
+                            key_block_shape.1,
+                            key_block_shape.2,
+                        ),
+                        k_dtype,
+                        device,
+                    )?;
                     (key_blocks, value_blocks)
                 }
                 KvCacheLayout::Mla {

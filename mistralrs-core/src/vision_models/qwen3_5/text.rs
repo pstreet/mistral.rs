@@ -2497,11 +2497,15 @@ impl Qwen3_5TextModel {
             for (i, layer) in self.layers.iter().enumerate() {
                 match normalized_x.as_ref() {
                     Some(PreparedLayerInput::Dense(t)) => trace_layer_nan(t, i, "prep", query_len),
-                    Some(PreparedLayerInput::Quantized { normalized, .. }) => {
-                        if let Some(t) = normalized {
-                            trace_layer_nan(t, i, "prep", query_len);
-                        }
+                    Some(PreparedLayerInput::Quantized {
+                        normalized: Some(t),
+                        ..
+                    }) => {
+                        trace_layer_nan(t, i, "prep", query_len);
                     }
+                    Some(PreparedLayerInput::Quantized {
+                        normalized: None, ..
+                    }) => {}
                     None => {}
                 }
                 xs = self.mapper.map(xs, i)?;

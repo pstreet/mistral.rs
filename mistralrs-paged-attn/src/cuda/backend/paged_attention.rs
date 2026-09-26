@@ -391,7 +391,7 @@ impl PagedAttention {
             (max_num_blocks_per_seq * block_size).min(self.max_context_len);
         let max_num_partitions = effective_max_context_len.div_ceil(partition_size);
         let use_v1 = (max_num_partitions == 1 || num_seqs * num_heads > 512)
-            && partition_size % block_size == 0;
+            && partition_size.is_multiple_of(block_size);
 
         let elem_count = out_shape.elem_count();
         let out = unsafe { dev.alloc::<T>(elem_count) }?;
@@ -1387,8 +1387,8 @@ pub fn reshape_and_cache_q4(
             vc_ptr as *const core::ffi::c_void,
             ks_ptr as *mut f32,
             vs_ptr as *mut f32,
-            kr_ptr as *mut u8,
-            vr_ptr as *mut u8,
+            kr_ptr,
+            vr_ptr,
             s_ptr as *const core::ffi::c_long,
             num_tokens as c_int,
             num_heads as c_int,
@@ -1491,7 +1491,7 @@ mod tests {
     }
 
     fn max_abs_diff(out: &Tensor, expected: &Tensor) -> Result<f32> {
-        Ok(out.sub(expected)?.abs()?.max_all()?.to_scalar::<f32>()?)
+        out.sub(expected)?.abs()?.max_all()?.to_scalar::<f32>()
     }
 
     #[test]

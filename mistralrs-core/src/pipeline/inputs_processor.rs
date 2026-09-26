@@ -155,6 +155,7 @@ pub mod text_models_inputs_processor {
     // Mirror of the vLLM v2 launcher's partition math
     // (ceil(min(table_tokens, ceil512(context)) / 512)): the recorded grid and
     // reduce stride only stay valid while this is unchanged.
+    #[allow(dead_code)]
     fn cuda_graph_decode_partitions(
         table_blocks: usize,
         block_size: usize,

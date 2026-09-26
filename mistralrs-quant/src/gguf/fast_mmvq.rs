@@ -336,7 +336,7 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     };
     let xs_offset = xs_layout.start_offset();
 
-    let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
+    let stream_ptr = stream.cu_stream();
     let k_padded = pad(k, MATRIX_ROW_PADDING);
     let num_blocks_per_row = k_padded / Q8_1_BLOCK_SIZE;
     let dst_row_bytes = num_blocks_per_row * Q8_1_TYPE_SIZE;
@@ -537,7 +537,7 @@ pub fn fused_glu(
     let xs_offset = xs_layout.start_offset();
 
     let stream = dev.cuda_stream();
-    let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
+    let stream_ptr = stream.cu_stream();
     let k_padded = pad(k, MATRIX_ROW_PADDING);
     let num_blocks_per_row = k_padded / Q8_1_BLOCK_SIZE;
     let dst_row_bytes = num_blocks_per_row * Q8_1_TYPE_SIZE;
@@ -752,7 +752,7 @@ pub fn fused_qkv(
     let xs_offset = xs_layout.start_offset();
 
     let stream = dev.cuda_stream();
-    let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
+    let stream_ptr = stream.cu_stream();
     let k_padded = pad(k, MATRIX_ROW_PADDING);
     let num_blocks_per_row = k_padded / Q8_1_BLOCK_SIZE;
     let dst_row_bytes = num_blocks_per_row * Q8_1_TYPE_SIZE;

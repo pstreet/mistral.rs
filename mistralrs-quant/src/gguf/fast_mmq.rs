@@ -399,7 +399,7 @@ impl DenseMmqRun<'_> {
         xs_slice: &CudaSlice<T>,
         xs_offset: usize,
     ) -> Result<Vec<Tensor>> {
-        let stream_ptr = self.stream.cu_stream() as *mut std::ffi::c_void;
+        let stream_ptr = self.stream.cu_stream();
         let (xs_ptr, _xs_guard) = slice_ptr_on_stream(xs_slice, xs_offset, self.stream);
         unsafe {
             (self.quantize)(
@@ -489,7 +489,7 @@ impl DenseGluDownRun<'_> {
         up_slice: &CudaSlice<T>,
         up_offset: usize,
     ) -> Result<Tensor> {
-        let stream_ptr = self.stream.cu_stream() as *mut std::ffi::c_void;
+        let stream_ptr = self.stream.cu_stream();
         let (gate_ptr, _gate_guard) = slice_ptr_on_stream(gate_slice, gate_offset, self.stream);
         let (up_ptr, _up_guard) = slice_ptr_on_stream(up_slice, up_offset, self.stream);
         unsafe {
@@ -896,7 +896,7 @@ pub fn grouped(
     };
 
     let stream = dev.cuda_stream();
-    let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
+    let stream_ptr = stream.cu_stream();
     let k_padded = pad(pad(k, MATRIX_ROW_PADDING), 4 * QK8_1);
 
     let blocks_per_row = k_padded / (4 * QK8_1);
@@ -1104,7 +1104,7 @@ fn grouped_from_glu(run: GroupedGluRun<'_>) -> Result<Tensor> {
     }
 
     let stream = dev.cuda_stream();
-    let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
+    let stream_ptr = stream.cu_stream();
     let k_padded = pad(pad(k, MATRIX_ROW_PADDING), 4 * QK8_1);
 
     let blocks_per_row = k_padded / (4 * QK8_1);
@@ -1379,7 +1379,7 @@ pub fn grouped_pair_packed(
     };
 
     let stream = dev.cuda_stream();
-    let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
+    let stream_ptr = stream.cu_stream();
     let k_padded = pad(pad(k, MATRIX_ROW_PADDING), 4 * QK8_1);
 
     let blocks_per_row = k_padded / (4 * QK8_1);

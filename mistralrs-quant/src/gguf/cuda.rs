@@ -208,7 +208,7 @@ fn quantize_q8_1(
 
     // Get stream pointer
     let cuda_stream = dev.cuda_stream();
-    let stream = cuda_stream.cu_stream() as *mut std::ffi::c_void;
+    let stream = cuda_stream.cu_stream();
 
     const CHUNK_SIZE: usize = 65535;
     let mut rows_processed = 0;
@@ -300,7 +300,7 @@ fn indexed_moe_forward_fused_q8_1_input(
     let out = dev.alloc_zeros::<f32>(outsize)?;
 
     // Get stream pointer
-    let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+    let stream = dev.cuda_stream().cu_stream();
 
     let n_i32 = n as i32;
     let k_i32 = k as i32;
@@ -598,7 +598,7 @@ pub fn moe_dispatch_build(
     let sorted_token_ids = unsafe { dev.alloc::<u32>(total_assignments) }?;
     let sorted_source_ids = unsafe { dev.alloc::<u32>(total_assignments) }?;
 
-    let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+    let stream = dev.cuda_stream().cu_stream();
     let (dispatch_ws_ptr, _dispatch_ws_guard) = dispatch_workspace_ensure(dev, 2 * num_experts)?;
 
     {
@@ -667,7 +667,7 @@ pub unsafe fn moe_weighted_reduce_flat(
     };
     let input_slice = cuda.as_cuda_slice::<f32>()?;
     let out = unsafe { dev.alloc::<f32>(num_tokens * hidden)? };
-    let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+    let stream = dev.cuda_stream().cu_stream();
 
     {
         let (input_ptr, _ig) = slice_ptr(input_slice, layout.start_offset());
@@ -727,7 +727,7 @@ pub unsafe fn moe_weighted_reduce_flat_bf16(
     };
     let input_slice = cuda.as_cuda_slice::<f32>()?;
     let out = unsafe { dev.alloc::<half::bf16>(num_tokens * hidden)? };
-    let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+    let stream = dev.cuda_stream().cu_stream();
 
     {
         let (input_ptr, _ig) = slice_ptr(input_slice, layout.start_offset());
@@ -816,7 +816,7 @@ unsafe fn moe_weighted_reduce_same_dtype<T: CudaDType + DeviceRepr>(
         .ok_or_else(|| candle_core::Error::msg(format!("{kernel}: output size overflow")))?;
     let mut out = unsafe { dev.alloc::<T>(output_len)? };
     let cuda_stream = dev.cuda_stream();
-    let stream = cuda_stream.cu_stream() as *mut std::ffi::c_void;
+    let stream = cuda_stream.cu_stream();
 
     {
         let (input_ptr, _ig) =
@@ -961,7 +961,7 @@ fn quantize_input_q8_1_into(
         };
         assert!(xs_layout.start_offset() == 0);
         let cuda_stream = dev.cuda_stream();
-        let stream = cuda_stream.cu_stream() as *mut std::ffi::c_void;
+        let stream = cuda_stream.cu_stream();
         let (out_ptr, _og) = slice_ptr_mut_on_stream(input_quant, 0, &cuda_stream);
         if xs_contig.dtype() == candle_core::DType::BF16 {
             let xs_slice = xs_cuda.as_cuda_slice::<half::bf16>()?;
@@ -1230,7 +1230,7 @@ impl<'a> IndexedMoeLoraDecode<'a> {
             .ok_or_else(|| candle_core::Error::msg("indexed MoE LoRA output size overflow"))?;
         let mut output = unsafe { self.routing.dev.alloc::<T>(output_len)? };
         let cuda_stream = self.routing.dev.cuda_stream();
-        let stream = cuda_stream.cu_stream() as *mut std::ffi::c_void;
+        let stream = cuda_stream.cu_stream();
         let (gate_ptr, _gate_guard) = self.weights.gate.device_ptr_with_guard(&cuda_stream)?;
         let (up_ptr, _up_guard) = self.weights.up.device_ptr_with_guard(&cuda_stream)?;
 
@@ -1292,7 +1292,7 @@ impl<'a> IndexedMoeLoraDecode<'a> {
             .ok_or_else(|| candle_core::Error::msg("indexed MoE LoRA output size overflow"))?;
         let mut output = unsafe { self.routing.dev.alloc::<T>(output_len)? };
         let cuda_stream = self.routing.dev.cuda_stream();
-        let stream = cuda_stream.cu_stream() as *mut std::ffi::c_void;
+        let stream = cuda_stream.cu_stream();
         let (down_ptr, _down_guard) = self.weights.down.device_ptr_with_guard(&cuda_stream)?;
 
         {
@@ -1371,7 +1371,7 @@ pub fn grouped_moe_gemm_prequantized(
     };
     let out = dev.alloc_zeros::<f32>(out_rows * n)?;
 
-    let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+    let stream = dev.cuda_stream().cu_stream();
     let weight_ptr = qtensor.device_ptr()? as *const std::ffi::c_void;
 
     let topk_w_ptr = topk_weights.map(|(p, _)| p).unwrap_or(std::ptr::null());
@@ -1482,7 +1482,7 @@ pub unsafe fn indexed_moe_fused_decode(
     // Step 1: Quantize input to Q8_1 (shared between gate and up)
     quantize_input_q8_1_into(&xs_contig, &mut q8_workspace.slice, dev)?;
 
-    let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+    let stream = dev.cuda_stream().cu_stream();
 
     // Step 2: Fused gate+up+activation+multiply
     let gate_up_outsize = batch * topk * intermediate_size;

@@ -1970,6 +1970,7 @@ fn configure_paged_attn(device: &Device, paged_attn: Option<bool>) -> bool {
 }
 
 /// Initializes the cache configuration for paged attention based on provided parameters.
+#[allow(clippy::too_many_arguments)]
 fn init_cache_config(
     paged_attn_block_size: Option<usize>,
     paged_attn_gpu_mem: Option<usize>,

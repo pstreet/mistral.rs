@@ -3448,9 +3448,10 @@ impl MistralRs {
 /// Estimated device bytes a demand-load needs: local weight files plus the
 /// planned KV budget plus headroom. `None` when either side is unknowable
 /// pre-load (remote weights, context-sized KV); callers then skip eviction.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn estimate_load_bytes(
     loader_config: &ModelLoaderConfig,
-    available_now: u64,
+    _available_now: u64,
     total_bytes: u64,
     headroom_bytes: u64,
 ) -> Option<u64> {
@@ -3530,6 +3531,7 @@ fn gguf_local_weight_bytes(selected: &ModelSelected) -> Option<u64> {
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 mod tests {
     use super::*;
     use std::panic::{catch_unwind, AssertUnwindSafe};

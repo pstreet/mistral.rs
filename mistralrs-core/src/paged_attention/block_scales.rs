@@ -20,6 +20,7 @@ use mistralrs_paged_attn::BlockQuantKind;
 // cannot pin stale multi-GB caches.
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub(crate) struct BlockQuantScales {
     pub k: Option<Tensor>,
     pub v: Option<Tensor>,
@@ -68,6 +69,7 @@ pub(crate) fn register_block_scales(key_cache: &Tensor, scales: BlockQuantScales
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(crate) fn lookup_block_scales(key_cache: &Tensor) -> Result<Option<BlockQuantScales>> {
     let key = cache_key(key_cache)?;
     Ok(registry()

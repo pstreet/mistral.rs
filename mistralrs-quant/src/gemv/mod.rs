@@ -315,7 +315,7 @@ fn gemv_bf16(
             k as i32,
             batch_size as i32,
             has_bias,
-            stream.cu_stream() as *mut std::ffi::c_void,
+            stream.cu_stream(),
         );
     }
 
@@ -383,7 +383,7 @@ fn gemv_f16(
             k as i32,
             batch_size as i32,
             has_bias,
-            stream.cu_stream() as *mut std::ffi::c_void,
+            stream.cu_stream(),
         );
     }
 
@@ -451,7 +451,7 @@ fn gemv_f32(
             k as i32,
             batch_size as i32,
             has_bias,
-            stream.cu_stream() as *mut std::ffi::c_void,
+            stream.cu_stream(),
         );
     }
 

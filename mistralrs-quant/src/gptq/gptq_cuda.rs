@@ -17,7 +17,7 @@ use candle_core::{
         },
         CudaStorageSlice, WrapErr,
     },
-    Context, CudaStorage, DType, Device, Result, Shape, Storage, Tensor, D,
+    CudaStorage, DType, Device, Result, Shape, Storage, Tensor, D,
 };
 use half::f16;
 
@@ -64,6 +64,7 @@ fn insert_tmp_dq_buffer(len: usize, buffer: CudaSlice<f16>) {
 }
 
 #[derive(Debug)]
+#[cfg_attr(feature = "rocm", allow(dead_code))]
 pub struct GptqLayer {
     q_weight: Tensor,       // u32
     qzeros: Option<Tensor>, // u32
