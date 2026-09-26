@@ -480,16 +480,40 @@ P3 = polish, Deferred = do not do on RDNA.
       Runtime half (real NVIDIA GPU) remains unverified on this
       box - hardware follow-up, but the link/load/dispatch risks
       are all answered.
-- [ ] ~M cudarc-hip dynamic-loading mode (Stage 2 enabler, from the
-      coexistence spike): port upstream cudarc's libloading pattern into
-      the fork's cudarc-hip - a `dynamic-loading` cargo feature that
-      resolves every sys binding through a OnceLock<libloading::Library>
-      (RTLD_LOCAL, so symmetric interposition immunity), plus an
-      `is_hiplib_present()` probe mirroring cudarc::driver::sys's.
-      Mechanical mirror of the proven pattern across cudarc-hip's 5 sys
-      modules (driver, cublas, cublaslt, curand, nvrtc); dynamic-linking
-      stays the default so prod builds are unchanged. Do this BEFORE
-      Stage 2 so the multi-backend binary starts on CPU-only boxes.
+- [x] 2026-09-26 ~M cudarc-hip dynamic-loading mode (Stage 2 enabler,
+      from the coexistence spike). DONE. Ported upstream cudarc's
+      libloading pattern across all 5 sys modules (driver 62 bindings,
+      cublaslt 13, cublas 6, curand 9, nvrtc 5 hoisted out of a
+      function-local extern block): a `dynamic-loading` cargo feature
+      resolves every binding through a OnceLock<libloading::Library>
+      (libloading 0.9, upstream's pin) + is_culib_present() probe
+      mirroring cudarc::driver::sys's name; build.rs emits NO link
+      lines under the feature. Dynamic-linking stays the default - prod
+      builds compile the identical extern blocks (byte-for-byte, only
+      cfg-gated).
+      KEY DISCOVERY (cost a segfault): a probe that opens the library
+      and drops the handle DL CLOSES the HIP runtime, whose static
+      initializers cannot survive an unload/reload cycle - the next
+      real init segfaults. Upstream's is_culib_present has exactly this
+      shape. FIX in the fork: probe and loader share one
+      OnceLock<Result<&'static Library, candidates>> - whichever runs
+      first keeps the library loaded for the process lifetime.
+      VERIFICATION: dual-dlopen spike binary has ZERO vendor libs in
+      DT_NEEDED (readelf), starts under a stripped env, probe->init
+      ->probe->init sequences clean, full htod/dtoh roundtrip +
+      gcnArchName resolution through the dlopen'd runtime; nvlink +
+      hip-dlopen mixed mode links; prod path unchanged (candle rocm
+      check, gcn_arch_name_resolves, fast_mmq 5/5, mmq bench - all
+      green, no new clippy lints in either mode). NOTE for Stage 2 on
+      the NVIDIA side: upstream's probe dlcloses libcuda too - the
+      stub survives it (trivial lib), but a REAL driver may share
+      HIP's unload fragility, so prefer one guarded init attempt over
+      probe->init cycles, and validate on hardware.
+      Stage-2 wiring note (from the dynamic-loading port): the HIP
+      probe/loader never dlclose()s (shared OnceLock - see the cudarc-hip
+      task above); on the NVIDIA side, upstream cudarc's probe DOES
+      dlclose, so wrap NVIDIA backend selection in ONE guarded init
+      rather than probe->init cycles, pending hardware validation.
 - [ ] ~L multi-backend runtime: CPU + NVIDIA + AMD + Intel in ONE
       process, per-model device assignment. Design agreed 2026-09-26;
       precedent = the ggml/llama.cpp architecture (separate backend
