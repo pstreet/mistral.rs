@@ -542,6 +542,78 @@ P3 = polish, Deferred = do not do on RDNA.
       API surface (CudaDevice, Device::Cuda) is NOT renamed: HIP is
       CUDA-shaped by design and renaming means forking away from
       candle upstream (llama.cpp accepts the same shape).
+      VULKAN IS NOT "THE INTEL BACKEND" (user directive 2026-09-26):
+      Vulkan is a vendor-agnostic API - the same physical card is
+      reachable as hip:0 AND vulkan:0 (or cuda:0 and vulkan:0), so
+      backends are keyed by API, not vendor, caps are per (API,
+      device) - the same card via two APIs has different caps -
+      and enumeration is per-API. GpuArch::Vulkan resolves the
+      underlying vendor from VkPhysicalDeviceProperties (vendorID
+      0x10DE/0x1002/0x8086 + deviceName parse) so Vulkan policy
+      code can apply per-vendor quirks (ggml-vulkan precedent).
+      Selection precedence: native API by default (cuda/hip),
+      Vulkan when explicitly chosen or on Intel-only boxes.
+      SLICE PLAN (code survey 2026-09-26): candle's
+      DeviceLocation/Device enums are the precedented extension
+      point (Metal already coexists); cuda_backend is ONE module
+      bound to either vendor via the extern-crate alias (it already
+      dual-compiles) -> macro-instantiate it per vendor rather than
+      duplicating; candle-kernels build.rs has BOTH paths (CORRECTED
+      2026-09-26: rocm feature -> hand-rolled hipcc; else ->
+      cudaforge, a crates.io nvcc wrapper - "nvcc" never appears
+      literally in build.rs, the initial grep read was wrong), but a
+      dual-GPU build still needs the kernels crate instantiated
+      twice (candle-kernels-cuda twin keeping the cudaforge branch;
+      today's build.rs takes the rocm branch on feature precedence,
+      so a both-features build would silently produce HIP kernels
+      only). Baseline candle ops are RUNTIME-loaded modules (PTX on
+      CUDA, cubin on HIP) -> no link-time collision for the
+      baseline; the only link-time collision is the static
+      libmoe.a FFI archive (mmq/mmvq/moe fast paths, same C symbols
+      from both vendors) - and BackendCaps makes it a non-blocker:
+      a dual-build CUDA side ships with mmq/moe caps false and
+      serves via dequant GEMM until symbol prefixing lands.
+      NVIDIA side init is probe-gated (is_culib_present, one
+      guarded attempt, never probe->init cycles). Slice order: (S1)
+      dual-GPU candle compile - lift the compile_error, macro-
+      instantiate the backend module, kernels twin crate (PTX
+      only, no static FFI), Device::Hip + DeviceLocation::Hip arms,
+      alloc/copy ops verified on hip on this box with the cuda side
+      probe-gated; (S2) full candle GPU
+      test suite through the dual build; (S3) mistral.rs routing:
+      device strings + BackendCaps contract + graceful per-device
+      degradation, serving smoke on hip:0; (S4) Vulkan backend
+      (largest; llama.cpp shader precedent), GpuArch::Vulkan
+      vendor-detect, vulkan caps floor (no decode graphs initially).
+      mistral.rs fast paths (mmq/gdn/paged-attn/cuda-graph) meet
+      Device::Hip in S3 - trait or caps-carried dispatch, design
+      deferred to S3.
+      S1 DONE 2026-09-26 (candle): kernels twin builds standalone
+      (11 PTX, symlink-free, sm_80 fallback GPU-less); dual check
+      green alongside default + rocm; 4 dual tests pass (CPU op +
+      hip arch/roundtrip/affine-module-load + graceful NVIDIA stub
+      error in one binary); regressions green (fast_mmq 5/5, quant
+      295, gdn 55, mmq bench, warning-parity with the original,
+      candle-nn's `candle::builder_arg!` kept working via a crate-
+      root macro_export). Structural lessons, all earned the hard
+      way: (1) bodies must not define #[macro_export] macros (dual
+      instantiation exports twice + poisons absolute-path imports);
+      (2) shell `use` bindings are invisible to include-text inside
+      modules DECLARED by expanded code - role bindings live in the
+      role-module shells, bodies import via `super::`; (3) inherent
+      impls on shared crate types (`impl Scalar`) conflict under
+      dual instantiation - use a body-local trait; (4) macros cannot
+      expand to struct fields or splice across their boundary - the
+      dispatch gate uses an inverted companion macro instead.
+      REMAINING for the dispatch layer (S1b/S2): Device::Hip +
+      Storage::Hip variants + ~30 match arms + DeviceLocation::Hip
+      parsing; hip-side coverage for candle's quantized ops,
+      safetensors/GGUF managed uploads in dual (single-vendor-gated
+      for now); symbol prefixing for the static libmoe.a FFI (S3
+      fast paths); the upstream-cudarc fork port restoring
+      graphs/Lt/managed caps on the NVIDIA role (follows BackendCaps
+      degradation until then); cuda-only builds stay broken
+      (pre-existing fork-vs-upstream divergence, out of scope).
 - [ ] _S semantic check post-merge (was §6): upstream `804d361e` bf16 vectorized
       `fast_sum` gated `__CUDA_ARCH__ >= 800` will be live in ROCm JIT builds
       (rocm_compat pins 1030) and is untested on gfx1151. Cheap safety check.
