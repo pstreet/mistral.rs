@@ -605,11 +605,27 @@ P3 = polish, Deferred = do not do on RDNA.
       dual instantiation - use a body-local trait; (4) macros cannot
       expand to struct fields or splice across their boundary - the
       dispatch gate uses an inverted companion macro instead.
-      REMAINING for the dispatch layer (S1b/S2): Device::Hip +
-      Storage::Hip variants + ~30 match arms + DeviceLocation::Hip
-      parsing; hip-side coverage for candle's quantized ops,
-      safetensors/GGUF managed uploads in dual (single-vendor-gated
-      for now); symbol prefixing for the static libmoe.a FFI (S3
+      S1b DONE 2026-09-26 (candle): Device::Hip + Storage::Hip
+      variants with the full dispatch layer - hand arms in device.rs
+      (constructors, accessors, all storage-creation methods,
+      synchronize), script-duplicated arms in storage.rs (17 single
+      + tuple forms), to_device cross-product + conversions in
+      tensor.rs, safetensors upload twins on hip_backend types,
+      DeviceLocation::Hip with a role-owned location macro in the
+      shared body, Display arms, defaulted hip_fwd (+aliased) on all
+      six CustomOp traits (opt-in per op, Msg bail), quantized
+      loaders + ggml_file routed to explicit S2 bails. Dual check
+      green; dual tests 5/5 with a tensor-level Hip test (zeros/add/
+      dtoh/hip->cpu/location); regressions green (rocm + default
+      checks zero-error with warning parity, fast_mmq 5/5, quant
+      295, gdn 55). Structural note: tuple match arms need paren-
+      aware patterns, and arm-tracking scripts must reset per match
+      (cross-match contamination renamed two Cuda arms mid-work -
+      caught by the type checker, fixed by content search).
+      REMAINING (S2): hip-side quantized coverage (QStorage-on-hip,
+      currently explicit bails), safetensors/GGUF managed uploads in
+      dual (single-vendor-gated), full candle GPU suite through the
+      dual build; symbol prefixing for the static libmoe.a FFI (S3
       fast paths); the upstream-cudarc fork port restoring
       graphs/Lt/managed caps on the NVIDIA role (follows BackendCaps
       degradation until then); cuda-only builds stay broken
