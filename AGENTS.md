@@ -134,6 +134,12 @@ The CI pipeline is defined in `.github/workflows/ci.yml` and includes:
 ## Contribution Conventions
 
 - Follow Rust 2021 idioms, keep code minimal and focused.
+- GPU policy code (kernel selection, dispatch tables, capability gates) matches
+  on `candle_core::GpuArch`, never raw compute-capability ints; the
+  HIP-synthetic `cc` encoding (gfx1151 -> 1150) lives only at the kernel
+  bridge where the llama.cpp-derived C launchers consume it. Exactly one GPU
+  backend per binary (`cuda` xor `rocm`; both together is a compile error
+  until multi-vendor lands).
 - Update `/docs/src/content/docs/` and examples when adding features or breaking changes.
 - Add tests and examples for new functionality.
 - Commit messages should be clear and follow conventional style where possible.

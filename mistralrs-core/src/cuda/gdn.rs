@@ -1,5 +1,7 @@
 #![allow(clippy::cast_possible_truncation)]
 
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
+use candle_core::GpuArch;
 use candle_core::{DType, Device, Result, Tensor};
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use mistralrs_quant::QuantizedActivation;
@@ -14,9 +16,30 @@ use crate::kv_cache::GDN_PENDING_KEY_BANK_COUNT;
 pub(crate) const GDN_PAD_SLOT: u32 = u32::MAX;
 
 #[cfg(any(feature = "cuda", feature = "rocm", test))]
-const GDN_DECODE_MIN_COMPUTE_MAJOR: i32 = 9;
-#[cfg_attr(not(any(feature = "cuda", test)), allow(dead_code))]
-const GDN_DECODE_TUNED_COMPUTE_MAJOR: i32 = 9;
+// The vmajor kernels are tuned for NVIDIA Hopper sm_90 (mistral.rs is
+// CUDA-first). The Rocm gfx9xx arm preserves the legacy numeric gate only:
+// HIP's synthetic compute caps give CDNA3 gfx942 major 9, which matched by
+// coincidence and was never validated.
+fn gdn_vmajor_arch(arch: GpuArch) -> bool {
+    matches!(
+        arch,
+        GpuArch::Cuda { sm: (9, _) } | GpuArch::Rocm { gfx: (9, _, _) }
+    )
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
+// Floor for the Cooperative/Pipelined key-major decode kernels, originally
+// compute major >= 9: Hopper-or-newer NVIDIA, or AMD families 9+ (gfx9xx
+// through RDNA4). These serve gfx1151 today - keep the threshold exact.
+fn gdn_modern_arch(arch: GpuArch) -> bool {
+    match arch {
+        GpuArch::Cuda { sm: (major, _) } => major >= 9,
+        GpuArch::Rocm {
+            gfx: (family, _, _),
+        } => family >= 9,
+        GpuArch::Vulkan => false,
+    }
+}
 pub(crate) const GDN_DECODE_K_DIM: usize = 128;
 pub(crate) const GDN_DECODE_V_DIM: usize = 128;
 #[cfg(any(feature = "cuda", feature = "rocm", test))]
@@ -287,7 +310,7 @@ enum GdnPrefillKernel {
 #[cfg(any(feature = "cuda", feature = "rocm", test))]
 #[derive(Clone, Copy)]
 struct GdnPrefillPolicy {
-    compute_major: i32,
+    arch: GpuArch,
     multiprocessor_count: usize,
     state_blocks: usize,
     seq_len: usize,
@@ -301,7 +324,7 @@ struct GdnPrefillPolicy {
 fn prefill_kernel_supported(kernel: GdnPrefillKernel, policy: GdnPrefillPolicy) -> bool {
     kernel != GdnPrefillKernel::FlashInferSm90
         && policy.state_layout == RecurrentStateLayout::GdnValueMajor
-        && policy.compute_major == GDN_DECODE_TUNED_COMPUTE_MAJOR
+        && gdn_vmajor_arch(policy.arch)
         && policy.multiprocessor_count > 0
         && policy.state_blocks > 0
         && policy.seq_len > 0
@@ -365,7 +388,7 @@ fn prefill_kernel_override() -> Result<Option<GdnPrefillKernel>> {
 #[cfg(any(feature = "cuda", feature = "rocm", test))]
 #[derive(Clone, Copy)]
 struct GdnDecodePolicy {
-    compute_major: i32,
+    arch: GpuArch,
     multiprocessor_count: usize,
     state_blocks: usize,
     head_k_dim: usize,
@@ -381,7 +404,7 @@ fn decode_kernel_supported(kernel: GdnDecodeKernel, policy: GdnDecodePolicy) -> 
         GdnDecodeKernel::Baseline => policy.state_layout == RecurrentStateLayout::GdnKeyMajor,
         GdnDecodeKernel::Cooperative => {
             policy.state_layout == RecurrentStateLayout::GdnKeyMajor
-                && policy.compute_major >= GDN_DECODE_MIN_COMPUTE_MAJOR
+                && gdn_modern_arch(policy.arch)
                 && policy.vector_aligned
                 && policy.head_k_dim == GDN_DECODE_K_DIM
                 && policy
@@ -390,7 +413,7 @@ fn decode_kernel_supported(kernel: GdnDecodeKernel, policy: GdnDecodePolicy) -> 
         }
         GdnDecodeKernel::Pipelined => {
             policy.state_layout == RecurrentStateLayout::GdnKeyMajor
-                && policy.compute_major >= GDN_DECODE_MIN_COMPUTE_MAJOR
+                && gdn_modern_arch(policy.arch)
                 && policy.vector_aligned
                 && policy.head_k_dim == GDN_DECODE_K_DIM
                 && policy.head_v_dim >= GDN_DECODE_PIPELINED_V_TILE
@@ -400,7 +423,7 @@ fn decode_kernel_supported(kernel: GdnDecodeKernel, policy: GdnDecodePolicy) -> 
         }
         GdnDecodeKernel::ValueMajor4 | GdnDecodeKernel::ValueMajor32 => {
             policy.state_layout == RecurrentStateLayout::GdnValueMajor
-                && policy.compute_major == GDN_DECODE_TUNED_COMPUTE_MAJOR
+                && gdn_vmajor_arch(policy.arch)
                 && policy.bf16
                 && policy.vector_aligned
                 && policy.head_k_dim == GDN_DECODE_K_DIM
@@ -425,7 +448,7 @@ fn automatic_decode_kernel(policy: GdnDecodePolicy) -> GdnDecodeKernel {
         }
         return GdnDecodeKernel::ValueMajor4;
     }
-    if policy.compute_major != GDN_DECODE_TUNED_COMPUTE_MAJOR || policy.multiprocessor_count == 0 {
+    if !gdn_vmajor_arch(policy.arch) || policy.multiprocessor_count == 0 {
         return GdnDecodeKernel::Baseline;
     }
 
@@ -506,7 +529,7 @@ fn decode_kernel_override() -> Result<Option<GdnDecodeKernel>> {
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 #[derive(Clone, Copy)]
 struct GdnCudaDeviceProperties {
-    compute_major: i32,
+    arch: GpuArch,
     multiprocessor_count: usize,
 }
 
@@ -529,9 +552,6 @@ fn gdn_cuda_device_properties(dev: &candle_core::CudaDevice) -> Result<GdnCudaDe
     {
         return Ok(properties);
     }
-    let compute_major = context
-        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)
-        .map_err(candle_core::Error::wrap)?;
     let multiprocessor_count = context
         .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
         .map_err(candle_core::Error::wrap)?;
@@ -540,7 +560,7 @@ fn gdn_cuda_device_properties(dev: &candle_core::CudaDevice) -> Result<GdnCudaDe
         .filter(|count| *count > 0)
         .ok_or_else(|| candle_core::Error::msg("CUDA device reported no multiprocessors"))?;
     let properties = GdnCudaDeviceProperties {
-        compute_major,
+        arch: GpuArch::resolve(dev)?,
         multiprocessor_count,
     };
     cache
@@ -565,7 +585,7 @@ pub(crate) fn v_major_state_supported(
             return Ok(false);
         }
         let properties = gdn_cuda_device_properties(device.as_cuda_device()?)?;
-        Ok(properties.compute_major == GDN_DECODE_TUNED_COMPUTE_MAJOR)
+        Ok(gdn_vmajor_arch(properties.arch))
     }
     #[cfg(not(any(feature = "cuda", feature = "rocm")))]
     {
@@ -1536,7 +1556,7 @@ fn vmajor_prefill_gated_delta_rule_recurrence_cuda_impl(
     let head_v_dim = inputs.v.dim(2)?;
     let properties = gdn_cuda_device_properties(inputs.q.device().as_cuda_device()?)?;
     let policy = GdnPrefillPolicy {
-        compute_major: properties.compute_major,
+        arch: properties.arch,
         multiprocessor_count: properties.multiprocessor_count,
         state_blocks,
         seq_len,
@@ -1547,8 +1567,8 @@ fn vmajor_prefill_gated_delta_rule_recurrence_cuda_impl(
     };
     let kernel = select_prefill_kernel(policy, requested).map_err(|kernel| {
         candle_core::Error::msg(format!(
-            "GDN prefill kernel {kernel:?} does not support compute {}, BH={state_blocks}, S={seq_len}, K={head_k_dim}, V={head_v_dim}, dtype={activation_dtype:?}",
-            properties.compute_major
+            "GDN prefill kernel {kernel:?} does not support {:?}, BH={state_blocks}, S={seq_len}, K={head_k_dim}, V={head_v_dim}, dtype={activation_dtype:?}",
+            properties.arch
         ))
     })?;
     let recurrence_kernel = match kernel {
@@ -2305,10 +2325,9 @@ fn flashinfer_sm90_prefill_supported(launch: &FusedPrefillRecurrence<'_>) -> Res
                 return Ok(false);
             }
         }
-        Ok(
-            gdn_cuda_device_properties(device.as_cuda_device()?)?.compute_major
-                == GDN_DECODE_TUNED_COMPUTE_MAJOR,
-        )
+        Ok(gdn_vmajor_arch(
+            gdn_cuda_device_properties(device.as_cuda_device()?)?.arch,
+        ))
     }
 }
 
@@ -2616,7 +2635,7 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
 
         let (state_ptr, state_dtype) = cuda_recurrent_state_ptr(state, "state")?;
         let policy = GdnDecodePolicy {
-            compute_major: device_properties.compute_major,
+            arch: device_properties.arch,
             multiprocessor_count: device_properties.multiprocessor_count,
             state_blocks: batch_size.saturating_mul(num_v_heads),
             head_k_dim,
@@ -2628,8 +2647,8 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
         };
         let decode_kernel = select_decode_kernel(policy, requested_kernel).map_err(|kernel| {
             candle_core::Error::msg(format!(
-                "requested {kernel:?} GDN kernel is unsupported on compute {}, K={}, V={}, layout={:?}, bf16={}, aligned={}",
-                policy.compute_major,
+                "requested {kernel:?} GDN kernel is unsupported on {:?}, K={}, V={}, layout={:?}, bf16={}, aligned={}",
+                policy.arch,
                 policy.head_k_dim,
                 policy.head_v_dim,
                 policy.state_layout,
@@ -3919,10 +3938,8 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(
     if !device.is_cuda() {
         candle::bail!("deferred GDN recurrence requires CUDA");
     }
-    if gdn_cuda_device_properties(device.as_cuda_device()?)?.compute_major
-        != GDN_DECODE_TUNED_COMPUTE_MAJOR
-    {
-        candle::bail!("deferred GDN recurrence requires compute capability 9.x");
+    if !gdn_vmajor_arch(gdn_cuda_device_properties(device.as_cuda_device()?)?.arch) {
+        candle::bail!("deferred GDN recurrence requires an sm_90-class GPU");
     }
     let fp8_layout = quantization
         .as_ref()
@@ -4276,10 +4293,9 @@ fn launch_deferred_state_cuda(
     }
     let device = state_pool.device();
     if !device.is_cuda()
-        || gdn_cuda_device_properties(device.as_cuda_device()?)?.compute_major
-            != GDN_DECODE_TUNED_COMPUTE_MAJOR
+        || !gdn_vmajor_arch(gdn_cuda_device_properties(device.as_cuda_device()?)?.arch)
     {
-        candle::bail!("deferred GDN materialization requires compute capability 9.x CUDA");
+        candle::bail!("deferred GDN materialization requires an sm_90-class GPU");
     }
     let dev = device.as_cuda_device()?;
     if !std::sync::Arc::ptr_eq(dev.cuda_stream().context(), stream.context()) {
@@ -5729,12 +5745,13 @@ mod dispatch_tests {
         GdnPrefillPolicy,
     };
     use crate::kv_cache::RecurrentStateLayout;
+    use candle_core::GpuArch;
 
     const TEST_SM_COUNT: usize = 132;
 
     fn sm90_policy(state_blocks: usize) -> GdnDecodePolicy {
         GdnDecodePolicy {
-            compute_major: 9,
+            arch: GpuArch::Cuda { sm: (9, 0) },
             multiprocessor_count: TEST_SM_COUNT,
             state_blocks,
             head_k_dim: 128,
@@ -5755,7 +5772,7 @@ mod dispatch_tests {
 
     fn sm90_prefill_policy(state_blocks: usize, seq_len: usize) -> GdnPrefillPolicy {
         GdnPrefillPolicy {
-            compute_major: 9,
+            arch: GpuArch::Cuda { sm: (9, 0) },
             multiprocessor_count: TEST_SM_COUNT,
             state_blocks,
             seq_len,
@@ -5805,13 +5822,13 @@ mod dispatch_tests {
     #[test]
     fn automatic_decode_dispatch_requires_a_tuned_architecture_and_shape() {
         let mut unsupported = sm90_policy(12 * TEST_SM_COUNT);
-        unsupported.compute_major = 8;
+        unsupported.arch = GpuArch::Cuda { sm: (8, 0) };
         assert_eq!(
             automatic_decode_kernel(unsupported),
             GdnDecodeKernel::Baseline
         );
         unsupported = sm90_policy(12 * TEST_SM_COUNT);
-        unsupported.compute_major = 10;
+        unsupported.arch = GpuArch::Cuda { sm: (10, 0) };
         assert_eq!(
             automatic_decode_kernel(unsupported),
             GdnDecodeKernel::Baseline
@@ -5864,7 +5881,7 @@ mod dispatch_tests {
             unsupported
         ));
         unsupported = sm90_value_major_policy(8);
-        unsupported.compute_major = 10;
+        unsupported.arch = GpuArch::Cuda { sm: (10, 0) };
         assert!(!super::decode_kernel_supported(
             GdnDecodeKernel::ValueMajor32,
             unsupported
@@ -5909,13 +5926,13 @@ mod dispatch_tests {
             GdnDecodeKernel::Baseline
         );
         let mut unsupported = policy;
-        unsupported.compute_major = 8;
+        unsupported.arch = GpuArch::Cuda { sm: (8, 0) };
         assert_eq!(
             select_decode_kernel(unsupported, Some(GdnDecodeKernel::Pipelined)),
             Err(GdnDecodeKernel::Pipelined)
         );
         let mut untuned = policy;
-        untuned.compute_major = 10;
+        untuned.arch = GpuArch::Cuda { sm: (10, 0) };
         assert_eq!(
             select_decode_kernel(untuned, Some(GdnDecodeKernel::Pipelined)).unwrap(),
             GdnDecodeKernel::Pipelined
@@ -5984,7 +6001,7 @@ mod dispatch_tests {
         }
 
         let mut unsupported = policy;
-        unsupported.compute_major = 8;
+        unsupported.arch = GpuArch::Cuda { sm: (8, 0) };
         assert_eq!(
             select_prefill_kernel(unsupported, Some(GdnPrefillKernel::ValueMajor4)),
             Err(GdnPrefillKernel::ValueMajor4)
@@ -10512,7 +10529,7 @@ mod tests {
         )?;
 
         let properties = gdn_cuda_device_properties(dev.as_cuda_device()?)?;
-        if properties.compute_major >= GDN_DECODE_MIN_COMPUTE_MAJOR {
+        if gdn_modern_arch(properties.arch) {
             for kernel in [GdnDecodeKernel::Cooperative, GdnDecodeKernel::Pipelined] {
                 run_fused_decode_padding_case(
                     &dev,
@@ -10524,7 +10541,7 @@ mod tests {
                 )?;
             }
         }
-        if properties.compute_major == GDN_DECODE_TUNED_COMPUTE_MAJOR {
+        if gdn_vmajor_arch(properties.arch) {
             for kernel in [GdnDecodeKernel::ValueMajor4, GdnDecodeKernel::ValueMajor32] {
                 run_fused_decode_padding_case(
                     &dev,

@@ -11,7 +11,7 @@ use candle_core::cuda::cudarc::driver::{
 use candle_core::cuda_backend::CudaDType;
 use candle_core::{
     quantized::{GgmlDType, QTensor},
-    CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
+    CudaDevice, CudaStorage, DType, Device, GpuArch, Result, Shape, Storage, Tensor,
 };
 
 use super::ffi;
@@ -67,36 +67,38 @@ pub fn supports(dtype: GgmlDType) -> bool {
 }
 
 // Per-arch MMQ handoff: batches above the returned row count go to candle's
-// dequantize GEMM. gfx1151 (RDNA3/3.5, cc major 11 - the AMD_WMMA path)
-// measured 2026-09-25: Q6K MMQ ~14 TFLOPS vs ~28 dequant at 4096 rows (its
-// 16-value scale groups force K=16 wmma tiles with a per-16-value 3-mul
+// dequantize GEMM. gfx1151 (Rocm gfx family 11, RDNA3/3.5 - the AMD wmma
+// path) measured 2026-09-25: Q6K MMQ ~14 TFLOPS vs ~28 dequant at 4096 rows
+// (its 16-value scale groups force K=16 wmma tiles with a per-16-value 3-mul
 // scalar fixup), Q2K pathological (~0.7) at every batch. Other dtypes were
 // within noise at small/mid batches and only modestly behind at 2048+ rows,
 // so they stay on MMQ. Unlisted archs/dtypes keep MMQ at every batch (the
 // llama.cpp default) - extend only after measuring; tests::mmq_dtype_bench
 // is the harness.
-pub fn dequant_handoff_rows(dtype: GgmlDType, cc: i32) -> Option<usize> {
-    if cc / 100 == 11 && matches!(dtype, GgmlDType::Q2K | GgmlDType::Q6K) {
+pub fn dequant_handoff_rows(dtype: GgmlDType, arch: GpuArch) -> Option<usize> {
+    if matches!(arch, GpuArch::Rocm { gfx: (11, _, _) })
+        && matches!(dtype, GgmlDType::Q2K | GgmlDType::Q6K)
+    {
         Some(candle_core::quantized::cuda::dequant_f16_min_rows())
     } else {
         None
     }
 }
 
-pub fn batch_supported(dtype: GgmlDType, flat_batch: usize, cc: i32) -> bool {
+pub fn batch_supported(dtype: GgmlDType, flat_batch: usize, arch: GpuArch) -> bool {
     if !supports(dtype) {
         return false;
     }
-    match dequant_handoff_rows(dtype, cc) {
+    match dequant_handoff_rows(dtype, arch) {
         Some(max) => flat_batch <= max,
         None => true,
     }
 }
 
-pub fn device_cc(device: &Device) -> Result<i32> {
+pub fn device_arch(device: &Device) -> Result<GpuArch> {
     match device {
-        Device::Cuda(dev) => Ok(get_device_info(dev).cc),
-        _ => candle_core::bail!("fast_mmq device_cc requires a CUDA device"),
+        Device::Cuda(dev) => Ok(get_device_info(dev)?.arch),
+        _ => candle_core::bail!("fast_mmq device_arch requires a CUDA device"),
     }
 }
 
@@ -303,6 +305,7 @@ static FIXUP_WORKSPACE: OnceLock<WsMap> = OnceLock::new();
 
 #[derive(Clone, Copy)]
 struct DeviceInfo {
+    arch: GpuArch,
     cc: i32,
     nsm: i32,
     smpbo: i64,
@@ -312,13 +315,13 @@ struct DeviceInfo {
 static DEVICE_INFO: OnceLock<Mutex<HashMap<candle_core::cuda::DeviceId, DeviceInfo>>> =
     OnceLock::new();
 
-fn get_device_info(dev: &CudaDevice) -> DeviceInfo {
+fn get_device_info(dev: &CudaDevice) -> Result<DeviceInfo> {
     use candle_core::cuda::cudarc::driver::{result, sys};
     let map = DEVICE_INFO.get_or_init(|| Mutex::new(HashMap::new()));
     let key = dev.id();
     let mut guard = map.lock().unwrap();
     if let Some(info) = guard.get(&key) {
-        return *info;
+        return Ok(*info);
     }
     let cu_device = dev.cuda_stream().context().cu_device();
     let major = unsafe {
@@ -357,17 +360,20 @@ fn get_device_info(dev: &CudaDevice) -> DeviceInfo {
     }
     .unwrap_or(32);
     let info = DeviceInfo {
+        // Kernel-bridge encoding the llama.cpp launchers expect; policy code
+        // matches on `arch` instead.
+        arch: GpuArch::resolve(dev)?,
         cc: major * 100 + minor * 10,
         nsm,
         smpbo: smpbo as i64,
         warp_size,
     };
     guard.insert(key, info);
-    info
+    Ok(info)
 }
 
-fn fixup_workspace_bytes(dev: &CudaDevice) -> usize {
-    get_device_info(dev).nsm as usize * MMQ_X_MAX * MMQ_Y_MAX * std::mem::size_of::<f32>()
+fn fixup_workspace_bytes(dev: &CudaDevice) -> Result<usize> {
+    Ok(get_device_info(dev)?.nsm as usize * MMQ_X_MAX * MMQ_Y_MAX * std::mem::size_of::<f32>())
 }
 
 fn workspace_ensure<'a>(
@@ -646,7 +652,7 @@ fn shared_lhs(weights: &[&QTensor], xs: &Tensor) -> Result<Vec<Tensor>> {
     let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
     let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
 
-    let fixup_bytes = fixup_workspace_bytes(&dev);
+    let fixup_bytes = fixup_workspace_bytes(&dev)?;
     let mut fixup_workspace = workspace_ensure(&FIXUP_WORKSPACE, &dev, fixup_bytes, &stream)?;
     let (fixup_ptr, _fixup_guard) = fixup_workspace.ptr_mut();
     let fixup_ptr = fixup_ptr as *mut std::ffi::c_void;
@@ -660,7 +666,7 @@ fn shared_lhs(weights: &[&QTensor], xs: &Tensor) -> Result<Vec<Tensor>> {
         fixup_ptr,
         quantize: quantize_launcher(ds_layout_for(dtype)),
         launcher: mmq_launcher(dtype).expect("supports() checked"),
-        device_info: get_device_info(&dev),
+        device_info: get_device_info(&dev)?,
         k,
         k_padded,
         batch_size,
@@ -754,7 +760,7 @@ fn down_from_glu(
     let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
     let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
 
-    let fixup_bytes = fixup_workspace_bytes(&dev);
+    let fixup_bytes = fixup_workspace_bytes(&dev)?;
     let mut fixup_workspace = workspace_ensure(&FIXUP_WORKSPACE, &dev, fixup_bytes, &stream)?;
     let (fixup_ptr, _fixup_guard) = fixup_workspace.ptr_mut();
     let fixup_ptr = fixup_ptr as *mut std::ffi::c_void;
@@ -768,7 +774,7 @@ fn down_from_glu(
         fixup_ptr,
         quantize: quantize_glu_launcher(ds_layout_for(dtype)),
         launcher: mmq_launcher(dtype).expect("supports() checked"),
-        device_info: get_device_info(&dev),
+        device_info: get_device_info(&dev)?,
         k,
         k_padded,
         batch_size,
@@ -932,7 +938,7 @@ pub fn grouped(
     let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
     let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
 
-    let fixup_bytes = fixup_workspace_bytes(dev);
+    let fixup_bytes = fixup_workspace_bytes(dev)?;
     let mut fixup_workspace = workspace_ensure(&FIXUP_WORKSPACE, dev, fixup_bytes, &stream)?;
     let (fixup_ptr, _fixup_guard) = fixup_workspace.ptr_mut();
     let fixup_ptr = fixup_ptr as *mut std::ffi::c_void;
@@ -942,7 +948,7 @@ pub fn grouped(
     let weight_ptr = weight.device_ptr()? as *const std::ffi::c_void;
     let stride_row_x = (k / qk) as i64;
     let stride_col_dst = nrows as i64;
-    let di = get_device_info(dev);
+    let di = get_device_info(dev)?;
 
     let quantize = quantize_launcher(ds_layout_for(dtype));
     let launcher = mmq_moe_launcher(dtype).expect("supports() checked");
@@ -1140,7 +1146,7 @@ fn grouped_from_glu(run: GroupedGluRun<'_>) -> Result<Tensor> {
     let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
     let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
 
-    let fixup_bytes = fixup_workspace_bytes(dev);
+    let fixup_bytes = fixup_workspace_bytes(dev)?;
     let mut fixup_workspace = workspace_ensure(&FIXUP_WORKSPACE, dev, fixup_bytes, &stream)?;
     let (fixup_ptr, _fixup_guard) = fixup_workspace.ptr_mut();
     let fixup_ptr = fixup_ptr as *mut std::ffi::c_void;
@@ -1150,7 +1156,7 @@ fn grouped_from_glu(run: GroupedGluRun<'_>) -> Result<Tensor> {
     let weight_ptr = weight.device_ptr()? as *const std::ffi::c_void;
     let stride_row_x = (k / qk) as i64;
     let stride_col_dst = nrows as i64;
-    let di = get_device_info(dev);
+    let di = get_device_info(dev)?;
 
     let quantize = quantize_glu_f32_launcher(ds_layout_for(dtype));
     let launcher = mmq_moe_launcher(dtype).expect("supports() checked");
@@ -1415,7 +1421,7 @@ pub fn grouped_pair_packed(
     let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
     let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
 
-    let fixup_bytes = fixup_workspace_bytes(dev);
+    let fixup_bytes = fixup_workspace_bytes(dev)?;
     let mut fixup_workspace = workspace_ensure(&FIXUP_WORKSPACE, dev, fixup_bytes, &stream)?;
     let (fixup_ptr, _fixup_guard) = fixup_workspace.ptr_mut();
     let fixup_ptr = fixup_ptr as *mut std::ffi::c_void;
@@ -1426,7 +1432,7 @@ pub fn grouped_pair_packed(
     let up_ptr = up.device_ptr()? as *const std::ffi::c_void;
     let stride_row_x = (k / qk) as i64;
     let stride_col_dst = (2 * nrows) as i64;
-    let di = get_device_info(dev);
+    let di = get_device_info(dev)?;
 
     let quantize = quantize_launcher(ds_layout_for(dtype));
     let launcher = mmq_moe_launcher(dtype).expect("supports() checked");
@@ -1750,7 +1756,7 @@ mod tests {
         use candle_core::Module as _;
 
         let dev = Device::new_cuda(0)?;
-        let cc = device_cc(&dev)?;
+        let arch = device_arch(&dev)?;
         let (n, k) = (4096usize, 4096usize);
         let ms = [4usize, 8, 128, 256, 512, 1024, 2048, 4096];
         let dtypes = [
@@ -1763,7 +1769,7 @@ mod tests {
         ];
         let w = patterned((n, k), 11, 1.0)?;
         println!(
-            "mmq dtype bench: cc={cc} n={n} k={k}, xs bf16; mmq = fast_mmq::plain, \
+            "mmq dtype bench: arch={arch:?} n={n} k={k}, xs bf16; mmq = fast_mmq::plain, \
              fallback = candle QMatMul (candle mmvq/mmq gates, then dequant GEMM)"
         );
         for quant in dtypes {
@@ -1807,20 +1813,29 @@ mod tests {
 
     #[test]
     fn q2k_q6k_hand_off_is_arch_gated() {
-        // gfx1151 (cc 1150, RDNA3/3.5): measured carve-outs active.
-        assert!(batch_supported(GgmlDType::Q8_0, 8, 1150));
-        assert!(batch_supported(GgmlDType::Q4K, 8192, 1150));
-        assert!(batch_supported(GgmlDType::Q5K, 8192, 1150));
-        assert!(batch_supported(GgmlDType::Q3K, 8192, 1150));
-        assert!(batch_supported(GgmlDType::Q2K, 256, 1150));
-        assert!(batch_supported(GgmlDType::Q6K, 256, 1150));
-        assert!(!batch_supported(GgmlDType::Q2K, 257, 1150));
-        assert!(!batch_supported(GgmlDType::Q6K, 257, 1150));
+        // gfx1151 (RDNA3.5): the measured carve-outs are active.
+        let rdna35 = GpuArch::Rocm { gfx: (11, 5, 1) };
+        assert!(batch_supported(GgmlDType::Q8_0, 8, rdna35));
+        assert!(batch_supported(GgmlDType::Q4K, 8192, rdna35));
+        assert!(batch_supported(GgmlDType::Q5K, 8192, rdna35));
+        assert!(batch_supported(GgmlDType::Q3K, 8192, rdna35));
+        assert!(batch_supported(GgmlDType::Q2K, 256, rdna35));
+        assert!(batch_supported(GgmlDType::Q6K, 256, rdna35));
+        assert!(!batch_supported(GgmlDType::Q2K, 257, rdna35));
+        assert!(!batch_supported(GgmlDType::Q6K, 257, rdna35));
+        // Sibling part of the same family carries the same carve-outs.
+        let rdna35_sibling = GpuArch::Rocm { gfx: (11, 5, 0) };
+        assert!(!batch_supported(GgmlDType::Q6K, 257, rdna35_sibling));
         // Unmeasured archs keep the MMQ-everywhere default.
-        assert!(batch_supported(GgmlDType::Q6K, 65536, 942));
-        assert!(batch_supported(GgmlDType::Q2K, 65536, 942));
-        assert!(batch_supported(GgmlDType::Q6K, 65536, 1200));
-        assert!(batch_supported(GgmlDType::Q6K, 65536, 1000));
+        let cdna3 = GpuArch::Rocm { gfx: (9, 4, 2) };
+        let rdna4 = GpuArch::Rocm { gfx: (12, 0, 0) };
+        let hopper = GpuArch::Cuda { sm: (9, 0) };
+        let vulkan = GpuArch::Vulkan;
+        assert!(batch_supported(GgmlDType::Q6K, 65536, cdna3));
+        assert!(batch_supported(GgmlDType::Q2K, 65536, cdna3));
+        assert!(batch_supported(GgmlDType::Q6K, 65536, rdna4));
+        assert!(batch_supported(GgmlDType::Q6K, 65536, hopper));
+        assert!(batch_supported(GgmlDType::Q2K, 65536, vulkan));
     }
 
     fn bench_tflops(m: usize, n: usize, k: usize, secs: f64) -> f64 {

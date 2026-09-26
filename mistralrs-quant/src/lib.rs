@@ -2028,12 +2028,12 @@ pub fn try_fused_quantized_ffn(
         || !gguf::fast_mmq::batch_supported(
             gate_q.dtype(),
             flat_batch,
-            gguf::fast_mmq::device_cc(&gate_q.device())?,
+            gguf::fast_mmq::device_arch(&gate_q.device())?,
         )
         || !gguf::fast_mmq::batch_supported(
             down_q.dtype(),
             flat_batch,
-            gguf::fast_mmq::device_cc(&down_q.device())?,
+            gguf::fast_mmq::device_arch(&down_q.device())?,
         )
     {
         return Ok(None);
@@ -2128,7 +2128,7 @@ pub fn try_fused_quantized_gate_up(
         if !gguf::fast_mmq::batch_supported(
             gate_q.dtype(),
             flat_batch,
-            gguf::fast_mmq::device_cc(&gate_q.device())?,
+            gguf::fast_mmq::device_arch(&gate_q.device())?,
         ) {
             return Ok(None);
         }
@@ -2251,7 +2251,7 @@ pub fn try_fused_quantized_qkv(
         if !gguf::fast_mmq::batch_supported(
             dtype,
             flat_batch,
-            gguf::fast_mmq::device_cc(&q_q.device())?,
+            gguf::fast_mmq::device_arch(&q_q.device())?,
         ) {
             return Ok(None);
         }

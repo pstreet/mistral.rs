@@ -236,11 +236,14 @@ P3 = polish, Deferred = do not do on RDNA.
       warp recurrence kernel is only 4.93s / 5.6% of 88.1s GPU time.
       Even a perfect GDN prefill kernel saves ~5% of prefill. Old
       premise doubly stale: the fork already has native vmajor1/2/4/8
-      prefill kernels (cuda/gdn.rs), gated to compute major 9 (MI300,
-      GDN_DECODE_TUNED_COMPUTE_MAJOR) - on gfx1151 v_major_state_supported
-      is false, so models use GdnKeyMajor + the backend.rs warp/chunked
-      dispatcher (MRS_GDN_KERNEL knob). Revisit only if a GDN model's
-      prefill profile ever shows the recurrence above ~20%.
+      prefill kernels (cuda/gdn.rs), gated to compute major 9 -
+      NVIDIA Hopper sm_90 (mistral.rs is CUDA-first; the numeric 9
+      coincidentally also matches CDNA3 gfx942 under HIP's synthetic
+      caps, untested there) - on gfx1151 (synthetic major 11)
+      v_major_state_supported is false, so models use GdnKeyMajor +
+      the backend.rs warp/chunked dispatcher (MISTRALRS_GDN_KERNEL
+      knob). Revisit only if a GDN model's prefill profile ever shows
+      the recurrence above ~20%.
       The SAME profile found the real prefill bottleneck: mul_mat_q
       Q6_K at 82.5% (72.7s, 2040 launches, ~11 effective TFLOPS vs
       ~30 TFLOPS from dequant->F16->hipBLASLt per lt_probe). 18k cold
@@ -359,8 +362,9 @@ P3 = polish, Deferred = do not do on RDNA.
       ("no cuda implementation for dtype-to-fp8") and 2-3 hqq GPU
       tests fail under --features rocm; upstream capability gaps,
       unrelated to the dispatch work.
-- [ ] ~M GpuArch: typed device identity for GPU policy decisions.
-      DESIGN agreed 2026-09-26; supersedes the raw-cc gates from
+- [x] 2026-09-26 GpuArch: typed device identity for GPU policy
+      decisions. DONE (see completion notes at the end of this
+      entry). DESIGN agreed 2026-09-26; supersedes the raw-cc gates from
       de90887d9 (same behavior on gfx1151, clearer + multi-backend
       ready everywhere else).
       candle-core gains `pub enum GpuArch { Cuda { sm: (u8,u8) },
@@ -382,9 +386,11 @@ P3 = polish, Deferred = do not do on RDNA.
       Rocm{gfx:(11,_,_)} arm carrying the measured RDNA3/3.5 Q2K+Q6K
       carve-outs; candle should_use_mmq takes arch (stays false until
       the kernel-copy resync); GDN v_major_state_supported +
-      prefill_kernel_supported move from compute_major==9 to
-      Rocm{gfx:(9,_,_)} (CDNA family, same semantics, no Hopper
-      confusion); device_cc -> device_arch; unify the duplicated
+      prefill_kernel_supported move from compute_major==9 to an exact
+      translation Cuda{sm:(9,_)} OR Rocm{gfx:(9,_,_)} - the 9 meant
+      NVIDIA Hopper sm_90 (CUDA-first history; the AMD gfx9xx match is
+      the HIP-synthetic coincidence, untested, preserved for behavior);
+      device_cc -> device_arch; unify the duplicated
       get_device_info impls (mistralrs-quant + candle-core both
       query attributes independently). The HIP-synthetic cc ints
       survive ONLY at the kernel bridge (the C launchers keep the
@@ -399,6 +405,33 @@ P3 = polish, Deferred = do not do on RDNA.
       matches GpuArch, never bare ints; the encoding lives only at
       the kernel bridge") land with the implementation commit so
       they ride the upstream PR.
+      COMPLETION 2026-09-26: candle-core gpu.rs (GpuArch + parse +
+      resolve + tests); cudarc-hip CudaContext::gcn_arch_name(); mistral
+      device_arch/dequant_handoff_rows/batch_supported on GpuArch;
+      GDN gates via gdn_vmajor_arch/gdn_modern_arch (exact Cuda sm 9 /
+      family>=9 translations, sm90 test names kept - honest NVIDIA
+      history); get_device_info (both copies) carry arch and became
+      fallible. DISCOVERY: the offset-256 gcnArchName plan was WRONG -
+      modern hipDevicePropS puts gcnArchName AFTER ~87 CUDA-compat
+      fields + reserved[63] + hipReserved[32], and the unversioned
+      hipGetDeviceProperties symbol only fills the LEGACY struct (the
+      vendored 1472-byte blob is legacy-sized; the R0600 struct is
+      bigger). hipDeviceAttributeGcnArchName was also removed
+      (hipDeviceAttributeUnused5). FIX: cudarc-hip declares
+      hipGetDevicePropertiesR0600 (exported by the runtime @@hip_6.0)
+      and gcn_arch_name() scans an oversized zeroed buffer for the
+      "gfx" string - no offset assumptions, ROCm-version-proof.
+      Probe/#[ignore] test gcn_arch_name_resolves pins the contract;
+      bench header now prints the true resolved arch (Rocm
+      {gfx:(11,5,1)}). Feature matrix: compile_error on cuda+rocm
+      both (clear pointer to this roadmap), CPU-only default builds
+      verified green. Conventions landed in candle README + AGENTS.md.
+      VERIFICATION: bench table identical on gfx1151 (mmq 0.7/21.2/
+      20.4/21.5/14.7/23.5 vs fallback 28-30 at m=4096), fast_mmq
+      slice 5/5, GDN gates 55/55 default, cuda_graph 31+8, paged-attn
+      8/8, quant 295/295, fmt/clippy/check green both repos both
+      feature sets. candle should_use_mmq now takes GpuArch (still
+      false pending the kernel resync).
 - [ ] ~S CUDA+HIP coexistence spike - the decision gate for
       multi-backend. One toy binary linking BOTH cudarc (NVIDIA) and
       cudarc-hip (AMD), running a kernel on each vendor in one

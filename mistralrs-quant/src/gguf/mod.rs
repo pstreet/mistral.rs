@@ -323,7 +323,7 @@ impl GgufMatMul {
         // Batch > 8: use MMQ (prompt kernel)
         if flat_batch > fast_mmvq::MMVQ_MAX_BATCH
             && std::env::var("MISTRALRS_NO_FAST_MMQ").is_err()
-            && fast_mmq::batch_supported(q.dtype(), flat_batch, fast_mmq::device_cc(&q.device())?)
+            && fast_mmq::batch_supported(q.dtype(), flat_batch, fast_mmq::device_arch(&q.device())?)
         {
             return Ok(Some(fast_mmq::plain(q, a)?));
         }
