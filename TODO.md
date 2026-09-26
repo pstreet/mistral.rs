@@ -588,6 +588,50 @@ P3 = polish, Deferred = do not do on RDNA.
       mistral.rs fast paths (mmq/gdn/paged-attn/cuda-graph) meet
       Device::Hip in S3 - trait or caps-carried dispatch, design
       deferred to S3.
+      S3a DONE 2026-09-26 (the dual-compile leg): the ENTIRE
+      mistral.rs stack compiles under cuda+rocm - mistralrs-quant
+      (launcher modules fast_mmq/mmvq/cuda replaced by *_hip.rs
+      stand-ins: pure policy mirrored, launcher entries bail until
+      S2's QStorage-on-hip; gemv + cublaslt gated with bail stubs;
+      gemv's plain launchers cfg'd not(dual) since the fork FFI
+      stream args differ), mistralrs-paged-attn (role alias,
+      hip_fwd CustomOp twin, as_role_storage conversions, per-role
+      cuda_fwd_t/workspace_ensure twins), mistralrs-core (FA3/
+      FlashInfer/MLA/sinks NVIDIA-only paths tightened to
+      all(cuda, not(rocm)) - paged-attn exports those symbols
+      not(rocm) only; cuda_graph decode-graph stack fully
+      role-bound with per-vendor sys/stream imports and the arena
+      path widened from all(rocm, not(cuda)) to rocm; gdn.rs
+      role-bound with Storage-arm twins, role_storage() helper, 2
+      trait-method hip_fwd twins, resolve/resolve_hip split;
+      device_map/debug/memory_usage/normal/multimodal/execution/
+      sampling/ops Hip arms or role bindings), and mistralrs-cli
+      green in all three shapes (dual, rocm, default).
+      VERIFICATION: full regression bar green - quant 316/317
+      (1 = documented pre-existing fp8 roundtrip, clean-tree
+      verified), fast_mmq 5/5, gdn 55/55, cuda_graph 31+8,
+      paged-attn 8/8, mmq bench, candle default/rocm/dual checks
+      zero-error with dual tests 5/5, clippy parity on every
+      changed crate (core 3=3, quant 5=5, paged-attn 2<=3).
+      STRUCTURAL LESSONS: (1) cfg(feature="cuda") in mistral.rs
+      means NVIDIA-ORIGINAL (upstream legacy) - under dual those
+      paths reference not(rocm)-exported symbols and must tighten
+      to all(cuda, not(rocm)); (2) all(rocm, not(cuda)) single-
+      vendor guards break dual (the arena path) - serving-truth
+      guards are plain feature="rocm"; (3) cfg CANNOT splice
+      Storage enum variants into expressions - use a
+      role_storage() helper fn per file, cfg-paired arms for
+      matches, let-pairs for destructures; (4) rename trait-method
+      cuda_fwd -> hip_fwd ONLY for fns inside impl blocks - free
+      helper fns named cuda_fwd keep their names (an over-broad
+      rename broke 16 call sites); (5) script hygiene: paren
+      counts are 1-for-1 when swapping fn names in calls
+      (role_storage( vs Storage::Cuda(), keep the closers), and
+      destructure conversions must re-emit else-bodies.
+      S3b REMAINING: device strings (hip:N|cuda:N|cpu parsing +
+      validation), BackendCaps contract + probe-gated NVIDIA
+      init, serving smoke on hip:0 through a dual build, then S2
+      (QStorage-on-hip making the quant stand-ins real).
       S1 DONE 2026-09-26 (candle): kernels twin builds standalone
       (11 PTX, symlink-free, sm_80 fallback GPU-less); dual check
       green alongside default + rocm; 4 dual tests pass (CPU op +
