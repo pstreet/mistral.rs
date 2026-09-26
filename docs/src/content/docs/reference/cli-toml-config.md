@@ -56,6 +56,7 @@ quant = "4"
 | `mtp_model` | `--mtp-model` | not set | [MTP (multi-token prediction)](/guides/perf/speculative-decoding/) assistant model id or path. |
 | `mtp_n_predict` | `--mtp-n-predict` | not set | MTP draft tokens proposed per target step. |
 | `mtp_draft_sampling` | `--mtp-draft-sampling` | `auto` | MTP draft policy: `auto`, `greedy`, or `probabilistic`. |
+| `mtp_draft_lm_head_isq` | TOML only | not set | ISQ type for a draft-only copy of lm_head (e.g. `Q4K`). Smaller draft-head reads cut proposer latency; the target still verifies with the checkpoint head, so only the acceptance rate can move. See [speculative decoding](/guides/perf/speculative-decoding/). |
 | `mcp_config` | `--mcp-config` | not set | [MCP (Model Context Protocol)](/guides/agents/connect-mcp-server/) client configuration JSON for outbound servers. Also reads `MCP_CONFIG_PATH` if unset. |
 | `agent` | `--agent` (alias `--agentic`) | false | Shortcut for `enable_search = true` + `enable_code_execution = true` + `enable_shell = true`. |
 | `enable_search` | `--enable-search` | false | Enable the built-in web search tool. |

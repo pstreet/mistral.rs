@@ -124,8 +124,9 @@ live in the [environment variables reference](/reference/environment-variables/)
 | `MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD=1` | Release host shard buffers once weights are on-device (pairs with `NO_MMAP`). |
 | `MISTRALRS_CUDA_GRAPHS=0` | Disable decode-graph capture on the ROCm path if a capture crash recurs. |
 | `MRS_DECODE_ARENA_OVERRIDE=<bytes>` | Raise the decode-graph capture arena if capture fails with an overflow; the log prints the size actually needed. |
-| `CANDLE_LT_COMPUTE=32` | Force F32 accumulation in hipBLASLt; required on some RDNA parts where the F16 path errors heuristically. |
-| `MRS_NO_FAST_MMQ=1` / `CANDLE_NO_FAST_MMQ=1` | Route large-batch quantized GEMMs through dequantize+hipBLAS instead of the fused MMQ kernels. |
+| `CANDLE_LT_COMPUTE=32` | Force F32 accumulation in F16 hipBLASLt GEMMs. The F16 heuristic failures that once required this on RDNA parts no longer occur on current ROCm stacks, and F32 is performance-neutral; keep only as a fallback for old stacks. |
+| `MRS_NO_FAST_MMQ=1` / `CANDLE_NO_FAST_MMQ=1` | Override the per-dtype MMQ dispatch: route every supported dtype's large-batch quantized GEMMs through dequantize + hipBLASLt. By default only Q6K batches above 256 rows take that path (MMQ Q6K plateaus far below the dequant GEMM at large batches); Q4K/Q5K/Q8_0 and small batches use the fused MMQ kernels. |
+| `CANDLE_DMM_F16_MIN=<rows>` | Minimum `b*m` rows for the dequantize-to-F16 GEMM path (default 256). |
 
 ## Verify
 
