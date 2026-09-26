@@ -9,7 +9,7 @@ pub mod gdn;
         feature = "cuda",
         any(test, all(feature = "flash-attn", target_family = "unix"))
     ),
-    all(feature = "rocm", not(feature = "cuda"))
+    feature = "rocm"
 ))]
 pub mod graph;
 #[cfg(any(feature = "cuda", feature = "rocm"))]

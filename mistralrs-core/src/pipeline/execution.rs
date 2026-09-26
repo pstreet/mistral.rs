@@ -7,7 +7,7 @@ use std::time::Instant;
 use std::sync::Arc;
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-use candle_core::cuda_backend::cudarc::driver::CudaStream;
+use candle_core::role::backend::cudarc::driver::CudaStream;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use rand_isaac::Isaac64Rng;
 

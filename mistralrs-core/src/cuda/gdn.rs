@@ -3,6 +3,31 @@
 #[cfg(any(feature = "cuda", feature = "rocm", test))]
 use candle_core::GpuArch;
 use candle_core::{DType, Device, Result, Tensor};
+// Role wrapper types: the compiled vendor in single-vendor builds, the AMD
+// role in dual builds (the GDN C kernels are hipcc-built).
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use candle_core::role::{RoleDevice as CudaDevice, RoleStorage as CudaStorage};
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::{CudaDevice, CudaStorage};
+
+/// Wrap the role storage into the `Storage` enum variant for this build shape:
+/// `Cuda` in single-vendor builds, `Hip` in dual builds.
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+#[inline]
+fn role_storage(s: CudaStorage) -> candle_core::Storage {
+    candle_core::Storage::Cuda(s)
+}
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[inline]
+fn role_storage(s: CudaStorage) -> candle_core::Storage {
+    candle_core::Storage::Hip(s)
+}
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use mistralrs_quant::QuantizedActivation;
 #[cfg(any(feature = "cuda", feature = "rocm", test))]
@@ -534,8 +559,8 @@ struct GdnCudaDeviceProperties {
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-fn gdn_cuda_device_properties(dev: &candle_core::CudaDevice) -> Result<GdnCudaDeviceProperties> {
-    use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
+fn gdn_cuda_device_properties(dev: &CudaDevice) -> Result<GdnCudaDeviceProperties> {
+    use candle_core::role::backend::cudarc::driver::sys::CUdevice_attribute;
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
@@ -560,7 +585,12 @@ fn gdn_cuda_device_properties(dev: &candle_core::CudaDevice) -> Result<GdnCudaDe
         .filter(|count| *count > 0)
         .ok_or_else(|| candle_core::Error::msg("CUDA device reported no multiprocessors"))?;
     let properties = GdnCudaDeviceProperties {
+        // Single-vendor builds resolve through the compiled vendor; dual
+        // builds resolve the AMD role directly.
+        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
         arch: GpuArch::resolve(dev)?,
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        arch: GpuArch::resolve_hip(dev)?,
         multiprocessor_count,
     };
     cache
@@ -584,7 +614,7 @@ pub(crate) fn v_major_state_supported(
         if !device.is_cuda() {
             return Ok(false);
         }
-        let properties = gdn_cuda_device_properties(device.as_cuda_device()?)?;
+        let properties = gdn_cuda_device_properties(device.as_role_device()?)?;
         Ok(gdn_vmajor_arch(properties.arch))
     }
     #[cfg(not(any(feature = "cuda", feature = "rocm")))]
@@ -596,7 +626,7 @@ pub(crate) fn v_major_state_supported(
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 fn cuda_recurrent_state_ptr(tensor: &Tensor, name: &str) -> Result<(*mut core::ffi::c_void, i32)> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
 
     let (storage, layout) = tensor.storage_and_layout();
@@ -604,7 +634,10 @@ fn cuda_recurrent_state_ptr(tensor: &Tensor, name: &str) -> Result<(*mut core::f
     let (pointer, dtype) = match tensor.dtype() {
         DType::F16 => {
             let storage = match &*storage {
+                #[cfg(not(all(feature = "cuda", feature = "rocm")))]
                 candle::Storage::Cuda(storage) => storage.as_cuda_slice::<half::f16>()?,
+                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                candle::Storage::Hip(storage) => storage.as_cuda_slice::<half::f16>()?,
                 _ => candle::bail!("{name} must be a CUDA tensor"),
             };
             (
@@ -614,7 +647,10 @@ fn cuda_recurrent_state_ptr(tensor: &Tensor, name: &str) -> Result<(*mut core::f
         }
         DType::BF16 => {
             let storage = match &*storage {
+                #[cfg(not(all(feature = "cuda", feature = "rocm")))]
                 candle::Storage::Cuda(storage) => storage.as_cuda_slice::<half::bf16>()?,
+                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                candle::Storage::Hip(storage) => storage.as_cuda_slice::<half::bf16>()?,
                 _ => candle::bail!("{name} must be a CUDA tensor"),
             };
             (
@@ -624,7 +660,10 @@ fn cuda_recurrent_state_ptr(tensor: &Tensor, name: &str) -> Result<(*mut core::f
         }
         DType::F32 => {
             let storage = match &*storage {
+                #[cfg(not(all(feature = "cuda", feature = "rocm")))]
                 candle::Storage::Cuda(storage) => storage.as_cuda_slice::<f32>()?,
+                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                candle::Storage::Hip(storage) => storage.as_cuda_slice::<f32>()?,
                 _ => candle::bail!("{name} must be a CUDA tensor"),
             };
             (
@@ -638,19 +677,22 @@ fn cuda_recurrent_state_ptr(tensor: &Tensor, name: &str) -> Result<(*mut core::f
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-fn cuda_read_ptr_with_guard<'a, T: candle_core::cuda_backend::CudaDType + 'a>(
+fn cuda_read_ptr_with_guard<'a, T: candle_core::role::backend::CudaDType + 'a>(
     storage: &'a candle_core::Storage,
     layout: &candle_core::Layout,
-    stream: &'a candle_core::cuda_backend::cudarc::driver::CudaStream,
+    stream: &'a candle_core::role::backend::cudarc::driver::CudaStream,
     name: &str,
 ) -> Result<(
-    candle_core::cuda_backend::cudarc::driver::sys::CUdeviceptr,
-    candle_core::cuda_backend::cudarc::driver::SyncOnDrop<'a>,
+    candle_core::role::backend::cudarc::driver::sys::CUdeviceptr,
+    candle_core::role::backend::cudarc::driver::SyncOnDrop<'a>,
 )> {
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::role::backend::cudarc::driver::DevicePtr;
 
     let slice = match storage {
+        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<T>()?,
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<T>()?,
         _ => candle_core::bail!("{name} must be CUDA"),
     };
     let (base, guard) = slice.device_ptr(stream);
@@ -660,7 +702,7 @@ fn cuda_read_ptr_with_guard<'a, T: candle_core::cuda_backend::CudaDType + 'a>(
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 struct CudaWritePtrOp<'a, T, F> {
-    stream: &'a std::sync::Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+    stream: &'a std::sync::Arc<candle_core::role::backend::cudarc::driver::CudaStream>,
     name: &'static str,
     callback: std::cell::RefCell<Option<F>>,
     marker: std::marker::PhantomData<T>,
@@ -669,8 +711,8 @@ struct CudaWritePtrOp<'a, T, F> {
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 impl<T, F> candle_core::InplaceOp1 for CudaWritePtrOp<'_, T, F>
 where
-    T: candle_core::cuda_backend::CudaDType,
-    F: FnOnce(candle_core::cuda_backend::cudarc::driver::sys::CUdeviceptr) -> Result<()>,
+    T: candle_core::role::backend::CudaDType,
+    F: FnOnce(candle_core::role::backend::cudarc::driver::sys::CUdeviceptr) -> Result<()>,
 {
     fn name(&self) -> &'static str {
         "cuda-write-pointer"
@@ -684,12 +726,36 @@ where
         candle_core::bail!("{} must be CUDA", self.name)
     }
 
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     fn cuda_fwd(
         &self,
         storage: &mut candle_core::CudaStorage,
         layout: &candle_core::Layout,
     ) -> Result<()> {
-        use candle_core::cuda_backend::cudarc::driver::DevicePtrMut;
+        use candle_core::role::backend::cudarc::driver::DevicePtrMut;
+
+        let slice = storage.as_cuda_slice_mut::<T>()?;
+        if !std::sync::Arc::ptr_eq(slice.stream().context(), self.stream.context()) {
+            candle_core::bail!("{} belongs to another CUDA context", self.name);
+        }
+        let mut view = slice.slice_mut(layout.start_offset()..);
+        let (pointer, guard) = view.device_ptr_mut(self.stream);
+        let callback = self
+            .callback
+            .borrow_mut()
+            .take()
+            .expect("CUDA write callback runs once");
+        let result = callback(pointer);
+        drop(guard);
+        result
+    }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    fn hip_fwd(
+        &self,
+        storage: &mut candle_core::HipStorage,
+        layout: &candle_core::Layout,
+    ) -> Result<()> {
+        use candle_core::role::backend::cudarc::driver::DevicePtrMut;
 
         let slice = storage.as_cuda_slice_mut::<T>()?;
         if !std::sync::Arc::ptr_eq(slice.stream().context(), self.stream.context()) {
@@ -711,13 +777,13 @@ where
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 fn with_cuda_write_ptr<T, F>(
     tensor: &Tensor,
-    stream: &std::sync::Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+    stream: &std::sync::Arc<candle_core::role::backend::cudarc::driver::CudaStream>,
     name: &'static str,
     callback: F,
 ) -> Result<()>
 where
-    T: candle_core::cuda_backend::CudaDType,
-    F: FnOnce(candle_core::cuda_backend::cudarc::driver::sys::CUdeviceptr) -> Result<()>,
+    T: candle_core::role::backend::CudaDType,
+    F: FnOnce(candle_core::role::backend::cudarc::driver::sys::CUdeviceptr) -> Result<()>,
 {
     tensor.inplace_op1(&CudaWritePtrOp::<T, F> {
         stream,
@@ -728,17 +794,20 @@ where
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-fn cuda_inplace_ptr_with_guard<'a, T: candle_core::cuda_backend::CudaDType + 'a>(
+fn cuda_inplace_ptr_with_guard<'a, T: candle_core::role::backend::CudaDType + 'a>(
     storage: &'a candle_core::Storage,
     layout: &candle_core::Layout,
-    stream: &'a candle_core::cuda_backend::cudarc::driver::CudaStream,
+    stream: &'a candle_core::role::backend::cudarc::driver::CudaStream,
     name: &str,
 ) -> Result<(
-    candle_core::cuda_backend::cudarc::driver::sys::CUdeviceptr,
-    candle_core::cuda_backend::cudarc::driver::SyncOnDrop<'a>,
+    candle_core::role::backend::cudarc::driver::sys::CUdeviceptr,
+    candle_core::role::backend::cudarc::driver::SyncOnDrop<'a>,
 )> {
     let slice = match storage {
+        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<T>()?,
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<T>()?,
         _ => candle_core::bail!("{name} must be CUDA"),
     };
     if slice.stream().cu_stream() != stream.cu_stream() {
@@ -752,12 +821,12 @@ fn cuda_recurrent_state_inplace_ptr_with_guard<'a>(
     dtype: DType,
     storage: &'a candle_core::Storage,
     layout: &candle_core::Layout,
-    stream: &'a candle_core::cuda_backend::cudarc::driver::CudaStream,
+    stream: &'a candle_core::role::backend::cudarc::driver::CudaStream,
     name: &str,
 ) -> Result<(
-    candle_core::cuda_backend::cudarc::driver::sys::CUdeviceptr,
+    candle_core::role::backend::cudarc::driver::sys::CUdeviceptr,
     i32,
-    candle_core::cuda_backend::cudarc::driver::SyncOnDrop<'a>,
+    candle_core::role::backend::cudarc::driver::SyncOnDrop<'a>,
 )> {
     let (pointer, dtype_code, guard) = match dtype {
         DType::F16 => {
@@ -882,17 +951,17 @@ fn validate_gdn_ragged_metadata(
 pub(crate) fn try_gdn_packed_to_padded_cuda(
     context: GdnPackedToPadded<'_>,
 ) -> Result<Option<Tensor>> {
-    use candle::cuda_backend::cudarc::driver::{DevicePtrMut, DeviceRepr};
+    use candle::role::backend::cudarc::driver::{DevicePtrMut, DeviceRepr};
     use candle_core as candle;
 
-    fn launch<T: candle::cuda_backend::CudaDType + DeviceRepr>(
+    fn launch<T: candle::role::backend::CudaDType + DeviceRepr>(
         context: GdnPackedToPadded<'_>,
         width: usize,
         token_stride: usize,
         output_shape: Vec<usize>,
         dtype_code: i32,
     ) -> Result<Tensor> {
-        use candle::cuda_backend::CudaStorage;
+        use candle::role::backend::CudaStorage;
 
         let GdnPackedToPadded {
             source,
@@ -902,7 +971,7 @@ pub(crate) fn try_gdn_packed_to_padded_cuda(
             padding_value,
             ..
         } = context;
-        let dev = source.device().as_cuda_device()?;
+        let dev = source.device().as_role_device()?;
         let stream = dev.cuda_stream();
         let output_elements = batch_size
             .checked_mul(padded_len)
@@ -944,7 +1013,7 @@ pub(crate) fn try_gdn_packed_to_padded_cuda(
         drop(seqlens_storage);
         drop(source_storage);
         Ok(Tensor::from((
-            candle::Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
+            role_storage(CudaStorage::wrap_cuda_slice(output, dev.clone())),
             candle::Shape::from_dims(&output_shape),
         )))
     }
@@ -1002,16 +1071,16 @@ pub(crate) fn try_gdn_packed_to_padded_cuda(
 pub(crate) fn try_gdn_padded_to_packed_cuda(
     context: GdnPaddedToPacked<'_>,
 ) -> Result<Option<Tensor>> {
-    use candle::cuda_backend::cudarc::driver::{DevicePtrMut, DeviceRepr};
+    use candle::role::backend::cudarc::driver::{DevicePtrMut, DeviceRepr};
     use candle_core as candle;
 
-    fn launch<T: candle::cuda_backend::CudaDType + DeviceRepr>(
+    fn launch<T: candle::role::backend::CudaDType + DeviceRepr>(
         context: GdnPaddedToPacked<'_>,
         geometry: GdnPaddedToPackedGeometry,
         output_shape: Vec<usize>,
         dtype_code: i32,
     ) -> Result<Tensor> {
-        use candle::cuda_backend::CudaStorage;
+        use candle::role::backend::CudaStorage;
 
         let GdnPaddedToPacked {
             source,
@@ -1027,7 +1096,7 @@ pub(crate) fn try_gdn_padded_to_packed_cuda(
             feature_inner_width,
         } = geometry;
         let padded_len = source.dim(1)?;
-        let dev = source.device().as_cuda_device()?;
+        let dev = source.device().as_role_device()?;
         let stream = dev.cuda_stream();
         let output_elements = token_count
             .checked_mul(width)
@@ -1070,7 +1139,7 @@ pub(crate) fn try_gdn_padded_to_packed_cuda(
         drop(seqlens_storage);
         drop(source_storage);
         Ok(Tensor::from((
-            candle::Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
+            role_storage(CudaStorage::wrap_cuda_slice(output, dev.clone())),
             candle::Shape::from_dims(&output_shape),
         )))
     }
@@ -1114,17 +1183,17 @@ pub(crate) fn try_gdn_padded_to_packed_cuda(
 pub(crate) fn try_gdn_extract_ragged_conv_state_cuda(
     context: GdnRaggedConvState<'_>,
 ) -> Result<Option<Tensor>> {
-    use candle::cuda_backend::cudarc::driver::{DevicePtrMut, DeviceRepr};
+    use candle::role::backend::cudarc::driver::{DevicePtrMut, DeviceRepr};
     use candle_core as candle;
 
-    fn launch<T: candle::cuda_backend::CudaDType + DeviceRepr>(
+    fn launch<T: candle::role::backend::CudaDType + DeviceRepr>(
         context: GdnRaggedConvState<'_>,
         input_batch_stride: usize,
         input_token_stride: usize,
         output_elements: usize,
         dtype_code: i32,
     ) -> Result<Tensor> {
-        use candle::cuda_backend::CudaStorage;
+        use candle::role::backend::CudaStorage;
 
         let GdnRaggedConvState {
             padded_input,
@@ -1134,7 +1203,7 @@ pub(crate) fn try_gdn_extract_ragged_conv_state_cuda(
         } = context;
         let (_, padded_len, channels) = padded_input.dims3()?;
         let state_width = initial_state.dim(2)?;
-        let dev = padded_input.device().as_cuda_device()?;
+        let dev = padded_input.device().as_role_device()?;
         let stream = dev.cuda_stream();
         let (input_storage, input_layout) = padded_input.storage_and_layout();
         let (input_ptr, input_guard) = cuda_read_ptr_with_guard::<T>(
@@ -1183,7 +1252,7 @@ pub(crate) fn try_gdn_extract_ragged_conv_state_cuda(
         drop(state_storage);
         drop(input_storage);
         Ok(Tensor::from((
-            candle::Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
+            role_storage(CudaStorage::wrap_cuda_slice(output, dev.clone())),
             initial_state.shape().clone(),
         )))
     }
@@ -1270,14 +1339,17 @@ fn with_slot_indices<T>(
     slots: GdnStateSlots<'_>,
     f: impl FnOnce(*const i32, usize) -> Result<T>,
 ) -> Result<T> {
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::role::backend::cudarc::driver::DevicePtr;
     match slots {
         GdnStateSlots::Gathered => f(std::ptr::null(), 0),
         GdnStateSlots::Pooled(slots) => {
             let batch = slots.dim(0)?;
             let (s, l) = slots.storage_and_layout();
             let s = match &*s {
+                #[cfg(not(all(feature = "cuda", feature = "rocm")))]
                 candle_core::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                candle_core::Storage::Hip(c) => c.as_cuda_slice::<u32>()?,
                 _ => candle_core::bail!("slot indices must be a cuda tensor"),
             };
             let ptr = s.slice(l.start_offset()..).device_ptr(s.stream()).0 as *const i32;
@@ -1356,7 +1428,7 @@ fn launch_recurrence(
     state: &mut Tensor,
     slots: GdnStateSlots<'_>,
 ) -> Result<Tensor> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
 
     let RecurrenceInputs { q, k, v, g, beta } = inputs;
@@ -1373,14 +1445,17 @@ fn launch_recurrence(
     {
         candle::bail!("value-major GDN prefill requires K=V=128, got K={k_dim}, V={v_dim}");
     }
-    let dev = q.device().as_cuda_device()?;
+    let dev = q.device().as_role_device()?;
 
     macro_rules! f32_ptr {
         ($t:expr, $name:literal) => {{
             let (s, l) = $t.storage_and_layout();
             let offset = l.start_offset();
             let s = match &*s {
+                #[cfg(not(all(feature = "cuda", feature = "rocm")))]
                 candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                candle::Storage::Hip(c) => c.as_cuda_slice::<f32>()?,
                 _ => candle::bail!(concat!($name, " must be a cuda tensor")),
             };
             let ptr = s.slice(offset..).device_ptr(s.stream()).0 as *mut f32;
@@ -1497,9 +1572,9 @@ fn launch_recurrence(
         Ok(())
     })?;
 
-    let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
+    let output_storage = CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
     Ok(Tensor::from((
-        candle::Storage::Cuda(output_storage),
+        role_storage(output_storage),
         (bh, seq_len, v_dim),
     )))
 }
@@ -1554,7 +1629,7 @@ fn vmajor_prefill_gated_delta_rule_recurrence_cuda_impl(
 ) -> Result<Tensor> {
     let (state_blocks, seq_len, head_k_dim) = inputs.q.dims3()?;
     let head_v_dim = inputs.v.dim(2)?;
-    let properties = gdn_cuda_device_properties(inputs.q.device().as_cuda_device()?)?;
+    let properties = gdn_cuda_device_properties(inputs.q.device().as_role_device()?)?;
     let policy = GdnPrefillPolicy {
         arch: properties.arch,
         multiprocessor_count: properties.multiprocessor_count,
@@ -1689,12 +1764,12 @@ pub fn causal_conv1d_cuda(
     is_update: bool,
     slots: GdnStateSlots<'_>,
 ) -> Result<(Tensor, Tensor)> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
 
     fn cuda_fwd<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle::role::backend::CudaDType + candle::role::backend::cudarc::driver::DeviceRepr,
     >(
         x: &Tensor,
         weight: &Tensor,
@@ -1704,13 +1779,16 @@ pub fn causal_conv1d_cuda(
         slots: GdnStateSlots<'_>,
         dtype_code: i32,
     ) -> Result<(Tensor, Tensor)> {
-        let dev = x.device().as_cuda_device()?;
+        let dev = x.device().as_role_device()?;
         let (batch_size, seq_len, conv_dim) = x.dims3()?;
         let pooled = matches!(slots, GdnStateSlots::Pooled(_));
 
         let (x_s, x_l) = x.storage_and_layout();
         let x_s = match &*x_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("x must be a cuda tensor"),
         };
         let x_offset = x_l.start_offset();
@@ -1718,7 +1796,10 @@ pub fn causal_conv1d_cuda(
 
         let (w_s, w_l) = weight.storage_and_layout();
         let w_s = match &*w_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("weight must be a cuda tensor"),
         };
         let w_offset = w_l.start_offset();
@@ -1735,7 +1816,10 @@ pub fn causal_conv1d_cuda(
             {
                 let (cs_s, cs_l) = conv_state_new.storage_and_layout();
                 let cs_s = match &*cs_s {
+                    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
                     candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+                    #[cfg(all(feature = "cuda", feature = "rocm"))]
+                    candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
                     _ => candle::bail!("conv_state must be a cuda tensor"),
                 };
                 let cs_offset = cs_l.start_offset();
@@ -1762,11 +1846,9 @@ pub fn causal_conv1d_cuda(
                 })?;
             }
 
-            let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
-            let output = Tensor::from((
-                candle::Storage::Cuda(output_storage),
-                (batch_size, 1usize, conv_dim),
-            ));
+            let output_storage = CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
+            let output =
+                Tensor::from((role_storage(output_storage), (batch_size, 1usize, conv_dim)));
 
             Ok((output, conv_state_new))
         } else {
@@ -1779,7 +1861,10 @@ pub fn causal_conv1d_cuda(
             };
             let (cs_s, cs_l) = conv_state.storage_and_layout();
             let cs_s = match &*cs_s {
+                #[cfg(not(all(feature = "cuda", feature = "rocm")))]
                 candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
                 _ => candle::bail!("conv_state must be a cuda tensor"),
             };
             let cs_offset = cs_l.start_offset();
@@ -1812,18 +1897,15 @@ pub fn causal_conv1d_cuda(
                 Ok(())
             })?;
 
-            let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
+            let output_storage = CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
             let output = Tensor::from((
-                candle::Storage::Cuda(output_storage),
+                role_storage(output_storage),
                 (batch_size, seq_len, conv_dim),
             ));
 
             let new_conv_state = match cs_buf {
                 Some(cs_buf) => Tensor::from((
-                    candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
-                        cs_buf,
-                        dev.clone(),
-                    )),
+                    role_storage(CudaStorage::wrap_cuda_slice(cs_buf, dev.clone())),
                     (batch_size, conv_dim, kernel_size),
                 )),
                 None => conv_state.clone(),
@@ -1878,12 +1960,12 @@ pub fn prepare_recurrence_inputs_cuda(
     head_v_dim: usize,
     tiled_v_heads: bool,
 ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
 
     fn cuda_fwd<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle::role::backend::CudaDType + candle::role::backend::cudarc::driver::DeviceRepr,
     >(
         mixed_qkv: &Tensor,
         b: &Tensor,
@@ -1899,39 +1981,54 @@ pub fn prepare_recurrence_inputs_cuda(
         tiled_v_heads: bool,
         dtype_code: i32,
     ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
-        let dev = mixed_qkv.device().as_cuda_device()?;
+        let dev = mixed_qkv.device().as_role_device()?;
 
         let (mixed_s, mixed_l) = mixed_qkv.storage_and_layout();
         let mixed_s = match &*mixed_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("mixed_qkv must be a cuda tensor"),
         };
         let mixed_offset = mixed_l.start_offset();
 
         let (b_s, b_l) = b.storage_and_layout();
         let b_s = match &*b_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("b must be a cuda tensor"),
         };
         let b_offset = b_l.start_offset();
 
         let (a_s, a_l) = a.storage_and_layout();
         let a_s = match &*a_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("a must be a cuda tensor"),
         };
         let a_offset = a_l.start_offset();
 
         let (alog_s, alog_l) = a_log.storage_and_layout();
         let alog_s = match &*alog_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<f32>()?,
             _ => candle::bail!("a_log must be a cuda tensor"),
         };
         let alog_offset = alog_l.start_offset();
 
         let (dtb_s, dtb_l) = dt_bias.storage_and_layout();
         let dtb_s = match &*dtb_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<f32>()?,
             _ => candle::bail!("dt_bias must be a cuda tensor"),
         };
         let dtb_offset = dtb_l.start_offset();
@@ -1970,23 +2067,23 @@ pub fn prepare_recurrence_inputs_cuda(
         }
 
         let q = Tensor::from((
-            candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(q_buf, dev.clone())),
+            role_storage(CudaStorage::wrap_cuda_slice(q_buf, dev.clone())),
             (bh, seq_len, head_k_dim),
         ));
         let k = Tensor::from((
-            candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(k_buf, dev.clone())),
+            role_storage(CudaStorage::wrap_cuda_slice(k_buf, dev.clone())),
             (bh, seq_len, head_k_dim),
         ));
         let v = Tensor::from((
-            candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(v_buf, dev.clone())),
+            role_storage(CudaStorage::wrap_cuda_slice(v_buf, dev.clone())),
             (bh, seq_len, head_v_dim),
         ));
         let g = Tensor::from((
-            candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(g_buf, dev.clone())),
+            role_storage(CudaStorage::wrap_cuda_slice(g_buf, dev.clone())),
             (bh, seq_len),
         ));
         let beta = Tensor::from((
-            candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(beta_buf, dev.clone())),
+            role_storage(CudaStorage::wrap_cuda_slice(beta_buf, dev.clone())),
             (bh, seq_len),
         ));
 
@@ -2109,9 +2206,10 @@ struct FlashInferGdnSm90Launch<'a> {
     dt_bias: &'a Tensor,
     slots: Option<&'a Tensor>,
     output: std::cell::RefCell<
-        Option<candle_core::cuda_backend::cudarc::driver::CudaSlice<half::bf16>>,
+        Option<candle_core::role::backend::cudarc::driver::CudaSlice<half::bf16>>,
     >,
-    workspace: std::cell::RefCell<Option<candle_core::cuda_backend::cudarc::driver::CudaSlice<u8>>>,
+    workspace:
+        std::cell::RefCell<Option<candle_core::role::backend::cudarc::driver::CudaSlice<u8>>>,
     workspace_bytes: u64,
     batch_size: i32,
     seq_len: i32,
@@ -2134,13 +2232,14 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
         candle_core::bail!("FlashInfer GDN SM90 prefill requires CUDA storage")
     }
 
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     fn cuda_fwd(
         &self,
         state_storage: &mut candle_core::CudaStorage,
         state_layout: &candle_core::Layout,
     ) -> Result<()> {
         use candle_core::backend::BackendStorage;
-        use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+        use candle_core::role::backend::cudarc::driver::{DevicePtr, DevicePtrMut};
 
         if !state_layout.is_contiguous() {
             candle_core::bail!("FlashInfer GDN SM90 prefill requires contiguous state")
@@ -2150,7 +2249,10 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
 
         let (mixed_storage, mixed_layout) = self.mixed_qkv.storage_and_layout();
         let mixed_slice = match &*mixed_storage {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<half::bf16>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<half::bf16>()?,
             _ => candle_core::bail!("mixed_qkv must be a CUDA tensor"),
         };
         let (mixed_base, mixed_guard) = mixed_slice.device_ptr(&stream);
@@ -2161,7 +2263,10 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
 
         let (b_storage, b_layout) = self.b.storage_and_layout();
         let b_slice = match &*b_storage {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<half::bf16>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<half::bf16>()?,
             _ => candle_core::bail!("b must be a CUDA tensor"),
         };
         let (b_base, b_guard) = b_slice.device_ptr(&stream);
@@ -2171,7 +2276,10 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
 
         let (a_storage, a_layout) = self.a.storage_and_layout();
         let a_slice = match &*a_storage {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<half::bf16>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<half::bf16>()?,
             _ => candle_core::bail!("a must be a CUDA tensor"),
         };
         let (a_base, a_guard) = a_slice.device_ptr(&stream);
@@ -2181,7 +2289,10 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
 
         let (a_log_storage, a_log_layout) = self.a_log.storage_and_layout();
         let a_log_slice = match &*a_log_storage {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<f32>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<f32>()?,
             _ => candle_core::bail!("a_log must be a CUDA tensor"),
         };
         let (a_log_base, a_log_guard) = a_log_slice.device_ptr(&stream);
@@ -2189,7 +2300,10 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
 
         let (dt_bias_storage, dt_bias_layout) = self.dt_bias.storage_and_layout();
         let dt_bias_slice = match &*dt_bias_storage {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<f32>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<f32>()?,
             _ => candle_core::bail!("dt_bias must be a CUDA tensor"),
         };
         let (dt_bias_base, dt_bias_guard) = dt_bias_slice.device_ptr(&stream);
@@ -2200,7 +2314,159 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
         let mut slots_guard = None;
         let slots_ptr = if let Some((storage, layout)) = &slots_storage_layout {
             let slice = match &**storage {
+                #[cfg(not(all(feature = "cuda", feature = "rocm")))]
                 candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<u32>()?,
+                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<u32>()?,
+                _ => candle_core::bail!("slot indices must be a CUDA tensor"),
+            };
+            let (base, guard) = slice.device_ptr(&stream);
+            slots_guard = Some(guard);
+            unsafe { (base as *const u32).add(layout.start_offset()) }
+        } else {
+            std::ptr::null()
+        };
+
+        let state_slice = state_storage.as_cuda_slice_mut::<f32>()?;
+        let (state_base, state_guard) = state_slice.device_ptr_mut(&stream);
+        let state_ptr = unsafe { (state_base as *mut f32).add(state_layout.start_offset()) };
+
+        let mut output = self.output.borrow_mut();
+        let output = output
+            .as_mut()
+            .ok_or_else(|| candle_core::Error::msg("FlashInfer GDN output was already consumed"))?;
+        let (output_ptr, output_guard) = output.device_ptr_mut(&stream);
+
+        let mut workspace = self.workspace.borrow_mut();
+        let workspace = workspace.as_mut().ok_or_else(|| {
+            candle_core::Error::msg("FlashInfer GDN workspace was already consumed")
+        })?;
+        let (workspace_ptr, workspace_guard) = workspace.device_ptr_mut(&stream);
+
+        let params = FlashInferGdnSm90Params {
+            mixed_qkv: mixed_ptr,
+            b: b_ptr,
+            a: a_ptr,
+            a_log: a_log_ptr,
+            dt_bias: dt_bias_ptr,
+            state: state_ptr,
+            slots: slots_ptr,
+            output: output_ptr as *mut core::ffi::c_void,
+            workspace: workspace_ptr as *mut core::ffi::c_void,
+            workspace_bytes: self.workspace_bytes,
+            batch_size: self.batch_size,
+            seq_len: self.seq_len,
+            num_k_heads: self.num_k_heads,
+            num_v_heads: self.num_v_heads,
+            sm_count: self.sm_count,
+            stream: stream.cu_stream() as i64,
+        };
+        let status = unsafe {
+            crate::cuda::ffi::mistralrs_flashinfer_gdn_sm90_launch(
+                &params as *const FlashInferGdnSm90Params as *const core::ffi::c_void,
+            )
+        };
+
+        drop(workspace_guard);
+        drop(output_guard);
+        drop(state_guard);
+        drop(slots_guard);
+        drop(dt_bias_guard);
+        drop(a_log_guard);
+        drop(a_guard);
+        drop(b_guard);
+        drop(mixed_guard);
+        if status != 0 {
+            candle_core::bail!("FlashInfer GDN SM90 prefill failed with status {status}")
+        }
+        Ok(())
+    }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    fn hip_fwd(
+        &self,
+        state_storage: &mut candle_core::HipStorage,
+        state_layout: &candle_core::Layout,
+    ) -> Result<()> {
+        use candle_core::backend::BackendStorage;
+        use candle_core::role::backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+
+        if !state_layout.is_contiguous() {
+            candle_core::bail!("FlashInfer GDN SM90 prefill requires contiguous state")
+        }
+        let dev = state_storage.device();
+        let stream = dev.cuda_stream();
+
+        let (mixed_storage, mixed_layout) = self.mixed_qkv.storage_and_layout();
+        let mixed_slice = match &*mixed_storage {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<half::bf16>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<half::bf16>()?,
+            _ => candle_core::bail!("mixed_qkv must be a CUDA tensor"),
+        };
+        let (mixed_base, mixed_guard) = mixed_slice.device_ptr(&stream);
+        let mixed_ptr = unsafe {
+            (mixed_base as *const half::bf16).add(mixed_layout.start_offset())
+                as *const core::ffi::c_void
+        };
+
+        let (b_storage, b_layout) = self.b.storage_and_layout();
+        let b_slice = match &*b_storage {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<half::bf16>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<half::bf16>()?,
+            _ => candle_core::bail!("b must be a CUDA tensor"),
+        };
+        let (b_base, b_guard) = b_slice.device_ptr(&stream);
+        let b_ptr = unsafe {
+            (b_base as *const half::bf16).add(b_layout.start_offset()) as *const core::ffi::c_void
+        };
+
+        let (a_storage, a_layout) = self.a.storage_and_layout();
+        let a_slice = match &*a_storage {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<half::bf16>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<half::bf16>()?,
+            _ => candle_core::bail!("a must be a CUDA tensor"),
+        };
+        let (a_base, a_guard) = a_slice.device_ptr(&stream);
+        let a_ptr = unsafe {
+            (a_base as *const half::bf16).add(a_layout.start_offset()) as *const core::ffi::c_void
+        };
+
+        let (a_log_storage, a_log_layout) = self.a_log.storage_and_layout();
+        let a_log_slice = match &*a_log_storage {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<f32>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<f32>()?,
+            _ => candle_core::bail!("a_log must be a CUDA tensor"),
+        };
+        let (a_log_base, a_log_guard) = a_log_slice.device_ptr(&stream);
+        let a_log_ptr = unsafe { (a_log_base as *const f32).add(a_log_layout.start_offset()) };
+
+        let (dt_bias_storage, dt_bias_layout) = self.dt_bias.storage_and_layout();
+        let dt_bias_slice = match &*dt_bias_storage {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<f32>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<f32>()?,
+            _ => candle_core::bail!("dt_bias must be a CUDA tensor"),
+        };
+        let (dt_bias_base, dt_bias_guard) = dt_bias_slice.device_ptr(&stream);
+        let dt_bias_ptr =
+            unsafe { (dt_bias_base as *const f32).add(dt_bias_layout.start_offset()) };
+
+        let slots_storage_layout = self.slots.map(Tensor::storage_and_layout);
+        let mut slots_guard = None;
+        let slots_ptr = if let Some((storage, layout)) = &slots_storage_layout {
+            let slice = match &**storage {
+                #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<u32>()?,
+                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<u32>()?,
                 _ => candle_core::bail!("slot indices must be a CUDA tensor"),
             };
             let (base, guard) = slice.device_ptr(&stream);
@@ -2326,7 +2592,7 @@ fn flashinfer_sm90_prefill_supported(launch: &FusedPrefillRecurrence<'_>) -> Res
             }
         }
         Ok(gdn_vmajor_arch(
-            gdn_cuda_device_properties(device.as_cuda_device()?)?.arch,
+            gdn_cuda_device_properties(device.as_role_device()?)?.arch,
         ))
     }
 }
@@ -2389,7 +2655,7 @@ fn flashinfer_sm90_prefill(launch: FusedPrefillRecurrence<'_>) -> Result<FusedPr
         }
     }
 
-    let dev = mixed_qkv.device().as_cuda_device()?;
+    let dev = mixed_qkv.device().as_role_device()?;
     let properties = gdn_cuda_device_properties(dev)?;
     let batch_size_i32 = i32::try_from(batch_size).map_err(candle::Error::wrap)?;
     let seq_len_i32 = i32::try_from(seq_len).map_err(candle::Error::wrap)?;
@@ -2447,9 +2713,9 @@ fn flashinfer_sm90_prefill(launch: FusedPrefillRecurrence<'_>) -> Result<FusedPr
         .output
         .into_inner()
         .ok_or_else(|| candle::Error::msg("FlashInfer GDN output is unavailable"))?;
-    let output_storage = candle::CudaStorage::wrap_cuda_slice(output, dev.clone());
+    let output_storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
     Ok(FusedPrefillOutput::TokenMajor(Tensor::from((
-        candle::Storage::Cuda(output_storage),
+        role_storage(output_storage),
         (batch_size, seq_len, num_v_heads, head_v_dim),
     ))))
 }
@@ -2555,12 +2821,12 @@ pub fn fused_decode_recurrence_cuda(launch: FusedDecodeRecurrence<'_>) -> Result
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tensor> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
 
     fn cuda_fwd<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle::role::backend::CudaDType + candle::role::backend::cudarc::driver::DeviceRepr,
     >(
         launch: GdnDecodeLaunch<'_>,
         dtype_code: i32,
@@ -2587,12 +2853,15 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
                 "GDN decode key dimension {head_k_dim} exceeds the CUDA fallback limit {GDN_DECODE_FALLBACK_MAX_K}"
             );
         }
-        let dev = mixed_qkv.device().as_cuda_device()?;
+        let dev = mixed_qkv.device().as_role_device()?;
         let device_properties = gdn_cuda_device_properties(dev)?;
 
         let (mixed_s, mixed_l) = mixed_qkv.storage_and_layout();
         let mixed_s = match &*mixed_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("mixed_qkv must be a cuda tensor"),
         };
         let mixed_offset = mixed_l.start_offset();
@@ -2601,7 +2870,10 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
 
         let (b_s, b_l) = b.storage_and_layout();
         let b_s = match &*b_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("b must be a cuda tensor"),
         };
         let b_offset = b_l.start_offset();
@@ -2611,7 +2883,10 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
 
         let (a_s, a_l) = a.storage_and_layout();
         let a_s = match &*a_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("a must be a cuda tensor"),
         };
         let a_offset = a_l.start_offset();
@@ -2621,14 +2896,20 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
 
         let (alog_s, alog_l) = a_log.storage_and_layout();
         let alog_s = match &*alog_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<f32>()?,
             _ => candle::bail!("a_log must be a cuda tensor"),
         };
         let alog_offset = alog_l.start_offset();
 
         let (dtb_s, dtb_l) = dt_bias.storage_and_layout();
         let dtb_s = match &*dtb_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<f32>()?,
             _ => candle::bail!("dt_bias must be a cuda tensor"),
         };
         let dtb_offset = dtb_l.start_offset();
@@ -2692,10 +2973,7 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
         })?;
 
         Ok(Tensor::from((
-            candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
-                output_buf,
-                dev.clone(),
-            )),
+            role_storage(CudaStorage::wrap_cuda_slice(output_buf, dev.clone())),
             (bh, 1, head_v_dim),
         )))
     }
@@ -2740,12 +3018,12 @@ pub struct GdnSpeculativeStateCommit<'a> {
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn speculative_state_commit_cuda(commit: GdnSpeculativeStateCommit<'_>) -> Result<()> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
 
     fn cuda_fwd<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle::role::backend::CudaDType + candle::role::backend::cudarc::driver::DeviceRepr,
     >(
         commit: GdnSpeculativeStateCommit<'_>,
         dtype_code: i32,
@@ -2841,7 +3119,10 @@ pub fn speculative_state_commit_cuda(commit: GdnSpeculativeStateCommit<'_>) -> R
             ($tensor:expr, $ty:ty, $name:literal) => {{
                 let (storage, layout) = $tensor.storage_and_layout();
                 let storage = match &*storage {
+                    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
                     candle::Storage::Cuda(storage) => storage.as_cuda_slice::<$ty>()?,
+                    #[cfg(all(feature = "cuda", feature = "rocm"))]
+                    candle::Storage::Hip(storage) => storage.as_cuda_slice::<$ty>()?,
                     _ => candle::bail!(concat!($name, " must be a CUDA tensor")),
                 };
                 let pointer = storage
@@ -2870,7 +3151,7 @@ pub fn speculative_state_commit_cuda(commit: GdnSpeculativeStateCommit<'_>) -> R
         }
         let keep_rows_ptr = typed_ptr!(keep_rows, u32, "keep_rows") as *const u32;
         let slot_indices_ptr = typed_ptr!(slot_indices, u32, "slot_indices") as *const u32;
-        let dev = mixed_qkv.device().as_cuda_device()?;
+        let dev = mixed_qkv.device().as_role_device()?;
         let stream = dev.cuda_stream().cu_stream() as i64;
 
         unsafe {
@@ -2944,12 +3225,12 @@ pub struct GdnSpeculativeConvCheckpoints<'a> {
 pub fn speculative_conv_checkpoints_cuda(
     context: GdnSpeculativeConvCheckpoints<'_>,
 ) -> Result<Tensor> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
 
     fn cuda_fwd<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle::role::backend::CudaDType + candle::role::backend::cudarc::driver::DeviceRepr,
     >(
         context: GdnSpeculativeConvCheckpoints<'_>,
         dtype_code: i32,
@@ -3068,26 +3349,38 @@ pub fn speculative_conv_checkpoints_cuda(
             );
         }
 
-        let dev = x.device().as_cuda_device()?;
+        let dev = x.device().as_role_device()?;
         let (x_storage, x_layout) = x.storage_and_layout();
         let x_storage = match &*x_storage {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(storage) => storage.as_cuda_slice::<T>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(storage) => storage.as_cuda_slice::<T>()?,
             _ => candle::bail!("GDN speculative convolution input must be CUDA"),
         };
         let x_strides = x_layout.stride();
         let (weight_storage, weight_layout) = weight.storage_and_layout();
         let weight_storage = match &*weight_storage {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(storage) => storage.as_cuda_slice::<T>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(storage) => storage.as_cuda_slice::<T>()?,
             _ => candle::bail!("GDN speculative convolution weight must be CUDA"),
         };
         let (state_storage, state_layout) = state_pool.storage_and_layout();
         let state_storage = match &*state_storage {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(storage) => storage.as_cuda_slice::<T>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(storage) => storage.as_cuda_slice::<T>()?,
             _ => candle::bail!("GDN speculative convolution state must be CUDA"),
         };
         let (slots_storage, slots_layout) = active_slots.storage_and_layout();
         let slots_storage = match &*slots_storage {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(storage) => storage.as_cuda_slice::<u32>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(storage) => storage.as_cuda_slice::<u32>()?,
             _ => candle::bail!("GDN speculative convolution slots must be CUDA"),
         };
         let output = unsafe { dev.alloc::<T>(batch_size * seq_len * conv_dim) }?;
@@ -3097,7 +3390,10 @@ pub fn speculative_conv_checkpoints_cuda(
             ($tensor:expr, $ty:ty, $name:literal) => {{
                 let (storage, layout) = $tensor.storage_and_layout();
                 let storage = match &*storage {
+                    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
                     candle::Storage::Cuda(storage) => storage.as_cuda_slice::<$ty>()?,
+                    #[cfg(all(feature = "cuda", feature = "rocm"))]
+                    candle::Storage::Hip(storage) => storage.as_cuda_slice::<$ty>()?,
                     _ => candle::bail!(concat!($name, " must be CUDA")),
                 };
                 let pointer = storage
@@ -3178,7 +3474,7 @@ pub fn speculative_conv_checkpoints_cuda(
         }
 
         Ok(Tensor::from((
-            candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(output, dev.clone())),
+            role_storage(CudaStorage::wrap_cuda_slice(output, dev.clone())),
             (batch_size, seq_len, conv_dim),
         )))
     }
@@ -3263,13 +3559,13 @@ pub struct GdnSpeculativeRecurrenceOutput {
 pub fn speculative_recurrence_checkpoints_cuda(
     context: GdnSpeculativeRecurrenceCheckpoints<'_>,
 ) -> Result<GdnSpeculativeRecurrenceOutput> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
     use float8::F8E4M3;
 
     fn cuda_fwd<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle::role::backend::CudaDType + candle::role::backend::cudarc::driver::DeviceRepr,
     >(
         context: GdnSpeculativeRecurrenceCheckpoints<'_>,
         dtype_code: i32,
@@ -3539,13 +3835,16 @@ pub fn speculative_recurrence_checkpoints_cuda(
         };
         let a_log = a_log.to_dtype(DType::F32)?.contiguous()?;
         let dt_bias = dt_bias.to_dtype(DType::F32)?.contiguous()?;
-        let dev = mixed_qkv.device().as_cuda_device()?;
+        let dev = mixed_qkv.device().as_role_device()?;
 
         macro_rules! cuda_ptr {
             ($tensor:expr, $ty:ty, $name:literal) => {{
                 let (storage, layout) = $tensor.storage_and_layout();
                 let storage = match &*storage {
+                    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
                     candle::Storage::Cuda(storage) => storage.as_cuda_slice::<$ty>()?,
+                    #[cfg(all(feature = "cuda", feature = "rocm"))]
+                    candle::Storage::Hip(storage) => storage.as_cuda_slice::<$ty>()?,
                     _ => candle::bail!(concat!($name, " must be CUDA")),
                 };
                 let pointer = storage
@@ -3724,7 +4023,7 @@ pub fn speculative_recurrence_checkpoints_cuda(
 
         let output = if let (Some(spec), Some(layout)) = (fp8_spec, fp8_layout) {
             let quantized_output = Tensor::from((
-                candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
+                role_storage(CudaStorage::wrap_cuda_slice(
                     quantized_output.expect("FP8 output allocation follows its layout"),
                     dev.clone(),
                 )),
@@ -3735,7 +4034,7 @@ pub fn speculative_recurrence_checkpoints_cuda(
                 ActivationScaleLayout::GroupMajor { .. } => [layout.groups, layout.scale_stride_m],
             };
             let scales = Tensor::from((
-                candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
+                role_storage(CudaStorage::wrap_cuda_slice(
                     output_scales.expect("FP8 scale allocation follows its layout"),
                     dev.clone(),
                 )),
@@ -3750,7 +4049,7 @@ pub fn speculative_recurrence_checkpoints_cuda(
                 spec.scale_layout,
             )?)
         } else {
-            let output_storage = candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
+            let output_storage = role_storage(CudaStorage::wrap_cuda_slice(
                 output.expect("BF16 output allocation follows the FP8 contract"),
                 dev.clone(),
             ));
@@ -3769,15 +4068,15 @@ pub fn speculative_recurrence_checkpoints_cuda(
         let transitions = match (transition_key, transition_delta, transition_decay) {
             (Some(key), Some(delta), Some(decay)) => Some(GdnSpeculativeTransitions {
                 key: Tensor::from((
-                    candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(key, dev.clone())),
+                    role_storage(CudaStorage::wrap_cuda_slice(key, dev.clone())),
                     (batch_size, seq_len, num_k_heads, head_k_dim),
                 )),
                 delta: Tensor::from((
-                    candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(delta, dev.clone())),
+                    role_storage(CudaStorage::wrap_cuda_slice(delta, dev.clone())),
                     (batch_size, seq_len, num_v_heads, head_v_dim),
                 )),
                 decay: Tensor::from((
-                    candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(decay, dev.clone())),
+                    role_storage(CudaStorage::wrap_cuda_slice(decay, dev.clone())),
                     (batch_size, seq_len, num_v_heads),
                 )),
             }),
@@ -3837,7 +4136,7 @@ pub struct GdnDeferredRecurrence<'a> {
 pub fn deferred_recurrence_rmsnorm_gate_cuda(
     context: GdnDeferredRecurrence<'_>,
 ) -> Result<GdnPostOpOutput> {
-    use candle::cuda_backend::cudarc::driver::DevicePtrMut;
+    use candle::role::backend::cudarc::driver::DevicePtrMut;
     use candle_core as candle;
     use core::ffi::c_void;
 
@@ -3938,7 +4237,7 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(
     if !device.is_cuda() {
         candle::bail!("deferred GDN recurrence requires CUDA");
     }
-    if !gdn_vmajor_arch(gdn_cuda_device_properties(device.as_cuda_device()?)?.arch) {
+    if !gdn_vmajor_arch(gdn_cuda_device_properties(device.as_role_device()?)?.arch) {
         candle::bail!("deferred GDN recurrence requires an sm_90-class GPU");
     }
     let fp8_layout = quantization
@@ -3998,7 +4297,7 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(
         let strides = layout.stride();
         [strides[0], strides[2]]
     };
-    let dev = device.as_cuda_device()?;
+    let dev = device.as_role_device()?;
     let stream = dev.cuda_stream();
     macro_rules! cuda_read_ptr {
         ($ptr:ident, $guard:ident, $storage:ident, $layout:ident, $tensor:expr, $ty:ty, $name:literal) => {
@@ -4179,7 +4478,7 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(
     drop(mixed_qkv_storage);
     if let (Some(spec), Some(layout)) = (quantization, fp8_layout) {
         let quantized_output = Tensor::from((
-            candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
+            role_storage(CudaStorage::wrap_cuda_slice(
                 quantized_output.expect("FP8 output allocation follows its layout"),
                 dev.clone(),
             )),
@@ -4190,7 +4489,7 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(
             ActivationScaleLayout::GroupMajor { .. } => [layout.groups, layout.scale_stride_m],
         };
         let scales = Tensor::from((
-            candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
+            role_storage(CudaStorage::wrap_cuda_slice(
                 output_scales.expect("FP8 scale allocation follows its layout"),
                 dev.clone(),
             )),
@@ -4208,7 +4507,7 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(
         ));
     }
     Ok(GdnPostOpOutput::Tensor(Tensor::from((
-        candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
+        role_storage(CudaStorage::wrap_cuda_slice(
             output.expect("BF16 output allocation follows the FP8 contract"),
             dev.clone(),
         )),
@@ -4243,7 +4542,7 @@ pub struct GdnDeferredStateFlush<'a> {
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 fn launch_deferred_state_cuda(
     context: GdnDeferredStateFlush<'_>,
-    stream: &std::sync::Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+    stream: &std::sync::Arc<candle_core::role::backend::cudarc::driver::CudaStream>,
 ) -> Result<()> {
     use candle_core as candle;
 
@@ -4293,11 +4592,11 @@ fn launch_deferred_state_cuda(
     }
     let device = state_pool.device();
     if !device.is_cuda()
-        || !gdn_vmajor_arch(gdn_cuda_device_properties(device.as_cuda_device()?)?.arch)
+        || !gdn_vmajor_arch(gdn_cuda_device_properties(device.as_role_device()?)?.arch)
     {
         candle::bail!("deferred GDN materialization requires an sm_90-class GPU");
     }
-    let dev = device.as_cuda_device()?;
+    let dev = device.as_role_device()?;
     if !std::sync::Arc::ptr_eq(dev.cuda_stream().context(), stream.context()) {
         candle::bail!("deferred GDN materialization stream belongs to another CUDA context");
     }
@@ -4397,7 +4696,7 @@ fn launch_deferred_state_cuda(
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn flush_deferred_state_cuda(context: GdnDeferredStateFlush<'_>) -> Result<()> {
-    let stream = context.state_pool.device().as_cuda_device()?.cuda_stream();
+    let stream = context.state_pool.device().as_role_device()?.cuda_stream();
     launch_deferred_state_cuda(context, &stream)
 }
 
@@ -4437,11 +4736,11 @@ pub struct GdnSpeculativeTransitionCommit<'a> {
 pub fn speculative_transition_commit_batched_cuda(
     commit: GdnSpeculativeTransitionCommit<'_>,
 ) -> Result<()> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
 
     fn cuda_commit<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle::role::backend::CudaDType + candle::role::backend::cudarc::driver::DeviceRepr,
     >(
         commit: GdnSpeculativeTransitionCommit<'_>,
         activation_dtype: i32,
@@ -4509,7 +4808,7 @@ pub fn speculative_transition_commit_batched_cuda(
             candle::bail!("GDN transition commit state has unsupported dtype");
         }
 
-        let cuda_stream = device.as_cuda_device()?.cuda_stream();
+        let cuda_stream = device.as_role_device()?.cuda_stream();
         let phase_timer = crate::pipeline::cuda_graph::CudaPhaseTimer::start(&cuda_stream)?;
         let mut pointer_segments = (0..6)
             .map(|_| Vec::with_capacity(layers.len()))
@@ -4564,7 +4863,10 @@ pub fn speculative_transition_commit_batched_cuda(
                 ($tensor:expr, $ty:ty, $name:literal) => {{
                     let (storage, layout) = $tensor.storage_and_layout();
                     let storage = match &*storage {
+                        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
                         candle::Storage::Cuda(storage) => storage.as_cuda_slice::<$ty>()?,
+                        #[cfg(all(feature = "cuda", feature = "rocm"))]
+                        candle::Storage::Hip(storage) => storage.as_cuda_slice::<$ty>()?,
                         _ => candle::bail!(concat!($name, " must be CUDA")),
                     };
                     let pointer = storage
@@ -4600,7 +4902,10 @@ pub fn speculative_transition_commit_batched_cuda(
             ($tensor:expr, $ty:ty, $name:literal) => {{
                 let (storage, layout) = $tensor.storage_and_layout();
                 let storage = match &*storage {
+                    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
                     candle::Storage::Cuda(storage) => storage.as_cuda_slice::<$ty>()?,
+                    #[cfg(all(feature = "cuda", feature = "rocm"))]
+                    candle::Storage::Hip(storage) => storage.as_cuda_slice::<$ty>()?,
                     _ => candle::bail!(concat!($name, " must be CUDA")),
                 };
                 let pointer = storage
@@ -4693,7 +4998,7 @@ pub fn speculative_transition_stage_batched_cuda(
     use candle_core as candle;
 
     fn cuda_stage<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle::role::backend::CudaDType + candle::role::backend::cudarc::driver::DeviceRepr,
     >(
         stage: GdnSpeculativeTransitionStage<'_>,
         activation_dtype: i32,
@@ -4803,7 +5108,7 @@ pub fn speculative_transition_stage_batched_cuda(
                 }
             }
         }
-        let cuda_stream = device.as_cuda_device()?.cuda_stream();
+        let cuda_stream = device.as_role_device()?.cuda_stream();
         let layer_storage_layouts = layers
             .iter()
             .map(|layer| {
@@ -5004,7 +5309,7 @@ pub fn pending_transition_publish_batched_cuda(
         }
     }
 
-    let cuda_stream = device.as_cuda_device()?.cuda_stream();
+    let cuda_stream = device.as_role_device()?.cuda_stream();
     let layer_storage_layouts = layers
         .iter()
         .map(|layer| {
@@ -5125,7 +5430,7 @@ pub fn pending_transition_apply_batched_cuda(apply: GdnPendingTransitionApply<'_
     use candle_core as candle;
 
     fn cuda_apply<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle::role::backend::CudaDType + candle::role::backend::cudarc::driver::DeviceRepr,
     >(
         apply: GdnPendingTransitionApply<'_>,
         activation_dtype: i32,
@@ -5230,7 +5535,7 @@ pub fn pending_transition_apply_batched_cuda(apply: GdnPendingTransitionApply<'_
                 }
             }
         }
-        let cuda_stream = device.as_cuda_device()?.cuda_stream();
+        let cuda_stream = device.as_role_device()?.cuda_stream();
         let layer_storage_layouts = layers
             .iter()
             .map(|layer| {
@@ -5403,12 +5708,12 @@ fn normalize_gdn_rmsnorm_layout(
 /// CUDA RMSNorm with a SiLU gate; packed final dimensions are split by the norm weight width.
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
 
     fn cuda_fwd<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle::role::backend::CudaDType + candle::role::backend::cudarc::driver::DeviceRepr,
     >(
         x: &Tensor,
         gate: &Tensor,
@@ -5418,11 +5723,14 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
     ) -> Result<Tensor> {
         let weight = weight.contiguous()?;
         let hidden_dim = weight.dims1()?;
-        let dev = x.device().as_cuda_device()?;
+        let dev = x.device().as_role_device()?;
 
         let (x_s, x_l) = x.storage_and_layout();
         let x_s = match &*x_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("x must be a cuda tensor"),
         };
         let x_offset = x_l.start_offset();
@@ -5430,7 +5738,10 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
 
         let (gate_s, gate_l) = gate.storage_and_layout();
         let gate_s = match &*gate_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("gate must be a cuda tensor"),
         };
         let gate_offset = gate_l.start_offset();
@@ -5442,7 +5753,10 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
 
         let (weight_s, weight_l) = weight.storage_and_layout();
         let weight_s = match &*weight_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("weight must be a cuda tensor"),
         };
         let weight_offset = weight_l.start_offset();
@@ -5478,9 +5792,9 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
             );
         }
 
-        let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
+        let output_storage = CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
         Ok(Tensor::from((
-            candle::Storage::Cuda(output_storage),
+            role_storage(output_storage),
             x.shape().clone(),
         )))
     }
@@ -5502,8 +5816,8 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
     num_v_heads: usize,
     head_v_dim: usize,
 ) -> Result<QuantizedActivation> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
-    use candle_core::{self as candle, CudaStorage, Shape, Storage};
+    use candle::role::backend::cudarc::driver::DevicePtr;
+    use candle_core::{self as candle, Shape, Storage};
     use core::ffi::c_void;
     use float8::F8E4M3;
 
@@ -5527,9 +5841,13 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
     }
 
     let (x_storage, x_layout) = x.storage_and_layout();
-    let Storage::Cuda(x_storage) = &*x_storage else {
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    let Storage::Cuda(x_storage) = &*x_storage
+    else {
         unreachable!()
     };
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    let x_storage = x_storage.as_role_storage().expect("role storage");
     let x_storage = x_storage.as_cuda_slice::<half::bf16>()?;
     let (dims, x_stride) = normalize_gdn_rmsnorm_layout(x.dims(), x_layout.stride(), head_v_dim)?;
     let normalized_rows = dims[0]
@@ -5541,9 +5859,13 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
     }
 
     let (gate_storage, gate_layout) = gate.storage_and_layout();
-    let Storage::Cuda(gate_storage) = &*gate_storage else {
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    let Storage::Cuda(gate_storage) = &*gate_storage
+    else {
         unreachable!()
     };
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    let gate_storage = gate_storage.as_role_storage().expect("role storage");
     let gate_storage = gate_storage.as_cuda_slice::<half::bf16>()?;
     let (gate_dims, gate_stride) =
         normalize_gdn_rmsnorm_layout(gate.dims(), gate_layout.stride(), head_v_dim)?;
@@ -5552,11 +5874,15 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
     }
 
     let (weight_storage, weight_layout) = weight.storage_and_layout();
-    let Storage::Cuda(weight_storage) = &*weight_storage else {
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    let Storage::Cuda(weight_storage) = &*weight_storage
+    else {
         unreachable!()
     };
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    let weight_storage = weight_storage.as_role_storage().expect("role storage");
     let weight_storage = weight_storage.as_cuda_slice::<half::bf16>()?;
-    let dev = x.device().as_cuda_device()?;
+    let dev = x.device().as_role_device()?;
     let output = unsafe { dev.alloc::<F8E4M3>(layout.rows * layout.columns) }?;
     let scales = unsafe { dev.alloc::<f32>(layout.scale_elements) }?;
     let stream = dev.cuda_stream().cu_stream() as i64;
@@ -5597,7 +5923,7 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
     }
 
     let output = Tensor::from((
-        Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
+        role_storage(CudaStorage::wrap_cuda_slice(output, dev.clone())),
         Shape::from_dims(&[layout.rows, layout.columns]),
     ));
     let scale_shape = match spec.scale_layout {
@@ -5605,7 +5931,7 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
         ActivationScaleLayout::GroupMajor { .. } => [layout.groups, layout.scale_stride_m],
     };
     let scales = Tensor::from((
-        Storage::Cuda(CudaStorage::wrap_cuda_slice(scales, dev.clone())),
+        role_storage(CudaStorage::wrap_cuda_slice(scales, dev.clone())),
         Shape::from_dims(&scale_shape),
     ));
     QuantizedActivation::new_with_scale_layout(
@@ -5640,12 +5966,12 @@ pub fn fused_gdn_gating_cuda(
     a_log: &Tensor,
     dt_bias: &Tensor,
 ) -> Result<(Tensor, Tensor)> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
 
     fn cuda_fwd<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle::role::backend::CudaDType + candle::role::backend::cudarc::driver::DeviceRepr,
     >(
         b: &Tensor,
         a: &Tensor,
@@ -5656,32 +5982,44 @@ pub fn fused_gdn_gating_cuda(
         let total_elements = b.elem_count();
         let num_heads = a_log.elem_count();
         let shape = b.shape().clone();
-        let dev = b.device().as_cuda_device()?;
+        let dev = b.device().as_role_device()?;
 
         let (b_s, b_l) = b.storage_and_layout();
         let b_s = match &*b_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("b must be a cuda tensor"),
         };
         let b_offset = b_l.start_offset();
 
         let (a_s, a_l) = a.storage_and_layout();
         let a_s = match &*a_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("a must be a cuda tensor"),
         };
         let a_offset = a_l.start_offset();
 
         let (alog_s, alog_l) = a_log.storage_and_layout();
         let alog_s = match &*alog_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<f32>()?,
             _ => candle::bail!("a_log must be a cuda tensor"),
         };
         let alog_offset = alog_l.start_offset();
 
         let (dtb_s, dtb_l) = dt_bias.storage_and_layout();
         let dtb_s = match &*dtb_s {
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            candle::Storage::Hip(c) => c.as_cuda_slice::<f32>()?,
             _ => candle::bail!("dt_bias must be a cuda tensor"),
         };
         let dtb_offset = dtb_l.start_offset();
@@ -5706,11 +6044,11 @@ pub fn fused_gdn_gating_cuda(
             );
         }
 
-        let beta_storage = candle::CudaStorage::wrap_cuda_slice(beta_buf, dev.clone());
-        let beta = Tensor::from((candle::Storage::Cuda(beta_storage), shape.clone()));
+        let beta_storage = CudaStorage::wrap_cuda_slice(beta_buf, dev.clone());
+        let beta = Tensor::from((role_storage(beta_storage), shape.clone()));
 
-        let g_storage = candle::CudaStorage::wrap_cuda_slice(g_buf, dev.clone());
-        let g = Tensor::from((candle::Storage::Cuda(g_storage), shape));
+        let g_storage = CudaStorage::wrap_cuda_slice(g_buf, dev.clone());
+        let g = Tensor::from((role_storage(g_storage), shape));
 
         Ok((beta, g))
     }
@@ -10528,7 +10866,7 @@ mod tests {
             RecurrentStateLayout::GdnKeyMajor,
         )?;
 
-        let properties = gdn_cuda_device_properties(dev.as_cuda_device()?)?;
+        let properties = gdn_cuda_device_properties(dev.as_role_device()?)?;
         if gdn_modern_arch(properties.arch) {
             for kernel in [GdnDecodeKernel::Cooperative, GdnDecodeKernel::Pipelined] {
                 run_fused_decode_padding_case(

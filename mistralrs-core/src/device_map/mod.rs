@@ -260,6 +260,16 @@ fn mapped_device_for_ordinal(
             }),
         DeviceLocation::Metal { gpu_id } if gpu_id == ordinal => Ok(device.clone()),
         DeviceLocation::Metal { .. } => Device::new_metal(ordinal),
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        DeviceLocation::Hip { gpu_id } if gpu_id == ordinal => Ok(device.clone()),
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        DeviceLocation::Hip { .. } => all_devices
+            .iter()
+            .find(|d| d.is_hip() && device_ordinal(d) == ordinal)
+            .cloned()
+            .ok_or_else(|| {
+                candle_core::Error::msg(format!("Could not find hip device with ordinal {ordinal}"))
+            }),
     }
 }
 
@@ -268,6 +278,8 @@ fn device_ordinal(device: &Device) -> usize {
         DeviceLocation::Cpu => 0,
         DeviceLocation::Cuda { gpu_id } => gpu_id,
         DeviceLocation::Metal { gpu_id } => gpu_id,
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        DeviceLocation::Hip { gpu_id } => gpu_id,
     }
 }
 
@@ -310,6 +322,26 @@ pub fn get_all_similar_devices(base: &Device) -> Result<Vec<Device>> {
     let mut devices = Vec::new();
     match base {
         Device::Cpu => return Ok(vec![Device::Cpu]),
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        Device::Hip(_) => {
+            let mut ord = 0;
+            loop {
+                let dev = Device::new_hip(ord);
+                if let Ok(dev) = dev {
+                    devices.push(dev);
+                    ord += 1;
+                } else {
+                    break;
+                }
+            }
+        }
+        // NVIDIA devices do not serve in dual builds yet (all C kernels are
+        // hipcc-built); no similar-device enumeration exists for that role.
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        Device::Cuda(_) => {
+            candle_core::bail!("NVIDIA devices do not serve in cuda+rocm builds yet");
+        }
+        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
         Device::Cuda(_) => {
             let mut ord = 0;
             let DeviceLocation::Cuda { gpu_id: base_ord } = base.location() else {

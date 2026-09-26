@@ -1,9 +1,9 @@
 use crate::cuda::backend::slice_ptr;
 use crate::cuda::ffi;
+use crate::cuda::role_backend::cudarc::driver::{DevicePtr, DeviceSlice};
 use candle::backend::BackendStorage;
 use candle::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Tensor};
 use candle_core as candle;
-use candle_core::cuda::cudarc::driver::{DevicePtr, DeviceSlice};
 use half::{bf16, f16};
 use std::ffi::{c_int, c_uint};
 
@@ -17,7 +17,8 @@ struct FlashAttnSinks {
 
 impl FlashAttnSinks {
     fn cuda_fwd_t<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: crate::cuda::role_backend::CudaDType
+            + crate::cuda::role_backend::cudarc::driver::DeviceRepr,
     >(
         &self,
         q: &CudaStorage,
@@ -153,9 +154,9 @@ struct FlashAttnSinksVarlen {
 
 impl FlashAttnSinksVarlen {
     fn cuda_fwd_t<
-        T: candle::cuda_backend::CudaDType
-            + candle::cuda_backend::cudarc::driver::DeviceRepr
-            + candle::cuda_backend::cudarc::driver::ValidAsZeroBits,
+        T: crate::cuda::role_backend::CudaDType
+            + crate::cuda::role_backend::cudarc::driver::DeviceRepr
+            + crate::cuda::role_backend::cudarc::driver::ValidAsZeroBits,
     >(
         &self,
         q: &CudaStorage,

@@ -297,7 +297,7 @@ fn main() -> Result<(), String> {
     println!("cargo::rustc-check-cfg=cfg(has_cutlass_moe_kernels)");
     println!("cargo::rustc-check-cfg=cfg(cuda_ge_13000)");
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     {
         use std::{path::Path, path::PathBuf, vec};
         const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");

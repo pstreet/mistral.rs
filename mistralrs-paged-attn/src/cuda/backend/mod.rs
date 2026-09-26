@@ -13,11 +13,11 @@ mod mla;
 mod paged_attention;
 #[cfg(not(feature = "rocm"))]
 mod scale_update;
-pub use cache::{copy_blocks, swap_blocks};
-use candle_core::cuda::cudarc::{
+use crate::cuda::role_backend::cudarc::{
     self,
     driver::{CudaSlice, CudaStream, DevicePtr, DeviceRepr},
 };
+pub use cache::{copy_blocks, swap_blocks};
 use candle_core::{Layout, Result};
 #[cfg(not(feature = "rocm"))]
 pub use context_attention_mla::context_attention_fwd_mla;

@@ -6,7 +6,7 @@ use super::{
 };
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
 use crate::attention::flash_backend_supports_sdpa;
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
 use crate::flashinfer::{self, FlashInferDecodePlan, FlashInferDecodePlanInput};
 
 #[allow(dead_code)]
@@ -38,7 +38,7 @@ pub(crate) struct PrefixPrefillPlanInput {
 #[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 pub(crate) enum PrefixPrefillPlan {
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
     Fa3Fp8Paged,
     #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
     FlashAttentionPaged,
@@ -72,7 +72,7 @@ impl PrefixPrefillPlan {
             input.attention_backend,
         );
 
-        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
         if mistralrs_paged_attn::USE_FA3_FP8_PAGED && fa3_paged_prefill_supported(input) {
             return Self::Fa3Fp8Paged;
         }
@@ -102,7 +102,7 @@ impl PrefixPrefillPlan {
     }
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
 pub(crate) fn fa3_paged_prefill_supported(input: PrefixPrefillPlanInput) -> bool {
     input.fa3_supported
         && input.device_is_cuda
@@ -495,7 +495,7 @@ pub(crate) fn prompt_prefill_workspace(
         .iter()
         .try_fold(0usize, |total, &len| total.checked_add(len))
         .ok_or_else(|| candle_core::Error::msg("prompt query length sum overflow"))?;
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
     let mut fa3_pool = crate::flashinfer::Fa3PrefillPoolBytes::default();
     let mut max_layer_transient = 0usize;
     let mut gather_workspace_bytes = 0usize;
@@ -516,7 +516,7 @@ pub(crate) fn prompt_prefill_workspace(
             )
         });
         let plan = plan_input.map_or(PrefixPrefillPlan::GatherSdpa, PrefixPrefillPlan::choose);
-        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
         if matches!(plan, PrefixPrefillPlan::Fa3Fp8Paged) {
             let fa3_workspace = crate::flashinfer::fa3_prefill_workspace_components(
                 input.query_lens.len(),
@@ -585,9 +585,9 @@ pub(crate) fn prompt_prefill_workspace(
         gather_workspace_bytes = gather_workspace_bytes.max(layer_workspace);
         max_layer_transient = max_layer_transient.max(layer_workspace);
     }
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
     let fa3_pool_bytes = fa3_pool.bytes()?;
-    #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+    #[cfg(not(all(feature = "cuda", not(feature = "rocm"), target_family = "unix")))]
     let fa3_pool_bytes = 0usize;
     let bytes = fa3_pool_bytes
         .checked_add(max_layer_transient)
@@ -634,7 +634,7 @@ fn prompt_plan_input(
     }
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
 fn fa3_group_size_is_supported(q_heads: usize, kv_heads: usize) -> bool {
     kv_heads > 0
         && q_heads.is_multiple_of(kv_heads)
@@ -664,7 +664,7 @@ pub(crate) struct DecodePlanInput {
 #[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 pub(crate) enum DecodePlan {
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
     FlashInfer(FlashInferDecodePlan),
     GatherSdpa,
     PagedAttention,
@@ -675,11 +675,11 @@ impl DecodePlan {
         attention_backend: AttentionBackendKind,
         head_size: usize,
     ) -> bool {
-        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
         {
             head_size > FlashInferDecodePlan::head_size_limit(attention_backend)
         }
-        #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+        #[cfg(not(all(feature = "cuda", not(feature = "rocm"), target_family = "unix")))]
         {
             let _ = head_size;
             matches!(attention_backend, AttentionBackendKind::FlashInfer)
@@ -691,7 +691,7 @@ impl DecodePlan {
             return Ok(Self::GatherSdpa);
         }
         match input.attention_backend {
-            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
             AttentionBackendKind::FlashInfer => {
                 flashinfer::decode_plan(FlashInferDecodePlanInput {
                     head_size: input.head_size,
@@ -700,7 +700,7 @@ impl DecodePlan {
                 })
                 .map(Self::FlashInfer)
             }
-            #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+            #[cfg(not(all(feature = "cuda", not(feature = "rocm"), target_family = "unix")))]
             AttentionBackendKind::FlashInfer => Ok(Self::GatherSdpa),
             AttentionBackendKind::Standard if input.has_sliding_window => Ok(Self::GatherSdpa),
             AttentionBackendKind::Standard => Ok(Self::PagedAttention),
@@ -883,7 +883,7 @@ mod tests {
         assert!(matches!(plan, PrefixPrefillPlan::GatherSdpa));
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
     #[test]
     fn fp8_dense_short_prefix_uses_fa3_when_available() {
         let input = PrefixPrefillPlanInput {
@@ -1090,10 +1090,10 @@ mod tests {
         let model = workspace_model(Some(PrefixPrefillAttentionFeatures::default()));
         let query_lens = [129, 129];
         let context_lens = [1_000, 8_000];
-        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
         let expected_bytes = 38_977_536;
         // FA3 paged prefill is cuda-only, so other builds take GatherSdpa here.
-        #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+        #[cfg(not(all(feature = "cuda", not(feature = "rocm"), target_family = "unix")))]
         let expected_bytes = 742_821_536;
         assert_eq!(
             prompt_prefill_workspace(Some(&model), workspace_input(&query_lens, &context_lens))
@@ -1115,7 +1115,7 @@ mod tests {
         );
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
     #[test]
     fn prompt_workspace_matches_direct_fa3_availability() {
         let model = workspace_model(Some(PrefixPrefillAttentionFeatures::default()));
@@ -1136,7 +1136,7 @@ mod tests {
         assert_eq!(workspace.gather_workspace_bytes, 0);
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
     #[test]
     fn prompt_workspace_tracks_fa3_support_per_layer() {
         let model = workspace_model(Some(PrefixPrefillAttentionFeatures::default()));

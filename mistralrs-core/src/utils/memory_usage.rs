@@ -108,6 +108,28 @@ impl MemoryUsage {
                     Ok(DeviceMemory::Discrete { total, free })
                 }
             }
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            Device::Hip(dev) => {
+                if super::normal::is_integrated_gpu(device) {
+                    let sys = System::new_all();
+                    let total_bytes = usize::try_from(sys.total_memory())?;
+                    let avail_bytes = usize::try_from(sys.available_memory())?;
+                    let fraction = igpu_memory_fraction();
+                    let budget = (total_bytes as f64 * fraction) as usize;
+                    let free = (avail_bytes as f64 * fraction) as usize;
+                    Ok(DeviceMemory::Unified {
+                        budget,
+                        allocated: budget.saturating_sub(free),
+                    })
+                } else {
+                    use candle_core::role::backend::cudarc::driver::result;
+                    use candle_core::role::backend::WrapErr;
+
+                    dev.cuda_stream().context().bind_to_thread().w()?;
+                    let (free, total) = result::mem_get_info().w()?;
+                    Ok(DeviceMemory::Discrete { total, free })
+                }
+            }
             #[cfg(not(any(feature = "cuda", feature = "rocm")))]
             Device::Cuda(_) => {
                 candle_core::bail!("Cannot query memory for CUDA device")

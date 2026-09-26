@@ -653,6 +653,7 @@ dependencies = [
  "accelerate-src",
  "byteorder",
  "candle-kernels",
+ "candle-kernels-cuda",
  "candle-metal-kernels",
  "candle-ug",
  "cudarc 0.19.8",
@@ -694,6 +695,13 @@ dependencies = [
 
 [[package]]
 name = "candle-kernels"
+version = "0.11.0"
+dependencies = [
+ "cudaforge",
+]
+
+[[package]]
+name = "candle-kernels-cuda"
 version = "0.11.0"
 dependencies = [
  "cudaforge",

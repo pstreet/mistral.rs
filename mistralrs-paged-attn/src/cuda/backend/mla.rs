@@ -3,8 +3,8 @@ use crate::cuda::ffi::{
     concat_and_cache_mla as ffi_concat_and_cache_mla,
     flashinfer_mla_decode as ffi_flashinfer_mla_decode, gather_mla_cache as ffi_gather_mla_cache,
 };
+use crate::cuda::role_backend::CudaStorageSlice;
 use candle_core::backend::BackendStorage;
-use candle_core::cuda_backend::CudaStorageSlice;
 use candle_core::{DType, Result, Storage, Tensor};
 
 pub fn concat_and_cache_mla(

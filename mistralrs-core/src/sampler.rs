@@ -346,7 +346,7 @@ impl CudaTop1BatchSubmission {
 
     pub(crate) fn wait_on(
         &self,
-        stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+        stream: &Arc<candle_core::role::backend::cudarc::driver::CudaStream>,
     ) -> Result<()> {
         let mut cache = self.cache.lock().unwrap();
         crate::ops::cuda_top1_device_tokens_wait_on(
@@ -362,7 +362,7 @@ impl CudaTop1BatchSubmission {
 
     pub(crate) fn release_after(
         &self,
-        stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+        stream: &Arc<candle_core::role::backend::cudarc::driver::CudaStream>,
     ) -> Result<()> {
         let mut cache = self.cache.lock().unwrap();
         crate::ops::cuda_top1_device_tokens_release_after(
@@ -443,7 +443,7 @@ impl CudaTopKBatchSubmission {
 
     pub(crate) fn wait_on(
         &self,
-        stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+        stream: &Arc<candle_core::role::backend::cudarc::driver::CudaStream>,
     ) -> Result<()> {
         let mut cache = self.cache.lock().unwrap();
         crate::ops::cuda_topk_sampling_device_tokens_wait_on(
@@ -459,7 +459,7 @@ impl CudaTopKBatchSubmission {
 
     pub(crate) fn release_after(
         &self,
-        stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+        stream: &Arc<candle_core::role::backend::cudarc::driver::CudaStream>,
     ) -> Result<()> {
         let mut cache = self.cache.lock().unwrap();
         crate::ops::cuda_topk_sampling_device_tokens_release_after(

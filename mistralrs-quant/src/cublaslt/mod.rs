@@ -65,15 +65,15 @@ pub static CUBLASLT_CONTROLLER: LazyLock<CublasLtController> =
         device_location: Mutex::new(None),
     });
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 mod api;
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 mod matmul;
 #[cfg(test)]
 #[cfg(feature = "cuda")]
 mod tests;
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub use api::{fused_batch_matmul, fused_batch_matmul_f8, CublasLt};
 
 pub fn maybe_init_cublas_lt_wrapper(device: Device) {
@@ -85,7 +85,9 @@ pub fn maybe_init_cublas_lt_wrapper(device: Device) {
     static INIT: Once = Once::new();
 
     INIT.call_once(|| {
-        #[cfg(feature = "cuda")]
+        // Dual builds never initialize the Lt wrapper (no Lt machinery);
+        // the controller stays empty and every caller falls back to GEMM.
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         {
             let wrapper = Box::new(CublasLtWrapper {
                 cublaslt: CublasLt::new(&device).unwrap(),
@@ -108,7 +110,7 @@ pub fn maybe_init_cublas_lt_wrapper(device: Device) {
 
 #[derive(Debug, Clone)]
 pub struct CublasLtWrapper {
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     pub cublaslt: CublasLt,
 }
 
@@ -130,6 +132,7 @@ impl CublasLtWrapper {
     ///
     /// The resulting tensor is of shape NxM
     #[allow(clippy::too_many_arguments)]
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     pub fn batch_matmul_f8(
         &self,
         a: &Tensor,
@@ -174,6 +177,22 @@ impl CublasLtWrapper {
             candle_core::bail!("`cuda` feature is not enabled")
         }
     }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    pub fn batch_matmul_f8(
+        &self,
+        _a: &Tensor,
+        _b: &Tensor,
+        _dequant_a_scale: &Tensor,
+        _dequant_b_scale: &Tensor,
+        _quantize_scale: &Tensor,
+        _out: Option<&Tensor>,
+        _alpha: Option<f32>,
+        _beta: Option<f32>,
+        _bias: Option<&Tensor>,
+        _act: Option<CandleActivation>,
+    ) -> Result<Tensor> {
+        candle_core::bail!("cublaslt batch_matmul_f8 on Hip needs S2")
+    }
 
     /// Fused batch matmul + add + Relu/Gelu activation using CublasLt.
     ///
@@ -189,6 +208,7 @@ impl CublasLtWrapper {
     ///
     /// The resulting tensor is of shape NxM
     #[allow(clippy::too_many_arguments)]
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     pub fn batch_matmul(
         &self,
         a: &Tensor,
@@ -226,5 +246,20 @@ impl CublasLtWrapper {
         {
             candle_core::bail!("`cuda` feature is not enabled")
         }
+    }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    pub fn batch_matmul(
+        &self,
+        _a: &Tensor,
+        _b: &Tensor,
+        _out: Option<&Tensor>,
+        _alpha: Option<f32>,
+        _beta: Option<f32>,
+        _bias: Option<&Tensor>,
+        _act: Option<CandleActivation>,
+    ) -> Result<Tensor> {
+        candle_core::bail!(
+            "cublaslt batch_matmul on Hip needs S2; unquantized linear falls back to plain GEMM"
+        )
     }
 }

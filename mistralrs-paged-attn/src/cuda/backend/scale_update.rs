@@ -33,9 +33,9 @@ impl candle::InplaceOp2 for KvScaleUpdate {
         v: &candle::CudaStorage,
         _: &candle::Layout,
     ) -> Result<()> {
+        use crate::cuda::role_backend::cudarc::driver::DevicePtr;
+        use crate::cuda::role_backend::CudaStorageSlice;
         use candle::backend::BackendStorage;
-        use candle::cuda_backend::cudarc::driver::DevicePtr;
-        use candle::cuda_backend::CudaStorageSlice;
         let dev = k.device();
         let elem_count = k_layout.shape().elem_count();
 

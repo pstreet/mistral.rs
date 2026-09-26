@@ -1,10 +1,22 @@
 pub mod archive;
 pub mod cpu;
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) mod cuda;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[path = "cuda_hip.rs"]
+pub(crate) mod cuda;
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub mod fast_mmq;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[path = "fast_mmq_hip.rs"]
+pub mod fast_mmq;
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+pub mod fast_mmvq;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[path = "fast_mmvq_hip.rs"]
 pub mod fast_mmvq;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 mod ffi;

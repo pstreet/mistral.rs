@@ -2,12 +2,15 @@ use std::{collections::HashMap, iter::zip, mem::size_of, sync::Arc};
 
 use crate::cuda::backend::{slice_ptr, slice_ptr_on_stream};
 use crate::cuda::ffi::{copy_blocks_bf16, copy_blocks_f16, copy_blocks_f32, copy_blocks_u8};
+use crate::cuda::role_backend::cudarc::driver::sys::CUstreamCaptureStatus;
+use crate::cuda::role_backend::cudarc::driver::CudaSlice;
+use crate::cuda::role_backend::cudarc::driver::CudaStream;
+use crate::cuda::role_backend::CudaStorageSlice;
 use candle_core::backend::BackendDevice;
-use candle_core::cuda_backend::cudarc::driver::sys::CUstreamCaptureStatus;
-use candle_core::cuda_backend::cudarc::driver::CudaStream;
-use candle_core::cuda_backend::CudaStorageSlice;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use candle_core::hip_backend::CudaStorage as HipStorage;
 use candle_core::Result;
-use candle_core::{cuda_backend::cudarc::driver::CudaSlice, Device, Storage, Tensor};
+use candle_core::{Device, Storage, Tensor};
 
 fn ensure_allocation_stream<T>(
     slice: &CudaSlice<T>,
@@ -44,9 +47,9 @@ pub fn copy_blocks(
     }
 
     let cache_dev = key_caches[0].device();
-    let Device::Cuda(dev) = cache_dev else {
-        candle_core::bail!("copy_blocks requires CUDA caches")
-    };
+    let dev = cache_dev
+        .as_role_device()
+        .map_err(|_| candle_core::Error::msg("copy_blocks requires CUDA caches"))?;
     let stream = dev.cuda_stream();
     let capture_status = stream
         .capture_status()
@@ -69,11 +72,12 @@ pub fn copy_blocks(
     value_cache_ptrs.reserve_exact(num_layers as usize);
 
     for (layer, (key_cache, value_cache)) in zip(&key_caches, &value_caches).enumerate() {
-        let (Device::Cuda(key_dev), Device::Cuda(value_dev)) =
-            (key_cache.device(), value_cache.device())
-        else {
-            candle_core::bail!("copy_blocks cache layer {layer} is not on CUDA");
-        };
+        let key_dev = key_cache.device().as_role_device().map_err(|_| {
+            candle_core::Error::msg(format!("copy_blocks cache layer {layer} is not on CUDA"))
+        })?;
+        let value_dev = value_cache.device().as_role_device().map_err(|_| {
+            candle_core::Error::msg(format!("copy_blocks cache layer {layer} is not on CUDA"))
+        })?;
         if !cache_dev.same_device(key_cache.device())
             || !cache_dev.same_device(value_cache.device())
         {
@@ -127,12 +131,12 @@ pub fn copy_blocks(
     for (layer, ((key_storage, key_layout), (value_storage, value_layout))) in
         zip(&key_storage_layouts, &value_storage_layouts).enumerate()
     {
-        let Storage::Cuda(key_storage) = &**key_storage else {
-            unreachable!()
-        };
-        let Storage::Cuda(value_storage) = &**value_storage else {
-            unreachable!()
-        };
+        let key_storage = key_storage
+            .as_role_storage()
+            .expect("copy_blocks cache must hold role storage");
+        let value_storage = value_storage
+            .as_role_storage()
+            .expect("copy_blocks cache must hold role storage");
 
         let (key_ptr, value_ptr, key_guard, value_guard) =
             match (&key_storage.slice, &value_storage.slice) {
@@ -270,6 +274,7 @@ pub unsafe fn swap_blocks(
 ) -> Result<()> {
     let block_size_in_bytes = src.dtype().size_in_bytes() * src.dims()[0];
     match (src.device(), dst.device()) {
+        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
         (Device::Cuda(src_dev), Device::Cuda(dst_dev)) => {
             if src_dev.location() != dst_dev.location() {
                 candle_core::bail!("Tensors must be on the same device to copy, got locations {:?} (src) and {:?} (dst).", src_dev.location(), dst_dev.location());
@@ -330,6 +335,68 @@ pub unsafe fn swap_blocks(
                 src_dev.memcpy_dtod(&src_slice, &mut dst_slice)?;
             }
         }
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        (Device::Hip(src_dev), Device::Hip(dst_dev)) => {
+            if src_dev.location() != dst_dev.location() {
+                candle_core::bail!("Tensors must be on the same device to copy, got locations {:?} (src) and {:?} (dst).", src_dev.location(), dst_dev.location());
+            }
+            let (src_storage, src_layout) = src.storage_and_layout();
+            let (dst_storage, dst_layout) = dst.storage_and_layout();
+            assert!(matches!(&*src_storage, Storage::Hip(_)));
+            assert!(matches!(&*dst_storage, Storage::Hip(_)));
+            let Storage::Hip(src_storage) = &*src_storage else {
+                unreachable!()
+            };
+            let Storage::Hip(dst_storage) = &*dst_storage else {
+                unreachable!()
+            };
+            let (src_ptr, dst_ptr) = match (&src_storage.slice, &dst_storage.slice) {
+                (CudaStorageSlice::BF16(slice_src), CudaStorageSlice::BF16(slice_dst)) => {
+                    let (ptr_src, _src_guard) = slice_ptr(slice_src, src_layout.start_offset());
+                    let (ptr_dst, _dst_guard) = slice_ptr(slice_dst, dst_layout.start_offset());
+                    (ptr_src, ptr_dst)
+                }
+                (CudaStorageSlice::F16(slice_src), CudaStorageSlice::F16(slice_dst)) => {
+                    let (ptr_src, _src_guard) = slice_ptr(slice_src, src_layout.start_offset());
+                    let (ptr_dst, _dst_guard) = slice_ptr(slice_dst, dst_layout.start_offset());
+                    (ptr_src, ptr_dst)
+                }
+                (CudaStorageSlice::F32(slice_src), CudaStorageSlice::F32(slice_dst)) => {
+                    let (ptr_src, _src_guard) = slice_ptr(slice_src, src_layout.start_offset());
+                    let (ptr_dst, _dst_guard) = slice_ptr(slice_dst, dst_layout.start_offset());
+                    (ptr_src, ptr_dst)
+                }
+                (CudaStorageSlice::F8E4M3(slice_src), CudaStorageSlice::F8E4M3(slice_dst)) => {
+                    let (ptr_src, _src_guard) = slice_ptr(slice_src, src_layout.start_offset());
+                    let (ptr_dst, _dst_guard) = slice_ptr(slice_dst, dst_layout.start_offset());
+                    (ptr_src, ptr_dst)
+                }
+                _ => {
+                    candle_core::bail!(
+                        "only f32, f16, bf16 and f8e4m3 input data types are supported"
+                    )
+                }
+            };
+
+            for (src_block_number, dst_block_number) in block_mapping {
+                let src_offset: u64 = (src_block_number * block_size_in_bytes).try_into().unwrap();
+                let dst_offset: u64 = (dst_block_number * block_size_in_bytes).try_into().unwrap();
+                // u8s because we copy by bytes
+                let src_slice: CudaSlice<u8> = unsafe {
+                    src_dev
+                        .cuda_stream()
+                        .upgrade_device_ptr(src_ptr + src_offset, block_size_in_bytes)
+                };
+                let mut dst_slice = unsafe {
+                    dst_dev
+                        .cuda_stream()
+                        .upgrade_device_ptr(dst_ptr + dst_offset, block_size_in_bytes)
+                };
+
+                src_dev.memcpy_dtod(&src_slice, &mut dst_slice)?;
+            }
+        }
+        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
         (Device::Cpu, Device::Cuda(dst_dev)) => {
             let (src_storage, _src_layout) = src.storage_and_layout();
             let (dst_storage, dst_layout) = dst.storage_and_layout();
@@ -339,6 +406,40 @@ pub unsafe fn swap_blocks(
                 unreachable!()
             };
             let Storage::Cuda(dst_storage) = &*dst_storage else {
+                unreachable!()
+            };
+            let (dst_ptr, _guard_dst) = slice_ptr(
+                dst_storage.as_cuda_slice::<u8>()?,
+                dst_layout.start_offset(),
+            );
+            let src_slice = src_storage.as_slice::<u8>()?;
+
+            for (src_block_number, dst_block_number) in block_mapping {
+                let src_offset = src_block_number * block_size_in_bytes;
+                let dst_offset: u64 = (dst_block_number * block_size_in_bytes).try_into().unwrap();
+                // u8s because we copy by bytes
+                let mut dst_slice: CudaSlice<u8> = unsafe {
+                    dst_dev
+                        .cuda_stream()
+                        .upgrade_device_ptr(dst_ptr + dst_offset, block_size_in_bytes)
+                };
+
+                dst_dev.memcpy_htod(
+                    &src_slice[src_offset..src_offset + block_size_in_bytes],
+                    &mut dst_slice,
+                )?;
+            }
+        }
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        (Device::Cpu, Device::Hip(dst_dev)) => {
+            let (src_storage, _src_layout) = src.storage_and_layout();
+            let (dst_storage, dst_layout) = dst.storage_and_layout();
+            assert!(matches!(&*src_storage, Storage::Cpu(_)));
+            assert!(matches!(&*dst_storage, Storage::Hip(_)));
+            let Storage::Cpu(src_storage) = &*src_storage else {
+                unreachable!()
+            };
+            let Storage::Hip(dst_storage) = &*dst_storage else {
                 unreachable!()
             };
             let (dst_ptr, _guard_dst) = slice_ptr(
@@ -433,9 +534,9 @@ mod tests {
         let Ok(device) = Device::new_cuda(0) else {
             return Ok(());
         };
-        let Device::Cuda(dev) = &device else {
-            unreachable!()
-        };
+        let dev = device
+            .as_role_device()
+            .expect("test device must be the role device");
         let stream = dev.cuda_stream();
         let alternate_stream = stream
             .context()
@@ -445,8 +546,11 @@ mod tests {
         let key_slice = alternate_stream
             .clone_htod(&(0..16).map(|value| value as f32).collect::<Vec<_>>())
             .map_err(|error| candle_core::Error::Cuda(Box::new(error)))?;
-        let key_storage = candle_core::CudaStorage::wrap_cuda_slice(key_slice, dev.clone());
+        let key_storage = candle_core::role::RoleStorage::wrap_cuda_slice(key_slice, dev.clone());
+        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
         let mut key = Tensor::from((Storage::Cuda(key_storage), (4, 4)));
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        let mut key = Tensor::from((Storage::Hip(key_storage), (4, 4)));
         let mut value = Tensor::zeros((4, 4), candle_core::DType::F32, &device)?;
         let mapping = HashMap::from([(0, vec![1])]);
 

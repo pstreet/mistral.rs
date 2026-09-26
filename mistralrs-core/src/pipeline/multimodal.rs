@@ -683,7 +683,7 @@ impl Loader for MultimodalLoader {
         };
         #[cfg(any(feature = "cuda", feature = "rocm"))]
         for device in &available_devices {
-            if let Device::Cuda(dev) = device {
+            if let Ok(dev) = device.as_role_device() {
                 unsafe { dev.disable_event_tracking() };
             }
         }
@@ -2313,9 +2313,10 @@ impl MultimodalPipeline {
         if speculative {
             state.prepare_spec_state_admission_for_key(&key);
         }
-        let Device::Cuda(cuda_device) = step.input_ids.device() else {
-            candle_core::bail!("CUDA graph decode expected CUDA input ids");
-        };
+        let cuda_device =
+            step.input_ids.device().as_role_device().map_err(|_| {
+                candle_core::Error::msg("CUDA graph decode expected CUDA input ids")
+            })?;
         let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
         let metadata = step
             .metadata

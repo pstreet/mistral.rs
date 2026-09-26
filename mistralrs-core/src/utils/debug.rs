@@ -77,6 +77,8 @@ impl DeviceRepr for Device {
             DeviceLocation::Cpu => "cpu".to_string(),
             DeviceLocation::Cuda { gpu_id } => format!("cuda[{gpu_id}]"),
             DeviceLocation::Metal { gpu_id } => format!("metal[{gpu_id}]"),
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            DeviceLocation::Hip { gpu_id } => format!("hip[{gpu_id}]"),
         }
     }
 }

@@ -1,5 +1,13 @@
 pub const USE_FP8: bool = cfg!(has_fp8);
 
+/// Role backend: single-vendor builds use `cuda_backend` (bound to the
+/// compiled vendor); dual builds use `hip_backend` (all C kernels here are
+/// hipcc-built, so this crate serves the AMD role).
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+pub use candle_core::cuda_backend as role_backend;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub use candle_core::hip_backend as role_backend;
+
 mod backend;
 mod ffi;
 

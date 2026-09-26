@@ -71,7 +71,7 @@ pub(crate) const FLASH_ATTN_NATIVE_MAX_GQA_GROUP: usize = 8;
 #[cfg(any(
     feature = "flash-attn",
     feature = "flash-attn-v3",
-    all(feature = "cuda", target_family = "unix")
+    all(feature = "cuda", not(feature = "rocm"), target_family = "unix")
 ))]
 pub(crate) fn sliding_window_left(sliding_window: Option<usize>) -> Option<usize> {
     sliding_window.map(|window| window.saturating_sub(1))
@@ -769,7 +769,7 @@ mod tests {
     #[cfg(any(
         feature = "flash-attn",
         feature = "flash-attn-v3",
-        all(feature = "cuda", target_family = "unix")
+        all(feature = "cuda", not(feature = "rocm"), target_family = "unix")
     ))]
     #[test]
     fn sliding_window_capacity_converts_to_left_distance() {

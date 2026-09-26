@@ -60,6 +60,7 @@ cutile = [
     "cuda",
     "dep:cutile",
 ]
+"cuda+rocm" = ["cuda", "rocm", "candle-core/cuda+rocm"]
 nccl = ["cuda", "candle-core/nccl"]
 metal = [
     "candle-core/metal",

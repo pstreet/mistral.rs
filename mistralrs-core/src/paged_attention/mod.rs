@@ -17,7 +17,7 @@ pub mod kv_cache_manager;
 mod layers;
 pub(crate) mod mm_prefix;
 #[cfg(any(
-    all(feature = "cuda", target_family = "unix"),
+    all(feature = "cuda", not(feature = "rocm"), target_family = "unix"),
     feature = "rocm",
     feature = "metal"
 ))]

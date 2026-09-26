@@ -663,7 +663,10 @@ pub mod text_models_inputs_processor {
         pub causal: bool,
         pub(crate) packed: bool,
         #[cfg_attr(
-            not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")),
+            not(any(
+                all(feature = "cuda", not(feature = "rocm"), target_family = "unix"),
+                feature = "metal"
+            )),
             allow(dead_code)
         )]
         pub(crate) varlen_segment_lens: Option<Vec<usize>>,

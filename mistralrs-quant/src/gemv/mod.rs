@@ -201,6 +201,7 @@ pub fn should_use_gemv(_x: &candle_core::Tensor, _w: &candle_core::Tensor) -> bo
 /// # Returns
 /// * Output tensor [B, M]
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 pub fn gemv(x: &Tensor, w: &Tensor, bias: Option<&Tensor>) -> Result<Tensor> {
     let dev = get_cuda_device(x)?;
 
@@ -255,9 +256,16 @@ pub fn gemv(x: &Tensor, w: &Tensor, bias: Option<&Tensor>) -> Result<Tensor> {
         dt => candle_core::bail!("GEMV unsupported dtype: {:?}", dt),
     }
 }
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub fn gemv(_x: &Tensor, _w: &Tensor, _bias: Option<&Tensor>) -> Result<Tensor> {
+    candle_core::bail!(
+        "gemv on the Hip backend needs S2; unquantized linear falls back to plain GEMM"
+    )
+}
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(clippy::too_many_arguments)]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 fn gemv_bf16(
     dev: &CudaDevice,
     x: &Tensor,
@@ -329,6 +337,7 @@ fn gemv_bf16(
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(clippy::too_many_arguments)]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 fn gemv_f16(
     dev: &CudaDevice,
     x: &Tensor,
@@ -397,6 +406,7 @@ fn gemv_f16(
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 #[allow(clippy::too_many_arguments)]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 fn gemv_f32(
     dev: &CudaDevice,
     x: &Tensor,

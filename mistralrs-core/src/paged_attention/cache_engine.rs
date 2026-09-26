@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::block_scales::{register_block_scales, BlockQuantScales};
 use super::config::{KvCacheLayout, ModelConfigLike};
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
 use crate::flashinfer::{register_fa3_prefill_caches, Fa3PrefillWorkspaceRegistration};
 
 #[cfg(all(any(feature = "cuda", feature = "rocm"), target_family = "unix"))]
@@ -222,7 +222,7 @@ impl CacheConfig {
 pub type KVCache = (Tensor, Tensor);
 
 pub struct CacheEngine {
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
     _fa3_prefill_workspaces: Fa3PrefillWorkspaceRegistration,
     fa3_prefill_num_sm_by_layer: Vec<Option<usize>>,
     gpu_cache: Arc<Mutex<Vec<KVCache>>>,
@@ -293,15 +293,15 @@ impl CacheEngine {
                 }
             }
         }
-        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
         let fa3_prefill_workspaces = register_fa3_prefill_caches(&gpu_cache)?;
-        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
         let fa3_prefill_num_sm_by_layer =
             Self::fa3_prefill_cache_coverage(model_config, cache_config, &gpu_cache)?;
-        #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+        #[cfg(not(all(feature = "cuda", not(feature = "rocm"), target_family = "unix")))]
         let fa3_prefill_num_sm_by_layer = vec![None; model_config.num_layers()];
         Ok(Self {
-            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
             _fa3_prefill_workspaces: fa3_prefill_workspaces,
             fa3_prefill_num_sm_by_layer,
             gpu_cache: Arc::new(Mutex::new(gpu_cache)),
@@ -732,7 +732,7 @@ impl CacheEngine {
         Ok((gpu_cache, q8_scales))
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
     fn fa3_prefill_cache_coverage(
         model_config: &dyn ModelConfigLike,
         cache_config: &CacheConfig,
@@ -970,7 +970,7 @@ mod tests {
         assert!(err.contains("only supported on CUDA"), "{err}");
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
     #[test]
     fn q8_0_validates_standard_layout_on_cuda() -> Result<()> {
         let Ok(device) = Device::new_cuda(0) else {
@@ -1015,7 +1015,7 @@ mod tests {
         assert!(err.contains("not supported for MLA layer 0"));
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
     #[test]
     fn fa3_prefill_coverage_requires_compatible_registered_caches() -> Result<()> {
         let Ok(device) = Device::new_cuda(0) else {

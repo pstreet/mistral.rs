@@ -357,8 +357,10 @@ fn main() -> Result<()> {
     println!("cargo::rustc-check-cfg=cfg(has_fa3_fp8_paged)");
 
     // Exactly one backend block compiles; each yields the build result as the
-    // function's return value.
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    // function's return value. In a dual cuda+rocm build the rocm (hipcc)
+    // block wins: both blocks link the same `mistralrspagedattention`
+    // archive, so compiling both would collide.
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
     {
         build_cuda()
     }

@@ -32,6 +32,10 @@ fn has_cublaslt_batch_layout(x: &Tensor) -> bool {
 }
 
 fn supports_cublaslt_batch_matmul(a: &Tensor, w: &Tensor) -> bool {
+    // Dual builds serve GEMMs through the plain path (no Lt machinery).
+    if cfg!(all(feature = "cuda", feature = "rocm")) {
+        return false;
+    }
     has_cublaslt_batch_layout(a) && has_cublaslt_batch_layout(w)
 }
 
@@ -186,6 +190,11 @@ impl QuantMethod for UnquantLinear {
                     let matmul_result = a.matmul(&w.t()?)?;
                     matmul_result.broadcast_add(&b)
                 }
+                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                DeviceLocation::Hip { .. } => {
+                    let matmul_result = a.matmul(&w.t()?)?;
+                    matmul_result.broadcast_add(&b)
+                }
                 DeviceLocation::Cpu => {
                     #[cfg(feature = "accelerate")]
                     {
@@ -222,6 +231,8 @@ impl QuantMethod for UnquantLinear {
                     }
                 }
                 DeviceLocation::Metal { .. } => a.matmul(&w.t()?),
+                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                DeviceLocation::Hip { .. } => a.matmul(&w.t()?),
                 DeviceLocation::Cpu => {
                     #[cfg(feature = "accelerate")]
                     {

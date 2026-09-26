@@ -295,7 +295,7 @@ macro_rules! serde_default_fn {
 
 /// `true` if built with CUDA (requires Unix) /ROCm/Metal
 #[cfg(any(
-    all(feature = "cuda", target_family = "unix"),
+    all(feature = "cuda", not(feature = "rocm"), target_family = "unix"),
     feature = "rocm",
     feature = "metal"
 ))]
@@ -305,7 +305,7 @@ pub const fn paged_attn_supported() -> bool {
 
 /// `true` if built with CUDA (requires Unix) /ROCm/Metal
 #[cfg(not(any(
-    all(feature = "cuda", target_family = "unix"),
+    all(feature = "cuda", not(feature = "rocm"), target_family = "unix"),
     feature = "rocm",
     feature = "metal"
 )))]

@@ -34,6 +34,10 @@ use super::ffi::{
 };
 #[cfg(feature = "cuda")]
 use super::marlin_ffi::HAVE_MARLIN_KERNELS;
+// The cuda-gated Marlin arm below uses candle's Option::context; the import
+// only resolves where that arm compiles.
+#[cfg(feature = "cuda")]
+use candle_core::Context;
 #[cfg(not(feature = "cuda"))]
 const HAVE_MARLIN_KERNELS: bool = false;
 

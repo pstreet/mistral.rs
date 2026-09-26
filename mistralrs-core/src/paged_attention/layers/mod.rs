@@ -1,18 +1,18 @@
 #[cfg(any(
-    all(feature = "cuda", target_family = "unix"),
+    all(feature = "cuda", not(feature = "rocm"), target_family = "unix"),
     feature = "rocm",
     feature = "metal"
 ))]
 pub mod paged_attention;
 #[cfg(any(
-    all(feature = "cuda", target_family = "unix"),
+    all(feature = "cuda", not(feature = "rocm"), target_family = "unix"),
     feature = "rocm",
     feature = "metal"
 ))]
 pub use paged_attention::PagedAttention;
 
 #[cfg(not(any(
-    all(feature = "cuda", target_family = "unix"),
+    all(feature = "cuda", not(feature = "rocm"), target_family = "unix"),
     feature = "rocm",
     feature = "metal"
 )))]
@@ -110,7 +110,7 @@ pub mod paged_attention {
 }
 
 #[cfg(not(any(
-    all(feature = "cuda", target_family = "unix"),
+    all(feature = "cuda", not(feature = "rocm"), target_family = "unix"),
     feature = "rocm",
     feature = "metal"
 )))]

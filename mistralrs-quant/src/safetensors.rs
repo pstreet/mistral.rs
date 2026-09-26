@@ -32,7 +32,7 @@ pub(crate) fn managed_weights_enabled() -> bool {
 // Weight-only upload: route host bytes through managed memory when opted in.
 // Activations and intermediates keep using Tensor::from_slice/from_vec.
 fn tensor_from_host<T: WithDType>(data: &[T], shape: &[usize], device: &Device) -> Result<Tensor> {
-    #[cfg(feature = "rocm")]
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
     if let Device::Cuda(dev) = device {
         if managed_weights_enabled() {
             let storage = dev.storage_from_slice_managed(data)?;
@@ -235,6 +235,24 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
                 device: device.clone(),
             };
             Storage::Cuda(storage)
+        }
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        Device::Hip(device) => {
+            let mut slice = unsafe { device.alloc::<u8>(data.len())? };
+            device.memcpy_htod(data, &mut slice)?;
+
+            let slice = match dtype {
+                DType::F6E2M3 => candle_core::hip_backend::CudaStorageSlice::F6E2M3(slice),
+                DType::F6E3M2 => candle_core::hip_backend::CudaStorageSlice::F6E3M2(slice),
+                DType::F4 => candle_core::hip_backend::CudaStorageSlice::F4(slice),
+                DType::F8E8M0 => candle_core::hip_backend::CudaStorageSlice::F8E8M0(slice),
+                _ => unreachable!(),
+            };
+            let storage = candle_core::hip_backend::CudaStorage {
+                slice,
+                device: device.clone(),
+            };
+            Storage::Hip(storage)
         }
         #[cfg(not(feature = "cuda"))]
         Device::Cuda(_) => {

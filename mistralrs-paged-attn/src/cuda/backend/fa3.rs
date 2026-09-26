@@ -114,8 +114,8 @@ pub fn fa3_prepare_paged_metadata(
     use crate::cuda::ffi::{
         fa3_fp8_decode_prepare, fa3_fp8_paged_materialize_metadata, Fa3Fp8DecodeScheduleParams,
     };
+    use crate::cuda::role_backend::CudaStorageSlice;
     use candle_core::backend::BackendStorage;
-    use candle_core::cuda_backend::CudaStorageSlice;
     use candle_core::Storage;
 
     if schedule.batch_size == 0
@@ -977,7 +977,7 @@ mod tests {
     #[cfg(has_fa3_fp8_paged)]
     #[test]
     fn per_sequence_metadata_matches_decode_tail_attention() -> Result<()> {
-        use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
+        use crate::cuda::role_backend::cudarc::driver::sys::CUdevice_attribute;
 
         if !crate::cuda::USE_FP8 {
             return Ok(());
@@ -1131,7 +1131,7 @@ mod tests {
     #[cfg(has_fa3_fp8_paged)]
     #[test]
     fn direct_fp8_paged_prefill_matches_scalar_causal_gqa() -> Result<()> {
-        use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
+        use crate::cuda::role_backend::cudarc::driver::sys::CUdevice_attribute;
 
         if !crate::cuda::USE_FP8 {
             return Ok(());

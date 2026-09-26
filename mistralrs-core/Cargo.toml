@@ -133,6 +133,13 @@ rocm = [
     "mistralrs-quant/rocm",
     "mistralrs-paged-attn/rocm",
 ]
+"cuda+rocm" = [
+    "cuda",
+    "rocm",
+    "candle-core/cuda+rocm",
+    "mistralrs-quant/cuda+rocm",
+    "mistralrs-paged-attn/cuda+rocm",
+]
 cudnn = ["candle-core/cudnn"]
 cutile = ["cuda", "mistralrs-quant/cutile"]
 metal = [

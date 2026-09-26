@@ -888,7 +888,7 @@ impl CudaTokenBatchSubmission {
 
     pub(crate) fn wait_on(
         &self,
-        stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+        stream: &Arc<candle_core::role::backend::cudarc::driver::CudaStream>,
     ) -> Result<()> {
         match &self.inner {
             CudaTokenBatchSubmissionInner::Top1(inner) => inner.wait_on(stream),
@@ -898,7 +898,7 @@ impl CudaTokenBatchSubmission {
 
     pub(crate) fn release_after(
         &self,
-        stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+        stream: &Arc<candle_core::role::backend::cudarc::driver::CudaStream>,
     ) -> Result<()> {
         match &self.inner {
             CudaTokenBatchSubmissionInner::Top1(inner) => inner.release_after(stream),
