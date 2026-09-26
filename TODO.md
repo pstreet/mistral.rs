@@ -432,14 +432,64 @@ P3 = polish, Deferred = do not do on RDNA.
       8/8, quant 295/295, fmt/clippy/check green both repos both
       feature sets. candle should_use_mmq now takes GpuArch (still
       false pending the kernel resync).
-- [ ] ~S CUDA+HIP coexistence spike - the decision gate for
-      multi-backend. One toy binary linking BOTH cudarc (NVIDIA) and
-      cudarc-hip (AMD), running a kernel on each vendor in one
-      process. Risk: HIP's cu* symbol shims colliding with real
-      CUDA. Clean result -> multi-backend is plumbing; dirty ->
-      build HIP without the shims or fall back to per-vendor
-      processes. Cheap and decisive: run this BEFORE committing to
-      the Stage-2 re-architecture below.
+- [x] 2026-09-26 CUDA+HIP coexistence spike - the decision gate for
+      multi-backend. VERDICT: GO - coexistence is clean; multi-backend
+      is plumbing. Executed as a throwaway crate (cudarc =0.19.8 with
+      candle's exact feature set + the fork's cudarc-hip, one binary,
+      interleaved vendor calls) after installing CUDA 13.3 toolkit
+      (nvcc for build.rs version detection only - cudarc 0.19
+      compiles kernels via runtime NVRTC; stubs for link; no NVIDIA
+      GPU or driver needed). Full evidence matrix, both of cudarc's
+      vendor-binding modes:
+      A) dynamic-linking (candle's current mode): links
+         libcuda.so.1 + libamdhip64.so.7 side by side. With the
+         toolkit stub as libcuda.so.1: PASS - cu* dispatch to the
+         NVIDIA stub (CUDA_ERROR_STUB_LIBRARY, NOT into HIP), AMD
+         side does real work (name/gcnArchName/4096-u32 htod-dtoh
+         roundtrip), interleaved retries clean. WITHOUT any libcuda:
+         the loader refuses to start the binary (DT_NEEDED).
+      B) dynamic-loading: NO libcuda in DT_NEEDED at all - NVIDIA
+         becomes a runtime dlopen. Same PASS with the stub present.
+         Without libcuda: binary runs, but cudarc PANICS on the
+         first driver call (not graceful) - must gate on
+         cudarc::driver::sys::is_culib_present() (exists upstream
+         in 0.19.8) first.
+      Interposition: this stack's libamdhip64 exports ZERO cu*
+      symbols (TheRock ships no CUDA-driver shims), so no global
+      namespace overlap; and mode B dlopens via libloading with
+      RTLD_LOCAL by construction, immune even on stacks that DO
+      ship a ROCm libcuda.so.1 compat shim.
+      DESIGN CONSEQUENCE for Stage 2: NVIDIA side must use
+      dynamic-loading + is_culib_present() gate (AMD-only boxes
+      then need zero NVIDIA bits and never fail to start). Per-
+      vendor processes NOT needed. CPU-ONLY CASE (checked after
+      the matrix): the HIP side has the same hazard mode A had
+      for NVIDIA - libamdhip64.so.7 is a hard DT_NEEDED, so on a
+      box with no HIP runtime the binary cannot even START (it
+      only ran under a stripped env here because the TheRock
+      lib dir is in the system loader cache). And the ungated
+      NVIDIA dlopen PANICS on a GPU-less box - the probe gate is
+      mandatory, not hygiene. CONSEQUENCE: the HIP side gets the
+      symmetric treatment - port cudarc's libloading pattern
+      into cudarc-hip (dynamic-loading mode + is_hiplib_present;
+      see the new task below) so one binary starts anywhere
+      (CPU-only, AMD-only, NVIDIA-only, mixed), probes both
+      runtimes, and activates what it finds; candle's CPU backend
+      is already first-class so per-model "cpu" assignment needs
+      no extra work.
+      Runtime half (real NVIDIA GPU) remains unverified on this
+      box - hardware follow-up, but the link/load/dispatch risks
+      are all answered.
+- [ ] ~M cudarc-hip dynamic-loading mode (Stage 2 enabler, from the
+      coexistence spike): port upstream cudarc's libloading pattern into
+      the fork's cudarc-hip - a `dynamic-loading` cargo feature that
+      resolves every sys binding through a OnceLock<libloading::Library>
+      (RTLD_LOCAL, so symmetric interposition immunity), plus an
+      `is_hiplib_present()` probe mirroring cudarc::driver::sys's.
+      Mechanical mirror of the proven pattern across cudarc-hip's 5 sys
+      modules (driver, cublas, cublaslt, curand, nvrtc); dynamic-linking
+      stays the default so prod builds are unchanged. Do this BEFORE
+      Stage 2 so the multi-backend binary starts on CPU-only boxes.
 - [ ] ~L multi-backend runtime: CPU + NVIDIA + AMD + Intel in ONE
       process, per-model device assignment. Design agreed 2026-09-26;
       precedent = the ggml/llama.cpp architecture (separate backend
