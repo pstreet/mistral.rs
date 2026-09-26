@@ -2025,8 +2025,16 @@ pub fn try_fused_quantized_ffn(
         return Ok(None);
     }
     if gate_q.dtype() != up_q.dtype()
-        || !gguf::fast_mmq::batch_supported(gate_q.dtype(), flat_batch)
-        || !gguf::fast_mmq::batch_supported(down_q.dtype(), flat_batch)
+        || !gguf::fast_mmq::batch_supported(
+            gate_q.dtype(),
+            flat_batch,
+            gguf::fast_mmq::device_cc(&gate_q.device())?,
+        )
+        || !gguf::fast_mmq::batch_supported(
+            down_q.dtype(),
+            flat_batch,
+            gguf::fast_mmq::device_cc(&down_q.device())?,
+        )
     {
         return Ok(None);
     }
@@ -2117,7 +2125,11 @@ pub fn try_fused_quantized_gate_up(
         if !fast_mmq_allowed() {
             return Ok(None);
         }
-        if !gguf::fast_mmq::batch_supported(gate_q.dtype(), flat_batch) {
+        if !gguf::fast_mmq::batch_supported(
+            gate_q.dtype(),
+            flat_batch,
+            gguf::fast_mmq::device_cc(&gate_q.device())?,
+        ) {
             return Ok(None);
         }
         Ok(Some(gguf::fast_mmq::fused_glu(
@@ -2236,7 +2248,11 @@ pub fn try_fused_quantized_qkv(
         if !fast_mmq_allowed() {
             return Ok(None);
         }
-        if !gguf::fast_mmq::batch_supported(dtype, flat_batch) {
+        if !gguf::fast_mmq::batch_supported(
+            dtype,
+            flat_batch,
+            gguf::fast_mmq::device_cc(&q_q.device())?,
+        ) {
             return Ok(None);
         }
         Ok(Some(gguf::fast_mmq::fused_qkv(&q_q, &k_q, &v_q, xs)?))

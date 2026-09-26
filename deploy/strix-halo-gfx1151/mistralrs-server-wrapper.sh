@@ -49,14 +49,16 @@ export MISTRALRS_CUDA_GRAPHS=1
 export ROCBLAS_USE_HIPBLASLT=1
 
 # Large-batch quantized GEMMs: fast_mmq on by default; the kernel dispatch is
-# per-dtype since 2026-09-25 - Q6K hands batches above candle's dequant-GEMM
-# row threshold (CANDLE_DMM_F16_MIN, default 256) to the dequant-to-F16 +
-# hipBLASLt path (MMQ Q6K plateaus ~11 effective TFLOPS on gfx1151 vs ~30
-# dequantized; 27B dense 18k prefill 426 vs 240 T/s) while keeping MMQ below
-# it (dequant overhead dominates small batches: 199 vs 82 T/s at ~112 rows)
-# and for Q4K/Q5K/Q8_0 at every batch (35B: +15% short, tie long). No env
-# vars needed; MISTRALRS_NO_FAST_MMQ (mistral.rs dispatch) and
-# CANDLE_NO_FAST_MMQ (candle's own fast path) remain as overrides.
+# per-dtype AND per-arch - on this machine (gfx1151, RDNA3.5) Q6K and Q2K hand
+# batches above candle's dequant-GEMM row threshold (CANDLE_DMM_F16_MIN,
+# default 256) to the dequant-to-F16 + hipBLASLt path (MMQ Q6K plateaus ~11
+# effective TFLOPS here vs ~30 dequantized; Q2K is pathological at every
+# batch), while keeping MMQ below it (dequant overhead dominates small
+# batches: 199 vs 82 T/s at ~112 rows) and for other dtypes at every batch
+# (35B: +15% short, tie long). Unmeasured architectures keep MMQ everywhere;
+# mistralrs-quant's mmq_dtype_bench is the harness for extending the table.
+# MISTRALRS_NO_FAST_MMQ (mistral.rs dispatch) and CANDLE_NO_FAST_MMQ
+# (candle's own fast path) remain as overrides.
 # Decode (b*m <= 8) uses the fused MMVQ kernels either way.
 # CANDLE_LT_COMPUTE removed 2026-09-25: an 80-shape hipBLASLt sweep
 # (candle-core example lt_probe; b=1 m 256-8192 k/n 2048-16384, odd shapes,

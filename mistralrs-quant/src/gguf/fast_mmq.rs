@@ -66,14 +66,38 @@ pub fn supports(dtype: GgmlDType) -> bool {
     )
 }
 
-// Q6K MMQ plateaus ~11 effective TFLOPS on gfx1151 while dequant-to-F16 +
-// hipBLASLt reaches ~30; above candle's dequant-GEMM row threshold (resolved
-// from CANDLE_DMM_F16_MIN), hand Q6K off so it lands on that path. Below it
-// MMQ wins (dequant overhead dominates small batches).
-pub fn batch_supported(dtype: GgmlDType, flat_batch: usize) -> bool {
-    supports(dtype)
-        && !(dtype == GgmlDType::Q6K
-            && flat_batch > candle_core::quantized::cuda::dequant_f16_min_rows())
+// Per-arch MMQ handoff: batches above the returned row count go to candle's
+// dequantize GEMM. gfx1151 (RDNA3/3.5, cc major 11 - the AMD_WMMA path)
+// measured 2026-09-25: Q6K MMQ ~14 TFLOPS vs ~28 dequant at 4096 rows (its
+// 16-value scale groups force K=16 wmma tiles with a per-16-value 3-mul
+// scalar fixup), Q2K pathological (~0.7) at every batch. Other dtypes were
+// within noise at small/mid batches and only modestly behind at 2048+ rows,
+// so they stay on MMQ. Unlisted archs/dtypes keep MMQ at every batch (the
+// llama.cpp default) - extend only after measuring; tests::mmq_dtype_bench
+// is the harness.
+pub fn dequant_handoff_rows(dtype: GgmlDType, cc: i32) -> Option<usize> {
+    if cc / 100 == 11 && matches!(dtype, GgmlDType::Q2K | GgmlDType::Q6K) {
+        Some(candle_core::quantized::cuda::dequant_f16_min_rows())
+    } else {
+        None
+    }
+}
+
+pub fn batch_supported(dtype: GgmlDType, flat_batch: usize, cc: i32) -> bool {
+    if !supports(dtype) {
+        return false;
+    }
+    match dequant_handoff_rows(dtype, cc) {
+        Some(max) => flat_batch <= max,
+        None => true,
+    }
+}
+
+pub fn device_cc(device: &Device) -> Result<i32> {
+    match device {
+        Device::Cuda(dev) => Ok(get_device_info(dev).cc),
+        _ => candle_core::bail!("fast_mmq device_cc requires a CUDA device"),
+    }
 }
 
 /// qk (block quantization size) per dtype.
@@ -1717,5 +1741,107 @@ mod tests {
             assert_close(&actual, &expected)?;
         }
         Ok(())
+    }
+
+    #[test]
+    #[ignore]
+    fn mmq_dtype_bench() -> Result<()> {
+        use candle_core::quantized::QMatMul;
+        use candle_core::Module as _;
+
+        let dev = Device::new_cuda(0)?;
+        let cc = device_cc(&dev)?;
+        let (n, k) = (4096usize, 4096usize);
+        let ms = [4usize, 8, 128, 256, 512, 1024, 2048, 4096];
+        let dtypes = [
+            GgmlDType::Q2K,
+            GgmlDType::Q3K,
+            GgmlDType::Q4K,
+            GgmlDType::Q5K,
+            GgmlDType::Q6K,
+            GgmlDType::Q8_0,
+        ];
+        let w = patterned((n, k), 11, 1.0)?;
+        println!(
+            "mmq dtype bench: cc={cc} n={n} k={k}, xs bf16; mmq = fast_mmq::plain, \
+             fallback = candle QMatMul (candle mmvq/mmq gates, then dequant GEMM)"
+        );
+        for quant in dtypes {
+            let qt = std::sync::Arc::new(QTensor::quantize_onto(&w, quant, &dev)?);
+            let qmm = QMatMul::from_arc(qt.clone())?;
+            println!("\n{quant:?}:");
+            for &m in &ms {
+                let xs = Tensor::randn(0f32, 1f32, (m, k), &Device::Cpu)?
+                    .to_dtype(DType::BF16)?
+                    .to_device(&dev)?;
+                let t_mmq = bench_time_iters(&dev, 3, 5, || plain(&qt, &xs))?;
+                let t_fb = bench_time_iters(&dev, 3, 5, || qmm.forward(&xs))?;
+                println!(
+                    "  m={m:>5}  mmq {:6.1} TFLOPS ({:7.3} ms)   fallback {:6.1} TFLOPS ({:7.3} ms)",
+                    bench_tflops(m, n, k, t_mmq),
+                    t_mmq * 1000.0,
+                    bench_tflops(m, n, k, t_fb),
+                    t_fb * 1000.0,
+                );
+                if m == 512 || m == 4 {
+                    let w_d = qt.dequantize(&dev)?.to_dtype(DType::F32)?;
+                    let ref_out = xs.to_dtype(DType::F32)?.matmul(&w_d.t()?)?;
+                    let out_mmq = plain(&qt, &xs)?.to_dtype(DType::F32)?;
+                    let out_fb = qmm.forward(&xs)?.to_dtype(DType::F32)?;
+                    let d_mmq = out_mmq
+                        .sub(&ref_out)?
+                        .abs()?
+                        .max_all()?
+                        .to_scalar::<f32>()?;
+                    let d_fb = out_fb.sub(&ref_out)?.abs()?.max_all()?.to_scalar::<f32>()?;
+                    println!(
+                        "    verify: mmq dims={:?} max_diff={d_mmq:.3e}  fallback dims={:?} max_diff={d_fb:.3e}",
+                        out_mmq.dims(),
+                        out_fb.dims(),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn q2k_q6k_hand_off_is_arch_gated() {
+        // gfx1151 (cc 1150, RDNA3/3.5): measured carve-outs active.
+        assert!(batch_supported(GgmlDType::Q8_0, 8, 1150));
+        assert!(batch_supported(GgmlDType::Q4K, 8192, 1150));
+        assert!(batch_supported(GgmlDType::Q5K, 8192, 1150));
+        assert!(batch_supported(GgmlDType::Q3K, 8192, 1150));
+        assert!(batch_supported(GgmlDType::Q2K, 256, 1150));
+        assert!(batch_supported(GgmlDType::Q6K, 256, 1150));
+        assert!(!batch_supported(GgmlDType::Q2K, 257, 1150));
+        assert!(!batch_supported(GgmlDType::Q6K, 257, 1150));
+        // Unmeasured archs keep the MMQ-everywhere default.
+        assert!(batch_supported(GgmlDType::Q6K, 65536, 942));
+        assert!(batch_supported(GgmlDType::Q2K, 65536, 942));
+        assert!(batch_supported(GgmlDType::Q6K, 65536, 1200));
+        assert!(batch_supported(GgmlDType::Q6K, 65536, 1000));
+    }
+
+    fn bench_tflops(m: usize, n: usize, k: usize, secs: f64) -> f64 {
+        2.0 * (m * n * k) as f64 / secs / 1e12
+    }
+
+    fn bench_time_iters<F: FnMut() -> Result<Tensor>>(
+        dev: &Device,
+        warmup: usize,
+        iters: usize,
+        mut f: F,
+    ) -> Result<f64> {
+        for _ in 0..warmup {
+            f()?;
+        }
+        dev.synchronize()?;
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            f()?;
+        }
+        dev.synchronize()?;
+        Ok(start.elapsed().as_secs_f64() / iters as f64)
     }
 }
