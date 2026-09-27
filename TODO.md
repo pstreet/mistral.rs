@@ -675,6 +675,36 @@ P3 = polish, Deferred = do not do on RDNA.
       makes that visible and enforced. NEXT: S2 (QStorage-on-hip
       replacing the stand-ins; also place the multimodal gate),
       then S4 Vulkan.
+      S3c HOT-PLUGGABLE BACKENDS (in progress 2026-09-27): dual binaries
+      must start with no GPU hardware present - every GPU backend
+      runtime-loads via dlopen, probe-gated, CPU always available.
+      PIECES 1+2 DONE in one line: `cuda+rocm` now enables
+      `cudarc-hip/dynamic-loading` (candle-core/Cargo.toml) - cudarc-hip's
+      build.rs already skipped ALL link-lib emissions in that mode, so the
+      same wire drops libamdhip64 + hipblas + hipblaslt + hiprand DT_NEEDED
+      at once. The hipcc static archive links clean without them. Proof:
+      fresh dual test binary has ZERO GPU DT_NEEDED (yesterday's has all
+      four); 5/5 dual tests pass through the dlopen path. Single-vendor
+      rocm keeps dynamic-linking DELIBERATELY (prod behavior unchanged).
+      PIECE 3 DONE: Device::new_cuda/_with_stream and new_hip/_with_stream
+      probe-gate (clean Err naming the missing runtime, never the
+      first-driver-call panic); `crate::cudarc` binds per shape so one gate
+      covers every shape; cuda_is_available() is now runtime-aware (same
+      per-shape binding; link-mode probes report true so single-vendor is
+      unchanged); new hip_is_available() for the dual AMD role. Tests 7/7
+      (cuda-role refuses cleanly without driver + CPU fallback;
+      hip-role gated on probe). B wall hit + DECISION NEEDED: the
+      mistralrs-quant hipcc archive (libmistralrsquant.a) references HIP
+      runtime symbols DIRECTLY from C++ (hipLaunchKernel,
+      __hipPush/PopCallConfiguration, __hipRegisterFatBinary) - dropping
+      its dylib=amdhip64 breaks the dual link, and the fatbin registrar
+      runs in static init so lazy-PLT tricks die at startup. Reverted to
+      keep the tree green. OPTIONS: (B) backend plugin .so (dlopen the
+      quant/GDN archives as a companion shared lib - true hot-plug, big
+      slice); (H) weak-symbol stubs + RTLD_GLOBAL dlopen (surgical but
+      fragile, touches dlopen semantics); (C) accept libamdhip64 DT_NEEDED
+      (binary needs ROCm FILES present, no GPU hardware required -
+      probes still gate all use). Candle side is fully clean regardless.
       S1 DONE 2026-09-26 (candle): kernels twin builds standalone
       (11 PTX, symlink-free, sm_80 fallback GPU-less); dual check
       green alongside default + rocm; 4 dual tests pass (CPU op +

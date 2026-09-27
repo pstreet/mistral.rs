@@ -1304,6 +1304,7 @@ version = "0.11.0"
 dependencies = [
  "float8",
  "half",
+ "libloading 0.9.0",
 ]
 
 [[package]]
