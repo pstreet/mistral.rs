@@ -2307,7 +2307,8 @@ mod tests {
         std::env::remove_var(ENV_MANAGED_WEIGHTS);
     }
 
-    #[cfg(feature = "rocm")]
+    // S2: QStorage-on-hip (managed upload has no Hip path yet).
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
     #[test]
     fn managed_upload_survives_host_release() -> Result<()> {
         let file = write_test_gguf(

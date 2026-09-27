@@ -64,9 +64,11 @@ pub struct Fa3Fp8DecodeParams {
     pub scheduler_metadata_prepared: c_int,
 }
 
-extern "C" {
+use crate::kernel_decl::declare_kernel;
+
+declare_kernel! {
     #[cfg(has_fa3_fp8_paged)]
-    pub fn fa3_fp8_paged_materialize_metadata(
+    fa3_fp8_paged_materialize_metadata(
         paged_kv_indptr: *const c_int,
         paged_kv_indices: *const c_int,
         paged_kv_last_page_len: *const c_int,
@@ -81,16 +83,16 @@ extern "C" {
     ) -> c_int;
 
     #[cfg(has_fa3_fp8_paged)]
-    pub fn fa3_fp8_decode_prepare(
+    fa3_fp8_decode_prepare(
         params: *const Fa3Fp8DecodeScheduleParams,
         stream: CUstream,
     ) -> c_int;
 
     #[cfg(has_fa3_fp8_paged)]
-    pub fn fa3_fp8_decode_run(params: *const Fa3Fp8DecodeParams, stream: CUstream) -> c_int;
+    fa3_fp8_decode_run(params: *const Fa3Fp8DecodeParams, stream: CUstream) -> c_int;
 
     #[cfg(has_fa3_fp8_paged)]
-    pub fn fa3_bf16_to_e4m3_static(
+    fa3_bf16_to_e4m3_static(
         input: *const c_void,
         output: *mut c_void,
         rows: c_int,
@@ -101,7 +103,7 @@ extern "C" {
         stream: CUstream,
     ) -> c_int;
 
-    pub fn reshape_and_cache(
+    reshape_and_cache(
         key: *const c_void,
         value: *const c_void,
         key_cache: *const c_void,
@@ -131,7 +133,7 @@ extern "C" {
     /// fp32 sidecars shaped [num_blocks, num_heads, block_size, head_size/32].
     /// Sides write independently: a masked-off side's payload pointer is
     /// ignored, its scales pointer may be null.
-    pub fn reshape_and_cache_q8(
+    reshape_and_cache_q8(
         key: *const c_void,
         value: *const c_void,
         key_cache: *const c_void,
@@ -158,7 +160,7 @@ extern "C" {
     /// Payload caches are U8 nibble packs; k_scales token-major, v_scales
     /// transposed group-major (same sidecar scheme as Q8_0). Sides write
     /// independently like the Q8 path; residual sidecars may be null.
-    pub fn reshape_and_cache_q4(
+    reshape_and_cache_q4(
         key: *const c_void,
         value: *const c_void,
         key_cache: *const c_void,
@@ -183,7 +185,7 @@ extern "C" {
         write_v: bool,
     );
 
-    pub fn concat_and_cache_mla(
+    concat_and_cache_mla(
         ckv: *const c_void,
         k_pe: *const c_void,
         ckv_cache: *const c_void,
@@ -200,7 +202,7 @@ extern "C" {
     );
 
     #[cfg(not(feature = "rocm"))]
-    pub fn flashinfer_mla_decode(
+    flashinfer_mla_decode(
         q_nope: *const c_void,
         q_pe: *const c_void,
         ckv_cache: *const c_void,
@@ -226,7 +228,7 @@ extern "C" {
     ) -> c_int;
 
     #[cfg(not(feature = "rocm"))]
-    pub fn reshape_and_cache_flashinfer(
+    reshape_and_cache_flashinfer(
         key: *const c_void,
         value: *const c_void,
         key_cache: *const c_void,
@@ -246,7 +248,7 @@ extern "C" {
     );
 
     #[cfg(not(feature = "rocm"))]
-    pub fn flashinfer_decode(
+    flashinfer_decode(
         q: *const c_void,
         key_cache: *const c_void,
         value_cache: *const c_void,
@@ -280,7 +282,7 @@ extern "C" {
     ) -> c_int;
 
     #[cfg(not(feature = "rocm"))]
-    pub fn gather_kv_cache_flashinfer(
+    gather_kv_cache_flashinfer(
         key_cache: *const c_void,
         value_cache: *const c_void,
         k_out: *const c_void,
@@ -301,7 +303,7 @@ extern "C" {
     );
 
     #[cfg(not(feature = "rocm"))]
-    pub fn gather_mla_cache(
+    gather_mla_cache(
         ckv_cache: *const c_void,
         kpe_cache: *const c_void,
         ckv_out: *const c_void,
@@ -318,7 +320,7 @@ extern "C" {
         dtype: u32,
     );
 
-    pub fn gather_kv_cache(
+    gather_kv_cache(
         key_cache: *const c_void,
         value_cache: *const c_void,
         k_out: *const c_void,
@@ -342,7 +344,7 @@ extern "C" {
         v_cache_dtype: u32,
     );
 
-    pub fn paged_attention_v1_f16(
+    paged_attention_v1_f16(
         out: *const c_void,
         query: *const c_void,
         key_cache: *const c_void,
@@ -374,7 +376,7 @@ extern "C" {
         sinks: *const f32,
     );
 
-    pub fn paged_attention_v1_bf16(
+    paged_attention_v1_bf16(
         out: *const c_void,
         query: *const c_void,
         key_cache: *const c_void,
@@ -406,7 +408,7 @@ extern "C" {
         sinks: *const f32,
     );
 
-    pub fn paged_attention_v1_f32(
+    paged_attention_v1_f32(
         out: *const c_void,
         query: *const c_void,
         key_cache: *const c_void,
@@ -438,42 +440,7 @@ extern "C" {
         sinks: *const f32,
     );
 
-    pub fn paged_attention_v2_f16(
-        out: *const c_void,
-        exp_sums: *const f32,
-        max_logits: *const f32,
-        tmp_out: *const c_void,
-        query: *const c_void,
-        key_cache: *const c_void,
-        value_cache: *const c_void,
-        alibi_slopes: *const c_void,
-        num_kv_heads: c_int,
-        scale: f32,
-        softcapping: f32,
-        block_tables: *const c_int,
-        context_lens: *const c_int,
-        block_size: c_int,
-        max_context_len: c_int,
-        num_seqs: c_int,
-        num_heads: c_int,
-        head_size: c_int,
-        max_num_blocks_per_seq: c_int,
-        q_stride: c_int,
-        kv_block_stride: c_int,
-        kv_head_stride: c_int,
-        v_block_stride: c_int,
-        v_head_stride: c_int,
-        stream: CUstream,
-        k_cache_dtype: u32,
-        v_cache_dtype: u32,
-        k_scale: *const f32,
-        v_scale: *const f32,
-        k_res: *const u8,
-        v_res: *const u8,
-        sinks: *const f32,
-    );
-
-    pub fn paged_attention_v2_bf16(
+    paged_attention_v2_f16(
         out: *const c_void,
         exp_sums: *const f32,
         max_logits: *const f32,
@@ -508,7 +475,7 @@ extern "C" {
         sinks: *const f32,
     );
 
-    pub fn paged_attention_v2_f32(
+    paged_attention_v2_bf16(
         out: *const c_void,
         exp_sums: *const f32,
         max_logits: *const f32,
@@ -543,7 +510,42 @@ extern "C" {
         sinks: *const f32,
     );
 
-    pub fn copy_blocks_bf16(
+    paged_attention_v2_f32(
+        out: *const c_void,
+        exp_sums: *const f32,
+        max_logits: *const f32,
+        tmp_out: *const c_void,
+        query: *const c_void,
+        key_cache: *const c_void,
+        value_cache: *const c_void,
+        alibi_slopes: *const c_void,
+        num_kv_heads: c_int,
+        scale: f32,
+        softcapping: f32,
+        block_tables: *const c_int,
+        context_lens: *const c_int,
+        block_size: c_int,
+        max_context_len: c_int,
+        num_seqs: c_int,
+        num_heads: c_int,
+        head_size: c_int,
+        max_num_blocks_per_seq: c_int,
+        q_stride: c_int,
+        kv_block_stride: c_int,
+        kv_head_stride: c_int,
+        v_block_stride: c_int,
+        v_head_stride: c_int,
+        stream: CUstream,
+        k_cache_dtype: u32,
+        v_cache_dtype: u32,
+        k_scale: *const f32,
+        v_scale: *const f32,
+        k_res: *const u8,
+        v_res: *const u8,
+        sinks: *const f32,
+    );
+
+    copy_blocks_bf16(
         key_cache_ptrs: *mut c_void,
         value_cache_ptrs: *mut c_void,
         block_mapping: *const c_void,
@@ -554,7 +556,7 @@ extern "C" {
         stream: i64,
     );
 
-    pub fn copy_blocks_f16(
+    copy_blocks_f16(
         key_cache_ptrs: *mut c_void,
         value_cache_ptrs: *mut c_void,
         block_mapping: *const c_void,
@@ -565,7 +567,7 @@ extern "C" {
         stream: i64,
     );
 
-    pub fn copy_blocks_f32(
+    copy_blocks_f32(
         key_cache_ptrs: *mut c_void,
         value_cache_ptrs: *mut c_void,
         block_mapping: *const c_void,
@@ -576,7 +578,7 @@ extern "C" {
         stream: i64,
     );
 
-    pub fn copy_blocks_u8(
+    copy_blocks_u8(
         key_cache_ptrs: *mut c_void,
         value_cache_ptrs: *mut c_void,
         block_mapping: *const c_void,
@@ -588,7 +590,7 @@ extern "C" {
     );
 
     #[cfg(not(feature = "rocm"))]
-    pub fn update_kv_scales_f32(
+    update_kv_scales_f32(
         k: *const c_void,
         v: *const c_void,
         elements: c_long,
@@ -598,7 +600,7 @@ extern "C" {
     );
 
     #[cfg(not(feature = "rocm"))]
-    pub fn update_kv_scales_f16(
+    update_kv_scales_f16(
         k: *const c_void,
         v: *const c_void,
         elements: c_long,
@@ -608,7 +610,7 @@ extern "C" {
     );
 
     #[cfg(not(feature = "rocm"))]
-    pub fn update_kv_scales_bf16(
+    update_kv_scales_bf16(
         k: *const c_void,
         v: *const c_void,
         elements: c_long,
@@ -618,7 +620,7 @@ extern "C" {
     );
 
     #[cfg(not(feature = "rocm"))]
-    pub fn flash_attn_sinks_f16(
+    flash_attn_sinks_f16(
         q: *const c_void,
         k: *const c_void,
         v: *const c_void,
@@ -636,7 +638,7 @@ extern "C" {
     );
 
     #[cfg(not(feature = "rocm"))]
-    pub fn flash_attn_sinks_bf16(
+    flash_attn_sinks_bf16(
         q: *const c_void,
         k: *const c_void,
         v: *const c_void,
@@ -654,7 +656,7 @@ extern "C" {
     );
 
     #[cfg(not(feature = "rocm"))]
-    pub fn flash_attn_sinks_f32(
+    flash_attn_sinks_f32(
         q: *const c_void,
         k: *const c_void,
         v: *const c_void,
@@ -672,7 +674,7 @@ extern "C" {
     );
 
     #[cfg(not(feature = "rocm"))]
-    pub fn flash_attn_sinks_varlen_f16(
+    flash_attn_sinks_varlen_f16(
         q: *const c_void,
         k: *const c_void,
         v: *const c_void,
@@ -691,7 +693,7 @@ extern "C" {
     );
 
     #[cfg(not(feature = "rocm"))]
-    pub fn flash_attn_sinks_varlen_bf16(
+    flash_attn_sinks_varlen_bf16(
         q: *const c_void,
         k: *const c_void,
         v: *const c_void,
@@ -710,7 +712,7 @@ extern "C" {
     );
 
     #[cfg(not(feature = "rocm"))]
-    pub fn flash_attn_sinks_varlen_f32(
+    flash_attn_sinks_varlen_f32(
         q: *const c_void,
         k: *const c_void,
         v: *const c_void,

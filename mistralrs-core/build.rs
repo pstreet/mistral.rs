@@ -363,26 +363,52 @@ fn build_rocm() {
         objects.push(object);
     }
 
-    let out_file = build_dir.join("libmistralrscuda.a");
-    // Start from a clean archive: `ar crs` only replaces same-named
-    // members, so objects left by the other vendor block (e.g. switching
-    // feature shapes in the same OUT_DIR) would otherwise leak in and drag
-    // their runtime's symbols along.
-    if out_file.exists() {
-        std::fs::remove_file(&out_file).expect("remove stale libmistralrscuda.a");
-    }
-    let status = Command::new("ar")
-        .arg("crs")
-        .arg(&out_file)
-        .args(&objects)
-        .status()
-        .expect("failed to run ar");
-    if !status.success() {
-        panic!("ar failed");
-    }
+    // Hot-pluggable dual builds link the same -fPIC objects into a
+    // companion shared library instead of the static archive (the .so
+    // carries its own amdhip64 DT_NEEDED; the exe links no HIP symbols
+    // and starts on ROCm-less machines). Single-vendor rocm keeps static.
+    let dual =
+        std::env::var("CARGO_FEATURE_CUDA").is_ok() && std::env::var("CARGO_FEATURE_ROCM").is_ok();
 
     println!("cargo:rustc-link-search={}", build_dir.display());
-    println!("cargo:rustc-link-lib=static=mistralrscuda");
+    if dual {
+        let so = build_dir.join("libmistralrscuda_hip.so");
+        if so.exists() {
+            std::fs::remove_file(&so).expect("remove stale libmistralrscuda_hip.so");
+        }
+        let status = Command::new(format!("{root}/bin/hipcc"))
+            .arg("--shared")
+            .arg("-o")
+            .arg(&so)
+            .args(&objects)
+            .arg(format!("-L{root}/lib"))
+            .arg("-lamdhip64")
+            .status()
+            .expect("failed to run hipcc");
+        if !status.success() {
+            panic!("hipcc failed to link libmistralrscuda_hip.so");
+        }
+        println!("cargo:rustc-env=MISTRALRS_CORE_HIP_PLUGIN={}", so.display());
+    } else {
+        let out_file = build_dir.join("libmistralrscuda.a");
+        // Start from a clean archive: `ar crs` only replaces same-named
+        // members, so objects left by the other vendor block (e.g. switching
+        // feature shapes in the same OUT_DIR) would otherwise leak in and drag
+        // their runtime's symbols along.
+        if out_file.exists() {
+            std::fs::remove_file(&out_file).expect("remove stale libmistralrscuda.a");
+        }
+        let status = Command::new("ar")
+            .arg("crs")
+            .arg(&out_file)
+            .args(&objects)
+            .status()
+            .expect("failed to run ar");
+        if !status.success() {
+            panic!("ar failed");
+        }
+        println!("cargo:rustc-link-lib=static=mistralrscuda");
+    }
     println!("cargo:rustc-link-lib=dylib=stdc++");
 }
 

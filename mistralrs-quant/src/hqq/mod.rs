@@ -1407,16 +1407,22 @@ mod tests {
         Ok(())
     }
 
+    // S2: Hip-side op coverage (HQQ ops bail on Hip today).
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     #[test]
     fn hqq4_embedding_matches_dequantized_gather() -> Result<()> {
         assert_embedding_matches_dequantized_gather(&test_layer(HqqBits::Four)?)
     }
 
+    // S2: Hip-side op coverage (HQQ ops bail on Hip today).
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     #[test]
     fn hqq8_embedding_matches_dequantized_gather() -> Result<()> {
         assert_embedding_matches_dequantized_gather(&test_layer(HqqBits::Eight)?)
     }
 
+    // S2: Hip-side op coverage (HQQ ops bail on Hip today).
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     #[test]
     fn hqq_apply_isq_supports_capture_and_cross_format_requantization() -> Result<()> {
         let device = test_device()?;
@@ -1459,6 +1465,8 @@ mod tests {
         Ok(())
     }
 
+    // S2: Hip-side op coverage (HQQ ops bail on Hip today).
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     #[test]
     fn hqq_embedding_chunks_preserve_shape_and_values() -> Result<()> {
         const TEST_CHUNK_ELEMENTS: usize = 45;
@@ -1512,6 +1520,8 @@ mod tests {
         Ok(())
     }
 
+    // S2: Hip-side op coverage (HQQ ops bail on Hip today).
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     #[test]
     fn hqq4_uqff_embedding_matches_dequantized_gather() -> Result<()> {
         let device = test_device()?;

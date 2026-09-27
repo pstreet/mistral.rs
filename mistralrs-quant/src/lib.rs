@@ -32,10 +32,13 @@ mod fp8;
 pub mod gemv;
 mod gguf;
 mod gptq;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+mod hip_plugin;
 pub mod host_alloc;
 mod hqq;
 mod imatrix;
 mod isq_executor;
+mod kernel_decl;
 mod lora;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub mod moe;

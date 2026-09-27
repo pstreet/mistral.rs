@@ -809,7 +809,7 @@ mod tests {
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn forward_cuda_flattens_large_non_contiguous_batch() -> Result<()> {
-        let device = Device::new_cuda(0)?;
+        let device = crate::utils::test_gpu_device();
         let input = Tensor::randn(0., 1., (9, 4, 3), &device)?
             .to_dtype(DType::F32)?
             .transpose(1, 2)?;
@@ -836,7 +836,7 @@ mod tests {
     fn forward_cuda_bf16_preserves_batched_shapes() -> Result<()> {
         const TOLERANCE: f32 = 0.05;
 
-        let device = Device::new_cuda(0)?;
+        let device = crate::utils::test_gpu_device();
         let weight = Tensor::from_vec(
             (0..20)
                 .map(|index| ((index % 7) as f32 - 3.0) / 4.0)

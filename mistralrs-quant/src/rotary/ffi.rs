@@ -1,7 +1,9 @@
 use core::ffi::{c_int, c_long, c_void};
 
-extern "C" {
-    pub(crate) fn rotary_embedding(
+use crate::kernel_decl::declare_kernel;
+
+declare_kernel! {
+    rotary_embedding(
         query: *const c_void,
         key: *const c_void,
         cos_cache: *const c_void,
@@ -21,7 +23,7 @@ extern "C" {
         stream: c_long,
     );
 
-    pub(crate) fn rotary_embedding_positions(
+    rotary_embedding_positions(
         query: *const c_void,
         key: *const c_void,
         cos_cache: *const c_void,

@@ -48,6 +48,9 @@ pub const PAGED_ATTENTION_V2_PARTITION_SIZE: usize = 512;
 
 #[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "rocm"))]
 mod cuda;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+mod hip_plugin;
+mod kernel_decl;
 #[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "rocm"))]
 pub use cuda::*;
 

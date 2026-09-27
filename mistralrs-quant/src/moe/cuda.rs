@@ -10,8 +10,10 @@ mod ffi {
     use candle_core::cuda::cudarc::driver::sys::CUstream;
     use core::ffi::c_void;
 
-    extern "C" {
-        pub fn launch_moe_align(
+    use crate::kernel_decl::declare_kernel;
+
+    declare_kernel! {
+        launch_moe_align(
             topk_ids: *const i32,
             sorted_token_ids: *mut i32,
             expert_ids: *mut i32,
@@ -24,7 +26,7 @@ mod ffi {
             stream: CUstream,
         );
 
-        pub fn launch_gelu_tanh_and_mul_bf16(
+        launch_gelu_tanh_and_mul_bf16(
             out: *mut c_void,
             input: *const c_void,
             num_tokens: i32,
@@ -32,7 +34,7 @@ mod ffi {
             stream: CUstream,
         );
 
-        pub fn launch_silu_and_mul_bf16(
+        launch_silu_and_mul_bf16(
             out: *mut c_void,
             input: *const c_void,
             num_tokens: i32,
@@ -40,7 +42,7 @@ mod ffi {
             stream: CUstream,
         );
 
-        pub fn launch_moe_sum_bf16(
+        launch_moe_sum_bf16(
             out: *mut c_void,
             input: *const c_void,
             num_tokens: i32,
@@ -49,7 +51,7 @@ mod ffi {
             stream: CUstream,
         );
 
-        pub fn launch_hunyuan_moe_capacity_mask(
+        launch_hunyuan_moe_capacity_mask(
             ids: *const c_void,
             weights: *const c_void,
             masked_weights: *mut c_void,
@@ -59,6 +61,7 @@ mod ffi {
             expert_capacity: i32,
             stream: CUstream,
         );
+
     }
 }
 

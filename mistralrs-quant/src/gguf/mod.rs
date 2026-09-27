@@ -1002,10 +1002,12 @@ mod tests {
         Ok(())
     }
 
+    // S2: capture machinery has no Hip path yet.
     #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     #[test]
     fn capture_to_cuda_preserves_packed_weight() -> Result<()> {
-        assert_cross_device_capture_preserves_packed_weight(Device::new_cuda(0)?)
+        assert_cross_device_capture_preserves_packed_weight(crate::utils::test_gpu_device())
     }
 
     #[cfg(feature = "metal")]

@@ -15,6 +15,7 @@ homepage.workspace = true
 [dependencies]
 anyhow.workspace = true
 candle-core.workspace = true
+libloading = { workspace = true, optional = true }
 metrics.workspace = true
 candle-nn.workspace = true
 serde.workspace = true
@@ -139,6 +140,7 @@ rocm = [
     "candle-core/cuda+rocm",
     "mistralrs-quant/cuda+rocm",
     "mistralrs-paged-attn/cuda+rocm",
+    "dep:libloading",
 ]
 cudnn = ["candle-core/cudnn"]
 cutile = ["cuda", "mistralrs-quant/cutile"]

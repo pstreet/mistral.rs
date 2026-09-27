@@ -41,6 +41,17 @@ pub(crate) fn get_cuda_device(x: &Tensor) -> candle_core::Result<&CudaDevice> {
     }
 }
 
+/// Serving-role GPU for kernel tests: Hip in dual builds (where Hip and
+/// Cuda are distinct variants), the Cuda role otherwise. Tests using this
+/// exercise the same kernels in every shape.
+#[cfg(all(test, any(feature = "cuda", feature = "rocm")))]
+pub(crate) fn test_gpu_device() -> Device {
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    return Device::new_hip(0).expect("hip:0 for kernel tests");
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    return Device::new_cuda(0).expect("cuda-role device for kernel tests");
+}
+
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn slice_ptr<T: DeviceRepr>(
     v: &CudaSlice<T>,
@@ -65,6 +76,45 @@ pub fn slice_ptr_mut_on_stream<'a, T: DeviceRepr>(
     lo: usize,
     stream: &'a CudaStream,
 ) -> (u64, cudarc::driver::SyncOnDrop<'a>) {
+    let (ptr, guard) = v.device_ptr_mut(stream);
+    (ptr + (lo * std::mem::size_of::<T>()) as u64, guard)
+}
+
+/// Dual-role mirrors of the slice helpers above, typed on the hip
+/// backend's driver types for `hip_fwd` twins.
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use candle_core::hip_backend::cudarc::{
+    self as hip_cudarc,
+    driver::{
+        CudaSlice as HipCudaSlice, CudaStream as HipCudaStream, DevicePtr as HipDevicePtr,
+        DevicePtrMut as HipDevicePtrMut, DeviceRepr as HipDeviceRepr,
+    },
+};
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub fn hip_slice_ptr<T: HipDeviceRepr>(
+    v: &HipCudaSlice<T>,
+    lo: usize,
+) -> (u64, hip_cudarc::driver::SyncOnDrop<'_>) {
+    hip_slice_ptr_on_stream(v, lo, v.stream())
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub fn hip_slice_ptr_on_stream<'a, T: HipDeviceRepr>(
+    v: &'a HipCudaSlice<T>,
+    lo: usize,
+    stream: &'a HipCudaStream,
+) -> (u64, hip_cudarc::driver::SyncOnDrop<'a>) {
+    let (ptr, guard) = v.device_ptr(stream);
+    (ptr + (lo * std::mem::size_of::<T>()) as u64, guard)
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub fn hip_slice_ptr_mut_on_stream<'a, T: HipDeviceRepr>(
+    v: &'a mut HipCudaSlice<T>,
+    lo: usize,
+    stream: &'a HipCudaStream,
+) -> (u64, hip_cudarc::driver::SyncOnDrop<'a>) {
     let (ptr, guard) = v.device_ptr_mut(stream);
     (ptr + (lo * std::mem::size_of::<T>()) as u64, guard)
 }

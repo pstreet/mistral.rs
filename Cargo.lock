@@ -698,6 +698,7 @@ name = "candle-kernels"
 version = "0.11.0"
 dependencies = [
  "cudaforge",
+ "libloading 0.9.0",
 ]
 
 [[package]]
@@ -3881,6 +3882,7 @@ dependencies = [
  "interprocess",
  "itertools 0.14.0",
  "libc",
+ "libloading 0.9.0",
  "llguidance",
  "lrtable",
  "metrics",
@@ -4008,6 +4010,7 @@ dependencies = [
  "dispatch2",
  "float8",
  "half",
+ "libloading 0.9.0",
  "mistralrs-metal-compile",
  "objc2-foundation",
  "objc2-metal",
@@ -4063,6 +4066,7 @@ dependencies = [
  "indicatif 0.18.3",
  "lazy_static",
  "libc",
+ "libloading 0.9.0",
  "libmimalloc-sys",
  "memmap2",
  "mistralrs-metal-compile",

@@ -222,9 +222,41 @@ fn build_rocm() -> Result<(), String> {
     println!("cargo:rustc-cfg=has_vector_fp8_kernels");
     println!("cargo:rustc-cfg=has_blockwise_fp8_kernels");
 
+    // Dual (hot-pluggable) builds: link the same -fPIC objects into a
+    // companion shared library instead of the static archive. The .so
+    // carries its own amdhip64 DT_NEEDED (graceful dlopen failure when
+    // ROCm is absent); the exe links no HIP symbols at all. Single-vendor
+    // rocm keeps the static archive (production behavior).
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    {
+        let so = build_dir.join("libmistralrsquant_hip.so");
+        if so.exists() {
+            std::fs::remove_file(&so).expect("remove stale libmistralrsquant_hip.so");
+        }
+        let mut cmd = Command::new(&hipcc);
+        cmd.arg("--shared").arg("-o").arg(&so);
+        for obj in &objects {
+            cmd.arg(obj);
+        }
+        cmd.arg(format!("-L{}/lib", rocm)).arg("-lamdhip64");
+        let status = cmd.status().map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err("hipcc failed to link libmistralrsquant_hip.so".to_string());
+        }
+        println!(
+            "cargo:rustc-env=MISTRALRS_QUANT_HIP_PLUGIN={}",
+            so.display()
+        );
+    }
+
     println!("cargo:rustc-link-search={}", build_dir.display());
-    println!("cargo:rustc-link-lib=mistralrsquant");
-    println!("cargo:rustc-link-lib=dylib=amdhip64");
+    // Dual: the exe links neither the archive nor the HIP runtime - both
+    // resolve at runtime through the companion plugin above.
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    {
+        println!("cargo:rustc-link-lib=mistralrsquant");
+        println!("cargo:rustc-link-lib=dylib=amdhip64");
+    }
     println!("cargo:rustc-link-search=native={}/lib", rocm);
     Ok(())
 }

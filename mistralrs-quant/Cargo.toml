@@ -44,6 +44,7 @@ tokio.workspace = true
 futures.workspace = true
 sysinfo.workspace = true
 cutile = { workspace = true, optional = true }
+libloading = { workspace = true, optional = true }
 mistralrs-metal-compile = { workspace = true, optional = true, features = ["metal"] }
 
 [features]
@@ -60,7 +61,7 @@ cutile = [
     "cuda",
     "dep:cutile",
 ]
-"cuda+rocm" = ["cuda", "rocm", "candle-core/cuda+rocm"]
+"cuda+rocm" = ["cuda", "rocm", "candle-core/cuda+rocm", "dep:libloading"]
 nccl = ["cuda", "candle-core/nccl"]
 metal = [
     "candle-core/metal",

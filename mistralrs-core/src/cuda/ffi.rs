@@ -1,10 +1,11 @@
 use std::ffi::c_void;
 
 #[allow(dead_code)]
-extern "C" {
+use crate::kernel_decl::declare_kernel;
 
+declare_kernel! {
     #[cfg(feature = "rocm")]
-    pub(crate) fn ck_flash_attn_fwd(
+    ck_flash_attn_fwd(
         q: *const c_void,
         k: *const c_void,
         v: *const c_void,
@@ -35,13 +36,13 @@ extern "C" {
         stream: i64,
     ) -> f32;
 
-    pub(crate) fn cuda_graph_copy_bytes(
+    cuda_graph_copy_bytes(
         src: *const c_void,
         dst: *mut c_void,
         n: i64,
         stream: i64,
     ) -> i32;
-    pub(crate) fn cuda_graph_copy_2d_bytes(
+    cuda_graph_copy_2d_bytes(
         src: *const c_void,
         dst: *mut c_void,
         width: i64,
@@ -50,7 +51,7 @@ extern "C" {
         dst_pitch: i64,
         stream: i64,
     ) -> i32;
-    pub(crate) fn indexed_row_copy_bf16(
+    indexed_row_copy_bf16(
         src: *const c_void,
         dst: *mut c_void,
         dst_rows: *const u32,
@@ -59,7 +60,7 @@ extern "C" {
         dst_row_capacity: i64,
         stream: i64,
     ) -> i32;
-    pub(crate) fn indexed_row_copy_f16(
+    indexed_row_copy_f16(
         src: *const c_void,
         dst: *mut c_void,
         dst_rows: *const u32,
@@ -68,7 +69,7 @@ extern "C" {
         dst_row_capacity: i64,
         stream: i64,
     ) -> i32;
-    pub(crate) fn indexed_row_copy_f32(
+    indexed_row_copy_f32(
         src: *const c_void,
         dst: *mut c_void,
         dst_rows: *const u32,
@@ -77,14 +78,14 @@ extern "C" {
         dst_row_capacity: i64,
         stream: i64,
     ) -> i32;
-    pub(crate) fn clamp_u32_index_table(
+    clamp_u32_index_table(
         table: *mut u32,
         len: i32,
         capacity: u32,
         replacement: u32,
         stream: i64,
     ) -> i32;
-    pub(crate) fn pack_completion_input_u32(
+    pack_completion_input_u32(
         host: *const c_void,
         staged_rows: *const *const c_void,
         output: *mut c_void,
@@ -93,7 +94,7 @@ extern "C" {
         staged_width: i32,
         stream: i64,
     ) -> i32;
-    pub(crate) fn pad_decode_input_u32(
+    pad_decode_input_u32(
         input: *const c_void,
         output: *mut c_void,
         input_rows: i32,
@@ -101,7 +102,7 @@ extern "C" {
         width: i32,
         stream: i64,
     ) -> i32;
-    pub(crate) fn dynamic_conv_bf16(
+    dynamic_conv_bf16(
         hidden: *const c_void,
         dynamic: *const c_void,
         base: *const c_void,
@@ -122,7 +123,7 @@ extern "C" {
         base_stride_h: i64,
         stream: i64,
     ) -> i32;
-    pub(crate) fn dynamic_conv_f16(
+    dynamic_conv_f16(
         hidden: *const c_void,
         dynamic: *const c_void,
         base: *const c_void,
@@ -143,7 +144,7 @@ extern "C" {
         base_stride_h: i64,
         stream: i64,
     ) -> i32;
-    pub(crate) fn dynamic_conv_f32(
+    dynamic_conv_f32(
         hidden: *const c_void,
         dynamic: *const c_void,
         base: *const c_void,
@@ -164,7 +165,7 @@ extern "C" {
         base_stride_h: i64,
         stream: i64,
     ) -> i32;
-    pub(crate) fn apply_sparse_penalties_f32(
+    apply_sparse_penalties_f32(
         x: *const c_void,
         dst: *mut c_void,
         token_ids: *const u32,
@@ -176,7 +177,7 @@ extern "C" {
         repetition_penalty: f32,
         stream: i64,
     );
-    pub(crate) fn apply_sparse_logits_bias_f32(
+    apply_sparse_logits_bias_f32(
         x: *const c_void,
         dst: *mut c_void,
         token_ids: *const u32,
@@ -185,7 +186,7 @@ extern "C" {
         n_tokens: i32,
         stream: i64,
     );
-    pub(crate) fn apply_causal_mask_f32(
+    apply_causal_mask_f32(
         scores: *mut c_void,
         batch_heads: i32,
         q_len: i32,
@@ -194,7 +195,7 @@ extern "C" {
         prefix_len: i32,
         stream: i64,
     );
-    pub(crate) fn rms_norm_residual_f32(
+    rms_norm_residual_f32(
         x: *const c_void,
         residual: *const c_void,
         weight: *const c_void,
@@ -205,7 +206,7 @@ extern "C" {
         eps: f32,
         stream: i64,
     );
-    pub(crate) fn rms_norm_residual_f16(
+    rms_norm_residual_f16(
         x: *const c_void,
         residual: *const c_void,
         weight: *const c_void,
@@ -216,7 +217,7 @@ extern "C" {
         eps: f32,
         stream: i64,
     );
-    pub(crate) fn rms_norm_residual_bf16(
+    rms_norm_residual_bf16(
         x: *const c_void,
         residual: *const c_void,
         weight: *const c_void,
@@ -227,7 +228,7 @@ extern "C" {
         eps: f32,
         stream: i64,
     );
-    pub(crate) fn add_rms_norm_f32(
+    add_rms_norm_f32(
         x: *const c_void,
         residual: *const c_void,
         weight: *const c_void,
@@ -238,7 +239,7 @@ extern "C" {
         eps: f32,
         stream: i64,
     );
-    pub(crate) fn add_rms_norm_f16(
+    add_rms_norm_f16(
         x: *const c_void,
         residual: *const c_void,
         weight: *const c_void,
@@ -249,7 +250,7 @@ extern "C" {
         eps: f32,
         stream: i64,
     );
-    pub(crate) fn add_rms_norm_bf16(
+    add_rms_norm_bf16(
         x: *const c_void,
         residual: *const c_void,
         weight: *const c_void,
@@ -260,7 +261,7 @@ extern "C" {
         eps: f32,
         stream: i64,
     );
-    pub(crate) fn rms_norm_residual_then_rms_norm_f32(
+    rms_norm_residual_then_rms_norm_f32(
         x: *const c_void,
         residual: *const c_void,
         residual_weight: *const c_void,
@@ -274,7 +275,7 @@ extern "C" {
         norm_eps: f32,
         stream: i64,
     );
-    pub(crate) fn rms_norm_residual_then_rms_norm_f16(
+    rms_norm_residual_then_rms_norm_f16(
         x: *const c_void,
         residual: *const c_void,
         residual_weight: *const c_void,
@@ -288,7 +289,7 @@ extern "C" {
         norm_eps: f32,
         stream: i64,
     );
-    pub(crate) fn rms_norm_residual_then_rms_norm_bf16(
+    rms_norm_residual_then_rms_norm_bf16(
         x: *const c_void,
         residual: *const c_void,
         residual_weight: *const c_void,
@@ -302,7 +303,7 @@ extern "C" {
         norm_eps: f32,
         stream: i64,
     );
-    pub(crate) fn rms_norm_strided_4d_f32(
+    rms_norm_strided_4d_f32(
         x: *const c_void,
         weight: *const c_void,
         dst: *mut c_void,
@@ -317,7 +318,7 @@ extern "C" {
         eps: f32,
         stream: i64,
     );
-    pub(crate) fn rms_norm_strided_4d_f16(
+    rms_norm_strided_4d_f16(
         x: *const c_void,
         weight: *const c_void,
         dst: *mut c_void,
@@ -332,7 +333,7 @@ extern "C" {
         eps: f32,
         stream: i64,
     );
-    pub(crate) fn rms_norm_strided_4d_bf16(
+    rms_norm_strided_4d_bf16(
         x: *const c_void,
         weight: *const c_void,
         dst: *mut c_void,
@@ -347,7 +348,7 @@ extern "C" {
         eps: f32,
         stream: i64,
     );
-    pub(crate) fn qk_rms_norm_rope(
+    qk_rms_norm_rope(
         q: *const c_void,
         k: *const c_void,
         q_weight: *const c_void,
@@ -379,7 +380,7 @@ extern "C" {
         stream: i64,
     );
 
-    pub(crate) fn qk_rms_norm_rope_positions(
+    qk_rms_norm_rope_positions(
         q: *const c_void,
         k: *const c_void,
         q_weight: *const c_void,
@@ -410,7 +411,7 @@ extern "C" {
         stream: i64,
     );
 
-    pub(crate) fn rope_sincos_positions(
+    rope_sincos_positions(
         positions: *const c_void,
         inv_freq: *const c_void,
         cos_out: *mut c_void,
@@ -421,7 +422,7 @@ extern "C" {
         stream: i64,
     );
 
-    pub(crate) fn qkv_rms_norm_rope_positions(
+    qkv_rms_norm_rope_positions(
         q: *const c_void,
         k: *const c_void,
         v: *const c_void,
@@ -460,7 +461,7 @@ extern "C" {
         stream: i64,
     );
 
-    pub(crate) fn asort_asc_f32(
+    asort_asc_f32(
         x: *const c_void,
         dst: *mut c_void,
         nrows: i32,
@@ -468,7 +469,7 @@ extern "C" {
         inplace: bool,
         stream: i64,
     );
-    pub(crate) fn asort_asc_f16(
+    asort_asc_f16(
         x: *const c_void,
         dst: *mut c_void,
         nrows: i32,
@@ -476,7 +477,7 @@ extern "C" {
         inplace: bool,
         stream: i64,
     );
-    pub(crate) fn asort_asc_bf16(
+    asort_asc_bf16(
         x: *const c_void,
         dst: *const c_void,
         nrows: i32,
@@ -484,7 +485,7 @@ extern "C" {
         inplace: bool,
         stream: i64,
     );
-    pub(crate) fn asort_asc_f64(
+    asort_asc_f64(
         x: *const c_void,
         dst: *mut c_void,
         nrows: i32,
@@ -492,7 +493,7 @@ extern "C" {
         inplace: bool,
         stream: i64,
     );
-    pub(crate) fn asort_asc_u8(
+    asort_asc_u8(
         x: *const c_void,
         dst: *mut c_void,
         nrows: i32,
@@ -500,7 +501,7 @@ extern "C" {
         inplace: bool,
         stream: i64,
     );
-    pub(crate) fn asort_asc_u32(
+    asort_asc_u32(
         x: *const c_void,
         dst: *mut c_void,
         nrows: i32,
@@ -508,7 +509,7 @@ extern "C" {
         inplace: bool,
         stream: i64,
     );
-    pub(crate) fn asort_asc_i64(
+    asort_asc_i64(
         x: *const c_void,
         dst: *mut c_void,
         nrows: i32,
@@ -516,7 +517,7 @@ extern "C" {
         inplace: bool,
         stream: i64,
     );
-    pub(crate) fn asort_desc_f32(
+    asort_desc_f32(
         x: *const c_void,
         dst: *mut c_void,
         nrows: i32,
@@ -524,7 +525,7 @@ extern "C" {
         inplace: bool,
         stream: i64,
     );
-    pub(crate) fn asort_desc_f16(
+    asort_desc_f16(
         x: *const c_void,
         dst: *mut c_void,
         nrows: i32,
@@ -532,7 +533,7 @@ extern "C" {
         inplace: bool,
         stream: i64,
     );
-    pub(crate) fn asort_desc_bf16(
+    asort_desc_bf16(
         x: *const c_void,
         dst: *mut c_void,
         nrows: i32,
@@ -540,7 +541,7 @@ extern "C" {
         inplace: bool,
         stream: i64,
     );
-    pub(crate) fn asort_desc_f64(
+    asort_desc_f64(
         x: *const c_void,
         dst: *mut c_void,
         nrows: i32,
@@ -548,7 +549,7 @@ extern "C" {
         inplace: bool,
         stream: i64,
     );
-    pub(crate) fn asort_desc_u8(
+    asort_desc_u8(
         x: *const c_void,
         dst: *mut c_void,
         nrows: i32,
@@ -556,7 +557,7 @@ extern "C" {
         inplace: bool,
         stream: i64,
     );
-    pub(crate) fn asort_desc_u32(
+    asort_desc_u32(
         x: *const c_void,
         dst: *mut c_void,
         nrows: i32,
@@ -564,7 +565,7 @@ extern "C" {
         inplace: bool,
         stream: i64,
     );
-    pub(crate) fn asort_desc_i64(
+    asort_desc_i64(
         x: *const c_void,
         dst: *mut c_void,
         nrows: i32,
@@ -574,7 +575,7 @@ extern "C" {
     );
 
     // for unquntized models (decoding)
-    pub fn moe_gemm(
+    moe_gemm(
         input: *const c_void,   // input [size_m, size_k]
         weights: *const c_void, // weights [num_experts, size_n, size_k]
         sorted_token_ids: *const i32,
@@ -591,7 +592,7 @@ extern "C" {
     );
 
     // for unquntized models (prefill)
-    pub fn moe_gemm_wmma(
+    moe_gemm_wmma(
         input: *const c_void,         // device pointer [size_m, size_k]
         weights: *const c_void,       // device pointer [num_experts, size_n, size_k]
         sorted_token_ids: *const i32, // device pointer [size_m]
@@ -608,7 +609,7 @@ extern "C" {
     );
 
     // MoE GEMV for decode phase (optimized for small batch sizes M <= 8)
-    pub fn moe_gemv(
+    moe_gemv(
         input: *const c_void,   // input [size_m or size_m / topk, size_k]
         weights: *const c_void, // weights [num_experts, size_n, size_k]
         sorted_token_ids: *const i32,
@@ -626,7 +627,7 @@ extern "C" {
 
     // Optimized parallel topk for small k (MoE routing)
     // Single kernel call writes to both values and indices buffers
-    pub(crate) fn topk_f32(
+    topk_f32(
         input: *const c_void,
         values_out: *mut c_void,  // [nrows, k]
         indices_out: *mut c_void, // [nrows, k] as u32
@@ -635,7 +636,7 @@ extern "C" {
         k: i32,
         stream: i64,
     );
-    pub(crate) fn topk_bf16(
+    topk_bf16(
         input: *const c_void,
         values_out: *mut c_void,  // [nrows, k]
         indices_out: *mut c_void, // [nrows, k] as u32
@@ -644,7 +645,7 @@ extern "C" {
         k: i32,
         stream: i64,
     );
-    pub(crate) fn topk_f16(
+    topk_f16(
         input: *const c_void,
         values_out: *mut c_void,  // [nrows, k]
         indices_out: *mut c_void, // [nrows, k] as u32
@@ -654,7 +655,7 @@ extern "C" {
         stream: i64,
     );
 
-    pub(crate) fn moe_router_topk_f32(
+    moe_router_topk_f32(
         logits: *const c_void,
         weights: *mut c_void,
         ids: *mut c_void,
@@ -673,7 +674,7 @@ extern "C" {
         output_scale: f32,
         stream: i64,
     );
-    pub(crate) fn moe_router_topk_bf16(
+    moe_router_topk_bf16(
         logits: *const c_void,
         weights: *mut c_void,
         ids: *mut c_void,
@@ -692,7 +693,7 @@ extern "C" {
         output_scale: f32,
         stream: i64,
     );
-    pub(crate) fn moe_router_topk_f16(
+    moe_router_topk_f16(
         logits: *const c_void,
         weights: *mut c_void,
         ids: *mut c_void,
@@ -712,7 +713,7 @@ extern "C" {
         stream: i64,
     );
 
-    pub(crate) fn moe_router_gemv(
+    moe_router_gemv(
         xs: *const c_void,
         w: *const c_void,
         logits: *mut c_void,
@@ -724,7 +725,7 @@ extern "C" {
         stream: i64,
     );
 
-    pub(crate) fn topk_large_f32(
+    topk_large_f32(
         input: *const f32,
         block_values: *mut f32,
         block_indices: *mut u32,
@@ -740,7 +741,7 @@ extern "C" {
         inv_temperature: f32,
         stream: i64,
     );
-    pub(crate) fn topk_large_f32_packed(
+    topk_large_f32_packed(
         input: *const f32,
         block_values: *mut f32,
         block_indices: *mut u32,
@@ -754,7 +755,7 @@ extern "C" {
         inv_temperature: f32,
         stream: i64,
     );
-    pub(crate) fn topk_large_f32_packed_batched(
+    topk_large_f32_packed_batched(
         input: *const f32,
         inv_temperatures: *const f32,
         block_values: *mut f32,
@@ -769,7 +770,7 @@ extern "C" {
         nblocks: i32,
         stream: i64,
     );
-    pub(crate) fn topk_large_bf16_packed_batched(
+    topk_large_bf16_packed_batched(
         input: *const c_void,
         inv_temperatures: *const f32,
         block_values: *mut f32,
@@ -784,7 +785,7 @@ extern "C" {
         nblocks: i32,
         stream: i64,
     );
-    pub(crate) fn topk_large_f16_packed_batched(
+    topk_large_f16_packed_batched(
         input: *const c_void,
         inv_temperatures: *const f32,
         block_values: *mut f32,
@@ -799,7 +800,7 @@ extern "C" {
         nblocks: i32,
         stream: i64,
     );
-    pub(crate) fn topk_large_ranked_f32_packed_batched(
+    topk_large_ranked_f32_packed_batched(
         input: *const f32,
         block_values: *mut f32,
         block_indices: *mut u32,
@@ -812,8 +813,8 @@ extern "C" {
         nblocks: i32,
         stream: i64,
     ) -> i32;
-    pub(crate) fn topk_large_ranked_state_words_per_row() -> usize;
-    pub(crate) fn topk_large_ranked_bf16_packed_batched(
+    topk_large_ranked_state_words_per_row() -> usize;
+    topk_large_ranked_bf16_packed_batched(
         input: *const c_void,
         block_values: *mut f32,
         block_indices: *mut u32,
@@ -826,7 +827,7 @@ extern "C" {
         nblocks: i32,
         stream: i64,
     ) -> i32;
-    pub(crate) fn topk_large_ranked_f16_packed_batched(
+    topk_large_ranked_f16_packed_batched(
         input: *const c_void,
         block_values: *mut f32,
         block_indices: *mut u32,
@@ -839,7 +840,7 @@ extern "C" {
         nblocks: i32,
         stream: i64,
     ) -> i32;
-    pub(crate) fn sample_ranked_topk(
+    sample_ranked_topk(
         packed: *const f32,
         params: *const f32,
         tokens: *mut u32,
@@ -847,7 +848,7 @@ extern "C" {
         packed_k: i32,
         stream: i64,
     );
-    pub(crate) fn dflash_greedy_select(
+    dflash_greedy_select(
         packed_topk: *const f32,
         projected_hidden: *const c_void,
         predecessor_codebook: *const c_void,
@@ -865,7 +866,7 @@ extern "C" {
         successor_dtype: i32,
         stream: i64,
     );
-    pub(crate) fn dflash_sample_select(
+    dflash_sample_select(
         packed_topk: *const f32,
         projected_hidden: *const c_void,
         predecessor_codebook: *const c_void,
@@ -887,7 +888,7 @@ extern "C" {
         successor_dtype: i32,
         stream: i64,
     );
-    pub(crate) fn sparse_rejection_categorical_f32(
+    sparse_rejection_categorical_f32(
         target_logits: *const f32,
         draft_tokens: *const u32,
         q_token_ids: *const u32,
@@ -905,7 +906,7 @@ extern "C" {
         q_width: i32,
         stream: i64,
     );
-    pub(crate) fn sparse_rejection_topk_f32(
+    sparse_rejection_topk_f32(
         packed_target: *const f32,
         draft_tokens: *const u32,
         q_token_ids: *const u32,
@@ -924,7 +925,7 @@ extern "C" {
         packed_k: i32,
         stream: i64,
     );
-    pub(crate) fn top1_large_f32_packed(
+    top1_large_f32_packed(
         input: *const f32,
         block_values: *mut f32,
         block_indices: *mut u32,
@@ -935,7 +936,7 @@ extern "C" {
         nblocks: i32,
         stream: i64,
     );
-    pub(crate) fn top1_large_bf16_packed(
+    top1_large_bf16_packed(
         input: *const c_void,
         block_values: *mut f32,
         block_indices: *mut u32,
@@ -946,7 +947,7 @@ extern "C" {
         nblocks: i32,
         stream: i64,
     );
-    pub(crate) fn top1_large_f16_packed(
+    top1_large_f16_packed(
         input: *const c_void,
         block_values: *mut f32,
         block_indices: *mut u32,
@@ -957,7 +958,7 @@ extern "C" {
         nblocks: i32,
         stream: i64,
     );
-    pub(crate) fn top1_large_f32_packed_batched(
+    top1_large_f32_packed_batched(
         input: *const f32,
         block_values: *mut f32,
         block_indices: *mut u32,
@@ -969,7 +970,7 @@ extern "C" {
         nblocks: i32,
         stream: i64,
     );
-    pub(crate) fn top1_large_bf16_packed_batched(
+    top1_large_bf16_packed_batched(
         input: *const c_void,
         block_values: *mut f32,
         block_indices: *mut u32,
@@ -981,7 +982,7 @@ extern "C" {
         nblocks: i32,
         stream: i64,
     );
-    pub(crate) fn top1_large_f16_packed_batched(
+    top1_large_f16_packed_batched(
         input: *const c_void,
         block_values: *mut f32,
         block_indices: *mut u32,
@@ -993,7 +994,7 @@ extern "C" {
         nblocks: i32,
         stream: i64,
     );
-    pub(crate) fn categorical_large_f32_packed_batched(
+    categorical_large_f32_packed_batched(
         input: *const f32,
         inv_temperatures: *const f32,
         uniforms: *const f32,
@@ -1007,7 +1008,7 @@ extern "C" {
         stream: i64,
     );
     // Mamba SSM selective scan kernel
-    pub(crate) fn selective_scan_cuda(
+    selective_scan_cuda(
         x: *const f32,       // (batch, seq_len, n_heads * head_dim)
         dt: *const f32,      // (batch, seq_len, n_heads)
         a: *const f32,       // (n_heads,) - negative exp of A_log
@@ -1028,7 +1029,7 @@ extern "C" {
     );
 
     // GDN (Gated Delta Net) kernels for qwen3_next
-    pub(crate) fn gdn_packed_to_padded(
+    gdn_packed_to_padded(
         source: *const c_void,
         output: *mut c_void,
         cu_seqlens: *const u32,
@@ -1040,7 +1041,7 @@ extern "C" {
         dtype: i32,
         stream: i64,
     );
-    pub(crate) fn gdn_padded_to_packed(
+    gdn_padded_to_packed(
         source: *const c_void,
         output: *mut c_void,
         cu_seqlens: *const u32,
@@ -1054,7 +1055,7 @@ extern "C" {
         dtype: i32,
         stream: i64,
     );
-    pub(crate) fn gdn_extract_ragged_conv_state(
+    gdn_extract_ragged_conv_state(
         padded_input: *const c_void,
         initial_state: *const c_void,
         output: *mut c_void,
@@ -1068,7 +1069,7 @@ extern "C" {
         dtype: i32,
         stream: i64,
     );
-    pub(crate) fn gated_delta_rule_recurrence(
+    gated_delta_rule_recurrence(
         q: *const f32,
         k: *const f32,
         v: *const f32,
@@ -1085,7 +1086,7 @@ extern "C" {
         state_dtype: i32,
         stream: i64,
     );
-    pub(crate) fn warp_gated_delta_rule_recurrence(
+    warp_gated_delta_rule_recurrence(
         q: *const f32,
         k: *const f32,
         v: *const f32,
@@ -1102,7 +1103,7 @@ extern "C" {
         state_dtype: i32,
         stream: i64,
     );
-    pub(crate) fn vmajor_warp_gated_delta_rule_recurrence(
+    vmajor_warp_gated_delta_rule_recurrence(
         q: *const f32,
         k: *const f32,
         v: *const f32,
@@ -1119,7 +1120,7 @@ extern "C" {
         state_dtype: i32,
         stream: i64,
     );
-    pub(crate) fn vmajor_grouped_warp_gated_delta_rule_recurrence(
+    vmajor_grouped_warp_gated_delta_rule_recurrence(
         q: *const f32,
         k: *const f32,
         v: *const f32,
@@ -1138,7 +1139,7 @@ extern "C" {
         stream: i64,
     ) -> i32;
     #[cfg(has_flashinfer_gdn_sm90_kernel)]
-    pub(crate) fn mistralrs_flashinfer_gdn_sm90_workspace_size(
+    mistralrs_flashinfer_gdn_sm90_workspace_size(
         batch_size: i32,
         seq_len: i32,
         num_k_heads: i32,
@@ -1147,9 +1148,9 @@ extern "C" {
         has_slots: i32,
     ) -> u64;
     #[cfg(has_flashinfer_gdn_sm90_kernel)]
-    pub(crate) fn mistralrs_flashinfer_gdn_sm90_launch(params: *const c_void) -> i32;
+    mistralrs_flashinfer_gdn_sm90_launch(params: *const c_void) -> i32;
     // Chunked GDN recurrence for prefill (processes tokens in BT=64 chunks)
-    pub(crate) fn chunked_gated_delta_rule_recurrence(
+    chunked_gated_delta_rule_recurrence(
         q: *const f32,
         k: *const f32,
         v: *const f32,
@@ -1166,7 +1167,7 @@ extern "C" {
         state_dtype: i32,
         stream: i64,
     );
-    pub(crate) fn vmajor_chunked_gated_delta_rule_recurrence(
+    vmajor_chunked_gated_delta_rule_recurrence(
         q: *const f32,
         k: *const f32,
         v: *const f32,
@@ -1183,7 +1184,7 @@ extern "C" {
         state_dtype: i32,
         stream: i64,
     ) -> i32;
-    pub(crate) fn causal_conv1d_update(
+    causal_conv1d_update(
         x: *const c_void,
         weight: *const c_void,
         conv_state: *mut c_void,
@@ -1198,7 +1199,7 @@ extern "C" {
         dtype: i32,
         stream: i64,
     );
-    pub(crate) fn causal_conv1d_full(
+    causal_conv1d_full(
         x: *const c_void,
         weight: *const c_void,
         conv_state_in: *const c_void,
@@ -1215,7 +1216,7 @@ extern "C" {
         dtype: i32,
         stream: i64,
     );
-    pub(crate) fn gdn_rmsnorm_gated(
+    gdn_rmsnorm_gated(
         x: *const c_void,
         gate: *const c_void,
         weight: *const c_void,
@@ -1236,7 +1237,7 @@ extern "C" {
         dtype: i32,
         stream: i64,
     );
-    pub(crate) fn gdn_rmsnorm_gated_quantized_bf16(
+    gdn_rmsnorm_gated_quantized_bf16(
         x: *const c_void,
         gate: *const c_void,
         weight: *const c_void,
@@ -1259,7 +1260,7 @@ extern "C" {
         eps: f32,
         stream: i64,
     );
-    pub(crate) fn fused_gdn_gating(
+    fused_gdn_gating(
         b: *const c_void,
         a: *const c_void,
         a_log: *const f32,
@@ -1271,7 +1272,7 @@ extern "C" {
         dtype: i32,
         stream: i64,
     );
-    pub(crate) fn gdn_prepare_recurrence(
+    gdn_prepare_recurrence(
         mixed_qkv: *const c_void,
         b: *const c_void,
         a: *const c_void,
@@ -1293,7 +1294,7 @@ extern "C" {
         stream: i64,
     );
 
-    pub(crate) fn gdn_decode_recurrence(
+    gdn_decode_recurrence(
         mixed_qkv: *const c_void,
         b: *const c_void,
         a: *const c_void,
@@ -1317,7 +1318,7 @@ extern "C" {
         state_dtype: i32,
         stream: i64,
     );
-    pub(crate) fn gdn_speculative_state_commit(
+    gdn_speculative_state_commit(
         mixed_qkv: *const c_void,
         convolved_qkv: *const c_void,
         b: *const c_void,
@@ -1343,7 +1344,7 @@ extern "C" {
         state_dtype: i32,
         stream: i64,
     );
-    pub(crate) fn gdn_speculative_conv_checkpoints(
+    gdn_speculative_conv_checkpoints(
         x: *const c_void,
         weight: *const c_void,
         state_pool: *mut c_void,
@@ -1368,7 +1369,7 @@ extern "C" {
         dtype: i32,
         stream: i64,
     );
-    pub(crate) fn gdn_speculative_recurrence_checkpoints(
+    gdn_speculative_recurrence_checkpoints(
         mixed_qkv: *const c_void,
         b: *const c_void,
         a: *const c_void,
@@ -1420,7 +1421,7 @@ extern "C" {
         state_dtype: i32,
         stream: i64,
     );
-    pub(crate) fn gdn_deferred_recurrence_rmsnorm_gate_value_major_128(
+    gdn_deferred_recurrence_rmsnorm_gate_value_major_128(
         mixed_qkv: *const c_void,
         b: *const c_void,
         a: *const c_void,
@@ -1454,7 +1455,7 @@ extern "C" {
         norm_eps: f32,
         stream: i64,
     );
-    pub(crate) fn gdn_flush_deferred_state_value_major_128(
+    gdn_flush_deferred_state_value_major_128(
         state_pool: *mut f32,
         active_slots: *const u32,
         deferred_key: *const f32,
@@ -1468,7 +1469,7 @@ extern "C" {
         tiled_v_heads: i32,
         stream: i64,
     );
-    pub(crate) fn gdn_speculative_transition_commit_batched(
+    gdn_speculative_transition_commit_batched(
         pointer_table: *const u64,
         keep_rows: *const u32,
         active_slots: *const u32,
@@ -1487,7 +1488,7 @@ extern "C" {
         state_dtype: i32,
         stream: i64,
     );
-    pub(crate) fn gdn_speculative_transition_stage_batched(
+    gdn_speculative_transition_stage_batched(
         pointer_table: *const u64,
         keep_rows: *const u32,
         destination_slots: *const u32,
@@ -1504,7 +1505,7 @@ extern "C" {
         activation_dtype: i32,
         stream: i64,
     );
-    pub(crate) fn gdn_pending_transition_publish_batched(
+    gdn_pending_transition_publish_batched(
         pointer_table: *const u64,
         keep_rows: *const u32,
         destination_slots: *const u32,
@@ -1514,7 +1515,7 @@ extern "C" {
         destination_capacity: i32,
         stream: i64,
     );
-    pub(crate) fn gdn_pending_transition_apply_batched(
+    gdn_pending_transition_apply_batched(
         pointer_table: *const u64,
         active_slots: *const u32,
         layer_count: i32,

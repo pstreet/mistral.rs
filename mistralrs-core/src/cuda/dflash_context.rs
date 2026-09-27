@@ -7,8 +7,10 @@ use candle_core::{DType, Result, Shape, Tensor};
 
 const MAX_DFLASH_CONTEXT_TAPS: usize = 64;
 
-unsafe extern "C" {
-    fn dflash_pack_taps_f16(
+use crate::kernel_decl::declare_kernel;
+
+declare_kernel! {
+    dflash_pack_taps_f16(
         inputs: *const *const c_void,
         widths: *const i32,
         taps: i32,
@@ -20,7 +22,7 @@ unsafe extern "C" {
         stream: i64,
     ) -> i32;
 
-    fn dflash_pack_taps_bf16(
+    dflash_pack_taps_bf16(
         inputs: *const *const c_void,
         widths: *const i32,
         taps: i32,
@@ -32,7 +34,7 @@ unsafe extern "C" {
         stream: i64,
     ) -> i32;
 
-    fn dflash_pack_taps_f32(
+    dflash_pack_taps_f32(
         inputs: *const *const c_void,
         widths: *const i32,
         taps: i32,
@@ -44,7 +46,7 @@ unsafe extern "C" {
         stream: i64,
     ) -> i32;
 
-    fn dflash_context_keys_f16(
+    dflash_context_keys_f16(
         input: *const c_void,
         norm_weights: *const c_void,
         cos: *const c_void,
@@ -60,7 +62,7 @@ unsafe extern "C" {
         stream: i64,
     ) -> i32;
 
-    fn dflash_context_keys_bf16(
+    dflash_context_keys_bf16(
         input: *const c_void,
         norm_weights: *const c_void,
         cos: *const c_void,
@@ -76,7 +78,7 @@ unsafe extern "C" {
         stream: i64,
     ) -> i32;
 
-    fn dflash_context_keys_f32(
+    dflash_context_keys_f32(
         input: *const c_void,
         norm_weights: *const c_void,
         cos: *const c_void,

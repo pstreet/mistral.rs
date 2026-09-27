@@ -14,10 +14,20 @@ use std::{
 use crate::utils::slice_ptr;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::utils::{ffi, slice_ptr_mut_on_stream, slice_ptr_on_stream};
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use crate::utils::{hip_slice_ptr, hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use candle_core::cuda::cudarc::driver::DevicePtr;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use candle_core::cuda::CudaStorage;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use candle_core::hip_backend::cudarc::driver::DevicePtr as _;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use candle_core::HipStorage;
+// Opaque stream handles are just bits across the driver boundary: hip_fwd
+// twins pass the Hip stream where the shared FFI decl names NVIDIA CUstream.
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use candle_core::cuda::cudarc::driver::sys::CUstream;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use float8::F8E4M3;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -572,6 +582,230 @@ impl CustomOp2 for BitWise {
                 };
                 drop(d_out_guard);
                 CudaStorage::wrap_cuda_slice(d_out, dev)
+            }
+            _ => unreachable!(),
+        };
+        Ok((dst, l1.shape().clone()))
+    }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    /// Dual-role twin of cuda_fwd: identical kernels through the
+    /// companion plugin, addressed via the Hip role types.
+    fn hip_fwd(
+        &self,
+        s1: &HipStorage,
+        l1: &Layout,
+        s2: &HipStorage,
+        l2: &Layout,
+    ) -> Result<(HipStorage, Shape)> {
+        if l1.shape() != l2.shape() || l1.stride() != l2.stride() {
+            return Err(Error::ShapeMismatchBinaryOp {
+                lhs: l1.shape().clone(),
+                rhs: l2.shape().clone(),
+                op: "bitwise-op",
+            });
+        }
+        if s1.dtype() != s2.dtype() {
+            return Err(Error::DTypeMismatchBinaryOp {
+                lhs: s1.dtype(),
+                rhs: s2.dtype(),
+                op: "bitwise-op",
+            });
+        }
+        if !l1.is_contiguous() {
+            candle_core::bail!("Input tensor s1 must be contiguous");
+        }
+        if !l2.is_contiguous() {
+            candle_core::bail!("Input tensor s2 must be contiguous");
+        }
+
+        let dev = s1.device().clone();
+        let (d_in1_ptr, d_in2_ptr, _d_in1_guard, _d_in2_guard, elem_count) = match s1.dtype() {
+            DType::U8 => {
+                let (d_in1, d_in1_guard) =
+                    hip_slice_ptr(s1.as_cuda_slice::<u8>()?, l1.start_offset());
+                let (d_in2, d_in2_guard) =
+                    hip_slice_ptr(s2.as_cuda_slice::<u8>()?, l2.start_offset());
+                let elem_count = l1.shape().elem_count();
+                (
+                    d_in1 as *const std::ffi::c_void,
+                    d_in2 as *const std::ffi::c_void,
+                    d_in1_guard,
+                    d_in2_guard,
+                    elem_count,
+                )
+            }
+            DType::U32 => {
+                let (d_in1, d_in1_guard) =
+                    hip_slice_ptr(s1.as_cuda_slice::<u32>()?, l1.start_offset());
+                let (d_in2, d_in2_guard) =
+                    hip_slice_ptr(s2.as_cuda_slice::<u32>()?, l2.start_offset());
+                let elem_count = l1.shape().elem_count();
+                (
+                    d_in1 as *const std::ffi::c_void,
+                    d_in2 as *const std::ffi::c_void,
+                    d_in1_guard,
+                    d_in2_guard,
+                    elem_count,
+                )
+            }
+            DType::I64 => {
+                let (d_in1, d_in1_guard) =
+                    hip_slice_ptr(s1.as_cuda_slice::<i64>()?, l1.start_offset());
+                let (d_in2, d_in2_guard) =
+                    hip_slice_ptr(s2.as_cuda_slice::<i64>()?, l2.start_offset());
+                let elem_count = l1.shape().elem_count();
+                (
+                    d_in1 as *const std::ffi::c_void,
+                    d_in2 as *const std::ffi::c_void,
+                    d_in1_guard,
+                    d_in2_guard,
+                    elem_count,
+                )
+            }
+            DType::I32 => {
+                let (d_in1, d_in1_guard) =
+                    hip_slice_ptr(s1.as_cuda_slice::<i32>()?, l1.start_offset());
+                let (d_in2, d_in2_guard) =
+                    hip_slice_ptr(s2.as_cuda_slice::<i32>()?, l2.start_offset());
+                let elem_count = l1.shape().elem_count();
+                (
+                    d_in1 as *const std::ffi::c_void,
+                    d_in2 as *const std::ffi::c_void,
+                    d_in1_guard,
+                    d_in2_guard,
+                    elem_count,
+                )
+            }
+            DType::I16 => {
+                let (d_in1, d_in1_guard) =
+                    hip_slice_ptr(s1.as_cuda_slice::<i16>()?, l1.start_offset());
+                let (d_in2, d_in2_guard) =
+                    hip_slice_ptr(s2.as_cuda_slice::<i16>()?, l2.start_offset());
+                let elem_count = l1.shape().elem_count();
+                (
+                    d_in1 as *const std::ffi::c_void,
+                    d_in2 as *const std::ffi::c_void,
+                    d_in1_guard,
+                    d_in2_guard,
+                    elem_count,
+                )
+            }
+            other => {
+                return Err(Error::UnsupportedDTypeForOp(other, "bitwise"));
+            }
+        };
+        let dst = match s1.dtype() {
+            DType::U8 => {
+                let d_out = unsafe { dev.alloc::<u8>(elem_count) }?;
+                let (d_out_ptr, d_out_guard) = d_out.device_ptr(d_out.stream());
+                unsafe {
+                    match self.op {
+                        BitWiseBinaryOpEnum::And => ffi::bitwise_and_u8(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr as *mut c_void,
+                            u32::try_from(elem_count)?,
+                        ),
+                        BitWiseBinaryOpEnum::Or => ffi::bitwise_or_u8(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr as *mut c_void,
+                            u32::try_from(elem_count)?,
+                        ),
+                        BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_u8(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr as *mut c_void,
+                            u32::try_from(elem_count)?,
+                        ),
+                    }
+                };
+                drop(d_out_guard);
+                HipStorage::wrap_cuda_slice(d_out, dev)
+            }
+            DType::U32 => {
+                let d_out = unsafe { dev.alloc::<u32>(elem_count) }?;
+                let (d_out_ptr, d_out_guard) = d_out.device_ptr(d_out.stream());
+                unsafe {
+                    match self.op {
+                        BitWiseBinaryOpEnum::And => ffi::bitwise_and_u32(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr as *mut c_void,
+                            u32::try_from(elem_count)?,
+                        ),
+                        BitWiseBinaryOpEnum::Or => ffi::bitwise_or_u32(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr as *mut c_void,
+                            u32::try_from(elem_count)?,
+                        ),
+                        BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_u32(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr as *mut c_void,
+                            u32::try_from(elem_count)?,
+                        ),
+                    }
+                };
+                drop(d_out_guard);
+                HipStorage::wrap_cuda_slice(d_out, dev)
+            }
+            DType::I64 => {
+                let d_out = unsafe { dev.alloc::<i64>(elem_count) }?;
+                let (d_out_ptr, d_out_guard) = d_out.device_ptr(d_out.stream());
+                unsafe {
+                    match self.op {
+                        BitWiseBinaryOpEnum::And => ffi::bitwise_and_i64(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr as *mut c_void,
+                            u32::try_from(elem_count)?,
+                        ),
+                        BitWiseBinaryOpEnum::Or => ffi::bitwise_or_i64(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr as *mut c_void,
+                            u32::try_from(elem_count)?,
+                        ),
+                        BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_i64(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr as *mut c_void,
+                            u32::try_from(elem_count)?,
+                        ),
+                    }
+                };
+                drop(d_out_guard);
+                HipStorage::wrap_cuda_slice(d_out, dev)
+            }
+            DType::I32 => {
+                let d_out = unsafe { dev.alloc::<i64>(elem_count) }?;
+                let (d_out_ptr, d_out_guard) = d_out.device_ptr(d_out.stream());
+                unsafe {
+                    match self.op {
+                        BitWiseBinaryOpEnum::And => ffi::bitwise_and_i32(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr as *mut c_void,
+                            u32::try_from(elem_count)?,
+                        ),
+                        BitWiseBinaryOpEnum::Or => ffi::bitwise_or_i32(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr as *mut c_void,
+                            u32::try_from(elem_count)?,
+                        ),
+                        BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_i32(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr as *mut c_void,
+                            u32::try_from(elem_count)?,
+                        ),
+                    }
+                };
+                drop(d_out_guard);
+                HipStorage::wrap_cuda_slice(d_out, dev)
             }
             _ => unreachable!(),
         };
@@ -1363,6 +1597,101 @@ impl CustomOp1 for NonZero {
         }
         let shape = Shape::from_dims(&[num_nonzero as usize, layout.dims().len()]);
         let dst = candle_core::CudaStorage::wrap_cuda_slice(d_out, dev);
+        Ok((dst, shape))
+    }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    /// Dual-role twin of cuda_fwd: identical kernels through the
+    /// companion plugin, addressed via the Hip role types.
+    fn hip_fwd(
+        &self,
+        storage: &candle_core::HipStorage,
+        layout: &Layout,
+    ) -> Result<(candle_core::HipStorage, Shape)> {
+        if !layout.is_contiguous() {
+            return Err(candle_core::Error::RequiresContiguous { op: "nonzero" });
+        }
+        let dev = storage.device().clone();
+        let (d_in, _d_in_guard) = match storage.dtype() {
+            candle_core::DType::U8 => {
+                let slice = storage.as_cuda_slice::<u8>()?;
+                let (d_in, d_in_guard) = hip_slice_ptr(slice, 0);
+                (d_in as *const std::ffi::c_void, d_in_guard)
+            }
+            candle_core::DType::U32 => {
+                let slice = storage.as_cuda_slice::<u32>()?;
+                let (d_in, d_in_guard) = hip_slice_ptr(slice, 0);
+                (d_in as *const std::ffi::c_void, d_in_guard)
+            }
+            candle_core::DType::I32 => {
+                let slice = storage.as_cuda_slice::<i32>()?;
+                let (d_in, d_in_guard) = hip_slice_ptr(slice, 0);
+                (d_in as *const std::ffi::c_void, d_in_guard)
+            }
+            candle_core::DType::I16 => {
+                let slice = storage.as_cuda_slice::<i16>()?;
+                let (d_in, d_in_guard) = hip_slice_ptr(slice, 0);
+                (d_in as *const std::ffi::c_void, d_in_guard)
+            }
+            candle_core::DType::I64 => {
+                let slice = storage.as_cuda_slice::<i64>()?;
+                let (d_in, d_in_guard) = hip_slice_ptr(slice, 0);
+                (d_in as *const std::ffi::c_void, d_in_guard)
+            }
+            candle_core::DType::BF16 => {
+                let slice = storage.as_cuda_slice::<half::bf16>()?;
+                let (d_in, d_in_guard) = hip_slice_ptr(slice, 0);
+                (d_in as *const std::ffi::c_void, d_in_guard)
+            }
+            candle_core::DType::F16 => {
+                let slice = storage.as_cuda_slice::<half::f16>()?;
+                let (d_in, d_in_guard) = hip_slice_ptr(slice, 0);
+                (d_in as *const std::ffi::c_void, d_in_guard)
+            }
+            candle_core::DType::F32 => {
+                let slice = storage.as_cuda_slice::<f32>()?;
+                let (d_in, d_in_guard) = hip_slice_ptr(slice, 0);
+                (d_in as *const std::ffi::c_void, d_in_guard)
+            }
+            candle_core::DType::F64 => {
+                let slice = storage.as_cuda_slice::<f64>()?;
+                let (d_in, d_in_guard) = hip_slice_ptr(slice, 0);
+                (d_in as *const std::ffi::c_void, d_in_guard)
+            }
+            _ => unreachable!(),
+        };
+        let n = layout.shape().elem_count();
+
+        let num_nonzero = count_nonzero_cuda(
+            storage.dtype(),
+            d_in,
+            u32::try_from(n)?,
+            dev.cuda_stream().cu_stream() as CUstream,
+        );
+        let d_out = unsafe { dev.alloc::<u32>(num_nonzero as usize * layout.dims().len()) }
+            .map_err(|_| Error::Msg("Failed to allocate memory for nonzero result".to_string()))?;
+        if num_nonzero != 0 {
+            let (d_out, _d_out_guard) = d_out.device_ptr(d_out.stream());
+            let dims = layout
+                .dims()
+                .iter()
+                .map(|&x| u32::try_from(x).unwrap())
+                .collect::<Vec<u32>>();
+            let mut d_dims = unsafe { dev.alloc::<u32>(dims.len()) }?;
+            dev.memcpy_htod(&dims, &mut d_dims)?;
+            let (d_dims_ptr, _d_dims_guard) = d_dims.device_ptr(d_dims.stream());
+            nonzero_cuda(
+                storage.dtype(),
+                d_in,
+                u32::try_from(n)?,
+                num_nonzero,
+                d_dims_ptr as *const c_void,
+                u32::try_from(layout.dims().len())?,
+                d_out as *mut c_void,
+                dev.cuda_stream().cu_stream() as CUstream,
+            );
+        }
+        let shape = Shape::from_dims(&[num_nonzero as usize, layout.dims().len()]);
+        let dst = candle_core::HipStorage::wrap_cuda_slice(d_out, dev);
         Ok((dst, shape))
     }
 }
@@ -2910,6 +3239,127 @@ impl CustomOp2 for FusedGlu {
             _ => candle_core::bail!("fused_glu: unsupported dtype {:?}", dtype),
         }
     }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    /// Dual-role twin of cuda_fwd: identical kernels through the
+    /// companion plugin, addressed via the Hip role types.
+    fn hip_fwd(
+        &self,
+        s1: &HipStorage,
+        l1: &Layout,
+        s2: &HipStorage,
+        l2: &Layout,
+    ) -> Result<(HipStorage, Shape)> {
+        use half::{bf16, f16};
+
+        let activation = self.0;
+        let device = s1.device();
+        let a_layout = dense_last_dim_layout(l1)
+            .ok_or_else(|| candle_core::Error::msg("fused_glu CUDA input a is not row-dense"))?;
+        let b_layout = dense_last_dim_layout(l2)
+            .ok_or_else(|| candle_core::Error::msg("fused_glu CUDA input b is not row-dense"))?;
+        if (a_layout.rows, a_layout.cols) != (b_layout.rows, b_layout.cols) {
+            candle_core::bail!("fused_glu CUDA input layouts have different logical shapes");
+        }
+        let n_elements = a_layout
+            .rows
+            .checked_mul(a_layout.cols)
+            .ok_or_else(|| candle_core::Error::msg("fused_glu output size overflow"))?;
+        let rows = u32::try_from(a_layout.rows)?;
+        let cols = u32::try_from(a_layout.cols)?;
+        let a_row_stride = u32::try_from(a_layout.row_stride)?;
+        let b_row_stride = u32::try_from(b_layout.row_stride)?;
+        let dtype = s1.dtype();
+        let out_shape = l1.shape().clone();
+        let stream = device.cuda_stream();
+        let stream_raw = stream.cu_stream() as CUstream;
+        let a_offset = l1.start_offset();
+        let b_offset = l2.start_offset();
+
+        match dtype {
+            DType::F16 => {
+                let mut output = device.alloc_zeros::<f16>(n_elements)?;
+                let a_slice = s1.as_cuda_slice::<f16>()?;
+                let b_slice = s2.as_cuda_slice::<f16>()?;
+
+                let (a_ptr, _a_guard) = hip_slice_ptr_on_stream(a_slice, a_offset, &stream);
+                let (b_ptr, _b_guard) = hip_slice_ptr_on_stream(b_slice, b_offset, &stream);
+                let (out_ptr, _o_guard) = hip_slice_ptr_mut_on_stream(&mut output, 0, &stream);
+
+                unsafe {
+                    ffi::fused_glu_f16(
+                        a_ptr as *const c_void,
+                        b_ptr as *const c_void,
+                        out_ptr as *mut c_void,
+                        rows,
+                        cols,
+                        a_row_stride,
+                        b_row_stride,
+                        activation as i32,
+                        stream_raw,
+                    );
+                }
+
+                drop(_o_guard);
+                let out_storage = HipStorage::wrap_cuda_slice(output, device.clone());
+                Ok((out_storage, out_shape))
+            }
+            DType::BF16 => {
+                let mut output = device.alloc_zeros::<bf16>(n_elements)?;
+                let a_slice = s1.as_cuda_slice::<bf16>()?;
+                let b_slice = s2.as_cuda_slice::<bf16>()?;
+
+                let (a_ptr, _a_guard) = hip_slice_ptr_on_stream(a_slice, a_offset, &stream);
+                let (b_ptr, _b_guard) = hip_slice_ptr_on_stream(b_slice, b_offset, &stream);
+                let (out_ptr, _o_guard) = hip_slice_ptr_mut_on_stream(&mut output, 0, &stream);
+
+                unsafe {
+                    ffi::fused_glu_bf16(
+                        a_ptr as *const c_void,
+                        b_ptr as *const c_void,
+                        out_ptr as *mut c_void,
+                        rows,
+                        cols,
+                        a_row_stride,
+                        b_row_stride,
+                        activation as i32,
+                        stream_raw,
+                    );
+                }
+
+                drop(_o_guard);
+                let out_storage = HipStorage::wrap_cuda_slice(output, device.clone());
+                Ok((out_storage, out_shape))
+            }
+            DType::F32 => {
+                let mut output = device.alloc_zeros::<f32>(n_elements)?;
+                let a_slice = s1.as_cuda_slice::<f32>()?;
+                let b_slice = s2.as_cuda_slice::<f32>()?;
+
+                let (a_ptr, _a_guard) = hip_slice_ptr_on_stream(a_slice, a_offset, &stream);
+                let (b_ptr, _b_guard) = hip_slice_ptr_on_stream(b_slice, b_offset, &stream);
+                let (out_ptr, _o_guard) = hip_slice_ptr_mut_on_stream(&mut output, 0, &stream);
+
+                unsafe {
+                    ffi::fused_glu_f32(
+                        a_ptr as *const c_void,
+                        b_ptr as *const c_void,
+                        out_ptr as *mut c_void,
+                        rows,
+                        cols,
+                        a_row_stride,
+                        b_row_stride,
+                        activation as i32,
+                        stream_raw,
+                    );
+                }
+
+                drop(_o_guard);
+                let out_storage = HipStorage::wrap_cuda_slice(output, device.clone());
+                Ok((out_storage, out_shape))
+            }
+            _ => candle_core::bail!("fused_glu: unsupported dtype {:?}", dtype),
+        }
+    }
 
     #[cfg(feature = "metal")]
     fn metal_fwd(
@@ -3189,6 +3639,94 @@ impl CustomOp1 for FusedSplitGlu {
         };
         Ok((output, output_shape))
     }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    /// Dual-role twin of cuda_fwd: identical kernels through the
+    /// companion plugin, addressed via the Hip role types.
+    fn hip_fwd(&self, storage: &HipStorage, layout: &Layout) -> Result<(HipStorage, Shape)> {
+        use half::{bf16, f16};
+
+        if !layout.is_contiguous() {
+            candle_core::bail!("fused split GLU input must be contiguous");
+        }
+        let mut output_dims = layout.dims().to_vec();
+        let last = output_dims
+            .last_mut()
+            .ok_or_else(|| candle_core::Error::msg("fused split GLU input must have a rank"))?;
+        *last = self.split_size;
+        let output_shape = Shape::from(output_dims);
+        let output_elements = output_shape.elem_count();
+        let rows = output_elements / self.split_size;
+        let rows = u32::try_from(rows)?;
+        let split_size = u32::try_from(self.split_size)?;
+        let device = storage.device();
+        let stream = device.cuda_stream();
+        let stream_raw = stream.cu_stream() as CUstream;
+
+        let output = match storage.dtype() {
+            DType::F16 => {
+                let input = storage.as_cuda_slice::<f16>()?;
+                let mut output = unsafe { device.alloc::<f16>(output_elements)? };
+                let (input_ptr, _input_guard) =
+                    hip_slice_ptr_on_stream(input, layout.start_offset(), &stream);
+                let (output_ptr, output_guard) =
+                    hip_slice_ptr_mut_on_stream(&mut output, 0, &stream);
+                unsafe {
+                    ffi::fused_split_glu_f16(
+                        input_ptr as *const c_void,
+                        output_ptr as *mut c_void,
+                        rows,
+                        split_size,
+                        self.activation as i32,
+                        stream_raw,
+                    );
+                }
+                drop(output_guard);
+                HipStorage::wrap_cuda_slice(output, device.clone())
+            }
+            DType::BF16 => {
+                let input = storage.as_cuda_slice::<bf16>()?;
+                let mut output = unsafe { device.alloc::<bf16>(output_elements)? };
+                let (input_ptr, _input_guard) =
+                    hip_slice_ptr_on_stream(input, layout.start_offset(), &stream);
+                let (output_ptr, output_guard) =
+                    hip_slice_ptr_mut_on_stream(&mut output, 0, &stream);
+                unsafe {
+                    ffi::fused_split_glu_bf16(
+                        input_ptr as *const c_void,
+                        output_ptr as *mut c_void,
+                        rows,
+                        split_size,
+                        self.activation as i32,
+                        stream_raw,
+                    );
+                }
+                drop(output_guard);
+                HipStorage::wrap_cuda_slice(output, device.clone())
+            }
+            DType::F32 => {
+                let input = storage.as_cuda_slice::<f32>()?;
+                let mut output = unsafe { device.alloc::<f32>(output_elements)? };
+                let (input_ptr, _input_guard) =
+                    hip_slice_ptr_on_stream(input, layout.start_offset(), &stream);
+                let (output_ptr, output_guard) =
+                    hip_slice_ptr_mut_on_stream(&mut output, 0, &stream);
+                unsafe {
+                    ffi::fused_split_glu_f32(
+                        input_ptr as *const c_void,
+                        output_ptr as *mut c_void,
+                        rows,
+                        split_size,
+                        self.activation as i32,
+                        stream_raw,
+                    );
+                }
+                drop(output_guard);
+                HipStorage::wrap_cuda_slice(output, device.clone())
+            }
+            dtype => candle_core::bail!("fused split GLU does not support {dtype:?}"),
+        };
+        Ok((output, output_shape))
+    }
 }
 
 pub fn fused_split_glu(
@@ -3386,6 +3924,48 @@ impl CustomOp1 for Softcap {
             out_shape,
         ))
     }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    /// Dual-role twin of cuda_fwd: identical kernels through the
+    /// companion plugin, addressed via the Hip role types.
+    fn hip_fwd(&self, s1: &HipStorage, l1: &Layout) -> Result<(HipStorage, Shape)> {
+        let device = s1.device();
+        let n_elements = l1.shape().elem_count();
+        let out_shape = l1.shape().clone();
+        let stream = device.cuda_stream();
+        let mut output = device.alloc_zeros::<f32>(n_elements)?;
+        let (output_ptr, _output_guard) = hip_slice_ptr_mut_on_stream(&mut output, 0, &stream);
+
+        macro_rules! launch {
+            ($ty:ty, $ffi:path) => {{
+                let input = s1.as_cuda_slice::<$ty>()?;
+                let (input_ptr, _input_guard) =
+                    hip_slice_ptr_on_stream(input, l1.start_offset(), &stream);
+                unsafe {
+                    $ffi(
+                        input_ptr as *const c_void,
+                        output_ptr as *mut c_void,
+                        u32::try_from(n_elements)?,
+                        self.0,
+                        stream.cu_stream() as CUstream,
+                    );
+                }
+                drop(_input_guard);
+            }};
+        }
+
+        match s1.dtype() {
+            DType::F32 => launch!(f32, ffi::softcap_f32),
+            DType::F16 => launch!(half::f16, ffi::softcap_f16_to_f32),
+            DType::BF16 => launch!(half::bf16, ffi::softcap_bf16_to_f32),
+            dtype => candle_core::bail!("softcap: unsupported dtype {dtype:?}"),
+        }
+
+        drop(_output_guard);
+        Ok((
+            HipStorage::wrap_cuda_slice(output, device.clone()),
+            out_shape,
+        ))
+    }
 
     #[cfg(feature = "metal")]
     fn metal_fwd(
@@ -3539,7 +4119,7 @@ mod tests {
         const ROWS: usize = 3;
 
         let cpu = Device::Cpu;
-        let cuda = Device::new_cuda(0).unwrap();
+        let cuda = crate::utils::test_gpu_device();
         for dtype in [DType::F32, DType::F16, DType::BF16] {
             for split in [7, 8] {
                 let gate_data = (0..ROWS * split)
@@ -3607,7 +4187,7 @@ mod tests {
         const SCALE_TOLERANCE: f32 = 1.0e-6;
         const QUANTIZATION_TOLERANCE: f32 = 0.08;
 
-        let cuda = Device::new_cuda(0).unwrap();
+        let cuda = crate::utils::test_gpu_device();
         let values = (0..ROWS * PACKED + 1)
             .map(|index| {
                 let value = ((index * 17 + 11) % 97) as f32 - 48.0;
@@ -3704,7 +4284,7 @@ mod tests {
         const VALUE_START: usize = 16;
         const QUANTIZATION_TOLERANCE: f32 = 0.08;
 
-        let cuda = Device::new_cuda(0).unwrap();
+        let cuda = crate::utils::test_gpu_device();
         let gate_values = (0..ROWS * GATE_WIDTH)
             .map(|index| (((index * 17 + 5) % 101) as f32 - 50.0) / 19.0)
             .collect::<Vec<_>>();
@@ -3798,7 +4378,7 @@ mod tests {
         const COLS: usize = 8;
 
         let cpu = Device::Cpu;
-        let cuda = Device::new_cuda(0).unwrap();
+        let cuda = crate::utils::test_gpu_device();
         for dtype in [DType::F32, DType::F16, DType::BF16] {
             for (a_width, a_start, b_width, b_start) in [(13, 1, 15, 2), (16, 4, 16, 4)] {
                 let a_data = (0..ROWS * a_width)
@@ -3879,7 +4459,7 @@ mod tests {
         use candle_core::Tensor;
 
         let cpu = candle_core::Device::Cpu;
-        let cuda = candle_core::Device::new_cuda(0).unwrap();
+        let cuda = crate::utils::test_gpu_device();
         let cap = 30.0;
         let data: Vec<f32> = (-128..128).map(|i| i as f32 * 0.5).collect();
         let input = Tensor::from_vec(data, &[4, 64], &cuda).unwrap();
@@ -4062,7 +4642,7 @@ mod tests {
     fn test_nonzero_cuda() {
         use crate::utils::ops::NonZeroOp;
         use candle_core::Tensor;
-        let device = candle_core::Device::new_cuda(0).unwrap();
+        let device = crate::utils::test_gpu_device();
         let a = Tensor::from_vec(
             vec![1f32, 0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0],
             &[2, 4],
@@ -4091,7 +4671,7 @@ mod tests {
     fn test_bitwise_and_cuda() {
         use crate::utils::ops::BitWiseOp;
         use candle_core::Tensor;
-        let device = candle_core::Device::new_cuda(0).unwrap();
+        let device = crate::utils::test_gpu_device();
         let a =
             Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
         let b =
@@ -4117,7 +4697,7 @@ mod tests {
     fn test_bitwise_or_cuda() {
         use crate::utils::ops::BitWiseOp;
         use candle_core::Tensor;
-        let device = candle_core::Device::new_cuda(0).unwrap();
+        let device = crate::utils::test_gpu_device();
         let a =
             Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
         let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
@@ -4142,7 +4722,7 @@ mod tests {
     fn test_bitwise_xor_cuda() {
         use crate::utils::ops::BitWiseOp;
         use candle_core::Tensor;
-        let device = candle_core::Device::new_cuda(0).unwrap();
+        let device = crate::utils::test_gpu_device();
         let a =
             Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
         let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
@@ -4271,7 +4851,7 @@ mod tests {
         use crate::utils::ops::{BitWiseOp, NonZeroOp};
         use candle_core::{Device, Tensor};
 
-        let device = Device::new_cuda(0).unwrap();
+        let device = crate::utils::test_gpu_device();
         let input1 =
             Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (10,), &device).unwrap();
         let input2 =
@@ -4323,7 +4903,7 @@ mod tests {
         use crate::HqqBits;
         use candle_core::{Device, Tensor};
         let bits = HqqBits::Eight;
-        let device = Device::new_cuda(0).unwrap();
+        let device = crate::utils::test_gpu_device();
         // Use U8 tensor directly to avoid candle's to_dtype which may not have
         // PTX compiled for newer GPU architectures (e.g., SM 120)
         let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 255, 0], (3, 2), &device).unwrap();
@@ -4363,13 +4943,15 @@ mod tests {
         assert_eq!(c, [[19, 36]]);
     }
 
+    // S2: Hip-side op coverage (HQQ bitpack ops bail on Hip today).
     #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     #[test]
     fn test_bitpack_4bit_cuda() {
         use crate::HqqBits;
         use candle_core::{Device, Tensor};
         let bits = HqqBits::Four;
-        let device = Device::new_cuda(0).unwrap();
+        let device = crate::utils::test_gpu_device();
         let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
         let c = bits.bitpack_type()(wq.clone())
             .unwrap()
@@ -4672,7 +5254,7 @@ mod tests {
         use candle_core::Tensor;
 
         let cpu = candle_core::Device::Cpu;
-        let cuda = candle_core::Device::new_cuda(0).unwrap();
+        let cuda = crate::utils::test_gpu_device();
 
         let a_data: Vec<f32> = (0..256).map(|i| (i as f32 - 128.0) / 64.0).collect();
         let b_data: Vec<f32> = (0..256).map(|i| (i as f32 * 0.7 - 90.0) / 50.0).collect();
@@ -4711,7 +5293,7 @@ mod tests {
         use candle_core::{DType, Tensor};
 
         let cpu = candle_core::Device::Cpu;
-        let cuda = candle_core::Device::new_cuda(0).unwrap();
+        let cuda = crate::utils::test_gpu_device();
 
         let a_data: Vec<f32> = (0..256).map(|i| (i as f32 - 128.0) / 64.0).collect();
         let b_data: Vec<f32> = (0..256).map(|i| (i as f32 * 0.7 - 90.0) / 50.0).collect();
@@ -4764,7 +5346,7 @@ mod tests {
         use candle_core::Tensor;
 
         let cpu = candle_core::Device::Cpu;
-        let cuda = candle_core::Device::new_cuda(0).unwrap();
+        let cuda = crate::utils::test_gpu_device();
 
         let a_data: Vec<f32> = (0..128).map(|i| (i as f32 - 64.0) / 32.0).collect();
         let b_data: Vec<f32> = (0..128).map(|i| (i as f32 * 0.5 - 32.0) / 20.0).collect();
@@ -4808,7 +5390,7 @@ mod tests {
         use super::{fused_glu, GluActivationType};
         use candle_core::{DType, Tensor};
 
-        let cuda = candle_core::Device::new_cuda(0).unwrap();
+        let cuda = crate::utils::test_gpu_device();
 
         let n = 10240;
         let a_data: Vec<f32> = (0..n).map(|i| (i as f32 - 5120.0) / 2560.0).collect();
