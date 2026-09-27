@@ -61,6 +61,10 @@ Mistral.rs supports multiple model types and advanced features via dedicated cra
    cargo build --release --package mistralrs-cli --features "<features>"
    cargo install --path mistralrs-cli --features "<features>"
    ```
+5. Build profiles:
+   - `--profile fast` for iteration: parallel codegen (`codegen-units = 32`), no LTO, line-table debug info - several times faster than `release`. Use it for correctness loops, test binaries, and link debugging.
+   - `--release` (thin-LTO, `codegen-units = 1`) only for the performance bar and production artifacts. Never benchmark `fast` builds.
+   - `sccache` is wired via `~/.cargo/config.toml`, so rebuilds after target-dir wipes and crates shared with the candle workspace come from cache.
 
 ## Models
 
@@ -142,7 +146,8 @@ The CI pipeline is defined in `.github/workflows/ci.yml` and includes:
   maintained in this fork), and `cuda+rocm` (dual-vendor: the AMD role
   serves - all C kernels are hipcc-built - and NVIDIA access is gated on
   cudarc's `is_culib_present()` probe; dynamic-loading means the binary
-  starts without an NVIDIA runtime installed).
+  starts with no GPU runtimes installed: drivers via dlopen, hipcc
+  kernel sets as companion libraries, all probe-gated).
 - Update `/docs/src/content/docs/` and examples when adding features or breaking changes.
 - Add tests and examples for new functionality.
 - Commit messages should be clear and follow conventional style where possible.

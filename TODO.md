@@ -705,6 +705,53 @@ P3 = polish, Deferred = do not do on RDNA.
       fragile, touches dlopen semantics); (C) accept libamdhip64 DT_NEEDED
       (binary needs ROCm FILES present, no GPU hardware required -
       probes still gate all use). Candle side is fully clean regardless.
+      DECISION 2026-09-27: combine B+S2 as PHASED S2 (neither B-now plus
+      S2-later nor one undifferentiated blob). Phase 1: plugin shell +
+      dlsym loader + call-site indirection around CURRENT kernels
+      (including the bail-stubs); verified by the existing bar plus the
+      bare-metal startup proof - the green checkpoint. Phase 2: stub to
+      real launchers (QStorage-on-hip, loader paths, managed uploads,
+      multimodal gate) through the proven loader; verified by GGUF
+      serving on hip:0 with caps gguf=on. Phase 1 wraps what exists,
+      Phase 2 extends - no call site rewritten twice.
+      PHASE 1 DONE 2026-09-27 (candle + mistral.rs): every hipcc kernel
+      set ships as a runtime-loaded companion library; the dual binary
+      carries ZERO GPU DT_NEEDED (readelf-proven on both fast and release
+      profiles) and starts in a stripped env with no ROCm variables.
+      Companions: libmoe_hip.so (candle-kernels, hip-plugin feature),
+      libmistralrsquant_hip.so, libmistralrscuda_hip.so (core GDN/CK/
+      graph), libmistralrspagedattention_hip.so. Design: one
+      kernel_decl.rs macro per crate declares entries BOTH ways - plain
+      extern "C" against the static archive in every single-vendor shape,
+      dlsym-cached wrappers through the companion in dual; one
+      hip_plugin.rs loader per crate (env override -> OUT_DIR-baked env!()
+      -> exe sibling, process-lifetime handle, named panics). Call sites
+      untouched - same names in all shapes. Rust test seams: gpu tests use
+      test_gpu_device() (Hip in dual) and 5 hip_fwd twins landed with the
+      conversion (BitWise, FusedGlu, NonZero, Softcap, FusedSplitGlu) +
+      candle Storage::copy_strided_src Hip arm (a real S1b gap found by a
+      twin test). 9 runtime-blocked tests gated with S2 pointers (hqq
+      embedding/capture family, managed uploads, bitpack, capture).
+      VERIFICATION: dual green through the plugins (quant 303, candle 7,
+      core device_spec 4 + cuda_graph 31+8 + gdn 55, paged-attn 8);
+      stripped-env startup OK; serving smoke identical (auto-select hip,
+      caps line, weight loading); prod-parity bar EXACT (quant 316/1
+      documented pre-existing fp8, fast_mmq 5/5, gdn 55/55, cuda_graph
+      31+8, paged-attn 8/8); release gate links. LESSON: paged-attn was
+      misclassified cuda-only - ATTRIBUTE undefined symbols to archive
+      members (rust-lld 'referenced by' lines) before classifying a
+      vendor block. BUILD INFRA: [profile.fast] in both workspaces
+      (cgu=32, no LTO, incremental) - 4m full / seconds-per-iteration
+      vs 9-10m release; sccache wired globally via ~/.cargo/config.toml
+      (rustc-wrapper; cross-workspace candle-core hits); mold installed
+      for cmake-only links (Rust stays on rust-lld - a mid-stream
+      RUSTFLAGS change splits cargo's fingerprint cache into two
+      universes); ccache-over-hipcc TRIED AND REJECTED: TheRock's hipcc
+      is a binary driver whose clang++ child-exec breaks under ccache's
+      two-phase invocation (--version passes, compiles fail). NEXT:
+      Phase 2 (QStorage-on-hip + real launchers through the proven
+      loader; multimodal gate placement), then the serving smoke with
+      real GGUF weights and caps gguf=on.
       S1 DONE 2026-09-26 (candle): kernels twin builds standalone
       (11 PTX, symlink-free, sm_80 fallback GPU-less); dual check
       green alongside default + rocm; 4 dual tests pass (CPU op +

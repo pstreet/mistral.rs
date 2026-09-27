@@ -39,11 +39,21 @@ cargo check -p mistralrs-cli --features rocm        # AMD - the prod shape
 cargo check -p mistralrs-cli --features cuda+rocm    # dual-vendor
 ```
 
+Build profiles: iterate with `--profile fast` (parallel codegen, no LTO) for
+test binaries and link gates - several times faster than `release`; reserve
+`--release` (thin-LTO, `codegen-units = 1`) for the performance bar and
+production artifacts, and never benchmark `fast` builds. sccache is wired
+globally (`~/.cargo/config.toml`), so rebuilds after target-dir wipes and
+candle crates shared between the two workspaces come from cache.
+
 The dual binary serves on the AMD role (all llama.cpp-derived C kernels are
 hipcc-built); the NVIDIA side is compiled in for interop with every driver
-call gated on cudarc's `is_culib_present()` probe. cudarc uses
-dynamic-loading, so a dual binary starts and serves with no NVIDIA runtime
-on the machine. A `cuda`-only build is not maintained in this fork.
+call gated on cudarc's `is_culib_present()` probe. Both vendors
+runtime-load in dual builds: drivers via dlopen, the hipcc kernel sets as
+companion libraries (`libmoe_hip.so`, `libmistralrsquant_hip.so`,
+`libmistralrscuda_hip.so`, `libmistralrspagedattention_hip.so`), so a dual
+binary starts and serves on machines with no GPU runtimes installed at
+all. A `cuda`-only build is not maintained in this fork.
 
 Dual-build env (GPU-less NVIDIA side needs the toolkit + pinned capability):
 
