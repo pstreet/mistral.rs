@@ -17,6 +17,8 @@ Use this page to check whether a prebuilt binary exists for your accelerator. If
 | Windows x86_64 | CPU | yes |
 | Intel Mac, unlisted GPU | source build | no |
 
+CPU inference is available in every build shape. `cuda+rocm` is a source-only dual-vendor shape (no prebuilt binaries): the AMD role serves while NVIDIA access is probe-gated (see [cargo features](/reference/cargo-features/)).
+
 ## NVIDIA compute capabilities
 
 The minimum supported NVIDIA GPU is **Ampere (compute capability 8.0)**. Turing (`sm75`: RTX 20-series, GTX 16-series, Tesla T4) and older are not supported by current prebuilts.

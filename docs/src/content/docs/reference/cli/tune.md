@@ -43,6 +43,7 @@ mistralrs tune [OPTIONS] [COMMAND]
 | `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
 | `--calibration-file <CALIBRATION_FILE>` |  | Calibration file for imatrix generation |
 | `--cpu` | `false` | Force CPU-only execution |
+| `--device <DEVICE>` |  | Explicit device: "cpu", "cuda:<idx>", or "hip:<idx>". Omit to auto-select (native GPU serving this build, else CPU). The API qualifier is the vendor-API choice; the index is per-API |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
@@ -102,6 +103,7 @@ mistralrs tune auto [OPTIONS] --model-id <MODEL_ID>
 | `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
 | `--calibration-file <CALIBRATION_FILE>` |  | Calibration file for imatrix generation |
 | `--cpu` | `false` | Force CPU-only execution |
+| `--device <DEVICE>` |  | Explicit device: "cpu", "cuda:<idx>", or "hip:<idx>". Omit to auto-select (native GPU serving this build, else CPU). The API qualifier is the vendor-API choice; the index is per-API |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
@@ -158,6 +160,7 @@ mistralrs tune text [OPTIONS] --model-id <MODEL_ID>
 | `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
 | `--calibration-file <CALIBRATION_FILE>` |  | Calibration file for imatrix generation |
 | `--cpu` | `false` | Force CPU-only execution |
+| `--device <DEVICE>` |  | Explicit device: "cpu", "cuda:<idx>", or "hip:<idx>". Omit to auto-select (native GPU serving this build, else CPU). The API qualifier is the vendor-API choice; the index is per-API |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
@@ -205,6 +208,7 @@ mistralrs tune multimodal [OPTIONS] --model-id <MODEL_ID>
 | `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
 | `--calibration-file <CALIBRATION_FILE>` |  | Calibration file for imatrix generation |
 | `--cpu` | `false` | Force CPU-only execution |
+| `--device <DEVICE>` |  | Explicit device: "cpu", "cuda:<idx>", or "hip:<idx>". Omit to auto-select (native GPU serving this build, else CPU). The API qualifier is the vendor-API choice; the index is per-API |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
@@ -240,6 +244,7 @@ mistralrs tune diffusion [OPTIONS] --model-id <MODEL_ID>
 | `--hf-overrides <HF_OVERRIDES>` |  | Recursively merged JSON overrides for the Hugging Face model config |
 | `--max-model-len <MAX_MODEL_LEN>` |  | Runtime model context length |
 | `--cpu` | `false` | Force CPU-only execution |
+| `--device <DEVICE>` |  | Explicit device: "cpu", "cuda:<idx>", or "hip:<idx>". Omit to auto-select (native GPU serving this build, else CPU). The API qualifier is the vendor-API choice; the index is per-API |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
@@ -263,6 +268,7 @@ mistralrs tune speech [OPTIONS] --model-id <MODEL_ID>
 | `--hf-overrides <HF_OVERRIDES>` |  | Recursively merged JSON overrides for the Hugging Face model config |
 | `--max-model-len <MAX_MODEL_LEN>` |  | Runtime model context length |
 | `--cpu` | `false` | Force CPU-only execution |
+| `--device <DEVICE>` |  | Explicit device: "cpu", "cuda:<idx>", or "hip:<idx>". Omit to auto-select (native GPU serving this build, else CPU). The API qualifier is the vendor-API choice; the index is per-API |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
@@ -297,6 +303,7 @@ mistralrs tune embedding [OPTIONS] --model-id <MODEL_ID>
 | `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
 | `--calibration-file <CALIBRATION_FILE>` |  | Calibration file for imatrix generation |
 | `--cpu` | `false` | Force CPU-only execution |
+| `--device <DEVICE>` |  | Explicit device: "cpu", "cuda:<idx>", or "hip:<idx>". Omit to auto-select (native GPU serving this build, else CPU). The API qualifier is the vendor-API choice; the index is per-API |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |

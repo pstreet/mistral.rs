@@ -37,6 +37,7 @@ quant = "4"
 | Field | CLI flag | Default | Purpose |
 |---|---|---|---|
 | `seed` | `--seed` | not set | Sampling seed. |
+| `device` | `--device` | not set | Backend selection: `"cpu"`, `"cuda:<N>"`, `"hip:<N>"` (indices per-API). A per-model `device` overrides it. Omitted = auto-select (probe the serving role, log the choice and capabilities). |
 | `log` | `-l`, `--log` | not set | Log file for requests/responses. |
 | `token_source` | `--token-source` | `cache` | Token source string (`literal:<token>`, `env:<var>`, `path:<file>`, `cache`, `none`). |
 
@@ -149,6 +150,7 @@ Each entry defines one loaded model.
 | `matformer_config_path` | path | no | MatFormer slice config (CSV/JSON). |
 | `matformer_slice_name` | string | no | MatFormer slice to load. |
 | `alias` | string | no | API-visible name for this model (like llama.cpp `--alias`). Defaults to `model_id`. |
+| `device` | string | no | Flat backend selection for this model (`"cpu"`, `"cuda:<N>"`, `"hip:<N>"`); overrides `[global] device`. Equivalent to the `device` key of the `[models.device]` sub-table. |
 | `lazy` | boolean | no | Register without loading weights (`serve` with 2+ models only; the first model must stay eager). Lazy models load on first request or explicit `/v1/models/reload`. |
 | `mtp` | boolean | no | MTP speculative decoding for this model. Defaults to the global `[runtime] mtp` flag. Honored for the first model and lazy entries only; a headless model fails at load (at first request when lazy). |
 | `cache_type` | enum | no | Per-model KV cache type (same values as `[paged_attn] cache_type`). Unset inherits the global base. Setting it also resets inherited global `k_cache_type`/`v_cache_type` overrides for this model. |
@@ -162,7 +164,7 @@ Each `[[models]]` entry can carry nested sections whose field shapes mirror the 
 | `[models.format]` | Weight format selection and overrides (`format`, `quantized_file`, `mmproj`, `tok_model_id`, and GGML `gqa`). |
 | `[models.adapter]` | LoRA/X-LoRA adapter configuration. |
 | `[models.quantization]` | Quantization and artifact selection: `quant` (same as `--quant`), `isq` (explicit ISQ, same as `--isq`), `from_uqff`, `isq_organization`, `imatrix`, `calibration_file`. |
-| `[models.device]` | Device placement: `cpu`, `device_layers`, `topology`, `hf_cache`, `max_seq_len`, `max_batch_size`. `cpu` must be consistent across every entry. |
+| `[models.device]` | Device placement: `cpu`, `device` (`"cpu"`, `"cuda:<N>"`, `"hip:<N>"`), `device_layers`, `topology`, `hf_cache`, `max_seq_len`, `max_batch_size`. `cpu` must be consistent across every entry. |
 | `[models.multimodal]` | Multimodal load-time caps (image/video/audio limits). |
 
 Dynamic LoRA uses structured adapter entries and explicit per-request selection. For `command = "run"`, the top-level `adapter` key selects the initial alias; omit it to run the base model.

@@ -54,6 +54,26 @@ a while on the first build; later builds are incremental. See
 [build from source](/developer/from-source/) for the general flag
 reference.
 
+### Dual-vendor (`cuda+rocm`) builds
+
+`--features cuda+rocm` builds one binary carrying both vendors. The AMD
+role serves (every C kernel is hipcc-built); the NVIDIA side is compiled in
+for interop with each driver call gated on cudarc's `is_culib_present()`
+probe, and cudarc's dynamic-loading mode means the binary starts and serves
+with no NVIDIA runtime on the machine. A `cuda`-only build is not maintained
+in this fork.
+
+The NVIDIA half needs the CUDA toolkit even without an NVIDIA GPU: the
+default compute-capability detection needs a driver, so GPU-less build boxes
+pin it explicitly.
+
+```bash
+export CUDA_PATH=/usr/local/cuda-13.3
+export PATH=/usr/local/cuda-13.3/bin:$PATH
+export CUDA_COMPUTE_CAP=80
+cargo build --release --locked -p mistralrs-cli --features cuda+rocm
+```
+
 ## Run
 
 Smoke-test with a single model, then move to a config file for anything
@@ -71,6 +91,18 @@ TOML serving is documented under [`from-config`](/reference/cli/from-config/)
 and the [TOML reference](/reference/cli-toml-config/). MTP speculative
 decoding works on ROCm with paged attention; see
 [speculative decoding](/guides/perf/speculative-decoding/).
+
+## Device selection
+
+The `--device` flag, `device` under the TOML `[global]` section, or a
+per-`[[models]]` `device` key select the backend: `"cpu"`, `"cuda:<N>"`, or
+`"hip:<N>"` (indices are per-API enumeration). Omitted, auto-select probes
+the serving role and logs the choice plus a capability line
+(`graphs/paged_attn/gguf/mtp`). `hip:<N>` also works in `rocm`-only builds
+as an alias for the compiled vendor, so one config ports across shapes.
+GGUF weights on the hip role refuse cleanly at load time until S2
+(QStorage-on-hip) lands; that gate is the `BackendCaps` contract, not a
+silent fallback.
 
 ## Serve under systemd
 

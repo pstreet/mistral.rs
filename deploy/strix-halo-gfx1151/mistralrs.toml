@@ -19,6 +19,16 @@
 #   - Sampling knobs from models.ini (top-k, top-p, temp, repeat/presence
 #     penalty) are per-request in the OpenAI API, not set here.
 #   - spec-type = draft-mtp is a global runtime flag in mistral.rs, not per-model.
+#
+# Device selection (multi-backend support):
+#   - Optional `device` key: "cpu", "cuda:N", or "hip:N" (indices per-API).
+#     `device` under [global] (or the --device flag) is the default; a
+#     per-[[models]] `device = "..."` overrides it for that model.
+#   - Omitted -> auto-select probes the GPU and logs the choice plus a
+#     capability line (graphs/paged_attn/gguf/mtp).
+#   - Prod runs single-vendor rocm: hip:N is an alias for the compiled
+#     vendor. In cuda+rocm builds the AMD role serves; GGUF on hip
+#     refuses cleanly until S2 (QStorage-on-hip) lands.
 
 command = "serve"
 # Single active model -> clients address it as "default".

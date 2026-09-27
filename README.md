@@ -23,6 +23,8 @@
   </a>
 </p>
 
+> **Deployment fork.** This checkout serves AMD ROCm (Strix Halo `gfx1151`) alongside upstream's CUDA/Metal/CPU paths. CPU works in every build; `rocm` is the production shape; `cuda+rocm` builds a dual-vendor binary (AMD serves, NVIDIA access is probe-gated). Device selection (`--device`, `[global] device`, per-model `device`) accepts `cpu`, `cuda:N`, `hip:N`, or omit it for probe-and-log auto-select. `cuda`-only builds are not maintained here; Vulkan is planned. Build shapes, device routing, and the verification bar are in [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md); the AMD guide is [Deploy on ROCm](docs/src/content/docs/guides/deploy/rocm.md).
+
 ## Latest
 
 - **Muse Glimmer 30B**: native text, image, and video inference with ATEM tool calling, reasoning controls, LoRA, ISQ/UQFF, and companion-projector GGUF loading. [Model notes](https://docs.mistralrs.dev/guides/models/model-family-notes/#muse-glimmer)

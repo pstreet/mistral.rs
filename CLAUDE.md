@@ -27,6 +27,39 @@ cargo build --release --features metal
 cargo install --path mistralrs-cli --features <features>
 ```
 
+### Fork build shapes & device selection
+
+This fork carries three verified CLI build shapes; re-check all three for
+GPU-facing changes (`cargo check` never links - build or test the touched
+shape too):
+
+```bash
+cargo check -p mistralrs-cli                        # CPU-only (unconditional)
+cargo check -p mistralrs-cli --features rocm        # AMD - the prod shape
+cargo check -p mistralrs-cli --features cuda+rocm    # dual-vendor
+```
+
+The dual binary serves on the AMD role (all llama.cpp-derived C kernels are
+hipcc-built); the NVIDIA side is compiled in for interop with every driver
+call gated on cudarc's `is_culib_present()` probe. cudarc uses
+dynamic-loading, so a dual binary starts and serves with no NVIDIA runtime
+on the machine. A `cuda`-only build is not maintained in this fork.
+
+Dual-build env (GPU-less NVIDIA side needs the toolkit + pinned capability):
+
+```bash
+export LOCALAI_ROOT=/home/pstreet/LocalAI && source .rocm-env.sh
+export CUDA_PATH=/usr/local/cuda-13.3 PATH=/usr/local/cuda-13.3/bin:$PATH CUDA_COMPUTE_CAP=80
+```
+
+Device selection (`mistralrs-core/src/device_spec.rs`): the `--device` flag,
+`device` under the toml `[global]` section, or a per-`[[models]]` `device` key
+accept `"cpu"`, `"cuda:<N>"`, `"hip:<N>"` (indices are per-API). Omitted,
+auto-select probes the serving role and logs the choice plus a capability
+line (graphs/paged_attn/gguf/mtp); GGUF on the hip role refuses cleanly
+until S2 (QStorage-on-hip) lands. `hip:<N>` also works in rocm-only builds
+as an alias for the compiled vendor, so configs port across shapes.
+
 ### Testing & Quality
 ```bash
 # Run core tests
@@ -161,3 +194,11 @@ Avoid returning TODOs.
 8. **Mistral `consolidated.safetensors` stores Q/K weights with interleaved head dimensions**: When loading from Mistral-native `consolidated.safetensors` (as opposed to HF-converted `model.safetensors`), the Q and K projection weights use an interleaved layout within each head: `[x0, x_{d/2}, x1, x_{d/2+1}, ...]` instead of the sequential HF layout `[x0, x1, ..., x_{d/2-1}, x_{d/2}, ...]`. This means you must use `is_gptx=false` (GPT-J/adjacent-pair style) for `RotaryEmbedding`, NOT `is_gptx=true` (GPT-NeoX/half-split style). Using the wrong RoPE style produces completely wrong attention outputs (cosine similarity ~0.02 with reference). To diagnose: compare a Q or K weight tensor between `consolidated.safetensors` and `model.safetensors` — if they differ (cosine ~0.02), apply the un-interleave: `reshape(n_heads, head_dim/2, 2, dim).permute(0,2,1,3)` and verify cosine ~1.0.
 
 9. **Causal Conv1d padding formula**: For causal convolution (left-pad only, no right-pad), the correct left padding is `effective_kernel_size - stride`, NOT `(kernel_size - 1) * dilation` (which is the total padding for non-causal). For example, with kernel_size=3, stride=2, dilation=1: left_pad = 3 - 2 = 1, not 2. Verify against the HF model's `VoxtralRealtimeCausalConv1d` or equivalent source.
+
+10. **Vendor gating under dual builds**: plain `cfg(feature = "cuda")` marks
+   NVIDIA-original code and stays active in `cuda+rocm` builds; gates for
+   cuda-block-only machinery must read `all(feature = "cuda", not(feature = "rocm"))`,
+   and AMD paths gate on plain `feature = "rocm"` - never
+   `all(feature = "rocm", not(feature = "cuda"))`, which silently disables in
+   dual builds. cfg cannot splice enum variants into an expression; use the
+   role helpers (`as_role_device`/`as_role_storage`) with cfg-gated arms.

@@ -29,6 +29,7 @@ sidebar:
 
 | Option | Default | Description |
 |---|---|---|
+| `--device <DEVICE>` |  | Explicit device: "cpu", "cuda:<idx>", "hip:<idx>". Omit to auto-select. Per-model `device` config keys override this |
 | `--seed <SEED>` |  | Random seed for reproducibility |
 | `-l, --log <LOG>` |  | Log all requests and responses to this file |
 | `--token-source <TOKEN_SOURCE>` | `cache` | Token source for Hugging Face authentication. Formats: `literal:<token>`, `env:<var>`, `path:<file>`, `cache`, `none` |

@@ -26,6 +26,8 @@ Typical combinations:
 - NVIDIA Ampere or Ada: `cuda flash-attn cudnn` (add `cutile` with CUDA >= 13.2)
 - NVIDIA Blackwell with CUDA >= 13.2 and a compatible `tileiras`: `cuda flash-attn cudnn cutile`
 - NVIDIA older: `cuda cudnn`
+- AMD ROCm: `rocm` ([deploy on ROCm](/guides/deploy/rocm/))
+- Dual-vendor, AMD serves with NVIDIA probe-gated: `cuda+rocm` (needs the CUDA toolkit at build time; pin `CUDA_COMPUTE_CAP` on GPU-less boxes)
 - Apple Silicon: `metal`
 - Intel CPU with MKL: `mkl`
 
