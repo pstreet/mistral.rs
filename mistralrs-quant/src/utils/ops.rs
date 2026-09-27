@@ -2965,7 +2965,7 @@ pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resul
         );
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     if a.device().is_cuda()
         && matches!(a.dtype(), DType::F16 | DType::BF16 | DType::F32)
         && dense_last_dim_layout(a.layout()).is_some()
@@ -3592,7 +3592,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn test_fused_split_glu_fp8_quantization_cuda() {
         use super::{fused_split_glu, fused_split_glu_quantized_bf16, GluActivationType};
@@ -3687,7 +3687,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn test_fused_glu_fp8_quantization_preserves_bf16_rounding_and_row_strides() {
         use super::{fused_glu, fused_glu_quantized_bf16, GluActivationType};
@@ -3788,7 +3788,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn test_fused_sigmoid_glu_cuda_row_strides_and_offsets() {
         use super::{fused_glu, GluActivationType};

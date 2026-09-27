@@ -9,11 +9,11 @@ use crate::{
     QuantizedSerdeType, Shard, ShardedVarBuilder, UqffReader, UqffTensor,
 };
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub(crate) mod ffi;
 #[cfg(feature = "metal")]
 pub(crate) mod metal_ops;
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub(crate) mod ops;
 
 /// MXFP4 block size (32 elements per scale)
@@ -104,7 +104,7 @@ impl QuantMethod for MXFP4Layer {
 
     #[allow(unused_variables)]
     fn forward_raw(&self, x: &Tensor) -> Result<Tensor> {
-        #[cfg(feature = "cuda")]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         if matches!(x.device(), Device::Cuda(_)) && ffi::HAVE_MXFP4_GEMM_KERNELS {
             let orig_dims = x.dims().to_vec();
             let x_2d = if orig_dims.len() > 2 {
@@ -154,7 +154,7 @@ impl QuantMethod for MXFP4Layer {
 
     #[allow(unused_variables)]
     fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        #[cfg(feature = "cuda")]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         if matches!(x.device(), Device::Cuda(_)) && ffi::HAVE_MXFP4_GEMM_KERNELS {
             return ops::mxfp4_indexed_moe_gemm(
                 x,
@@ -324,7 +324,7 @@ impl MXFP4Layer {
 
     /// Check if the device supports MXFP4 operations
     fn device_supported(_device: &Device) -> bool {
-        #[cfg(feature = "cuda")]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         if matches!(_device, Device::Cuda(_)) {
             return ffi::HAVE_MXFP4_GEMM_KERNELS;
         }

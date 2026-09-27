@@ -6,7 +6,7 @@ use candle_nn::Linear;
 mod ops;
 pub use ops::{fp8_vector_dequantize, fp8_vector_quantize};
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub(crate) mod ffi;
 
 use crate::{

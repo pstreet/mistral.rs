@@ -1283,6 +1283,12 @@ impl Loader for GGUFLoader {
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
+        // Capability gate: refuse GGUF weights early on devices that cannot
+        // serve them in this build.
+        crate::device_spec::backend_caps(device).ensure_gguf()?;
+        // Capability gate: refuse GGUF weights early (before any download or
+        // weight loading) on devices that cannot serve them in this build.
+        crate::device_spec::backend_caps(device).ensure_gguf()?;
         if matches!(self.kind, ModelKind::GgufQuantized { .. }) || self.dynamic_lora.is_some() {
             return self.load_native_normal(NativeNormalLoadArgs {
                 paths,

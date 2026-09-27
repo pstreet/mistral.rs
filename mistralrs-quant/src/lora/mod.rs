@@ -22,7 +22,7 @@ pub use dynamic::{
     RoutedLoraMetadataLayout, RoutedLoraProjectionLayout, ROUTED_LORA_BASE_SLOT,
     ROUTED_LORA_BLOCK_SIZE, ROUTED_LORA_MAX_RANK, ROUTED_LORA_WMMA_RANK_CAP,
 };
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub use dynamic::{
     launch_routed_lora_direct, launch_routed_lora_grouped, RoutedLoraCudaMetadata,
     RoutedLoraCudaWeightTable, RoutedLoraDirectLaunch, RoutedLoraGroupedLaunch,

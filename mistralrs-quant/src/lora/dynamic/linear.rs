@@ -127,7 +127,7 @@ impl QuantMethod for DynamicLoraLinear {
         }
     }
 
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
     fn prepare_gguf_affine_raw(
         &self,
         flat_batch: usize,
@@ -141,7 +141,7 @@ impl QuantMethod for DynamicLoraLinear {
         }
     }
 
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
     fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
         if self.site_is_active() {
             Ok(None)
@@ -150,7 +150,7 @@ impl QuantMethod for DynamicLoraLinear {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn try_forward_fused_split_glu(
         &self,
         input: &Tensor,
@@ -260,7 +260,7 @@ impl QuantMethod for DynamicLoraLinear {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     use std::collections::HashMap;
     use std::fmt;
 
@@ -336,7 +336,7 @@ mod tests {
             Some(self.qtensor.clone())
         }
 
-        #[cfg(all(feature = "cuda", has_marlin_kernels))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
         fn prepare_gguf_affine_raw(
             &self,
             _flat_batch: usize,
@@ -346,7 +346,7 @@ mod tests {
             Ok(true)
         }
 
-        #[cfg(all(feature = "cuda", has_marlin_kernels))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
         fn try_gguf_affine_forward_raw(&self, input: &Tensor) -> Result<Option<Tensor>> {
             Ok(Some(input.clone()))
         }
@@ -510,7 +510,7 @@ mod tests {
         assert!(targeted_layer.afq_inner().is_some());
         assert!(targeted_layer.unquant_weight_bias().is_some());
         assert!(targeted_layer.get_qtensor().is_some());
-        #[cfg(all(feature = "cuda", has_marlin_kernels))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
         {
             let input = Tensor::zeros((1, 32), DType::F32, &Device::Cpu)?;
             assert!(targeted_layer.prepare_gguf_affine_raw(8, DType::F16, &Device::Cpu)?);
@@ -540,7 +540,7 @@ mod tests {
             assert!(untargeted_layer.unquant_weight_bias().is_some());
             assert!(targeted_layer.get_qtensor().is_none());
             assert!(untargeted_layer.get_qtensor().is_some());
-            #[cfg(all(feature = "cuda", has_marlin_kernels))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
             {
                 let input = Tensor::zeros((1, 32), DType::F32, &Device::Cpu)?;
                 assert!(!targeted_layer.prepare_gguf_affine_raw(8, DType::F16, &Device::Cpu)?);
@@ -557,7 +557,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn site_placement_comes_from_the_var_builder() -> Result<()> {
         let device = Device::cuda_if_available(0)?;

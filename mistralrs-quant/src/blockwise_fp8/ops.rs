@@ -2,7 +2,7 @@ use candle_core::{CpuStorage, CustomOp1, CustomOp2, DType, Result, Tensor, WithD
 use float8::F8E4M3;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
-#[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), has_blockwise_fp8_kernels))]
 use crate::QuantizedActivation;
 use crate::{ActivationQuantizationScheme, ActivationScaleLayout, FusedRmsNormQuantized};
 
@@ -37,11 +37,11 @@ const CUDA_STREAM_PER_THREAD_HANDLE: usize = 2;
     any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
 ))]
 pub(super) const FP8_BLOCK_SIZE: usize = 128;
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
 const CUTLASS_FP8_N_ALIGNMENT: usize = 16;
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
 const CUTLASS_OUTPUT_F16: i32 = 0;
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
 const CUTLASS_OUTPUT_BF16: i32 = 1;
 
 struct Fp8BlockwiseDequantize {
@@ -153,7 +153,7 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn cuda_fwd(
         &self,
         scale_s: &candle_core::CudaStorage,
@@ -504,7 +504,7 @@ impl CustomOp1 for Fp8BlockwiseQuantize {
         ))
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn cuda_fwd(
         &self,
         input_s: &candle_core::CudaStorage,
@@ -635,7 +635,7 @@ pub fn fp8_blockwise_quantize(
 ) -> Result<(Tensor, Tensor)> {
     // Since CustomOp1 only returns a single tensor, we need a different approach
     // Let's implement this using the CUDA kernels directly
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     {
         use candle_core::{CudaStorage, Device, Storage};
         use half::{bf16, f16};
@@ -771,7 +771,7 @@ pub fn fp8_blockwise_quantize(
         Ok((weight, scale))
     }
 
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(any(not(feature = "cuda"), feature = "rocm"))]
     {
         candle_core::bail!("FP8 blockwise quantization requires CUDA feature");
     }
@@ -783,7 +783,7 @@ pub fn fp8_blockwise_quantize(
 /// - weight: [N, K] in FP8 with blockwise scales
 /// - scales: [N/block_y, K/block_x] in f32
 /// - output: [M, N] in fp16/bf16
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub fn fp8_blockwise_matmul(
     input: &Tensor,
     weight: &Tensor,
@@ -945,7 +945,7 @@ pub fn fp8_blockwise_matmul(
 /// - scales: [num_experts, N/block_y, K/block_x] in f32
 /// - indices: [num_tokens, topk] in i32
 /// - output: [num_tokens, topk, N] in fp16/bf16
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub fn fp8_indexed_moe_gemm(
     input: &Tensor,
     weights: &Tensor,
@@ -1134,7 +1134,7 @@ pub fn fp8_indexed_moe_gemm(
     }
 }
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
 pub(crate) fn cutlass_fp8_blockwise_supported(
     weight: &Tensor,
     weight_scales: &Tensor,
@@ -1217,7 +1217,7 @@ pub(super) fn is_sm90(dev: &candle_core::CudaDevice) -> bool {
     supported
 }
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
 fn check_cutlass_status(operation: &str, status: i32) -> Result<()> {
     if status == 0 {
         return Ok(());
@@ -1234,11 +1234,11 @@ fn check_cutlass_status(operation: &str, status: i32) -> Result<()> {
     candle_core::bail!("{operation} failed: {message} ({domain} status {status})")
 }
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
 static PREPARED_CUTLASS_FP8_DEVICES: OnceLock<Mutex<HashMap<candle_core::cuda::DeviceId, i32>>> =
     OnceLock::new();
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
 pub(super) fn prepare_cutlass_fp8(dev: &candle_core::CudaDevice) -> Result<i32> {
     use candle_core::cuda::cudarc::driver::{result, sys};
 
@@ -1311,7 +1311,7 @@ type Fp8WorkspaceMap = Mutex<HashMap<Fp8WorkspaceKey, Arc<Mutex<Fp8Workspace>>>>
 ))]
 static FP8_WORKSPACES: OnceLock<Fp8WorkspaceMap> = OnceLock::new();
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 struct CutlassWorkspaceRequirementsKey {
     m: i32,
@@ -1321,12 +1321,12 @@ struct CutlassWorkspaceRequirementsKey {
     sm_count: i32,
 }
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
 static CUTLASS_FP8_WORKSPACE_REQUIREMENTS: OnceLock<
     Mutex<HashMap<CutlassWorkspaceRequirementsKey, usize>>,
 > = OnceLock::new();
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
 fn cutlass_workspace_size(key: CutlassWorkspaceRequirementsKey) -> Result<usize> {
     let requirements =
         CUTLASS_FP8_WORKSPACE_REQUIREMENTS.get_or_init(|| Mutex::new(HashMap::new()));
@@ -1397,7 +1397,7 @@ pub(super) fn fp8_workspace(
     Ok(Some(workspace))
 }
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
 pub(crate) fn fp8_quantize_activation_cutlass(input: &Tensor) -> Result<(Tensor, Tensor)> {
     use candle_core::{CudaStorage, Device, Shape, Storage};
     use half::{bf16, f16};
@@ -1547,7 +1547,7 @@ fn fused_add_rms_norm_quantized_impl(
     scale_layout: ActivationScaleLayout,
     produce_normalized: bool,
 ) -> Result<(FusedRmsNormQuantized, Option<Tensor>)> {
-    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_blockwise_fp8_kernels))]
     {
         use std::ffi::CStr;
 
@@ -1767,7 +1767,7 @@ fn fused_add_rms_norm_quantized_impl(
         ))
     }
 
-    #[cfg(not(all(feature = "cuda", has_blockwise_fp8_kernels)))]
+    #[cfg(not(all(feature = "cuda", not(feature = "rocm"), has_blockwise_fp8_kernels)))]
     {
         let _ = (
             input,
@@ -1782,7 +1782,7 @@ fn fused_add_rms_norm_quantized_impl(
     }
 }
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
 struct CutlassGemm<'a> {
     activation: &'a Tensor,
     activation_scales: &'a Tensor,
@@ -1791,7 +1791,7 @@ struct CutlassGemm<'a> {
     output_dtype: DType,
 }
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
 fn launch_cutlass_gemm(context: CutlassGemm<'_>, output_ptr: u64) -> Result<()> {
     use candle_core::{Device, Storage};
 
@@ -1900,7 +1900,7 @@ fn launch_cutlass_gemm(context: CutlassGemm<'_>, output_ptr: u64) -> Result<()> 
     Ok(())
 }
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
 pub(crate) fn fp8_blockwise_matmul_cutlass(
     activation: &Tensor,
     activation_scales: &Tensor,
@@ -1982,11 +1982,19 @@ mod tests {
     use float8::F8E4M3;
     use half::bf16;
 
-    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+    #[cfg(all(
+        feature = "cuda",
+        not(feature = "rocm"),
+        has_deepgemm_fp8_sm90_provider
+    ))]
     use crate::blockwise_fp8::deepgemm;
     use crate::blockwise_fp8::ops;
 
-    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+    #[cfg(all(
+        feature = "cuda",
+        not(feature = "rocm"),
+        has_deepgemm_fp8_sm90_provider
+    ))]
     #[test]
     fn deepgemm_ffi_plan_layout() {
         use crate::blockwise_fp8::ffi::{DeepGemmPlan, DeepGemmPrepared};
@@ -2014,7 +2022,7 @@ mod tests {
         assert_eq!(ops::fp8_workspace_thread(0x1000), None);
     }
 
-    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_blockwise_fp8_kernels))]
     #[test]
     fn fused_add_rms_norm_quantized_matches_bf16_reference() -> Result<()> {
         use crate::{ActivationQuantizationScheme, ActivationScaleLayout};
@@ -2182,7 +2190,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_blockwise_fp8_kernels))]
     #[test]
     fn fused_add_rms_norm_quantized_aligned_store_normalized_matches_reference() -> Result<()> {
         use crate::{ActivationQuantizationScheme, ActivationScaleLayout};
@@ -2400,7 +2408,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn test_fp8_blockwise_dequant_cuda() -> Result<()> {
         let truth = {
@@ -2498,7 +2506,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn test_fp8_blockwise_dequant_cuda_bf16() -> Result<()> {
         let truth = {
@@ -2579,7 +2587,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn test_fp8_blockwise_quant_dequant_roundtrip() -> Result<()> {
         let dev = &Device::new_cuda(0)?;
@@ -2622,7 +2630,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
     #[test]
     fn test_cutlass_blockwise_fp8_gemm() -> Result<()> {
         const BLOCK_SIZE: usize = 128;
@@ -2703,7 +2711,11 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+    #[cfg(all(
+        feature = "cuda",
+        not(feature = "rocm"),
+        has_deepgemm_fp8_sm90_provider
+    ))]
     #[test]
     #[ignore = "requires an SM90 GPU and runtime nvcc or a prepared cubin cache"]
     fn test_deepgemm_blockwise_fp8_and_cuda_graph() -> Result<()> {
@@ -2891,7 +2903,11 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+    #[cfg(all(
+        feature = "cuda",
+        not(feature = "rocm"),
+        has_deepgemm_fp8_sm90_provider
+    ))]
     #[test]
     #[ignore = "requires an SM90 GPU and runtime nvcc or a prepared cubin cache"]
     fn test_deepgemm_shared_prepared_state_across_ptds_threads() -> Result<()> {
@@ -2954,7 +2970,7 @@ mod tests {
         })
     }
 
-    #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
     #[derive(Clone, Copy)]
     struct BlockwiseFp8BenchShape {
         name: &'static str,
@@ -2962,7 +2978,7 @@ mod tests {
         k: usize,
     }
 
-    #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
     fn blockwise_fp8_bench_iterations(variable: &str, default: usize) -> Result<usize> {
         match std::env::var(variable) {
             Ok(value) => value
@@ -2979,7 +2995,7 @@ mod tests {
         }
     }
 
-    #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
     fn measure_blockwise_fp8_cuda_us<T>(
         dev: &Device,
         warmup: usize,
@@ -3093,7 +3109,7 @@ mod tests {
         Ok(timings)
     }
 
-    #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
     fn validate_blockwise_fp8_bench_case(
         activation_scales: &Tensor,
         output: &Tensor,
@@ -3132,7 +3148,7 @@ mod tests {
         Ok(output_error)
     }
 
-    #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
     #[test]
     #[ignore = "requires an SM90 GPU and reports latency to stdout"]
     fn bench_cutlass_blockwise_fp8_production_shapes_sm90() -> Result<()> {
@@ -3230,7 +3246,11 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+    #[cfg(all(
+        feature = "cuda",
+        not(feature = "rocm"),
+        has_deepgemm_fp8_sm90_provider
+    ))]
     #[test]
     #[ignore = "requires an SM90 GPU and reports latency to stdout"]
     fn bench_deepgemm_blockwise_fp8_production_shapes_sm90() -> Result<()> {
@@ -3317,13 +3337,21 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+    #[cfg(all(
+        feature = "cuda",
+        not(feature = "rocm"),
+        has_deepgemm_fp8_sm90_provider
+    ))]
     fn median_cuda_us(mut samples: Vec<f64>) -> f64 {
         samples.sort_by(f64::total_cmp);
         samples[samples.len() / 2]
     }
 
-    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+    #[cfg(all(
+        feature = "cuda",
+        not(feature = "rocm"),
+        has_deepgemm_fp8_sm90_provider
+    ))]
     #[test]
     #[ignore = "requires an SM90 GPU and reports latency to stdout"]
     fn bench_cutlass_vs_deepgemm_fused_production_shapes_sm90() -> Result<()> {
@@ -3506,7 +3534,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
     #[test]
     fn test_cutlass_blockwise_fp8_cuda_graph() -> Result<()> {
         use candle_core::cuda::cudarc::driver::sys;

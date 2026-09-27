@@ -179,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn test_cublaslt_matmul() -> Result<()> {
         use crate::cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_CONTROLLER};
         let dev = Device::new_cuda(0)?;

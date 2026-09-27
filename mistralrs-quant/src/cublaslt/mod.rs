@@ -70,14 +70,14 @@ mod api;
 #[cfg(all(feature = "cuda", not(feature = "rocm")))]
 mod matmul;
 #[cfg(test)]
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 mod tests;
 
 #[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub use api::{fused_batch_matmul, fused_batch_matmul_f8, CublasLt};
 
 pub fn maybe_init_cublas_lt_wrapper(device: Device) {
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     if !device.is_cuda() {
         return;
     }
@@ -146,7 +146,7 @@ impl CublasLtWrapper {
         bias: Option<&Tensor>,
         act: Option<CandleActivation>,
     ) -> Result<Tensor> {
-        #[cfg(feature = "cuda")]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         {
             let inner_act = act.map(|a| match a {
                 CandleActivation::Relu => matmul::Activation::Relu,
@@ -219,7 +219,7 @@ impl CublasLtWrapper {
         bias: Option<&Tensor>,
         act: Option<CandleActivation>,
     ) -> Result<Tensor> {
-        #[cfg(feature = "cuda")]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         {
             let inner_act = act.map(|a| match a {
                 CandleActivation::Relu => matmul::Activation::Relu,

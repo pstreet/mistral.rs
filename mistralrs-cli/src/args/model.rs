@@ -673,6 +673,13 @@ pub struct DeviceOptions {
     #[serde(default)]
     pub cpu: bool,
 
+    /// Explicit device: "cpu", "cuda:<idx>", or "hip:<idx>". Omit to
+    /// auto-select (native GPU serving this build, else CPU). The API
+    /// qualifier is the vendor-API choice; the index is per-API.
+    #[arg(long)]
+    #[serde(default)]
+    pub device: Option<String>,
+
     /// Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20")
     /// Omit for automatic device mapping
     #[arg(short = 'n', long, value_delimiter = ';')]

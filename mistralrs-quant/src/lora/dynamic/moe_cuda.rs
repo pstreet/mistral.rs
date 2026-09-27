@@ -1,4 +1,4 @@
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 use candle_core::DType;
 use candle_core::Result;
 
@@ -402,10 +402,10 @@ impl RoutedLoraAdapterWeight {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 unsafe impl candle_core::cuda::cudarc::driver::DeviceRepr for RoutedLoraAdapterWeight {}
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 mod cuda {
     use super::*;
     use candle_core::{
@@ -1146,7 +1146,7 @@ mod cuda {
     pub use self::RoutedLoraGroupedLaunch as GroupedLaunch;
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub use cuda::{
     launch_routed_lora_direct, launch_routed_lora_grouped, DirectLaunch as RoutedLoraDirectLaunch,
     GroupedLaunch as RoutedLoraGroupedLaunch, Metadata as RoutedLoraCudaMetadata,

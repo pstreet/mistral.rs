@@ -1,6 +1,6 @@
 use std::sync::{Arc, OnceLock};
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 use std::sync::{Mutex, MutexGuard};
 
 use candle_core::{DType, Device, Result, Tensor};
@@ -311,17 +311,17 @@ pub struct LoraExpertWeights {
     gate: Option<LoraExpertProjectionWeights>,
     up: Option<LoraExpertProjectionWeights>,
     down: Option<LoraExpertProjectionWeights>,
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     cuda_table: Arc<ExpertCudaTableCache>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 #[derive(Default)]
 struct ExpertCudaTableCache {
     table: Mutex<Option<Arc<super::RoutedLoraCudaWeightTable>>>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 impl std::fmt::Debug for ExpertCudaTableCache {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("ExpertCudaTableCache")
@@ -354,7 +354,7 @@ impl LoraExpertWeights {
             gate,
             up,
             down,
-            #[cfg(feature = "cuda")]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             cuda_table: Arc::new(ExpertCudaTableCache::default()),
         })
     }
@@ -398,7 +398,7 @@ impl LoraExpertWeights {
         self.down.as_ref()
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     pub(super) fn cuda_table(
         &self,
     ) -> MutexGuard<'_, Option<Arc<super::RoutedLoraCudaWeightTable>>> {
@@ -555,7 +555,7 @@ impl LoraExpertExecution {
     fn add_delta_inner(&self, delta: LoraExpertDelta<'_>, in_place: bool) -> Result<Tensor> {
         #[cfg(not(feature = "cuda"))]
         let _ = in_place;
-        #[cfg(feature = "cuda")]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         if let Some(output) =
             super::expert_cuda::try_add_delta(&self.execution, &self.site, &delta, in_place)?
         {
@@ -590,7 +590,7 @@ impl LoraExpertExecution {
         base_gate_up: Tensor,
         topk_ids: &Tensor,
     ) -> Result<Tensor> {
-        #[cfg(feature = "cuda")]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         if let Some(output) = super::expert_cuda::try_add_gate_up_delta_combined(
             &self.execution,
             &self.site,
@@ -631,7 +631,7 @@ impl LoraExpertExecution {
     ) -> Result<(Tensor, Tensor)> {
         #[cfg(not(feature = "cuda"))]
         let _ = in_place;
-        #[cfg(feature = "cuda")]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         if let Some((gate, up)) = super::expert_cuda::try_add_gate_up_delta(
             &self.execution,
             &self.site,

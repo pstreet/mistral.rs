@@ -91,7 +91,7 @@ impl CustomOp2 for Fp8VectorDequantize {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn cuda_fwd(
         &self,
         scale_s: &candle_core::CudaStorage,
@@ -336,7 +336,7 @@ pub fn fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
         return cpu_fp8_vector_quantize(input);
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     {
         use candle_core::{CudaStorage, Device, Storage};
         use half::{bf16, f16};
@@ -449,6 +449,11 @@ pub fn fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
     {
         candle_core::bail!("FP8 vector quantization on non-CPU devices requires CUDA feature");
     }
+
+    #[cfg(any(not(feature = "cuda"), feature = "rocm"))]
+    {
+        candle_core::bail!("vector FP8 quantization requires the CUDA kernels");
+    }
 }
 
 #[cfg(test)]
@@ -514,7 +519,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn test_fp8_vector_quant_dequant_roundtrip() -> Result<()> {
         let dev = &Device::new_cuda(0)?;
@@ -552,7 +557,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn test_fp8_vector_cpu_cuda_equivalence() -> Result<()> {
         let cpu_dev = &Device::Cpu;

@@ -120,7 +120,7 @@ impl<T: QuantizedWeightSource + ?Sized> QuantizedWeightSource for Arc<T> {
 /// Subtract from the KV cache budget so the repack is planned for rather than corrected after.
 /// Returns 0 when the feature is off, which is the default.
 pub fn gguf_affine_budget_bytes(device: &Device, dtype: DType) -> usize {
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
     {
         gguf::gguf_affine_budget_bytes(device, dtype)
     }
@@ -154,7 +154,7 @@ pub use distributed::{
 pub use dummy::{DummyLayer, DummyLayerInfo};
 pub use f8q8::F8Q8Linear;
 pub use fp8::FP8Linear;
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub use gemv::gemv;
 pub use gemv::{should_use_gemv, GEMV_CONTROLLER};
 pub use gguf::archive::{
@@ -203,7 +203,7 @@ pub use lora::{
     RoutedLoraInputMode, RoutedLoraMetadataLayout, RoutedLoraProjectionLayout, StaticLoraConfig,
     ROUTED_LORA_BASE_SLOT, ROUTED_LORA_BLOCK_SIZE, ROUTED_LORA_MAX_RANK, ROUTED_LORA_WMMA_RANK_CAP,
 };
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub use lora::{
     launch_routed_lora_direct, launch_routed_lora_grouped, RoutedLoraCudaMetadata,
     RoutedLoraCudaWeightTable, RoutedLoraDirectLaunch, RoutedLoraGroupedLaunch,
@@ -216,7 +216,7 @@ pub use utils::flash_attn_sinks_metal;
 pub use utils::flash_attn_sinks_varlen_metal;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub use utils::gptoss_swiglu_fused;
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub use utils::gptoss_swiglu_interleaved;
 pub use utils::isq::{
     apply_immediate_isq, apply_immediate_isq_sharded, apply_immediate_isq_with_key,
@@ -1130,7 +1130,7 @@ impl TryFrom<IsqType> for GgmlDType {
             IsqType::Q8_1 => Self::Q8_1,
             _ => candle_core::bail!("Expected valid GGML ISQ type."),
         };
-        #[cfg(feature = "cuda")]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         {
             if !matches!(
                 tp,
@@ -1389,13 +1389,13 @@ impl QuantizeOntoGuard {
     ///
     /// On metal, this waits for outstanding work to finish to avoid "A command encoder is already encoding to this command buffer"
     pub fn acquire(&self, device: &Device) -> QuantizeOntoDropGuard<'_> {
-        #[cfg(feature = "cuda")]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         {
             let _ = device;
             QuantizeOntoDropGuard::Fake
         }
 
-        #[cfg(not(feature = "cuda"))]
+        #[cfg(any(not(feature = "cuda"), feature = "rocm"))]
         {
             #[cfg(feature = "metal")]
             if let Device::Metal(dev) = device {
@@ -1672,7 +1672,7 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         None
     }
 
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
     #[doc(hidden)]
     fn prepare_gguf_affine_raw(
         &self,
@@ -1683,7 +1683,7 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         Ok(false)
     }
 
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
     #[doc(hidden)]
     fn try_gguf_affine_forward_raw(&self, _a: &Tensor) -> Result<Option<Tensor>> {
         Ok(None)
@@ -1722,7 +1722,9 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         )
     }
 
-    #[cfg(feature = "cuda")]
+    // The fused split-GLU kernel is cuda-block machinery; the trait method
+    // stays available in every build shape with the same opt-in default
+    // (hipcc wiring lands with the S2 activation-quant work).
     fn try_forward_fused_split_glu(
         &self,
         _input: &Tensor,
@@ -1851,7 +1853,7 @@ pub fn try_forward_fused_quantized_glu(
     projection: &dyn QuantMethod,
     activation: GluActivationType,
 ) -> Result<Option<Tensor>> {
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     {
         if gate.dtype() != DType::BF16
             || value.dtype() != DType::BF16
@@ -1908,7 +1910,9 @@ pub fn try_forward_fused_quantized_glu(
         projection.forward_quantized(&quantized).map(Some)
     }
 
-    #[cfg(not(feature = "cuda"))]
+    // Dual builds: the fused GLU quant kernel is cuda-block machinery
+    // (fp8 kernels have no hipcc build); fall back like the cpu-only shape.
+    #[cfg(any(not(feature = "cuda"), feature = "rocm"))]
     {
         let _ = (gate, value, projection, activation);
         Ok(None)
@@ -3015,12 +3019,12 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     struct RecordingWeightSource {
         load_devices: Arc<std::sync::Mutex<Vec<bool>>>,
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     impl QuantizedWeightSource for RecordingWeightSource {
         fn contains(&self, name: &str) -> bool {
             name == "foo.weight"
@@ -3515,7 +3519,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn weight_source_stages_immediate_isq_on_cpu() -> Result<()> {
         let Ok(device) = Device::new_cuda(0) else {

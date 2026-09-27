@@ -218,7 +218,7 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
             };
             Storage::Cpu(cpu_storage)
         }
-        #[cfg(feature = "cuda")]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         Device::Cuda(device) => {
             let mut slice = unsafe { device.alloc::<u8>(data.len())? };
             device.memcpy_htod(data, &mut slice)?;
@@ -254,8 +254,16 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
             };
             Storage::Hip(storage)
         }
-        #[cfg(not(feature = "cuda"))]
+        // Without the cuda feature the variant is a compile-time stub; in
+        // dual builds it means an explicit cuda:<idx> request on a binary
+        // whose serving role is AMD.
+        #[cfg(any(not(feature = "cuda"), feature = "rocm"))]
         Device::Cuda(_) => {
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            return Err(Error::Msg(
+                "NVIDIA-role serving is not wired in dual builds; use hip:<idx> or cpu".to_string(),
+            ));
+            #[cfg(not(feature = "cuda"))]
             return Err(Error::Msg("CUDA support not compiled".to_string()));
         }
         #[cfg(feature = "metal")]

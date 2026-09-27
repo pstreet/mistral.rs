@@ -275,7 +275,7 @@ impl QuantMethod for RuntimeOutputLinear {
         self.inner.get_qtensor()
     }
 
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
     fn prepare_gguf_affine_raw(
         &self,
         flat_batch: usize,
@@ -286,7 +286,7 @@ impl QuantMethod for RuntimeOutputLinear {
             .prepare_gguf_affine_raw(flat_batch, dtype, device)
     }
 
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
     fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
         self.inner.try_gguf_affine_forward_raw(a)
     }
@@ -318,7 +318,7 @@ impl QuantMethod for RuntimeOutputLinear {
         self.inner.forward_quantized(a)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn try_forward_fused_split_glu(
         &self,
         input: &Tensor,
@@ -1058,7 +1058,7 @@ impl QuantMethod for RowParallelLayer {
         Ok(xs)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn try_forward_fused_split_glu(
         &self,
         input: &Tensor,
@@ -1112,7 +1112,7 @@ impl QuantMethod for RowParallelLayer {
         }
     }
 
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
     fn prepare_gguf_affine_raw(
         &self,
         flat_batch: usize,
@@ -1127,7 +1127,7 @@ impl QuantMethod for RowParallelLayer {
         }
     }
 
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
     fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
         if self.all_reduce.is_noop() {
             self.weight.try_gguf_affine_forward_raw(a)
@@ -1728,7 +1728,7 @@ impl QuantMethod for ColumnParallelLayer {
         Ok(xs)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn try_forward_fused_split_glu(
         &self,
         input: &Tensor,
@@ -1771,7 +1771,7 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.get_qtensor()
     }
 
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
     fn prepare_gguf_affine_raw(
         &self,
         flat_batch: usize,
@@ -1782,7 +1782,7 @@ impl QuantMethod for ColumnParallelLayer {
             .prepare_gguf_affine_raw(flat_batch, dtype, device)
     }
 
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
     fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
         self.weight.try_gguf_affine_forward_raw(a)
     }
@@ -2295,7 +2295,7 @@ impl QuantMethod for ReplicatedLayer {
         self.0.forward_quantized(a)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn try_forward_fused_split_glu(
         &self,
         input: &Tensor,
@@ -2330,7 +2330,7 @@ impl QuantMethod for ReplicatedLayer {
         self.0.get_qtensor()
     }
 
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
     fn prepare_gguf_affine_raw(
         &self,
         flat_batch: usize,
@@ -2340,7 +2340,7 @@ impl QuantMethod for ReplicatedLayer {
         self.0.prepare_gguf_affine_raw(flat_batch, dtype, device)
     }
 
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
     fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
         self.0.try_gguf_affine_forward_raw(a)
     }

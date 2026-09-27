@@ -66,7 +66,13 @@ pub async fn run_interactive(
         paged_k_cache_type,
         paged_v_cache_type,
     ) = extract_paged_attn_settings(&model_type);
-    let (cpu, device_layers) = extract_device_settings(&model_type);
+    let (cpu, device_layers, device_str) = extract_device_settings(&model_type);
+    let device_spec = device_str
+        .map(|s| {
+            mistralrs_core::device_spec::DeviceSpec::parse(&s)
+                .map_err(|e| anyhow::anyhow!("{e}"))
+        })
+        .transpose()?;
     let isq = extract_isq_setting(&model_type);
     let encoder_cache_memory_bytes = extract_encoder_cache_memory_bytes(&model_type)?;
 
@@ -83,6 +89,7 @@ pub async fn run_interactive(
         .with_prefix_cache_n(runtime.prefix_cache_n)
         .set_paged_attn(paged_attn)
         .with_cpu(cpu)
+        .with_device_spec(device_spec)
         .with_enable_search(runtime.enable_search)
         .with_seed_optional(global.seed)
         .with_log_optional(global.log.as_ref().map(|p| p.to_string_lossy().to_string()))

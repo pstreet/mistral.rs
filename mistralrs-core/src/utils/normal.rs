@@ -66,7 +66,7 @@ impl TryIntoDType for DType {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 fn get_dtypes() -> Vec<DType> {
     use std::process::Command;
 
@@ -113,7 +113,10 @@ fn get_dtypes_non_cuda() -> Vec<DType> {
     vec![DType::BF16, DType::F16]
 }
 
-#[cfg(not(feature = "cuda"))]
+// Single-vendor rocm and dual builds: the serving role is AMD (gfx), where
+// bf16 is native on every supported target - the same set the non-cuda
+// path reports for metal/cpu today.
+#[cfg(any(not(feature = "cuda"), feature = "rocm"))]
 fn get_dtypes() -> Vec<DType> {
     get_dtypes_non_cuda()
 }

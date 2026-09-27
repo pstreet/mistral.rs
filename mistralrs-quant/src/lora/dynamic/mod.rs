@@ -1,15 +1,15 @@
 #[cfg(any(feature = "cuda", test))]
 mod cuda;
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 mod cuda_ffi;
 mod execution;
 mod expert;
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 mod expert_cuda;
 mod linear;
 mod loader;
 mod moe_cuda;
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 mod moe_cuda_ffi;
 mod raw;
 mod reference;
@@ -29,7 +29,7 @@ pub use expert::{
 pub use linear::maybe_wrap_dynamic_lora;
 pub(crate) use linear::maybe_wrap_dynamic_lora_with_key;
 pub use loader::{load_dynamic_lora_weights, plan_dynamic_lora_weights, DynamicLoraLoadPlan};
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub use moe_cuda::{
     launch_routed_lora_direct, launch_routed_lora_grouped, RoutedLoraCudaMetadata,
     RoutedLoraCudaWeightTable, RoutedLoraDirectLaunch, RoutedLoraGroupedLaunch,

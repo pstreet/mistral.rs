@@ -555,6 +555,12 @@ pub enum ModelType {
 /// Global options that apply to all commands
 #[derive(clap::Args, Clone, Deserialize)]
 pub struct GlobalOptions {
+    /// Explicit device: "cpu", "cuda:<idx>", "hip:<idx>". Omit to
+    /// auto-select. Per-model `device` config keys override this.
+    #[arg(long, global = true)]
+    #[serde(default)]
+    pub device: Option<String>,
+
     /// Random seed for reproducibility
     #[arg(long, global = true)]
     #[serde(default)]
@@ -989,6 +995,7 @@ impl From<CodeExecPermissionArg> for mistralrs_core::AgentPermission {
 impl Default for GlobalOptions {
     fn default() -> Self {
         Self {
+            device: None,
             seed: None,
             log: None,
             token_source: TokenSource::CacheToken,

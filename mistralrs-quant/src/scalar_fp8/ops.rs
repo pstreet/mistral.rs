@@ -51,7 +51,7 @@ impl CustomOp1 for Fp8ToDtype {
         Ok((output, input_l.shape().clone()))
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn cuda_fwd(
         &self,
         input_s: &candle_core::CudaStorage,
@@ -214,7 +214,7 @@ impl CustomOp1 for DtypeToFp8 {
         Ok((output, input_l.shape().clone()))
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn cuda_fwd(
         &self,
         input_s: &candle_core::CudaStorage,

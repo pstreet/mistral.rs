@@ -106,6 +106,11 @@ impl RouterOptions {
 
 #[derive(Deserialize, Default, Clone)]
 pub struct GlobalOptionsToml {
+    /// Global explicit device: "cpu", "cuda:<idx>", "hip:<idx>". Per-model
+    /// `device` keys override this for that model.
+    #[serde(default)]
+    pub device: Option<String>,
+
     #[serde(default)]
     pub seed: Option<u64>,
     #[serde(default)]
@@ -126,8 +131,44 @@ pub enum ModelKind {
     Embedding,
 }
 
+/// A model's `device` config accepts both forms: the flat explicit device
+/// string (`device = "hip:0"`) and the upstream `[models.device]` options
+/// sub-table (device_layers, topology, ...). The flat string routes to the
+/// explicit device; the sub-table keeps its legacy meaning.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum ModelDevice {
+    /// Flat explicit device string: "cpu", "cuda:<idx>", "hip:<idx>".
+    Explicit(String),
+    /// The `[models.device]` options sub-table.
+    Options(DeviceOptionsToml),
+}
+
+impl Default for ModelDevice {
+    fn default() -> Self {
+        Self::Options(DeviceOptionsToml::default())
+    }
+}
+
+impl ModelEntry {
+    /// The entry's device options with the flat explicit-device form
+    /// normalized into the same structure.
+    pub fn device_options(&self) -> DeviceOptionsToml {
+        match &self.device {
+            ModelDevice::Explicit(device) => DeviceOptionsToml {
+                device: Some(device.clone()),
+                ..Default::default()
+            },
+            ModelDevice::Options(options) => options.clone(),
+        }
+    }
+}
+
 #[derive(Deserialize, Clone)]
 pub struct ModelEntry {
+    #[serde(default)]
+    pub device: ModelDevice,
+
     #[serde(default)]
     pub kind: ModelKind,
     pub model_id: String,
@@ -147,8 +188,6 @@ pub struct ModelEntry {
     pub adapter: AdapterOptions,
     #[serde(default)]
     pub quantization: QuantizationOptions,
-    #[serde(default)]
-    pub device: DeviceOptionsToml,
     #[serde(default)]
     pub multimodal: MultimodalOptions,
     #[serde(default)]
@@ -189,10 +228,13 @@ pub struct ModelEntry {
     pub v_cache_type: Option<PagedCacheType>,
 }
 
-#[derive(Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, Default, Clone)]
 pub struct DeviceOptionsToml {
     #[serde(default)]
     pub cpu: Option<bool>,
+    /// Explicit device: "cpu", "cuda:<idx>", "hip:<idx>".
+    #[serde(default)]
+    pub device: Option<String>,
     #[serde(default)]
     pub device_layers: Option<Vec<String>>,
     #[serde(default)]
@@ -269,7 +311,7 @@ fn validate_config(config: &CliConfig) -> Result<()> {
                 "multimodal models support dynamic language-model LoRA, but not legacy LoRA or X-LoRA"
             );
         }
-        if let Some(cpu) = model.device.cpu {
+        if let Some(cpu) = model.device_options().cpu {
             match cpu_setting {
                 None => cpu_setting = Some(cpu),
                 Some(existing) if existing != cpu => {
@@ -295,6 +337,7 @@ impl GlobalOptionsToml {
         };
 
         Ok(GlobalOptions {
+            device: self.device.clone(),
             seed: self.seed,
             log: self.log.clone(),
             token_source,
@@ -308,6 +351,7 @@ impl DeviceOptionsToml {
         let defaults = DeviceOptions::default();
         DeviceOptions {
             cpu,
+            device: self.device.clone(),
             device_layers: self.device_layers.clone(),
             topology: self.topology.clone(),
             hf_cache: self.hf_cache.clone(),
@@ -319,6 +363,7 @@ impl DeviceOptionsToml {
 
 impl ModelEntry {
     pub fn to_model_type(&self, cpu: bool) -> ModelType {
+        let device = self.device_options().to_device_options(cpu);
         let model = ModelSourceOptions {
             model_id: self.model_id.clone(),
             tokenizer: self.tokenizer.clone(),
@@ -328,7 +373,6 @@ impl ModelEntry {
             max_model_len: self.max_model_len,
         };
 
-        let device = self.device.to_device_options(cpu);
         let cache = CacheOptions::default();
 
         match self.kind {

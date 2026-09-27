@@ -51,6 +51,10 @@ pub struct ModelConfig {
     /// for the first model and lazy entries only.
     #[serde(default)]
     pub mtp: Option<bool>,
+    /// Per-model device string ("cpu", "cuda:N", "hip:N"). `None` inherits
+    /// the global device (auto-selected when that is unset too).
+    #[serde(default)]
+    pub device_spec: Option<mistralrs_core::device_spec::DeviceSpec>,
     /// Per-model KV cache type. `None` inherits the global `[paged_attn]`
     /// base; setting it also resets inherited global K/V side overrides
     /// unless the side is set explicitly below.
@@ -80,6 +84,7 @@ impl ModelConfig {
             encoder_cache_memory_bytes: None,
             lazy: false,
             mtp: None,
+            device_spec: None,
             cache_type: None,
             k_cache_type: None,
             v_cache_type: None,
@@ -94,6 +99,15 @@ impl ModelConfig {
     pub fn with_mtp(mut self, mtp: bool) -> Self {
         self.mtp = Some(mtp);
         self
+    }
+
+    /// Set this model's device explicitly ("cpu", "cuda:N", "hip:N");
+    /// parsed and validated eagerly so config errors surface at boot.
+    pub fn with_device_str(mut self, device: impl Into<String>) -> Result<Self> {
+        let spec = mistralrs_core::device_spec::DeviceSpec::parse(&device.into())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.device_spec = Some(spec);
+        Ok(self)
     }
 
     pub fn with_cache_type(mut self, cache_type: PagedCacheType) -> Self {
@@ -330,6 +344,10 @@ pub struct MistralRsForServerBuilder {
     /// Use CPU only
     cpu: bool,
 
+    /// Explicit device selection ("cpu", "cuda:N", "hip:N"); parsed
+    /// upstream. `None` auto-selects (probe-gated).
+    device_spec: Option<mistralrs_core::device_spec::DeviceSpec>,
+
     /// Enable searching compatible with the OpenAI `web_search_options` setting. This loads the selected search embedding reranker (EmbeddingGemma by default).
     enable_search: bool,
 
@@ -406,6 +424,7 @@ impl Default for MistralRsForServerBuilder {
             paged_attn_block_size: defaults::PAGED_ATTN_BLOCK_SIZE,
             paged_attn: defaults::PAGED_ATTN,
             cpu: defaults::CPU,
+            device_spec: None,
             enable_search: defaults::ENABLE_SEARCH,
             search_embedding_model: defaults::SEARCH_EMBEDDING_MODEL,
             search_callback: defaults::SEARCH_CALLBACK,
@@ -866,6 +885,24 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Set the explicit device ("cpu", "cuda:N", "hip:N"); parsed and
+    /// validated eagerly so config errors surface at boot. Overrides
+    /// auto-selection; `--cpu` and an explicit non-cpu device conflict.
+    pub fn with_device_str(mut self, device: impl Into<String>) -> Result<Self> {
+        let spec = mistralrs_core::device_spec::DeviceSpec::parse(&device.into())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.device_spec = Some(spec);
+        Ok(self)
+    }
+
+    pub fn with_device_spec(
+        mut self,
+        spec: Option<mistralrs_core::device_spec::DeviceSpec>,
+    ) -> Self {
+        self.device_spec = spec;
+        self
+    }
+
     /// Sets whether to enable web search functionality.
     pub fn with_enable_search(mut self, enable_search: bool) -> Self {
         self.enable_search = enable_search;
@@ -969,7 +1006,7 @@ impl MistralRsForServerBuilder {
         let device = if let Some(device) = self.device {
             device
         } else {
-            init_device(self.cpu, self.seed)?
+            init_device(self.cpu, self.device_spec.as_ref(), self.seed)?
         };
 
         let mapper = init_mapper(&self.num_device_layers, &auto_device_map_params);
@@ -1373,10 +1410,12 @@ impl MistralRsForServerBuilder {
         }
 
         // Cloned, not moved: the lazy loop below calls back into `self`.
+        // The first model's explicit device wins over the global spec.
         let device = if let Some(device) = self.device.clone() {
             device
         } else {
-            init_device(self.cpu, self.seed)?
+            let first_spec = first_model.device_spec.or(self.device_spec);
+            init_device(self.cpu, first_spec.as_ref(), self.seed)?
         };
 
         // Create the first model's pipeline
@@ -1585,10 +1624,17 @@ impl MistralRsForServerBuilder {
                 model_config.model_id
             );
 
+            // Per-model device: the entry's explicit spec wins over the
+            // shared device (global spec or auto), with a caps log line.
+            let entry_device = match model_config.device_spec {
+                Some(spec) => mistralrs_core::device_spec::resolve_and_report(Some(&spec))?,
+                None => device.clone(),
+            };
+
             if model_config.lazy {
                 let shared = LazyRegisterShared {
                     mistralrs: &mistralrs,
-                    device: &device,
+                    device: &entry_device,
                     no_paged_attn: !paged_attn,
                     search_embedding_model,
                 };
@@ -1655,7 +1701,9 @@ impl MistralRsForServerBuilder {
                 .in_situ_quant
                 .as_ref()
                 .or(self.in_situ_quant.as_ref())
-                .map(|isq| parse_isq_value(isq, Some(&device)).map_err(|e| anyhow::anyhow!("{e}")))
+                .map(|isq| {
+                    parse_isq_value(isq, Some(&entry_device)).map_err(|e| anyhow::anyhow!("{e}"))
+                })
                 .transpose()?;
 
             let paged_attn_config = paged_kv_plan.paged_attn[model_index];
@@ -1663,7 +1711,7 @@ impl MistralRsForServerBuilder {
                 None,
                 self.token_source.clone(),
                 &dtype,
-                &device,
+                &entry_device,
                 false,
                 mapper,
                 isq,
@@ -1819,7 +1867,7 @@ impl MistralRsForServerBuilder {
         let device = if let Some(device) = self.device.clone() {
             device
         } else {
-            init_device(self.cpu, self.seed)?
+            init_device(self.cpu, self.device_spec.as_ref(), self.seed)?
         };
         let paged_attn = configure_paged_attn(&device, self.paged_attn);
 
@@ -1868,23 +1916,29 @@ impl MistralRsForServerBuilder {
     }
 }
 
-// TODO: replace with best device?
-/// Initializes the device to be used for computation, optionally forcing CPU usage and setting a seed.
-fn init_device(force_cpu: bool, seed: Option<u64>) -> Result<candle_core::Device> {
+/// Initializes the device to be used for computation: an explicit spec when
+/// given (probe-gated, with a per-device capability log line), else automatic
+/// selection; `force_cpu` keeps its legacy meaning and conflicts with an
+/// explicit non-cpu device.
+fn init_device(
+    force_cpu: bool,
+    spec: Option<&mistralrs_core::device_spec::DeviceSpec>,
+    seed: Option<u64>,
+) -> Result<candle_core::Device> {
+    if force_cpu && spec.is_some_and(|s| *s != mistralrs_core::device_spec::DeviceSpec::Cpu) {
+        anyhow::bail!("--cpu and an explicit device conflict: pass one or the other");
+    }
     #[cfg(feature = "metal")]
-    let device = if force_cpu {
-        Device::Cpu
-    } else {
-        Device::new_metal(0)?
+    let device = match spec {
+        Some(mistralrs_core::device_spec::DeviceSpec::Cpu) | None if force_cpu => Device::Cpu,
+        Some(spec) => mistralrs_core::device_spec::resolve(&spec)?,
+        None => Device::new_metal(0)?,
     };
     #[cfg(not(feature = "metal"))]
-    #[allow(clippy::if_same_then_else)]
-    let device = if force_cpu {
-        Device::Cpu
-    } else if mistralrs_core::distributed::use_nccl() {
-        Device::Cpu
-    } else {
-        Device::cuda_if_available(0)?
+    let device = match spec {
+        Some(spec) => mistralrs_core::device_spec::resolve_and_report(Some(&spec))?,
+        None if force_cpu || mistralrs_core::distributed::use_nccl() => Device::Cpu,
+        None => mistralrs_core::device_spec::resolve_and_report(None)?,
     };
 
     if let Some(seed) = seed {

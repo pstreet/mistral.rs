@@ -6,21 +6,25 @@ use std::{
 use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
 use candle_nn::Linear;
 
-#[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+#[cfg(all(
+    feature = "cuda",
+    not(feature = "rocm"),
+    has_deepgemm_fp8_sm90_provider
+))]
 mod deepgemm;
 mod ops;
 pub use ops::{
     fp8_blockwise_dequantize, fp8_blockwise_quantize, fused_add_rms_norm_quantized,
     fused_add_rms_norm_quantized_with_normalized,
 };
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 #[allow(unused_imports)]
 pub(crate) use ops::{fp8_blockwise_matmul, fp8_indexed_moe_gemm};
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 mod ffi;
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 use crate::GluActivationType;
 use crate::{
     generate_isq, generate_isq_imatrix,
@@ -45,35 +49,59 @@ pub struct BlockwiseFP8Linear {
 #[derive(Clone, Debug)]
 enum BlockwiseFp8Provider {
     Legacy,
-    #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
     CutlassSm90,
-    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+    #[cfg(all(
+        feature = "cuda",
+        not(feature = "rocm"),
+        has_deepgemm_fp8_sm90_provider
+    ))]
     DeepGemmSm90(Arc<deepgemm::Prepared>),
 }
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+#[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
 static CUTLASS_FP8_PROVIDER_LOG: std::sync::Once = std::sync::Once::new();
-#[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+#[cfg(all(
+    feature = "cuda",
+    not(feature = "rocm"),
+    has_deepgemm_fp8_sm90_provider
+))]
 static DEEPGEMM_FP8_PROVIDER_LOG: std::sync::Once = std::sync::Once::new();
-#[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+#[cfg(all(
+    feature = "cuda",
+    not(feature = "rocm"),
+    has_deepgemm_fp8_sm90_provider
+))]
 static DEEPGEMM_FP8_FALLBACK_LOG: std::sync::Once = std::sync::Once::new();
-#[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+#[cfg(all(
+    feature = "cuda",
+    not(feature = "rocm"),
+    has_deepgemm_fp8_sm90_provider
+))]
 const FP8_SM90_PROVIDER_ENV: &str = "MISTRALRS_FP8_SM90_PROVIDER";
 
 impl BlockwiseFp8Provider {
     fn supports_shared_activation(&self) -> bool {
         match self {
             Self::Legacy => false,
-            #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
             Self::CutlassSm90 => true,
-            #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+            #[cfg(all(
+                feature = "cuda",
+                not(feature = "rocm"),
+                has_deepgemm_fp8_sm90_provider
+            ))]
             Self::DeepGemmSm90(_) => true,
         }
     }
 }
 
 impl BlockwiseFP8Linear {
-    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+    #[cfg(all(
+        feature = "cuda",
+        not(feature = "rocm"),
+        has_deepgemm_fp8_sm90_provider
+    ))]
     fn deepgemm_enabled() -> bool {
         match std::env::var(FP8_SM90_PROVIDER_ENV) {
             Err(std::env::VarError::NotPresent) => true,
@@ -123,7 +151,7 @@ impl BlockwiseFP8Linear {
                 }
             }
         }
-        #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
         if ops::cutlass_fp8_blockwise_supported(
             &self.weight,
             &self.weight_scale_inv,
@@ -233,7 +261,7 @@ impl QuantMethod for BlockwiseFP8Linear {
             }
         }
 
-        #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
         if self.activation_quantization_scheme().is_some()
             && matches!(x.dtype(), DType::F16 | DType::BF16)
         {
@@ -242,7 +270,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         }
 
         // Try to use native FP8 GEMM kernel on CUDA
-        #[cfg(feature = "cuda")]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         {
             if matches!(x.device(), candle_core::Device::Cuda(_))
                 && ffi::HAVE_BLOCKWISE_GEMM_KERNELS
@@ -300,7 +328,7 @@ impl QuantMethod for BlockwiseFP8Linear {
     /// then the indices are (n_tokens, n_experts_per_tok).
     fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
         // Try to use native FP8 indexed MoE GEMM kernel on CUDA
-        #[cfg(feature = "cuda")]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         {
             if matches!(x.device(), candle_core::Device::Cuda(_))
                 && ffi::HAVE_BLOCKWISE_GEMM_KERNELS
@@ -382,7 +410,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         {
             return None;
         }
-        #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
         {
             Some(ActivationQuantizationScheme {
                 dtype: DType::F8E4M3,
@@ -404,7 +432,11 @@ impl QuantMethod for BlockwiseFP8Linear {
 
     fn preferred_activation_scale_layout_for(&self, x: &Tensor) -> Option<ActivationScaleLayout> {
         self.activation_quantization_scheme_for(x)?;
-        #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+        #[cfg(all(
+            feature = "cuda",
+            not(feature = "rocm"),
+            has_deepgemm_fp8_sm90_provider
+        ))]
         if matches!(&self.provider, BlockwiseFp8Provider::DeepGemmSm90(_))
             && x.dtype() == DType::BF16
         {
@@ -425,7 +457,7 @@ impl QuantMethod for BlockwiseFP8Linear {
     }
 
     fn quantize_activation(&self, x: &Tensor) -> Result<QuantizedActivation> {
-        #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
         {
             let scheme = self.activation_quantization_scheme().ok_or_else(|| {
                 candle_core::Error::msg("blockwise FP8 activation quantization is unavailable")
@@ -453,7 +485,7 @@ impl QuantMethod for BlockwiseFP8Linear {
     }
 
     fn forward_quantized(&self, activation: &QuantizedActivation) -> Result<Tensor> {
-        #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm"), has_cutlass_fp8_sm90_kernels))]
         {
             let scheme = self.activation_quantization_scheme().ok_or_else(|| {
                 candle_core::Error::msg("blockwise FP8 activation quantization is unavailable")
@@ -474,7 +506,11 @@ impl QuantMethod for BlockwiseFP8Linear {
                     activation.source_dtype(),
                 )?,
                 ActivationScaleLayout::GroupMajor { row_alignment } => {
-                    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+                    #[cfg(all(
+                        feature = "cuda",
+                        not(feature = "rocm"),
+                        has_deepgemm_fp8_sm90_provider
+                    ))]
                     {
                         if row_alignment.get() != deepgemm::DEEPGEMM_ACTIVATION_SCALE_M_ALIGNMENT {
                             candle_core::bail!(
@@ -527,7 +563,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn try_forward_fused_split_glu(
         &self,
         input: &Tensor,
@@ -1657,7 +1693,11 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+    #[cfg(all(
+        feature = "cuda",
+        not(feature = "rocm"),
+        has_deepgemm_fp8_sm90_provider
+    ))]
     #[test]
     #[ignore = "requires an SM90 GPU and runtime nvcc or a prepared cubin cache"]
     fn deepgemm_production_shapes_use_linear_dispatch_sm90() -> Result<()> {

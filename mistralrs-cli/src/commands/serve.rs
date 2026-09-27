@@ -74,7 +74,13 @@ pub async fn run_server(
     ) = extract_paged_attn_settings(&model_type);
 
     // Extract device settings
-    let (cpu, device_layers) = extract_device_settings(&model_type);
+    let (cpu, device_layers, device_str) = extract_device_settings(&model_type);
+    let device_spec = device_str
+        .map(|s| {
+            mistralrs_core::device_spec::DeviceSpec::parse(&s)
+                .map_err(|e| anyhow::anyhow!("{e}"))
+        })
+        .transpose()?;
 
     // Extract quantization settings
     let isq = extract_isq_setting(&model_type);
@@ -93,6 +99,7 @@ pub async fn run_server(
         .with_prefix_cache_n(runtime.prefix_cache_n)
         .set_paged_attn(paged_attn)
         .with_cpu(cpu)
+        .with_device_spec(device_spec)
         .with_enable_search(runtime.enable_search)
         .with_seed_optional(global.seed)
         .with_log_optional(global.log.as_ref().map(|p| p.to_string_lossy().to_string()))
@@ -856,7 +863,9 @@ pub(crate) fn extract_paged_attn_settings(
     cache.paged_attn.clone().into_builder_flags()
 }
 
-pub(crate) fn extract_device_settings(model_type: &ModelType) -> (bool, Option<Vec<String>>) {
+pub(crate) fn extract_device_settings(
+    model_type: &ModelType,
+) -> (bool, Option<Vec<String>>, Option<String>) {
     let device = match model_type {
         ModelType::Auto { device, .. } => device,
         ModelType::Text { device, .. } => device,
@@ -866,7 +875,7 @@ pub(crate) fn extract_device_settings(model_type: &ModelType) -> (bool, Option<V
         ModelType::Embedding { device, .. } => device,
     };
 
-    (device.cpu, device.device_layers.clone())
+    (device.cpu, device.device_layers.clone(), device.device.clone())
 }
 
 pub(crate) fn extract_isq_setting(model_type: &ModelType) -> Option<String> {

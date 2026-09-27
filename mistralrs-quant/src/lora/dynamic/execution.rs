@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use candle_core::{Device, DeviceLocation, Result, Tensor};
@@ -22,19 +22,19 @@ enum LoraRowRemap {
     Repeat { row: usize, rows: usize },
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 #[derive(Debug)]
 pub(super) struct PreparedExpertAdapters {
     pub slots: Vec<(LoraSlotId, Arc<LoraExpertWeights>)>,
     pub token_slots: Vec<u32>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 static NEXT_LORA_EXECUTION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Default)]
 pub struct LoraExecutionArena {
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     expert_cuda: Mutex<super::expert_cuda::ExpertCudaCache>,
 }
 
@@ -58,7 +58,7 @@ impl LoraExecutionArena {
         Self::default()
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     pub fn cached_expert_cuda_resources(&self) -> usize {
         self.expert_cuda
             .lock()
@@ -66,7 +66,7 @@ impl LoraExecutionArena {
             .len()
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     pub fn cuda_stats(&self) -> LoraExecutionArenaStats {
         let cache = self
             .expert_cuda
@@ -178,7 +178,7 @@ impl LoraAdapterWeights {
 
 #[derive(Debug)]
 pub struct LoraExecution {
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     execution_id: u64,
     runtime_id: LoraRuntimeId,
     row_slots: Arc<[Option<LoraSlotId>]>,
@@ -188,7 +188,7 @@ pub struct LoraExecution {
     expert_weights: HashMap<(u32, LoraSlotId), Arc<LoraExpertWeights>>,
     row_indices: Mutex<HashMap<(DeviceLocation, LoraSlotId), Tensor>>,
     row_remaps: Mutex<HashMap<LoraRowRemap, Arc<LoraExecution>>>,
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     prepared_expert_adapters: Mutex<HashMap<u32, Arc<PreparedExpertAdapters>>>,
     arena: Arc<LoraExecutionArena>,
 }
@@ -224,7 +224,7 @@ impl LoraExecution {
             }
         }
         Self {
-            #[cfg(feature = "cuda")]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             execution_id: NEXT_LORA_EXECUTION_ID.fetch_add(1, Ordering::Relaxed),
             runtime_id,
             row_slots: row_slots.into(),
@@ -237,7 +237,7 @@ impl LoraExecution {
             expert_weights: HashMap::new(),
             row_indices: Mutex::new(HashMap::new()),
             row_remaps: Mutex::new(HashMap::new()),
-            #[cfg(feature = "cuda")]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             prepared_expert_adapters: Mutex::new(HashMap::new()),
             arena,
         }
@@ -287,7 +287,7 @@ impl LoraExecution {
         self.runtime_id
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     pub(super) fn execution_id(&self) -> u64 {
         self.execution_id
     }
@@ -350,7 +350,7 @@ impl LoraExecution {
         &self.rows_by_slot
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     pub(super) fn expert_cuda_cache(
         &self,
     ) -> std::sync::MutexGuard<'_, super::expert_cuda::ExpertCudaCache> {
@@ -443,7 +443,7 @@ impl LoraExecution {
                     .get_mut()
                     .expect("LoRA row remap cache poisoned")
                     .clear();
-                #[cfg(feature = "cuda")]
+                #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                 self.prepared_expert_adapters
                     .get_mut()
                     .expect("expert LoRA prepared cache poisoned")
@@ -495,7 +495,7 @@ impl LoraExecution {
                     .get_mut()
                     .expect("LoRA row remap cache poisoned")
                     .clear();
-                #[cfg(feature = "cuda")]
+                #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                 self.prepared_expert_adapters
                     .get_mut()
                     .expect("expert LoRA prepared cache poisoned")
@@ -517,7 +517,7 @@ impl LoraExecution {
             .or_else(|| self.adapters.get(&slot)?.expert_weights(site_id)))
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     pub(super) fn prepared_expert_adapters(
         &self,
         site: &LoraExpertSiteHandle,

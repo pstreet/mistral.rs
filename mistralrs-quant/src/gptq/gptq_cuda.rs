@@ -21,7 +21,7 @@ use candle_core::{
 };
 use half::f16;
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 use crate::gptq::marlin_backend::{marlin_matmul, marlin_weight_repack};
 use crate::{
     has_missing_required_tensors, make_dummy_or_error, utils::get_cuda_device, IsqType,
@@ -32,13 +32,15 @@ use crate::{
 use super::ffi::{
     gemm_half_q_half_alt, gemm_half_q_half_cuda_part, reconstruct_exllama, reconstruct_gptq,
 };
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 use super::marlin_ffi::HAVE_MARLIN_KERNELS;
 // The cuda-gated Marlin arm below uses candle's Option::context; the import
 // only resolves where that arm compiles.
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 use candle_core::Context;
-#[cfg(not(feature = "cuda"))]
+// Dual builds: the Marlin kernels are cuda-block machinery (no hipcc build),
+// so the flag is false exactly where the import above is compiled out.
+#[cfg(any(not(feature = "cuda"), feature = "rocm"))]
 const HAVE_MARLIN_KERNELS: bool = false;
 
 const MAX_Q_GEMM_ROWS_8BIT: i32 = 24;
@@ -384,7 +386,7 @@ impl QuantMethod for GptqLayer {
                     self.use_exllama,
                 )?
                 .reshape(out_shape)?,
-            #[cfg(feature = "cuda")]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             (_, _, true) => marlin_matmul(
                 a,
                 &self.q_weight,
@@ -594,11 +596,11 @@ pub fn gptq_linear(
 
         // Repack to marlin format (CUDA only; ROCm keeps the q_gemm layout)
         let qweight = if marlin_compatible {
-            #[cfg(feature = "cuda")]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             {
                 marlin_weight_repack(&qweight, &perm, in_dim, *bits as i32, is_awq)?
             }
-            #[cfg(not(feature = "cuda"))]
+            #[cfg(any(not(feature = "cuda"), feature = "rocm"))]
             {
                 candle_core::bail!("GPTQ marlin repack requires the CUDA feature");
             }

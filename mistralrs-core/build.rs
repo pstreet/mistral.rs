@@ -1,17 +1,17 @@
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 const FLASHINFER_GDN_COMMIT: &str = "28406af5b9134757acbd6bc44647fd00261d163f";
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 const CUTLASS_COMMIT: &str = "7127592069c2fe01b041e174ba4345ef9b279671";
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 const FLASHINFER_GDN_MIN_CUDA: u32 = 1208;
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 const GDN_FP8_PRODUCER_MIN_CUDA: u32 = 1108;
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 const CUDA_BUILD_ROOT_ENV: &str = "MISTRALRS_CUDA_BUILD_ROOT";
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 fn cuda_build_dir(out_dir: &std::path::Path, component: &str) -> std::path::PathBuf {
     println!("cargo:rerun-if-env-changed={CUDA_BUILD_ROOT_ENV}");
     let Some(root) = std::env::var_os(CUDA_BUILD_ROOT_ENV) else {
@@ -22,7 +22,7 @@ fn cuda_build_dir(out_dir: &std::path::Path, component: &str) -> std::path::Path
     build_dir
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 fn cuda_header_hash(dir: &std::path::Path) -> std::io::Result<u64> {
     fn update(hash: &mut u64, bytes: &[u8]) {
         for byte in bytes {
@@ -69,12 +69,15 @@ fn main() {
     #[cfg(feature = "cudnn")]
     add_cudnn_link_search();
 
-    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    // Dual builds serve the AMD role (all C kernels hipcc-built): the rocm
+    // block owns the GDN kernels and links; the cuda block stays for
+    // cuda-only builds.
+    #[cfg(feature = "rocm")]
     {
         build_rocm();
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     {
         use std::path::PathBuf;
         let cuda_version_code = set_cuda_toolkit_version();
@@ -220,7 +223,7 @@ fn main() {
 // GDN (Gated DeltaNet) kernels built with hipcc for hybrid SSM models. Only
 // the portable recurrence/conv/gating kernels are needed; they use standard
 // warp shuffles and fp16/bf16 math, so they compile for the target GCN/CDNA/RDNA.
-#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+#[cfg(feature = "rocm")]
 fn build_rocm() {
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -361,6 +364,13 @@ fn build_rocm() {
     }
 
     let out_file = build_dir.join("libmistralrscuda.a");
+    // Start from a clean archive: `ar crs` only replaces same-named
+    // members, so objects left by the other vendor block (e.g. switching
+    // feature shapes in the same OUT_DIR) would otherwise leak in and drag
+    // their runtime's symbols along.
+    if out_file.exists() {
+        std::fs::remove_file(&out_file).expect("remove stale libmistralrscuda.a");
+    }
     let status = Command::new("ar")
         .arg("crs")
         .arg(&out_file)
@@ -376,7 +386,7 @@ fn build_rocm() {
     println!("cargo:rustc-link-lib=dylib=stdc++");
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 fn set_cuda_toolkit_version() -> Option<u32> {
     let (version, code) = cuda_toolkit_version()?;
     {
@@ -386,13 +396,13 @@ fn set_cuda_toolkit_version() -> Option<u32> {
     Some(code)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 fn cuda_toolkit_version() -> Option<(String, u32)> {
     let version = cudaforge::CudaToolkit::detect().ok()?.version?;
     parse_cuda_version(&version)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 fn parse_cuda_version(version: &str) -> Option<(String, u32)> {
     let mut parts = version.split('.');
     let major: u32 = parts.next()?.parse().ok()?;

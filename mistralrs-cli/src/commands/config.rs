@@ -51,6 +51,14 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         install_prometheus_recorder();
     }
     let global = global.to_global_options()?;
+    let device_spec = global
+        .device
+        .clone()
+        .map(|s| {
+            mistralrs_core::device_spec::DeviceSpec::parse(&s)
+                .map_err(|e| anyhow::anyhow!("{e}"))
+        })
+        .transpose()?;
     apply_agent_mode(&mut runtime);
     validate_agent_options(&runtime)?;
     log_agent_runtime(&runtime, server.max_tool_rounds);
@@ -93,6 +101,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         .with_prefix_cache_n(runtime.prefix_cache_n)
         .set_paged_attn(paged_attn)
         .with_cpu(cpu)
+        .with_device_spec(device_spec)
         .with_enable_search(runtime.enable_search)
         .with_seed_optional(global.seed)
         .with_log_optional(global.log.as_ref().map(|p| p.to_string_lossy().to_string()))
@@ -243,6 +252,14 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
     mistralrs_core::resolve_reasoning_controls(thinking, reasoning_effort)?;
 
     let global = global.to_global_options()?;
+    let device_spec = global
+        .device
+        .clone()
+        .map(|s| {
+            mistralrs_core::device_spec::DeviceSpec::parse(&s)
+                .map_err(|e| anyhow::anyhow!("{e}"))
+        })
+        .transpose()?;
     apply_agent_mode(&mut runtime);
     validate_agent_options(&runtime)?;
     log_agent_runtime(&runtime, None);
@@ -270,6 +287,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         .with_prefix_cache_n(runtime.prefix_cache_n)
         .set_paged_attn(paged_attn)
         .with_cpu(cpu)
+        .with_device_spec(device_spec)
         .with_enable_search(runtime.enable_search)
         .with_seed_optional(global.seed)
         .with_log_optional(global.log.as_ref().map(|p| p.to_string_lossy().to_string()))
@@ -363,7 +381,7 @@ async fn build_model_configs(
     let mut configs = Vec::new();
 
     for entry in models {
-        if let Some(cpu) = entry.device.cpu {
+        if let Some(cpu) = entry.device_options().cpu {
             match cpu_setting {
                 None => cpu_setting = Some(cpu),
                 Some(existing) if existing != cpu => {
@@ -399,6 +417,11 @@ async fn build_model_configs(
         if entry.lazy {
             config = config.with_lazy(true);
         }
+        if let crate::config::ModelDevice::Explicit(device) = entry.device.clone() {
+            config = config
+                .with_device_str(device)
+                .map_err(|e| anyhow::anyhow!("model `{}`: {e}", entry.model_id))?;
+        }
         if let Some(mtp) = entry.mtp {
             config = config.with_mtp(mtp);
         }
@@ -431,7 +454,7 @@ async fn build_model_configs(
             config = config.with_jinja_explicit(jinja_explicit.to_string_lossy().to_string());
         }
 
-        if let Some(device_layers) = entry.device.device_layers.clone() {
+        if let Some(device_layers) = entry.device_options().device_layers.clone() {
             config = config.with_num_device_layers(device_layers);
         }
 

@@ -39,7 +39,7 @@ pub(crate) fn add_delta(
     input: &Tensor,
     base_output: Tensor,
 ) -> Result<Tensor> {
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     if let Some(output) = super::cuda::try_add_delta_cuda(execution, site, input, &base_output)? {
         return Ok(output);
     }

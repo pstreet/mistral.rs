@@ -363,7 +363,6 @@ const MOE_ROUTER_EXTRA_EXPERT_COUNTS: &[usize] = &[576];
 pub fn moe_router_gemv(xs: &Tensor, w: &Tensor) -> Result<Option<Tensor>> {
     use candle_core::role::backend::cudarc::driver::{DevicePtr, DevicePtrMut};
     use candle_core::role::backend::CudaStorageSlice;
-    use candle_core::Storage;
     use std::ffi::c_void;
 
     if !xs.device().is_cuda()
@@ -403,7 +402,7 @@ pub fn moe_router_gemv(xs: &Tensor, w: &Tensor) -> Result<Option<Tensor>> {
 
     let (xs_storage, xs_layout) = xs.storage_and_layout();
     #[cfg(not(all(feature = "cuda", feature = "rocm")))]
-    let Storage::Cuda(xs_cuda) = &*xs_storage
+    let candle_core::Storage::Cuda(xs_cuda) = &*xs_storage
     else {
         candle_core::bail!("moe_router_gemv requires CUDA xs");
     };
@@ -413,7 +412,7 @@ pub fn moe_router_gemv(xs: &Tensor, w: &Tensor) -> Result<Option<Tensor>> {
         .map_err(|_| candle_core::Error::msg("moe_router_gemv requires CUDA xs"))?;
     let (w_storage, w_layout) = w.storage_and_layout();
     #[cfg(not(all(feature = "cuda", feature = "rocm")))]
-    let Storage::Cuda(w_cuda) = &*w_storage
+    let candle_core::Storage::Cuda(w_cuda) = &*w_storage
     else {
         candle_core::bail!("moe_router_gemv requires CUDA weights");
     };
@@ -1020,10 +1019,7 @@ impl CudaTopKLogitsPackedWorkspace {
             .checked_mul(packed_width)
             .ok_or_else(|| candle_core::Error::msg("CUDA top-k packed workspace overflow"))?;
         #[cfg(not(all(feature = "cuda", feature = "rocm")))]
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
         let device = candle_core::Device::Cuda(dev.clone());
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
-        let device = candle_core::Device::Hip(dev.clone());
         #[cfg(all(feature = "cuda", feature = "rocm"))]
         let device = candle_core::Device::Hip(dev.clone());
         Ok(Self {

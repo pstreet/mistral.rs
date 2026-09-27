@@ -333,7 +333,7 @@ pub fn moe_sum_bf16(
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn test_hunyuan_moe_capacity_mask_cuda() -> candle_core::Result<()> {
         use super::hunyuan_moe_apply_capacity_mask;

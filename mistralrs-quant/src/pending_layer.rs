@@ -145,12 +145,12 @@ impl QuantMethod for PendingIsqLayer {
         self.resolve()?.embedding_forward_raw(ids)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
         self.resolve().ok()?.get_qtensor()
     }
 
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
     fn prepare_gguf_affine_raw(
         &self,
         flat_batch: usize,
@@ -161,7 +161,7 @@ impl QuantMethod for PendingIsqLayer {
             .prepare_gguf_affine_raw(flat_batch, dtype, device)
     }
 
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm"), has_marlin_kernels))]
     fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
         self.resolve()?.try_gguf_affine_forward_raw(a)
     }
@@ -195,7 +195,7 @@ impl QuantMethod for PendingIsqLayer {
         self.resolve()?.forward_quantized(a)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn try_forward_fused_split_glu(
         &self,
         input: &Tensor,

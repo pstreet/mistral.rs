@@ -109,6 +109,7 @@ mod adapter;
 mod agent_approval;
 mod cuda;
 mod device_map;
+pub mod device_spec;
 mod engine;
 mod lora;
 mod metal;

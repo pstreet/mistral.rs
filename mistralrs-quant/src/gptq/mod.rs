@@ -4,9 +4,9 @@ mod ffi;
 mod gptq_cpu;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 mod gptq_cuda;
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 mod marlin_backend;
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 mod marlin_ffi;
 
 #[cfg(not(any(feature = "cuda", feature = "rocm")))]

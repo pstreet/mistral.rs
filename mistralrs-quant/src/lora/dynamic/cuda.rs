@@ -1,6 +1,6 @@
 use candle_core::DType;
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 use super::{LoraExecution, LoraSiteHandle};
 
 pub(crate) const MAX_CUDA_LORA_RANK: usize = 128;
@@ -112,7 +112,7 @@ fn adapter_supported(layout: AdapterLayout<'_>, plan: CudaPlan) -> bool {
             .is_some_and(|v| v <= i32::MAX as usize)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 use candle_core::{
     cuda::{
         cudarc::driver::{DevicePtrMut, DeviceRepr},
@@ -120,13 +120,13 @@ use candle_core::{
     },
     CudaDevice, CudaStorage, Result, Shape, Storage, Tensor, WithDType,
 };
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 use half::{bf16, f16};
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 use crate::utils::slice_ptr_on_stream;
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 struct ActiveAdapter<'a> {
     weights: &'a super::LoraWeights,
     row_indices: Tensor,
@@ -134,7 +134,7 @@ struct ActiveAdapter<'a> {
     scale: f64,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 struct CudaLaunch {
     input: u64,
     a: u64,
@@ -150,13 +150,13 @@ struct CudaLaunch {
     stream: candle_core::cuda::cudarc::driver::sys::CUstream,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 trait CudaLoraElement: CudaDType + DeviceRepr + WithDType {
     unsafe fn launch(args: CudaLaunch) -> i32;
     fn rounded_scale(scale: f64) -> f32;
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 impl CudaLoraElement for f16 {
     fn rounded_scale(scale: f64) -> f32 {
         <f16 as WithDType>::from_f64(scale).to_f32()
@@ -180,7 +180,7 @@ impl CudaLoraElement for f16 {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 impl CudaLoraElement for bf16 {
     fn rounded_scale(scale: f64) -> f32 {
         <bf16 as WithDType>::from_f64(scale).to_f32()
@@ -204,7 +204,7 @@ impl CudaLoraElement for bf16 {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 fn run_cuda<T: CudaLoraElement>(
     device: &CudaDevice,
     input: &Tensor,
@@ -290,7 +290,7 @@ fn run_cuda<T: CudaLoraElement>(
     )))
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub(crate) fn try_add_delta_cuda(
     execution: &LoraExecution,
     site: &LoraSiteHandle,
@@ -484,7 +484,7 @@ mod tests {
         ));
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn cuda_tensor(
         data: &[f32],
         shape: &[usize],
@@ -494,7 +494,7 @@ mod tests {
         Tensor::from_vec(data.to_vec(), shape.to_vec(), device)?.to_dtype(dtype)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn check_cuda_dtype(dtype: DType, device: &candle_core::Device) -> candle_core::Result<()> {
         use super::super::{
             reference::add_delta_reference, LoraLayerRegistry, LoraLinearSpec, LoraSiteKey,
@@ -564,7 +564,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn cuda_prefill_and_decode_match_reference_for_mixed_slots() -> candle_core::Result<()> {
         let device = candle_core::Device::cuda_if_available(0)?;
@@ -575,7 +575,7 @@ mod tests {
         check_cuda_dtype(DType::BF16, &device)
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn cuda_and_fallback_match_at_a_bf16_rounding_boundary() -> candle_core::Result<()> {
         use super::super::{LoraLayerRegistry, LoraLinearSpec, LoraSiteKey, LoraWeights};
