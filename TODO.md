@@ -628,10 +628,53 @@ P3 = polish, Deferred = do not do on RDNA.
       counts are 1-for-1 when swapping fn names in calls
       (role_storage( vs Storage::Cuda(), keep the closers), and
       destructure conversions must re-emit else-bodies.
-      S3b REMAINING: device strings (hip:N|cuda:N|cpu parsing +
-      validation), BackendCaps contract + probe-gated NVIDIA
-      init, serving smoke on hip:0 through a dual build, then S2
-      (QStorage-on-hip making the quant stand-ins real).
+      S3b DONE 2026-09-26 (candle + mistral.rs): device strings
+      + BackendCaps + auto-selection, all probe-gated.
+      CANDLE: cudarc dep swapped dynamic-linking -> dynamic-loading
+      (dual binaries start with no NVIDIA runtime - the load-time
+      libcuda DT_NEEDED is gone); cudarc-hip gains a link-mode
+      is_culib_present() (true: a running process implies the
+      linked runtime) so callers gate uniformly across binding
+      modes; the dual test's NVIDIA arm is now the probe-gated
+      pattern.
+      MISTRALRS: mistralrs-core/device_spec.rs - DeviceSpec
+      parse/serde (string form "cpu"|"cuda:N"|"hip:N", vulkan:N
+      reports the S4 status), resolve() probe-gated per build
+      shape (dual cuda:N without a driver refuses, naming hip:N),
+      auto_select() (probe the serving role, log the choice; dual
+      + NVIDIA-only machine refuses honestly instead of drowning
+      on CPU), BackendCaps {arch, graphs, paged_attn,
+      quantized_gguf, mtp} with a per-device startup log line and
+      ensure_gguf() - the S2 boundary is a loud refusal at load
+      entry. Wiring: --device + global toml device + PER-MODEL
+      [[models]] device (untagged ModelDevice enum accepting the
+      flat string OR the legacy [models.device] sub-table),
+      init_device takes the spec, per-model resolution in
+      multi-model, device-mapper pretty-prints hip[N]. Sweep:
+      every remaining pure cfg(feature="cuda") module in
+      mistralrs-quant (lora/dynamic, blockwise_fp8, vector/scalar
+      fp8, gptq marlin, cublaslt users) + core get_dtypes
+      (nvidia-smi probe!) tightened to all(cuda, not(rocm)) with
+      dual fallbacks - those kernels are cuda-block machinery
+      with no hipcc build. BUILD-SCRIPT LESSON: ar crs only
+      replaces same-named members - switching feature shapes in
+      one OUT_DIR leaks the other vendor's objects (stale nvcc
+      members dragged cudart symbols); build_rocm now removes
+      the archive first, and cargo clean -p does NOT purge
+      build-script OUT_DIRs.
+      VERIFICATION: mistralrs-cli builds release in DUAL (first
+      full dual link) and checks zero-error in all three shapes;
+      device_spec tests 4/4; full bar green (quant 316/317 - the
+      1 is the documented pre-existing fp8; fast_mmq 5/5; gdn
+      55/55; cuda_graph 31+8; paged-attn 8/8; mmq bench); the
+      dual release binary SERVES: auto-select logs the serving
+      role Hip, caps line "Rocm{gfx:(11,5,1)}: graphs=on
+      paged_attn=on gguf=OFF mtp=on", device mapper routes
+      "Layers 0-63: hip[0]", weight loading proceeds. Full GGUF
+      serving on hip:0 remains gated on S2; the caps contract
+      makes that visible and enforced. NEXT: S2 (QStorage-on-hip
+      replacing the stand-ins; also place the multimodal gate),
+      then S4 Vulkan.
       S1 DONE 2026-09-26 (candle): kernels twin builds standalone
       (11 PTX, symlink-free, sm_80 fallback GPU-less); dual check
       green alongside default + rocm; 4 dual tests pass (CPU op +
