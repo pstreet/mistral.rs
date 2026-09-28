@@ -307,7 +307,9 @@ impl GgufMatMul {
     fn uses_fast_mmvq(&self) -> bool {
         matches!(
             &self.w,
-            QMatMul::QTensor(q) if q.device().is_cuda() && fast_mmvq::supports(q.dtype())
+            QMatMul::QTensor(q)
+                if crate::utils::device_has_fused_gguf(&q.device())
+                    && fast_mmvq::supports(q.dtype())
         )
     }
 

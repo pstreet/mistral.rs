@@ -52,6 +52,20 @@ pub(crate) fn test_gpu_device() -> Device {
     return Device::new_cuda(0).expect("cuda-role device for kernel tests");
 }
 
+/// Devices covered by the fused GGUF launchers: CUDA in every GPU shape,
+/// plus Hip in dual builds (where the `_hip` modules replace the launchers).
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+pub(crate) fn device_has_fused_gguf(device: &Device) -> bool {
+    if device.is_cuda() {
+        return true;
+    }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if device.is_hip() {
+        return true;
+    }
+    false
+}
+
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn slice_ptr<T: DeviceRepr>(
     v: &CudaSlice<T>,

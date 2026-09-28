@@ -1942,7 +1942,7 @@ pub fn try_fused_quantized_ffn(
     down: &dyn QuantMethod,
     activation: GluActivationType,
 ) -> Result<Option<Tensor>> {
-    if !xs.device().is_cuda() {
+    if !crate::utils::device_has_fused_gguf(xs.device()) {
         return Ok(None);
     }
     if gate.stats_snapshot().is_some()
@@ -2058,7 +2058,7 @@ pub fn try_fused_quantized_gate_up(
     up: &dyn QuantMethod,
     activation: GluActivationType,
 ) -> Result<Option<Tensor>> {
-    if !xs.device().is_cuda() {
+    if !crate::utils::device_has_fused_gguf(xs.device()) {
         return Ok(None);
     }
     if gate.stats_snapshot().is_some() || up.stats_snapshot().is_some() {
@@ -2175,7 +2175,7 @@ pub fn try_fused_quantized_qkv(
     k: &dyn QuantMethod,
     v: &dyn QuantMethod,
 ) -> Result<Option<(Tensor, Tensor, Tensor)>> {
-    if !xs.device().is_cuda() {
+    if !crate::utils::device_has_fused_gguf(xs.device()) {
         return Ok(None);
     }
     if q.stats_snapshot().is_some() || k.stats_snapshot().is_some() || v.stats_snapshot().is_some()

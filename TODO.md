@@ -840,9 +840,25 @@ P3 = polish, Deferred = do not do on RDNA.
       release builds cannot clobber the running binary; smokes stay
       on --profile fast (separate target dir); consider the healthcheck
       alert path a TODO.
+      LAUNCHER PORT LANDED 2026-09-28 (uncommitted): fused MMVQ +
+      MMQ serve the hip role. The kernels were already hipcc-built on
+      both sides; the port is dispatch wiring only: real launchers in
+      fast_mmvq_hip.rs (plain/fused_glu/fused_qkv) and fast_mmq_hip.rs
+      (plain/fused_qkv/fused_glu/fused_ffn via shared_lhs), a
+      device_has_fused_gguf helper (CUDA everywhere + Hip in dual),
+      and gate flips in gguf/mod.rs + three try_fused_* gates. The
+      #[path] replacement makes callees resolve per-shape, so flips
+      are predicate-only. MoE grouped entries stay on the CPU fallback
+      (signatures kept NVIDIA-typed for the core callers); candle's
+      gpu_quant_fused stays off (quant owns fused routing). 6 new hip
+      correctness tests (fused-vs-chute) pass; dual cascade 313/0 +
+      30/0 + 4/4; serving A/B on hip:0 (Qwen3.5-4B Q8_0, correct
+      1776 both): prefill 55->105 tok/s (+91%), decode 15.0->16.5
+      (+10%) via MISTRALRS_NO_FAST_MMVQ/MMQ=1 chute baseline; dual
+      release rebuilt with zero GPU DT_NEEDED.
       PHASE 2 REMAINING: hqq hip-side op coverage (gated tests),
-      multimodal projector fix, launcher port (fused MMQ/MMVQ perf),
-      release gate + full bar, commits.
+      multimodal projector fix, healthcheck alert wiring, MoE grouped
+      fusion on hip.
       S1 DONE 2026-09-26 (candle): kernels twin builds standalone
       (11 PTX, symlink-free, sm_80 fallback GPU-less); dual check
       green alongside default + rocm; 4 dual tests pass (CPU op +
