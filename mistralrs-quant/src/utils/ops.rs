@@ -160,6 +160,65 @@ impl CustomOp1 for Leftshift {
         };
         Ok((dst, l1.shape().clone()))
     }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    /// Dual-role twin of cuda_fwd: the same kernels through the hip
+    /// role's bindings (companion-plugin FFI included).
+    fn hip_fwd(&self, s1: &HipStorage, l1: &Layout) -> Result<(HipStorage, Shape)> {
+        use crate::utils::{hip_slice_ptr, hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
+        if !l1.is_contiguous() {
+            candle_core::bail!("Input tensor s1 must be contiguous");
+        }
+        let dev = s1.device().clone();
+        let (d_in1_ptr, _d_guard, elem_count) = match s1.dtype() {
+            DType::U8 => {
+                let (d_in1, d_in1_guard) =
+                    hip_slice_ptr(s1.as_cuda_slice::<u8>()?, l1.start_offset());
+                let elem_count = l1.shape().elem_count();
+                (d_in1 as *const c_void, d_in1_guard, elem_count)
+            }
+            DType::I32 => {
+                let (d_in1, d_in1_guard) =
+                    hip_slice_ptr(s1.as_cuda_slice::<i32>()?, l1.start_offset());
+                let elem_count = l1.shape().elem_count();
+                (d_in1 as *const c_void, d_in1_guard, elem_count)
+            }
+            other => {
+                return Err(Error::UnsupportedDTypeForOp(other, "leftshift"));
+            }
+        };
+        let dst = match s1.dtype() {
+            DType::U8 => {
+                let d_out = unsafe { dev.alloc::<u8>(elem_count) }?;
+                let (d_out_ptr, d_out_guard) = d_out.device_ptr(d_out.stream());
+                unsafe {
+                    ffi::leftshift_u8(
+                        d_in1_ptr,
+                        d_out_ptr as *mut std::ffi::c_void,
+                        u32::try_from(elem_count)?,
+                        self.0 as i32,
+                    )
+                };
+                drop(d_out_guard);
+                HipStorage::wrap_cuda_slice(d_out, dev)
+            }
+            DType::I32 => {
+                let d_out = unsafe { dev.alloc::<i32>(elem_count) }?;
+                let (d_out_ptr, d_out_guard) = d_out.device_ptr(d_out.stream());
+                unsafe {
+                    ffi::leftshift_i32(
+                        d_in1_ptr,
+                        d_out_ptr as *mut std::ffi::c_void,
+                        u32::try_from(elem_count)?,
+                        self.0 as i32,
+                    )
+                };
+                drop(d_out_guard);
+                HipStorage::wrap_cuda_slice(d_out, dev)
+            }
+            _ => unreachable!(),
+        };
+        Ok((dst, l1.shape().clone()))
+    }
 
     #[cfg(feature = "metal")]
     fn metal_fwd(
@@ -984,6 +1043,12 @@ impl CustomOp1 for BitWiseUnary {
     fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
         candle_core::bail!("bitwise unary operations are not supported on CUDA")
     }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    /// Dual-role twin of cuda_fwd: the same kernels through the hip
+    /// role's bindings (companion-plugin FFI included).
+    fn hip_fwd(&self, _s1: &HipStorage, _l1: &Layout) -> Result<(HipStorage, Shape)> {
+        candle_core::bail!("bitwise unary operations are not supported on CUDA")
+    }
 
     #[cfg(feature = "metal")]
     fn metal_fwd(
@@ -1081,6 +1146,12 @@ impl CustomOp1 for ArgSort {
     // -------- CUDA -----------------------------------------------------------
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
+        candle_core::bail!("ArgSort is not implemented for the CUDA backend");
+    }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    /// Dual-role twin of cuda_fwd: the same kernels through the hip
+    /// role's bindings (companion-plugin FFI included).
+    fn hip_fwd(&self, _s1: &HipStorage, _l1: &Layout) -> Result<(HipStorage, Shape)> {
         candle_core::bail!("ArgSort is not implemented for the CUDA backend");
     }
 
@@ -1188,6 +1259,12 @@ impl CustomOp1 for Sort {
     // -------- CUDA -----------------------------------------------------------
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
+        candle_core::bail!("Sort is not implemented for the CUDA backend");
+    }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    /// Dual-role twin of cuda_fwd: the same kernels through the hip
+    /// role's bindings (companion-plugin FFI included).
+    fn hip_fwd(&self, _s1: &HipStorage, _l1: &Layout) -> Result<(HipStorage, Shape)> {
         candle_core::bail!("Sort is not implemented for the CUDA backend");
     }
 
@@ -1844,6 +1921,12 @@ impl CustomOp1 for CumSum {
     fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
         candle_core::bail!("cumulative sum is not supported on CUDA")
     }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    /// Dual-role twin of cuda_fwd: the same kernels through the hip
+    /// role's bindings (companion-plugin FFI included).
+    fn hip_fwd(&self, _s1: &HipStorage, _l1: &Layout) -> Result<(HipStorage, Shape)> {
+        candle_core::bail!("cumulative sum is not supported on CUDA")
+    }
 
     #[cfg(feature = "metal")]
     fn metal_fwd(
@@ -2437,6 +2520,125 @@ impl CustomOp1 for SoftmaxWithSinks {
 
                 drop(_o_guard);
                 let out_storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+                Ok((out_storage, out_shape))
+            }
+            _ => candle_core::bail!("softmax_with_sinks: unsupported dtype {:?}", dtype),
+        }
+    }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    /// Dual-role twin of cuda_fwd: the same kernels through the hip
+    /// role's bindings (companion-plugin FFI included).
+    fn hip_fwd(&self, storage: &HipStorage, layout: &Layout) -> Result<(HipStorage, Shape)> {
+        use crate::utils::{hip_slice_ptr, hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
+        use candle_core::cuda::cudarc::driver::sys::CUstream;
+        use half::{bf16, f16};
+
+        let device = storage.device();
+        let dtype = storage.dtype();
+        let n_elements = layout.shape().elem_count();
+        let out_shape = layout.shape().clone();
+        let stream = device.cuda_stream();
+        let stream_raw = stream.cu_stream() as CUstream;
+        let logits_offset = layout.start_offset();
+
+        let batch_size = out_shape.dims()[0];
+
+        let sinks_data = self.sinks.storage_and_layout();
+        let sinks_cuda = match &*sinks_data.0 {
+            candle_core::Storage::Hip(s) => s,
+            _ => candle_core::bail!("softmax_with_sinks hip_fwd: sinks must be on hip"),
+        };
+        let sinks_offset = sinks_data.1.start_offset();
+
+        match dtype {
+            DType::F16 => {
+                let mut output = device.alloc_zeros::<f16>(n_elements)?;
+                let logits_slice = storage.as_cuda_slice::<f16>()?;
+                let sinks_slice = sinks_cuda.as_cuda_slice::<f16>()?;
+
+                let (logits_ptr, _l_guard) =
+                    hip_slice_ptr_on_stream(logits_slice, logits_offset, &stream);
+                let (sinks_ptr, _s_guard) =
+                    hip_slice_ptr_on_stream(sinks_slice, sinks_offset, &stream);
+                let (out_ptr, _o_guard) = hip_slice_ptr_mut_on_stream(&mut output, 0, &stream);
+
+                unsafe {
+                    ffi::softmax_with_sinks_f16(
+                        logits_ptr as *const c_void,
+                        sinks_ptr as *const c_void,
+                        std::ptr::null(), // mask pre-applied
+                        out_ptr as *mut c_void,
+                        batch_size as i32,
+                        self.num_heads as i32,
+                        self.q_len as i32,
+                        self.k_len as i32,
+                        1.0,
+                        stream_raw,
+                    );
+                }
+
+                drop(_o_guard);
+                let out_storage = HipStorage::wrap_cuda_slice(output, device.clone());
+                Ok((out_storage, out_shape))
+            }
+            DType::BF16 => {
+                let mut output = device.alloc_zeros::<bf16>(n_elements)?;
+                let logits_slice = storage.as_cuda_slice::<bf16>()?;
+                let sinks_slice = sinks_cuda.as_cuda_slice::<bf16>()?;
+
+                let (logits_ptr, _l_guard) =
+                    hip_slice_ptr_on_stream(logits_slice, logits_offset, &stream);
+                let (sinks_ptr, _s_guard) =
+                    hip_slice_ptr_on_stream(sinks_slice, sinks_offset, &stream);
+                let (out_ptr, _o_guard) = hip_slice_ptr_mut_on_stream(&mut output, 0, &stream);
+
+                unsafe {
+                    ffi::softmax_with_sinks_bf16(
+                        logits_ptr as *const c_void,
+                        sinks_ptr as *const c_void,
+                        std::ptr::null(),
+                        out_ptr as *mut c_void,
+                        batch_size as i32,
+                        self.num_heads as i32,
+                        self.q_len as i32,
+                        self.k_len as i32,
+                        1.0,
+                        stream_raw,
+                    );
+                }
+
+                drop(_o_guard);
+                let out_storage = HipStorage::wrap_cuda_slice(output, device.clone());
+                Ok((out_storage, out_shape))
+            }
+            DType::F32 => {
+                let mut output = unsafe { device.alloc::<f32>(n_elements) }?;
+                let logits_slice = storage.as_cuda_slice::<f32>()?;
+                let sinks_slice = sinks_cuda.as_cuda_slice::<f32>()?;
+
+                let (logits_ptr, _l_guard) =
+                    hip_slice_ptr_on_stream(logits_slice, logits_offset, &stream);
+                let (sinks_ptr, _s_guard) =
+                    hip_slice_ptr_on_stream(sinks_slice, sinks_offset, &stream);
+                let (out_ptr, _o_guard) = hip_slice_ptr_mut_on_stream(&mut output, 0, &stream);
+
+                unsafe {
+                    ffi::softmax_with_sinks_f32(
+                        logits_ptr as *const c_void,
+                        sinks_ptr as *const c_void,
+                        std::ptr::null(),
+                        out_ptr as *mut c_void,
+                        batch_size as i32,
+                        self.num_heads as i32,
+                        self.q_len as i32,
+                        self.k_len as i32,
+                        1.0,
+                        stream_raw,
+                    );
+                }
+
+                drop(_o_guard);
+                let out_storage = HipStorage::wrap_cuda_slice(output, device.clone());
                 Ok((out_storage, out_shape))
             }
             _ => candle_core::bail!("softmax_with_sinks: unsupported dtype {:?}", dtype),
@@ -4943,7 +5145,7 @@ mod tests {
         assert_eq!(c, [[19, 36]]);
     }
 
-    // S2: Hip-side op coverage (HQQ bitpack ops bail on Hip today).
+    // Hip-side hqq bitpack op coverage (see hqq/mod.rs gates).
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     #[test]

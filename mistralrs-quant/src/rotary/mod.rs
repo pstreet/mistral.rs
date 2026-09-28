@@ -831,6 +831,10 @@ fn apply_rotary_q_inner(
     if q.device().is_cuda() {
         return cuda_apply_rotary_q(q, cos, sin, positions, is_neox);
     }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if q.device().is_hip() {
+        return cuda_apply_rotary_q(q, cos, sin, positions, is_neox);
+    }
     #[cfg(feature = "metal")]
     if q.device().is_metal() {
         return metal_apply_rotary_q(q, cos, sin, positions, is_neox);
@@ -874,6 +878,10 @@ fn apply_rotary_qk_inner(
     if q.device().is_cuda() {
         return cuda_apply_rotary_qk(q, k, cos, sin, positions, is_neox);
     }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if q.device().is_hip() {
+        return cuda_apply_rotary_qk(q, k, cos, sin, positions, is_neox);
+    }
     #[cfg(feature = "metal")]
     if q.device().is_metal() {
         return metal_apply_rotary_qk(q, k, cos, sin, positions, is_neox);
@@ -883,6 +891,8 @@ fn apply_rotary_qk_inner(
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 mod cuda {
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    use candle_core::HipStorage;
     use candle_core::{
         backend::{BackendDevice, BackendStorage},
         cuda_backend::{CudaDType, CudaStorage, CudaStorageSlice},
@@ -891,6 +901,8 @@ mod cuda {
     use half::{bf16, f16};
     use std::ffi::{c_int, c_long};
 
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    use crate::utils::{hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
     use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
     fn rotary_dtype(dtype: DType) -> Result<u32> {
@@ -910,6 +922,18 @@ mod cuda {
         sin_cache: &'a CudaStorage,
         sin_l: &'a Layout,
         positions: Option<(&'a CudaStorage, &'a Layout)>,
+        is_neox: bool,
+    }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    struct RotaryLaunchHip<'a> {
+        query: &'a mut HipStorage,
+        query_l: &'a Layout,
+        cos_cache: &'a HipStorage,
+        cos_l: &'a Layout,
+        sin_cache: &'a HipStorage,
+        sin_l: &'a Layout,
+        positions: Option<(&'a HipStorage, &'a Layout)>,
         is_neox: bool,
     }
 
@@ -1048,6 +1072,146 @@ mod cuda {
         Ok(())
     }
 
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    fn launch_rotary_hip<T>(args: RotaryLaunchHip<'_>) -> Result<()>
+    where
+        T: candle_core::hip_backend::CudaDType
+            + candle_core::hip_backend::cudarc::driver::DeviceRepr,
+    {
+        let RotaryLaunchHip {
+            query,
+            query_l,
+            cos_cache,
+            cos_l,
+            sin_cache,
+            sin_l,
+            positions,
+            is_neox,
+        } = args;
+
+        if cos_cache.dtype() != query.dtype() || sin_cache.dtype() != query.dtype() {
+            candle_core::bail!("apply-rotary expects all tensors to have the same dtype");
+        }
+
+        let dev = query.device().clone();
+        if !cos_cache.device().same_device(&dev) || !sin_cache.device().same_device(&dev) {
+            candle_core::bail!("apply-rotary tensors must be on the same cuda device");
+        }
+
+        if query_l.stride().len() != 3 {
+            candle_core::bail!("apply-rotary expects query rank 3 ({query_l:?})")
+        }
+        if cos_l.stride().len() != 2 || sin_l.stride().len() != 2 {
+            candle_core::bail!("apply-rotary expects rank 2 caches")
+        }
+
+        let (num_tokens, num_heads, head_size) = query_l.shape().dims3()?;
+        let rot_dim = cos_l.dims()[1];
+        if sin_l.shape().dims2()? != (cos_l.dims()[0], rot_dim) {
+            candle_core::bail!(
+                "shape mismatch cos_cache {:?} and sin_cache {:?}",
+                cos_l.shape(),
+                sin_l.shape()
+            )
+        }
+        if positions.is_none() && (num_tokens, rot_dim) != cos_l.shape().dims2()? {
+            candle_core::bail!(
+                "shape mismatch cos_cache {:?}, expected {:?}",
+                cos_l.shape(),
+                (num_tokens, rot_dim)
+            )
+        }
+        if rot_dim == 0 || rot_dim * 2 > head_size {
+            candle_core::bail!(
+                "rotary dimension {rot_dim} is incompatible with head size {head_size}"
+            )
+        }
+
+        let query_dtype = query.dtype();
+        let stream = dev.cuda_stream();
+        let query = query.as_cuda_slice_mut::<T>()?;
+        let cos_cache = cos_cache.as_cuda_slice::<T>()?;
+        let sin_cache = sin_cache.as_cuda_slice::<T>()?;
+        let (query, _query_guard) =
+            hip_slice_ptr_mut_on_stream(query, query_l.start_offset(), &stream);
+        let (cos_cache, _cos_guard) =
+            hip_slice_ptr_on_stream(cos_cache, cos_l.start_offset(), &stream);
+        let (sin_cache, _sin_guard) =
+            hip_slice_ptr_on_stream(sin_cache, sin_l.start_offset(), &stream);
+
+        let positions = if let Some((positions, positions_l)) = positions {
+            if positions.dtype() != DType::U32 {
+                candle_core::bail!("apply-rotary-positions expects positions to be u32");
+            }
+            if !positions.device().same_device(&dev) {
+                candle_core::bail!("positions must be on the same cuda device as query");
+            }
+            if positions_l.stride().len() != 1 {
+                candle_core::bail!("apply-rotary-positions expects rank 1 positions")
+            }
+            let positions_len = positions_l.shape().dims1()?;
+            if positions_len != num_tokens {
+                candle_core::bail!(
+                    "positions length {positions_len} does not match token count {num_tokens}"
+                );
+            }
+            let positions = match &positions.slice {
+                candle_core::hip_backend::CudaStorageSlice::U32(positions) => positions,
+                _ => candle_core::bail!("positions dtype mismatch"),
+            };
+            let (positions, guard) =
+                hip_slice_ptr_on_stream(positions, positions_l.start_offset(), &stream);
+            Some((positions, 1, guard))
+        } else {
+            None
+        };
+
+        let neox = if is_neox { 1 } else { 0 };
+        let stream = stream.cu_stream() as c_long;
+        let internal_type = rotary_dtype(query_dtype)?;
+        match positions {
+            None => unsafe {
+                super::ffi::rotary_embedding(
+                    query as *const core::ffi::c_void,
+                    std::ptr::null(),
+                    cos_cache as *const core::ffi::c_void,
+                    sin_cache as *const core::ffi::c_void,
+                    neox,
+                    head_size as c_int,
+                    num_tokens as c_long,
+                    rot_dim as c_int,
+                    num_heads as c_int,
+                    0,
+                    query_l.stride()[0] as c_long,
+                    0,
+                    internal_type,
+                    stream,
+                )
+            },
+            Some((positions, seq_len, _positions_guard)) => unsafe {
+                super::ffi::rotary_embedding_positions(
+                    query as *const core::ffi::c_void,
+                    std::ptr::null(),
+                    cos_cache as *const core::ffi::c_void,
+                    sin_cache as *const core::ffi::c_void,
+                    positions as *const core::ffi::c_void,
+                    neox,
+                    head_size as c_int,
+                    num_tokens as c_long,
+                    rot_dim as c_int,
+                    seq_len as c_int,
+                    num_heads as c_int,
+                    0,
+                    query_l.stride()[0] as c_long,
+                    0,
+                    internal_type,
+                    stream,
+                )
+            },
+        }
+        Ok(())
+    }
+
     struct RotaryInplace {
         is_neox: bool,
     }
@@ -1100,6 +1264,55 @@ mod cuda {
                     is_neox: self.is_neox,
                 }),
                 DType::F32 => launch_rotary::<f32>(RotaryLaunch {
+                    query,
+                    query_l,
+                    cos_cache,
+                    cos_l,
+                    sin_cache,
+                    sin_l,
+                    positions: None,
+                    is_neox: self.is_neox,
+                }),
+                dt => {
+                    candle_core::bail!(
+                        "apply_rotary is only supported for f32, f16 and bf16 ({dt:?})"
+                    )
+                }
+            }
+        }
+
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        fn hip_fwd(
+            &self,
+            query: &mut HipStorage,
+            query_l: &Layout,
+            cos_cache: &HipStorage,
+            cos_l: &Layout,
+            sin_cache: &HipStorage,
+            sin_l: &Layout,
+        ) -> Result<()> {
+            match query.dtype() {
+                DType::F16 => launch_rotary_hip::<f16>(RotaryLaunchHip {
+                    query,
+                    query_l,
+                    cos_cache,
+                    cos_l,
+                    sin_cache,
+                    sin_l,
+                    positions: None,
+                    is_neox: self.is_neox,
+                }),
+                DType::BF16 => launch_rotary_hip::<bf16>(RotaryLaunchHip {
+                    query,
+                    query_l,
+                    cos_cache,
+                    cos_l,
+                    sin_cache,
+                    sin_l,
+                    positions: None,
+                    is_neox: self.is_neox,
+                }),
+                DType::F32 => launch_rotary_hip::<f32>(RotaryLaunchHip {
                     query,
                     query_l,
                     cos_cache,
@@ -1188,6 +1401,60 @@ mod cuda {
                     is_neox: self.is_neox,
                 }),
                 DType::F32 => launch_rotary::<f32>(RotaryLaunch {
+                    query,
+                    query_l,
+                    cos_cache,
+                    cos_l,
+                    sin_cache,
+                    sin_l,
+                    positions: Some((positions, positions_l)),
+                    is_neox: self.is_neox,
+                }),
+                dt => {
+                    candle_core::bail!(
+                        "apply_rotary is only supported for f32, f16 and bf16 ({dt:?})"
+                    )
+                }
+            }
+        }
+
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        fn hip_fwd(
+            &self,
+            query: &mut HipStorage,
+            query_l: &Layout,
+            cos_cache: &HipStorage,
+            cos_l: &Layout,
+            sin_cache: &HipStorage,
+            sin_l: &Layout,
+        ) -> Result<()> {
+            let (positions_storage, positions_l) = self.positions.storage_and_layout();
+            let positions = match &*positions_storage {
+                Storage::Hip(positions) => positions,
+                _ => candle_core::bail!("positions must be a hip tensor"),
+            };
+            match query.dtype() {
+                DType::F16 => launch_rotary_hip::<f16>(RotaryLaunchHip {
+                    query,
+                    query_l,
+                    cos_cache,
+                    cos_l,
+                    sin_cache,
+                    sin_l,
+                    positions: Some((positions, positions_l)),
+                    is_neox: self.is_neox,
+                }),
+                DType::BF16 => launch_rotary_hip::<bf16>(RotaryLaunchHip {
+                    query,
+                    query_l,
+                    cos_cache,
+                    cos_l,
+                    sin_cache,
+                    sin_l,
+                    positions: Some((positions, positions_l)),
+                    is_neox: self.is_neox,
+                }),
+                DType::F32 => launch_rotary_hip::<f32>(RotaryLaunchHip {
                     query,
                     query_l,
                     cos_cache,
@@ -1405,4 +1672,50 @@ pub fn apply_rotary_inplace_q_positions(
     _is_neox: bool,
 ) -> candle_core::Result<()> {
     candle_core::bail!("apply_rotary is only supported for cuda");
+}
+
+#[cfg(test)]
+mod dual_hip_tests {
+    use super::*;
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[test]
+    fn hip_rope_matches_cpu() -> Result<()> {
+        let dev = crate::utils::test_gpu_device();
+        let (b, h, s, d) = (2usize, 4, 8, 32);
+        let q: Vec<f32> = (0..b * h * s * d)
+            .map(|i| (i % 17) as f32 * 0.31 - 1.0)
+            .collect();
+        let q_cpu =
+            candle_core::Tensor::from_vec(q.clone(), (b, h, s, d), &candle_core::Device::Cpu)?;
+        let q_hip = q_cpu.to_device(&dev)?;
+        let rot_d = d / 2;
+        let inv_freq: Vec<f32> = (0..rot_d)
+            .map(|i| 1f32 / (10_000f32.powf(2.0 * (i as f32 / rot_d as f32))))
+            .collect();
+        let cos: Vec<f32> = (0..b * s)
+            .flat_map(|t| inv_freq.iter().map(move |&f| ((t % s) as f32 * f).cos()))
+            .collect();
+        let sin: Vec<f32> = (0..b * s)
+            .flat_map(|t| inv_freq.iter().map(move |&f| ((t % s) as f32 * f).sin()))
+            .collect();
+        let dims = (b * s, rot_d);
+        let cos_cpu = candle_core::Tensor::from_vec(cos.clone(), dims, &candle_core::Device::Cpu)?;
+        let sin_cpu = candle_core::Tensor::from_vec(sin.clone(), dims, &candle_core::Device::Cpu)?;
+        let cos_hip = cos_cpu.to_device(&dev)?;
+        let sin_hip = sin_cpu.to_device(&dev)?;
+
+        let out_cpu = apply_rotary_q_preselected(&q_cpu, &cos_cpu, &sin_cpu, false)?;
+        let out_hip = apply_rotary_q_preselected(&q_hip, &cos_hip, &sin_hip, false)?;
+        let hip_vals = out_hip
+            .flatten_all()?
+            .to_device(&candle_core::Device::Cpu)?
+            .to_vec1::<f32>()?;
+        let cpu_vals = out_cpu.flatten_all()?.to_vec1::<f32>()?;
+        for (a, bb) in hip_vals.iter().zip(cpu_vals.iter()) {
+            let diff = (a - bb).abs();
+            assert!(diff < 1e-3, "{a} vs {bb}");
+        }
+        Ok(())
+    }
 }

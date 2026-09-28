@@ -921,8 +921,7 @@ mod tests {
     #[cfg(feature = "rocm")]
     use super::*;
 
-    // S2: QStorage-on-hip (managed upload has no Hip path yet).
-    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    #[cfg(feature = "rocm")]
     #[test]
     fn managed_safetensors_upload_roundtrip() -> Result<()> {
         use safetensors::tensor::{Dtype as SafeDtype, TensorView};
@@ -941,7 +940,7 @@ mod tests {
         std::env::set_var(ENV_MANAGED_WEIGHTS, "1");
         let got = (|| -> Result<Vec<f32>> {
             let mmaped = unsafe { MmapedSafetensors::new(&path)? };
-            let device = Device::new_cuda(0)?;
+            let device = crate::utils::test_gpu_device();
             let t = mmaped.load("w", &device, Some(DType::F32))?;
             t.to_vec1::<f32>()
         })();

@@ -313,13 +313,14 @@ pub fn backend_caps(device: &Device) -> BackendCaps {
         #[cfg(all(feature = "cuda", feature = "rocm"))]
         Device::Hip(dev) => {
             let arch = GpuArch::resolve_hip(dev).ok();
-            // The AMD role: graphs/paged/mtp serve; GGUF waits for S2
-            // (QStorage::Hip).
+            // The AMD role: the full stack serves. GGUF rides QStorage::Hip
+            // (Phase 2); the fused MMQ/MMVQ launchers land with the launcher
+            // port - until then the dequant GEMM serves those shapes.
             BackendCaps {
                 arch,
                 graphs: true,
                 paged_attention: true,
-                quantized_gguf: false,
+                quantized_gguf: true,
                 mtp: true,
             }
         }
@@ -411,9 +412,9 @@ mod tests {
         let caps = backend_caps(&device);
         assert!(caps.arch.is_some(), "arch resolves on the AMD role");
         assert!(caps.graphs && caps.paged_attention && caps.mtp);
-        assert!(!caps.quantized_gguf, "GGUF waits for S2 on the hip role");
-        let gate = caps.ensure_gguf().unwrap_err().to_string();
-        assert!(gate.contains("S2"), "{gate}");
+        assert!(caps.quantized_gguf, "GGUF serves on the hip role (Phase 2)");
+        caps.ensure_gguf()
+            .expect("GGUF gate passes on the hip role");
 
         let auto = auto_select().unwrap();
         assert!(

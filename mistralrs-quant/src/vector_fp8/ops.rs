@@ -174,6 +174,93 @@ impl CustomOp2 for Fp8VectorDequantize {
 
         Ok((res, weight_l.shape().clone()))
     }
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    /// Dual-role twin of cuda_fwd: the same kernels through the hip
+    /// role's bindings (companion-plugin FFI included).
+    fn hip_fwd(
+        &self,
+        scale_s: &candle_core::CudaStorage,
+        scale_l: &candle_core::Layout,
+        weight_s: &candle_core::CudaStorage,
+        weight_l: &candle_core::Layout,
+    ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
+        use crate::utils::{hip_slice_ptr, hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
+        use candle_core::cuda::cudarc::driver::sys::CUstream;
+        use candle_core::{backend::BackendStorage, CudaStorage};
+        use half::{bf16, f16};
+
+        use crate::{utils::slice_ptr, vector_fp8::ffi};
+
+        if !ffi::HAVE_VECTOR_DEQUANT_KERNELS {
+            candle_core::bail!("Do not have vector FP8 dequant kernels.");
+        }
+
+        if weight_l.start_offset() != 0 || !weight_l.is_contiguous() {
+            candle_core::bail!("Expected weight to have start offset 0, continuous");
+        }
+        if scale_l.start_offset() != 0 || !scale_l.is_contiguous() {
+            candle_core::bail!("Expected scales to have start offset 0, continuous");
+        }
+
+        let dev = weight_s.device();
+        let num_elements = weight_l.shape().elem_count();
+
+        let (weight, _weight_guard) =
+            hip_slice_ptr(weight_s.as_cuda_slice::<F8E4M3>()?, weight_l.start_offset());
+        let (scale, _scale_guard) =
+            hip_slice_ptr(scale_s.as_cuda_slice::<f32>()?, scale_l.start_offset());
+
+        let res = match self.out_ty {
+            DType::F32 => {
+                let output = dev.alloc_zeros::<f32>(num_elements)?;
+                let (output_ptr, output_guard) = hip_slice_ptr(&output, 0);
+                unsafe {
+                    ffi::launch_dequant_fp8_vector_kernel_f32(
+                        weight as *const _,
+                        scale as *const _,
+                        output_ptr as *mut _,
+                        num_elements,
+                        dev.cuda_stream().cu_stream() as CUstream,
+                    )
+                };
+                drop(output_guard);
+                HipStorage::wrap_cuda_slice(output, dev.clone())
+            }
+            DType::F16 => {
+                let output = dev.alloc_zeros::<f16>(num_elements)?;
+                let (output_ptr, output_guard) = hip_slice_ptr(&output, 0);
+                unsafe {
+                    ffi::launch_dequant_fp8_vector_kernel_f16(
+                        weight as *const _,
+                        scale as *const _,
+                        output_ptr as *mut _,
+                        num_elements,
+                        dev.cuda_stream().cu_stream() as CUstream,
+                    )
+                };
+                drop(output_guard);
+                HipStorage::wrap_cuda_slice(output, dev.clone())
+            }
+            DType::BF16 => {
+                let output = dev.alloc_zeros::<bf16>(num_elements)?;
+                let (output_ptr, output_guard) = hip_slice_ptr(&output, 0);
+                unsafe {
+                    ffi::launch_dequant_fp8_vector_kernel_bf16(
+                        weight as *const _,
+                        scale as *const _,
+                        output_ptr as *mut _,
+                        num_elements,
+                        dev.cuda_stream().cu_stream() as CUstream,
+                    )
+                };
+                drop(output_guard);
+                HipStorage::wrap_cuda_slice(output, dev.clone())
+            }
+            other => candle_core::bail!("unexpected out type of fp8 vector dequant {other:?}"),
+        };
+
+        Ok((res, weight_l.shape().clone()))
+    }
 
     #[cfg(feature = "metal")]
     fn metal_fwd(

@@ -124,6 +124,83 @@ impl CustomOp1 for Fp8ToDtype {
 
         Ok((res, input_l.shape().clone()))
     }
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    /// Dual-role twin of cuda_fwd: the same kernels through the hip
+    /// role's bindings (companion-plugin FFI included).
+    fn hip_fwd(
+        &self,
+        input_s: &candle_core::CudaStorage,
+        input_l: &candle_core::Layout,
+    ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
+        use crate::utils::{hip_slice_ptr, hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
+        use candle_core::cuda::cudarc::driver::sys::CUstream;
+        use candle_core::{backend::BackendStorage, CudaStorage};
+        use half::{bf16, f16};
+
+        use crate::utils::slice_ptr;
+
+        if !super::ffi::HAVE_SCALAR_FP8_KERNELS {
+            candle_core::bail!("Do not have scalar FP8 kernels.");
+        }
+
+        if input_l.start_offset() != 0 || !input_l.is_contiguous() {
+            candle_core::bail!("Expected input to have start offset 0, continuous");
+        }
+
+        let dev = input_s.device();
+        let num_elements = input_l.shape().elem_count();
+
+        let (input, _input_guard) =
+            hip_slice_ptr(input_s.as_cuda_slice::<F8E4M3>()?, input_l.start_offset());
+
+        let res = match self.target_dtype {
+            DType::F32 => {
+                let output = dev.alloc_zeros::<f32>(num_elements)?;
+                let (output_ptr, output_guard) = hip_slice_ptr(&output, 0);
+                unsafe {
+                    super::ffi::launch_fp8_to_f32_kernel(
+                        input as *const _,
+                        output_ptr as *mut _,
+                        num_elements,
+                        dev.cuda_stream().cu_stream() as CUstream,
+                    );
+                }
+                drop(output_guard);
+                HipStorage::wrap_cuda_slice(output, dev.clone())
+            }
+            DType::F16 => {
+                let output = dev.alloc_zeros::<f16>(num_elements)?;
+                let (output_ptr, output_guard) = hip_slice_ptr(&output, 0);
+                unsafe {
+                    super::ffi::launch_fp8_to_f16_kernel(
+                        input as *const _,
+                        output_ptr as *mut _,
+                        num_elements,
+                        dev.cuda_stream().cu_stream() as CUstream,
+                    );
+                }
+                drop(output_guard);
+                HipStorage::wrap_cuda_slice(output, dev.clone())
+            }
+            DType::BF16 => {
+                let output = dev.alloc_zeros::<bf16>(num_elements)?;
+                let (output_ptr, output_guard) = hip_slice_ptr(&output, 0);
+                unsafe {
+                    super::ffi::launch_fp8_to_bf16_kernel(
+                        input as *const _,
+                        output_ptr as *mut _,
+                        num_elements,
+                        dev.cuda_stream().cu_stream() as CUstream,
+                    );
+                }
+                drop(output_guard);
+                HipStorage::wrap_cuda_slice(output, dev.clone())
+            }
+            other => candle_core::bail!("Unsupported target dtype for FP8 conversion: {other:?}"),
+        };
+
+        Ok((res, input_l.shape().clone()))
+    }
 
     #[cfg(feature = "metal")]
     fn metal_fwd(
@@ -281,6 +358,79 @@ impl CustomOp1 for DtypeToFp8 {
 
         drop(output_guard);
         let res = CudaStorage::wrap_cuda_slice(output, dev.clone());
+        Ok((res, input_l.shape().clone()))
+    }
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    /// Dual-role twin of cuda_fwd: the same kernels through the hip
+    /// role's bindings (companion-plugin FFI included).
+    fn hip_fwd(
+        &self,
+        input_s: &candle_core::CudaStorage,
+        input_l: &candle_core::Layout,
+    ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
+        use crate::utils::{hip_slice_ptr, hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
+        use candle_core::cuda::cudarc::driver::sys::CUstream;
+        use candle_core::{backend::BackendStorage, CudaStorage};
+        use half::{bf16, f16};
+
+        use crate::utils::slice_ptr;
+
+        if !super::ffi::HAVE_SCALAR_FP8_KERNELS {
+            candle_core::bail!("Do not have scalar FP8 kernels.");
+        }
+
+        if input_l.start_offset() != 0 || !input_l.is_contiguous() {
+            candle_core::bail!("Expected input to have start offset 0, continuous");
+        }
+
+        let dev = input_s.device();
+        let num_elements = input_l.shape().elem_count();
+
+        let output = dev.alloc_zeros::<F8E4M3>(num_elements)?;
+        let (output_ptr, output_guard) = hip_slice_ptr(&output, 0);
+
+        match self.source_dtype {
+            DType::F32 => {
+                let (input, _input_guard) =
+                    hip_slice_ptr(input_s.as_cuda_slice::<f32>()?, input_l.start_offset());
+                unsafe {
+                    super::ffi::launch_f32_to_fp8_kernel(
+                        input as *const _,
+                        output_ptr as *mut _,
+                        num_elements,
+                        dev.cuda_stream().cu_stream() as CUstream,
+                    );
+                }
+            }
+            DType::F16 => {
+                let (input, _input_guard) =
+                    hip_slice_ptr(input_s.as_cuda_slice::<f16>()?, input_l.start_offset());
+                unsafe {
+                    super::ffi::launch_f16_to_fp8_kernel(
+                        input as *const _,
+                        output_ptr as *mut _,
+                        num_elements,
+                        dev.cuda_stream().cu_stream() as CUstream,
+                    );
+                }
+            }
+            DType::BF16 => {
+                let (input, _input_guard) =
+                    hip_slice_ptr(input_s.as_cuda_slice::<bf16>()?, input_l.start_offset());
+                unsafe {
+                    super::ffi::launch_bf16_to_fp8_kernel(
+                        input as *const _,
+                        output_ptr as *mut _,
+                        num_elements,
+                        dev.cuda_stream().cu_stream() as CUstream,
+                    );
+                }
+            }
+            other => candle_core::bail!("Unsupported source dtype for FP8 conversion: {other:?}"),
+        }
+
+        drop(output_guard);
+        let res = HipStorage::wrap_cuda_slice(output, dev.clone());
         Ok((res, input_l.shape().clone()))
     }
 

@@ -269,6 +269,126 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
 
         Ok((res, weight_l.shape().clone()))
     }
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    /// Dual-role twin of cuda_fwd: the same kernels through the hip
+    /// role's bindings (companion-plugin FFI included).
+    fn hip_fwd(
+        &self,
+        scale_s: &candle_core::CudaStorage,
+        scale_l: &candle_core::Layout,
+        weight_s: &candle_core::CudaStorage,
+        weight_l: &candle_core::Layout,
+    ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
+        use crate::utils::{hip_slice_ptr, hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
+        use candle_core::cuda::cudarc::driver::sys::CUstream;
+        use candle_core::{backend::BackendStorage, CudaStorage};
+        use half::{bf16, f16};
+
+        use crate::{blockwise_fp8::ffi, utils::slice_ptr};
+
+        if !ffi::HAVE_BLOCKWISE_DEQUANT_KERNELS {
+            candle_core::bail!("Do not have blockwise FP8 dequant kernels.");
+        }
+
+        if !weight_l.is_contiguous() {
+            candle_core::bail!("Expected weight to be continuous");
+        }
+        if !scale_l.is_contiguous() {
+            candle_core::bail!("Expected scales to be continuous");
+        }
+        if weight_l.dims().len() != 2 {
+            candle_core::bail!("Expected weight to be rank 2");
+        }
+        if scale_l.dims().len() != 2 || self.weight_block_size.len() != 2 {
+            candle_core::bail!("Expected scale to be rank 2");
+        }
+
+        let dev = weight_s.device();
+
+        let (weight, _weight_guard) =
+            hip_slice_ptr(weight_s.as_cuda_slice::<F8E4M3>()?, weight_l.start_offset());
+        let (scale, _scale_guard) =
+            hip_slice_ptr(scale_s.as_cuda_slice::<f32>()?, scale_l.start_offset());
+
+        let weight_height = weight_l.dim(0)? as i32;
+        let weight_block_size_y = self.weight_block_size[0] as i32;
+        let weight_width = weight_l.dim(1)? as i32;
+        let weight_block_size_x = self.weight_block_size[1] as i32;
+        let scale_stride = scale_l.stride()[0] as i32;
+        let weight_row_stride = weight_l.stride()[0] as i32;
+
+        let res = match self.out_ty {
+            DType::F32 => {
+                let output = weight_s
+                    .device()
+                    .alloc_zeros::<f32>(weight_l.shape().elem_count())?;
+                let (output_ptr, output_guard) = hip_slice_ptr(&output, 0);
+                unsafe {
+                    ffi::launch_dequant_fp8_blockwise_kernel_f32(
+                        weight as *const _,
+                        scale as *const _,
+                        output_ptr as *mut _,
+                        weight_height,
+                        weight_width,
+                        weight_row_stride,
+                        scale_stride,
+                        weight_block_size_y,
+                        weight_block_size_x,
+                        dev.cuda_stream().cu_stream() as CUstream,
+                    )
+                };
+                drop(output_guard);
+                HipStorage::wrap_cuda_slice(output, weight_s.device().clone())
+            }
+            DType::F16 => {
+                let output = weight_s
+                    .device()
+                    .alloc_zeros::<f16>(weight_l.shape().elem_count())?;
+                let (output_ptr, output_guard) = hip_slice_ptr(&output, 0);
+                unsafe {
+                    ffi::launch_dequant_fp8_blockwise_kernel_f16(
+                        weight as *const _,
+                        scale as *const _,
+                        output_ptr as *mut _,
+                        weight_height,
+                        weight_width,
+                        weight_row_stride,
+                        scale_stride,
+                        weight_block_size_y,
+                        weight_block_size_x,
+                        dev.cuda_stream().cu_stream() as CUstream,
+                    )
+                };
+                drop(output_guard);
+                HipStorage::wrap_cuda_slice(output, weight_s.device().clone())
+            }
+            DType::BF16 => {
+                let output = weight_s
+                    .device()
+                    .alloc_zeros::<bf16>(weight_l.shape().elem_count())?;
+                let (output_ptr, output_guard) = hip_slice_ptr(&output, 0);
+                unsafe {
+                    ffi::launch_dequant_fp8_blockwise_kernel_bf16(
+                        weight as *const _,
+                        scale as *const _,
+                        output_ptr as *mut _,
+                        weight_height,
+                        weight_width,
+                        weight_row_stride,
+                        scale_stride,
+                        weight_block_size_y,
+                        weight_block_size_x,
+                        dev.cuda_stream().cu_stream() as CUstream,
+                    )
+                };
+                drop(output_guard);
+                HipStorage::wrap_cuda_slice(output, weight_s.device().clone())
+            }
+            other => candle_core::bail!("unexpected out type of fp8 blockwise dequant {other:?}"),
+        };
+
+        Ok((res, weight_l.shape().clone()))
+    }
 
     #[cfg(feature = "metal")]
     fn metal_fwd(
@@ -611,6 +731,119 @@ impl CustomOp1 for Fp8BlockwiseQuantize {
 
         // Return just the weight tensor - we'll handle scale separately
         let res = CudaStorage::wrap_cuda_slice(weight_output, input_s.device().clone());
+        Ok((res, input_l.shape().clone()))
+    }
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    /// Dual-role twin of cuda_fwd: the same kernels through the hip
+    /// role's bindings (companion-plugin FFI included).
+    fn hip_fwd(
+        &self,
+        input_s: &candle_core::CudaStorage,
+        input_l: &candle_core::Layout,
+    ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
+        use crate::utils::{hip_slice_ptr, hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
+        use candle_core::cuda::cudarc::driver::sys::CUstream;
+        use candle_core::{backend::BackendStorage, CudaStorage};
+        use half::{bf16, f16};
+
+        use crate::{blockwise_fp8::ffi, utils::slice_ptr};
+
+        if !ffi::HAVE_BLOCKWISE_QUANT_KERNELS {
+            candle_core::bail!("Do not have blockwise FP8 quant kernels.");
+        }
+
+        if input_l.start_offset() != 0 || !input_l.is_contiguous() {
+            candle_core::bail!("Expected input to have start offset 0, continuous");
+        }
+        if input_l.dims().len() != 2 {
+            candle_core::bail!("Expected input to be rank 2");
+        }
+        if self.weight_block_size.len() != 2 {
+            candle_core::bail!("Expected weight_block_size to have length 2");
+        }
+
+        let dev = input_s.device();
+
+        let weight_height = input_l.dim(0)? as i32;
+        let weight_block_size_y = self.weight_block_size[0] as i32;
+        let weight_width = input_l.dim(1)? as i32;
+        let weight_block_size_x = self.weight_block_size[1] as i32;
+        let weight_row_stride = input_l.stride()[0] as i32;
+
+        let grid_y = input_l.dim(0)?.div_ceil(self.weight_block_size[0]);
+        let grid_x = input_l.dim(1)?.div_ceil(self.weight_block_size[1]);
+        let scale_stride = grid_x as i32;
+
+        // Allocate output buffers
+        let weight_output = dev.alloc_zeros::<F8E4M3>(input_l.shape().elem_count())?;
+        let scale_output = dev.alloc_zeros::<f32>(grid_y * grid_x)?;
+
+        let (weight_ptr, weight_guard) = hip_slice_ptr(&weight_output, 0);
+        let (scale_ptr, scale_guard) = hip_slice_ptr(&scale_output, 0);
+
+        match input_s.dtype() {
+            DType::F32 => {
+                let (input, _input_guard) =
+                    hip_slice_ptr(input_s.as_cuda_slice::<f32>()?, input_l.start_offset());
+                unsafe {
+                    ffi::launch_quant_fp8_blockwise_kernel_f32(
+                        input as *const _,
+                        weight_ptr as *mut _,
+                        scale_ptr as *mut _,
+                        weight_height,
+                        weight_width,
+                        weight_row_stride,
+                        scale_stride,
+                        weight_block_size_y,
+                        weight_block_size_x,
+                        dev.cuda_stream().cu_stream() as CUstream,
+                    )
+                };
+            }
+            DType::F16 => {
+                let (input, _input_guard) =
+                    hip_slice_ptr(input_s.as_cuda_slice::<f16>()?, input_l.start_offset());
+                unsafe {
+                    ffi::launch_quant_fp8_blockwise_kernel_f16(
+                        input as *const _,
+                        weight_ptr as *mut _,
+                        scale_ptr as *mut _,
+                        weight_height,
+                        weight_width,
+                        weight_row_stride,
+                        scale_stride,
+                        weight_block_size_y,
+                        weight_block_size_x,
+                        dev.cuda_stream().cu_stream() as CUstream,
+                    )
+                };
+            }
+            DType::BF16 => {
+                let (input, _input_guard) =
+                    hip_slice_ptr(input_s.as_cuda_slice::<bf16>()?, input_l.start_offset());
+                unsafe {
+                    ffi::launch_quant_fp8_blockwise_kernel_bf16(
+                        input as *const _,
+                        weight_ptr as *mut _,
+                        scale_ptr as *mut _,
+                        weight_height,
+                        weight_width,
+                        weight_row_stride,
+                        scale_stride,
+                        weight_block_size_y,
+                        weight_block_size_x,
+                        dev.cuda_stream().cu_stream() as CUstream,
+                    )
+                };
+            }
+            other => candle_core::bail!("unexpected input type for fp8 blockwise quant: {other:?}"),
+        }
+
+        drop(weight_guard);
+        drop(scale_guard);
+
+        // Return just the weight tensor - we'll handle scale separately
+        let res = HipStorage::wrap_cuda_slice(weight_output, input_s.device().clone());
         Ok((res, input_l.shape().clone()))
     }
 

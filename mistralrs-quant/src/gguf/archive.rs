@@ -2307,8 +2307,7 @@ mod tests {
         std::env::remove_var(ENV_MANAGED_WEIGHTS);
     }
 
-    // S2: QStorage-on-hip (managed upload has no Hip path yet).
-    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    #[cfg(feature = "rocm")]
     #[test]
     fn managed_upload_survives_host_release() -> Result<()> {
         let file = write_test_gguf(
@@ -2323,7 +2322,7 @@ mod tests {
             DEFAULT_ALIGNMENT,
         );
         let archive = GgufArchive::open_file(file.path())?;
-        let device = Device::new_cuda(0)?;
+        let device = crate::utils::test_gpu_device();
         let qtensor = {
             let data = archive.tensor_data("blk.0.weight")?;
             let storage =

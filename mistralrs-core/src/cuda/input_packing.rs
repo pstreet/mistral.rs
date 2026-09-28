@@ -1,3 +1,5 @@
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use candle_core::HipStorage;
 use candle_core::{
     backend::BackendStorage, CpuStorage, CudaStorage, CustomOp1, DType, Layout, Result, Shape,
     Storage, Tensor,
@@ -99,6 +101,91 @@ impl CustomOp1 for CompletionInputPackOp {
             (self.batch, row_width).into(),
         ))
     }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    /// Dual-role twin of cuda_fwd: the same kernels through the hip
+    /// role's bindings (companion-plugin FFI included).
+    fn hip_fwd(&self, host: &HipStorage, host_layout: &Layout) -> Result<(HipStorage, Shape)> {
+        use candle_core::cuda::cudarc::driver::sys::CUstream;
+        use candle_core::hip_backend::cudarc::driver::DevicePtr as _;
+        use candle_core::hip_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+
+        if host.dtype() != DType::U32
+            || !host_layout.is_contiguous()
+            || host_layout.shape().dims2()? != (self.batch, self.host_width)
+            || self.staged_rows.len() != self.batch
+        {
+            candle_core::bail!("invalid CUDA completion input packing layout")
+        }
+        let row_width = self
+            .host_width
+            .checked_add(self.staged_width)
+            .ok_or_else(|| candle_core::Error::msg("completion input width overflow"))?;
+        let output_elements = self
+            .batch
+            .checked_mul(row_width)
+            .ok_or_else(|| candle_core::Error::msg("completion input size overflow"))?;
+
+        let device = host.device();
+        let stream = device.cuda_stream();
+        let host_values = host.as_cuda_slice::<u32>()?;
+        let (host_ptr, host_guard) = host_values.device_ptr(&stream);
+        let host_ptr = host_ptr
+            .checked_add((host_layout.start_offset() * size_of::<u32>()) as u64)
+            .ok_or_else(|| candle_core::Error::msg("completion host pointer overflow"))?;
+
+        let staged_storage = self
+            .staged_rows
+            .iter()
+            .map(Tensor::storage_and_layout)
+            .collect::<Vec<_>>();
+        let mut staged_ptrs = Vec::with_capacity(self.batch);
+        let mut staged_guards = Vec::with_capacity(self.batch);
+        for (storage, layout) in &staged_storage {
+            let Storage::Hip(storage) = &**storage else {
+                candle_core::bail!("completion staged row is not on hip")
+            };
+            if storage.dtype() != DType::U32
+                || !layout.is_contiguous()
+                || layout.shape().dims1()? != self.staged_width
+            {
+                candle_core::bail!("invalid CUDA completion staged row layout")
+            }
+            let values = storage.as_cuda_slice::<u32>()?;
+            let (ptr, guard) = values.device_ptr(&stream);
+            let ptr = ptr
+                .checked_add((layout.start_offset() * size_of::<u32>()) as u64)
+                .ok_or_else(|| candle_core::Error::msg("completion staged pointer overflow"))?;
+            staged_ptrs.push(ptr as *const core::ffi::c_void);
+            staged_guards.push(guard);
+        }
+
+        let mut output = unsafe { device.alloc::<u32>(output_elements)? };
+        let (output_ptr, output_guard) = output.device_ptr_mut(&stream);
+        let batch = i32::try_from(self.batch).map_err(candle_core::Error::wrap)?;
+        let host_width = i32::try_from(self.host_width).map_err(candle_core::Error::wrap)?;
+        let staged_width = i32::try_from(self.staged_width).map_err(candle_core::Error::wrap)?;
+        let status = unsafe {
+            super::ffi::pack_completion_input_u32(
+                host_ptr as *const core::ffi::c_void,
+                staged_ptrs.as_ptr(),
+                output_ptr as *mut core::ffi::c_void,
+                batch,
+                host_width,
+                staged_width,
+                stream.cu_stream() as CUstream as i64,
+            )
+        };
+        drop(output_guard);
+        drop(staged_guards);
+        drop(host_guard);
+        if status != 0 {
+            candle_core::bail!("pack_completion_input_u32 failed with status {status}")
+        }
+        Ok((
+            HipStorage::wrap_cuda_slice(output, device.clone()),
+            (self.batch, row_width).into(),
+        ))
+    }
 }
 
 struct DecodeInputPadOp {
@@ -157,6 +244,54 @@ impl CustomOp1 for DecodeInputPadOp {
         }
         Ok((
             CudaStorage::wrap_cuda_slice(output, device.clone()),
+            (self.output_rows, self.width).into(),
+        ))
+    }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    /// Dual-role twin of cuda_fwd: the same kernels through the hip
+    /// role's bindings (companion-plugin FFI included).
+    fn hip_fwd(&self, input: &HipStorage, input_layout: &Layout) -> Result<(HipStorage, Shape)> {
+        use candle_core::cuda::cudarc::driver::sys::CUstream;
+        use candle_core::hip_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+
+        if input.dtype() != DType::U32
+            || !input_layout.is_contiguous()
+            || input_layout.shape().dims2()? != (self.input_rows, self.width)
+            || self.input_rows == 0
+            || self.output_rows < self.input_rows
+        {
+            candle_core::bail!("invalid CUDA decode input padding layout")
+        }
+        let output_elements = self
+            .output_rows
+            .checked_mul(self.width)
+            .ok_or_else(|| candle_core::Error::msg("decode input padding size overflow"))?;
+        let device = input.device();
+        let stream = device.cuda_stream();
+        let input_values = input.as_cuda_slice::<u32>()?;
+        let (input_ptr, input_guard) = input_values.device_ptr(&stream);
+        let input_ptr = input_ptr
+            .checked_add((input_layout.start_offset() * size_of::<u32>()) as u64)
+            .ok_or_else(|| candle_core::Error::msg("decode input pointer overflow"))?;
+        let mut output = unsafe { device.alloc::<u32>(output_elements)? };
+        let (output_ptr, output_guard) = output.device_ptr_mut(&stream);
+        let status = unsafe {
+            super::ffi::pad_decode_input_u32(
+                input_ptr as *const core::ffi::c_void,
+                output_ptr as *mut core::ffi::c_void,
+                i32::try_from(self.input_rows).map_err(candle_core::Error::wrap)?,
+                i32::try_from(self.output_rows).map_err(candle_core::Error::wrap)?,
+                i32::try_from(self.width).map_err(candle_core::Error::wrap)?,
+                stream.cu_stream() as CUstream as i64,
+            )
+        };
+        drop(output_guard);
+        drop(input_guard);
+        if status != 0 {
+            candle_core::bail!("pad_decode_input_u32 failed with status {status}")
+        }
+        Ok((
+            HipStorage::wrap_cuda_slice(output, device.clone()),
             (self.output_rows, self.width).into(),
         ))
     }
