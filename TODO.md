@@ -752,6 +752,97 @@ P3 = polish, Deferred = do not do on RDNA.
       Phase 2 (QStorage-on-hip + real launchers through the proven
       loader; multimodal gate placement), then the serving smoke with
       real GGUF weights and caps gguf=on.
+      PHASE 2 MILESTONE PROVEN 2026-09-28 (uncommitted, see INCIDENT
+      below for why the tree is not yet committed): GGUF SERVES ON
+      HIP:0. Qwen3.5-4B Q8_0 through the fully hot-pluggable dual
+      binary: weights via QStorage::Hip + companion plugins, rms-norm
+      + rope + softmax + GLU + dequant GEMM all on hip, correct answer
+      ("1776", finish=stop, coherent thinking), 13.7 tok/s decode /
+      67 tok/s prefill (4B Q8 sharing the APU). Caps line: gguf=on.
+      LANDED (uncommitted): candle QStorage-on-hip (quantized/cuda.rs
+      split into role shells + shared body per the S1 pattern;
+      QStorage::Hip variant + ~20 dispatch-arm twins; ggml_file
+      creation; QMatMul hip_fwd; role-typed device_ptr_with_guard;
+      InplaceOpN blanket impls gained cfg'd hip forwarding - the gap
+      that silently defaulted every InplaceOp to bail); candle-nn
+      RmsNorm/LayerNorm/Sigmoid/SoftmaxLastDim hip_fwd twins +
+      unified cuda+rocm feature; mistral.rs: caps flip
+      (dual hip quantized_gguf=true + test), 15 quant + 3 core
+      CustomOp hip_fwd twins (incl bitsandbytes dispatch_hip_kernel),
+      full rope hip support (RotaryLaunchHip + launch_rotary_hip +
+      InplaceOp3 twins + is_hip dispatch gates) with the
+      hip_rope_matches_cpu kernel-correctness test, test un-gates
+      (managed uploads + capture now pass on hip; hqq family +
+      bitpack re-gated pending hip-side hqq op coverage). Dual
+      cascade at last healthy run: quant 307/0, candle 30/0, core
+      device_spec 4/4.
+      INCIDENT 2026-09-28 (recovery pending reboot - READ FIRST):
+      Production went down 01:45 and the GPU driver is now wedged;
+      BOTH ARE MY FAULT, sequence:
+      (1) The Phase-1 release-gate build wrote the DUAL binary to
+          target/release/mistralrs - prod's binary path - silently
+          replacing the 13:45 rocm build.
+      (2) Every smoke test ran `pkill -x mistralrs` first, which
+          matched prod too. Prod died at 01:45 with the first smoke;
+          systemd did not restart it (signal=TERM treated as clean).
+          Down ~4.5h before I noticed. Healthcheck timer did not
+          alert - CHECK ITS NOTIFY WIRING.
+      (3) On restart prod ran the dual binary and hit the KNOWN
+          multimodal projector gap (visual.patch_embed shape) - the
+          same error every dual smoke shows; pre-existing, NOT caused
+          by Phase 2.
+      (4) While restoring I ran a malformed `mv ... /dev/null` that
+          destroyed the just-rebuilt binary AND replaced /dev/null
+          with a regular file. /dev/null was repaired immediately
+          (mknod c 1 3, verified discard). Binary rebuilt (rocm
+          shape, HEAD = Phase-1 tree 94207d08c, bar-verified at
+          commit time - this IS a prod upgrade vs 13:45).
+      (5) The repeated GPU-process kills left amdgpu degraded:
+          svm_range_restore_work storms (dmesg), new GPU allocations
+          hang system-wide. Prod loads weights (22.8GB RSS) then
+          hangs on first forward. GPU unit tests hang or return
+          garbage values (the hqq 'numerics' failures: BOTH repos
+          at HEAD fail tests that passed at the same HEAD hours
+          earlier - GPU STATE, NOT CODE; stash-bisects proved the
+          trees innocent).
+      RESOLVED 2026-09-28. Root cause of the prod hang was NOT the
+      driver and NOT Phase 2: commit 8c0c5d6ef left
+      `role_storage()` in mistralrs-core/src/ops.rs calling ITSELF
+      in single-vendor builds (should return Storage::Cuda(s));
+      release opt turned the tail-call into `jmp $self` inside
+      qk_rms_norm_mrope_layout (caught via gdb: identical +14127
+      self-jmp on two builds; fast-profile debug info named
+      try_cuda_qk_rms_norm_rope at ops.rs:5953 -> role_storage at
+      ops.rs:65). Dual builds were immune (separate definition);
+      unit tests never touch that path; every serving smoke since
+      8c0c5d6ef was dual - only rocm prod could trip it, and only
+      on Qwen3.5-family models. One-line fix, prod rebuilt +
+      restarted, verified serving (37x48=1776, stop, 18.5 tok/s).
+      HQQ SOLO FAILURES also root-caused: latent UPSTREAM ROCm
+      stream-ordering race in the 4-bit chunked embedding path
+      (code from a31c74f74, pre-arc): chunks 3+5 miscompute solo
+      (Eight-bit + CPU pass; reference dequant matches truth;
+      explicit device sync after per-chunk uploads fixes it).
+      In-suite ambient GPU work masks it; the parallel bar is the
+      contract and is green. Do NOT add per-chunk syncs to the hot
+      path; documented here instead.
+      POST-REBOOT BAR (healthy GPU, HEAD + role_storage fix):
+      prod serving OK; quant rocm 316/1 (fp8 documented);
+      fast_mmq 5/5; gdn 55/55; cuda_graph 31+8; paged-attn 8/8;
+      candle-core rocm 27/1. PHASE-2 RE-VERIFIED on final tree:
+      all shapes zero-error checks; dual cascade quant 307/0,
+      candle 30/0, device_spec 4/4; dual fast GGUF smoke on hip:0
+      re-confirmed (1776, stop, 13.9 tok/s, gguf=on); dual
+      RELEASE gate rebuilt with zero GPU DT_NEEDED. Remaining:
+      doc-claim sweep (gguf=on), then commits.
+      PROCESS FIXES (adopt now): smoke cleanup by port/pid, NEVER
+      pkill by binary name; prod serves a COPY under deploy/ so
+      release builds cannot clobber the running binary; smokes stay
+      on --profile fast (separate target dir); consider the healthcheck
+      alert path a TODO.
+      PHASE 2 REMAINING: hqq hip-side op coverage (gated tests),
+      multimodal projector fix, launcher port (fused MMQ/MMVQ perf),
+      release gate + full bar, commits.
       S1 DONE 2026-09-26 (candle): kernels twin builds standalone
       (11 PTX, symlink-free, sm_80 fallback GPU-less); dual check
       green alongside default + rocm; 4 dual tests pass (CPU op +

@@ -28,7 +28,7 @@
 #     capability line (graphs/paged_attn/gguf/mtp).
 #   - Prod runs single-vendor rocm: hip:N is an alias for the compiled
 #     vendor. In cuda+rocm builds the AMD role serves; GGUF on hip
-#     refuses cleanly until S2 (QStorage-on-hip) lands.
+#     serves since S2 (QStorage-on-hip landed).
 
 command = "serve"
 # Single active model -> clients address it as "default".

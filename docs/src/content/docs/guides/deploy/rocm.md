@@ -100,9 +100,9 @@ per-`[[models]]` `device` key select the backend: `"cpu"`, `"cuda:<N>"`, or
 the serving role and logs the choice plus a capability line
 (`graphs/paged_attn/gguf/mtp`). `hip:<N>` also works in `rocm`-only builds
 as an alias for the compiled vendor, so one config ports across shapes.
-GGUF weights on the hip role refuse cleanly at load time until S2
-(QStorage-on-hip) lands; that gate is the `BackendCaps` contract, not a
-silent fallback.
+GGUF weights on the hip role serve since S2 (QStorage-on-hip landed;
+proven with Qwen3.5-4B Q8_0 on hip:0); that gate is the `BackendCaps`
+contract, not a silent fallback.
 
 ## Serve under systemd
 

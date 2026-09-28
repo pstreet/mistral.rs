@@ -66,8 +66,8 @@ Device selection (`mistralrs-core/src/device_spec.rs`): the `--device` flag,
 `device` under the toml `[global]` section, or a per-`[[models]]` `device` key
 accept `"cpu"`, `"cuda:<N>"`, `"hip:<N>"` (indices are per-API). Omitted,
 auto-select probes the serving role and logs the choice plus a capability
-line (graphs/paged_attn/gguf/mtp); GGUF on the hip role refuses cleanly
-until S2 (QStorage-on-hip) lands. `hip:<N>` also works in rocm-only builds
+line (graphs/paged_attn/gguf/mtp); GGUF on the hip role serves since S2
+(QStorage-on-hip landed; proven with Qwen3.5-4B Q8_0 on hip:0). `hip:<N>` also works in rocm-only builds
 as an alias for the compiled vendor, so configs port across shapes.
 
 ### Testing & Quality
