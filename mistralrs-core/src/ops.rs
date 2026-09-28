@@ -62,7 +62,7 @@ pub(crate) fn cuda_topk_ranked_packed_max_k(vocab: usize) -> Option<usize> {
 ))]
 #[inline]
 fn role_storage(s: candle_core::CudaStorage) -> candle_core::Storage {
-    role_storage(s)
+    candle_core::Storage::Cuda(s)
 }
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 #[inline]
