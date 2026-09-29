@@ -359,8 +359,10 @@ P3 = polish, Deferred = do not do on RDNA.
       Recorded follow-up (~M): resync candle's mmq kernel copy from
       mistral.rs's, re-enable arch by arch via the bench. Known
       pre-existing (clean-tree repro): rocm-feature fp8 roundtrip
-      ("no cuda implementation for dtype-to-fp8") and 2-3 hqq GPU
-      tests fail under --features rocm; upstream capability gaps,
+      ("no cuda implementation for dtype-to-fp8"); the hqq GPU tests
+      pass under --features rocm except the chunk-embedding test,
+      which stays gated fleet-wide (pre-existing shared chunk-path
+      race, fails pristine rocm-only too). Upstream capability gaps,
       unrelated to the dispatch work.
 - [x] 2026-09-26 GpuArch: typed device identity for GPU policy
       decisions. DONE (see completion notes at the end of this
@@ -772,7 +774,9 @@ P3 = polish, Deferred = do not do on RDNA.
       InplaceOp3 twins + is_hip dispatch gates) with the
       hip_rope_matches_cpu kernel-correctness test, test un-gates
       (managed uploads + capture now pass on hip; hqq family +
-      bitpack re-gated pending hip-side hqq op coverage). Dual
+      bitpack re-gated pending hip-side hqq op coverage - since
+      resolved by 973394523; only the chunk-embedding test stays
+      gated, pre-existing shared chunk-path race). Dual
       cascade at last healthy run: quant 307/0, candle 30/0, core
       device_spec 4/4.
       INCIDENT 2026-09-28 (recovery pending reboot - READ FIRST):
@@ -948,7 +952,7 @@ P3 = polish, Deferred = do not do on RDNA.
       pre-existing; rocm quant 316/1 (fp8), core 27/5; all three
       check shapes clean. The MoE hip port is now COMPLETE
       (gather, fused decode, grouped prefill, LoRA decode,
-      grouped LoRA). HQQ HIP PORT LANDED 2026-09-29 (uncommitted):
+      grouped LoRA). HQQ HIP PORT LANDED 2026-09-29 (committed 973394523):
       the GPU dequantize() was the only Cuda-only hqq op (bitpack
       closures already fall back to tensor ops with hip_fwd twins,
       proven by layer construction on hip). dequant_for_dtype_hip!
@@ -971,7 +975,9 @@ P3 = polish, Deferred = do not do on RDNA.
       (214.9/610.1/23.4). MTP only wins on draft acceptance; these
       short deterministic probes show no uplift. Paged-attn pays
       under multi-turn/concurrency load, not single-stream speed.
-      REMAINING: hqq hip-side op coverage,
+      REMAINING: chunk-race investigation (pre-existing shared chunk-path
+      race, fails pristine rocm-only; single-chunk exact on hip so the
+      dequant port is proven innocent - separate track), then
       healthcheck alert wiring.
       PROJECTOR ITEM RESOLVED 2026-09-28 (not a code bug): the
       `visual.patch_embed` multimodal gap does NOT reproduce on the
