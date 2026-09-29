@@ -204,7 +204,7 @@ impl GatedDeltaNet {
         activation_dtype: DType,
     ) -> bool {
         if !cfg!(feature = "cuda")
-            || !pool.device().is_cuda()
+            || !crate::cuda::gdn::gdn_device_supported(pool.device())
             || !matches!(activation_dtype, DType::F16 | DType::BF16)
             || pool.conv_dtype() != activation_dtype
             || !crate::cuda::gdn::recurrent_state_dtype_supported(pool.recurrent_dtype())
@@ -327,7 +327,7 @@ impl GatedDeltaNet {
             || batch_size == 0
             || seq_len == 0
             || conv_dim != self.dims.conv_dim
-            || !pool.device().is_cuda()
+            || !crate::cuda::gdn::gdn_device_supported(pool.device())
             || !matches!(stash.mixed_qkv.dtype(), DType::F16 | DType::BF16)
             || !speculative_state_commit_dims_supported(&self.dims)
         {
@@ -535,7 +535,7 @@ impl GatedDeltaNet {
         #[cfg(feature = "cuda")]
         let accelerated = if checkpoint_lanes > 1
             && batch_kind == RecurrentBatchKind::SpeculativeDecode
-            && mixed_qkv.device().is_cuda()
+            && crate::cuda::gdn::gdn_device_supported(mixed_qkv.device())
             && cache.slots.is_some()
         {
             Some(self.forward_speculative_checkpoints(
@@ -944,7 +944,7 @@ impl GatedDeltaNet {
         pool: &RecurrentStatePool,
     ) -> Result<bool> {
         #[cfg(feature = "cuda")]
-        if stash.mixed_qkv.device().is_cuda() {
+        if crate::cuda::gdn::gdn_device_supported(stash.mixed_qkv.device()) {
             crate::cuda::gdn::speculative_state_commit_cuda(
                 crate::cuda::gdn::GdnSpeculativeStateCommit {
                     mixed_qkv: &stash.mixed_qkv,
@@ -999,7 +999,7 @@ impl GatedDeltaNet {
     ) -> Option<crate::cuda::gdn::GdnFp8OutputSpec> {
         if self.out_proj_input_shard.is_some()
             || gate.dtype() != DType::BF16
-            || !gate.device().is_cuda()
+            || !crate::cuda::gdn::gdn_device_supported(gate.device())
             || self.norm.weight.dtype() != DType::BF16
             || !self.norm.weight.device().same_device(gate.device())
             || self.out_proj.is_dynamic_lora_active()

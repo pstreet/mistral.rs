@@ -199,7 +199,7 @@ pub fn compute_beta_g(
     dtype: DType,
 ) -> Result<(Tensor, Tensor)> {
     #[cfg(any(feature = "cuda", feature = "rocm"))]
-    if b.device().is_cuda() {
+    if crate::cuda::gdn::gdn_device_supported(b.device()) {
         let b_flat = b.contiguous()?.flatten_all()?;
         let a_flat = a.contiguous()?.flatten_all()?;
         let a_log_f32 = a_log.to_dtype(DType::F32)?.contiguous()?;
@@ -271,7 +271,7 @@ pub fn apply_recurrence_from_convolved(
     dtype: DType,
 ) -> Result<Tensor> {
     #[cfg(any(feature = "cuda", feature = "rocm"))]
-    if mixed_qkv.device().is_cuda() {
+    if crate::cuda::gdn::gdn_device_supported(mixed_qkv.device()) {
         return recurrence_cuda_from_convolved(
             mixed_qkv, b, a, a_log, dt_bias, dims, batch_size, seq_len, cache, dtype,
         );
@@ -629,7 +629,7 @@ pub fn apply_recurrence(
     dtype: DType,
 ) -> Result<Tensor> {
     #[cfg(any(feature = "cuda", feature = "rocm"))]
-    if q.device().is_cuda() {
+    if crate::cuda::gdn::gdn_device_supported(q.device()) {
         return recurrence_cuda(q, k, v, g, beta, dims, batch_size, seq_len, cache, dtype);
     }
 
@@ -913,7 +913,7 @@ fn causal_conv1d_update(
     }
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
-    if x.device().is_cuda() {
+    if crate::cuda::gdn::gdn_device_supported(x.device()) {
         let weight = conv1d_weight
             .squeeze(1)?
             .to_dtype(x.dtype())?
@@ -1038,7 +1038,7 @@ fn causal_conv1d_full(
     let (batch_size, seq_len, conv_dim) = x.dims3()?;
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
-    if x.device().is_cuda() {
+    if crate::cuda::gdn::gdn_device_supported(x.device()) {
         let weight = conv1d_weight
             .squeeze(1)?
             .to_dtype(x.dtype())?

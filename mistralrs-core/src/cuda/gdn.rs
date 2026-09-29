@@ -65,6 +65,21 @@ fn gdn_modern_arch(arch: GpuArch) -> bool {
         GpuArch::Vulkan => false,
     }
 }
+
+// The fused GDN kernels serve the compiled vendor in single-vendor builds
+// and the AMD role in dual builds; other devices take the generic paths.
+pub(crate) fn gdn_device_supported(device: &Device) -> bool {
+    if device.is_cuda() {
+        return true;
+    }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    {
+        if device.is_hip() {
+            return true;
+        }
+    }
+    false
+}
 pub(crate) const GDN_DECODE_K_DIM: usize = 128;
 pub(crate) const GDN_DECODE_V_DIM: usize = 128;
 #[cfg(any(feature = "cuda", feature = "rocm", test))]
@@ -611,7 +626,7 @@ pub(crate) fn v_major_state_supported(
     }
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     {
-        if !device.is_cuda() {
+        if !gdn_device_supported(device) {
             return Ok(false);
         }
         let properties = gdn_cuda_device_properties(device.as_role_device()?)?;
@@ -1026,7 +1041,8 @@ pub(crate) fn try_gdn_packed_to_padded_cuda(
         padded_len,
         ..
     } = context;
-    if !source.device().is_cuda() || !matches!(source.dtype(), DType::BF16 | DType::F32) {
+    if !gdn_device_supported(source.device()) || !matches!(source.dtype(), DType::BF16 | DType::F32)
+    {
         return Ok(None);
     }
     validate_gdn_ragged_metadata(source, cu_seqlens, batch_size)?;
@@ -1150,7 +1166,8 @@ pub(crate) fn try_gdn_padded_to_packed_cuda(
         batch_size,
         token_count,
     } = context;
-    if !source.device().is_cuda() || !matches!(source.dtype(), DType::BF16 | DType::F32) {
+    if !gdn_device_supported(source.device()) || !matches!(source.dtype(), DType::BF16 | DType::F32)
+    {
         return Ok(None);
     }
     validate_gdn_ragged_metadata(source, cu_seqlens, batch_size)?;
@@ -1263,7 +1280,8 @@ pub(crate) fn try_gdn_extract_ragged_conv_state_cuda(
         cu_seqlens,
         batch_size,
     } = context;
-    if !padded_input.device().is_cuda() || !matches!(padded_input.dtype(), DType::BF16 | DType::F32)
+    if !gdn_device_supported(padded_input.device())
+        || !matches!(padded_input.dtype(), DType::BF16 | DType::F32)
     {
         return Ok(None);
     }
@@ -2570,7 +2588,7 @@ fn flashinfer_sm90_prefill_supported(launch: &FusedPrefillRecurrence<'_>) -> Res
             return Ok(false);
         }
         let device = launch.mixed_qkv.device();
-        if !device.is_cuda()
+        if !gdn_device_supported(device)
             || [
                 launch.b,
                 launch.a,
@@ -4234,7 +4252,7 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(
         candle::bail!("deferred GDN recurrence epsilon must be finite and non-negative");
     }
     let device = mixed_qkv.device();
-    if !device.is_cuda() {
+    if !gdn_device_supported(device) {
         candle::bail!("deferred GDN recurrence requires CUDA");
     }
     if !gdn_vmajor_arch(gdn_cuda_device_properties(device.as_role_device()?)?.arch) {
@@ -4591,7 +4609,7 @@ fn launch_deferred_state_cuda(
         candle::bail!("deferred GDN materialization storage shapes are incompatible");
     }
     let device = state_pool.device();
-    if !device.is_cuda()
+    if !gdn_device_supported(device)
         || !gdn_vmajor_arch(gdn_cuda_device_properties(device.as_role_device()?)?.arch)
     {
         candle::bail!("deferred GDN materialization requires an sm_90-class GPU");
@@ -4796,7 +4814,7 @@ pub fn speculative_transition_commit_batched_cuda(
             candle::bail!("GDN transition commit input shape is incompatible with its indices");
         }
         let device = layers[0].conv_input.device();
-        if !device.is_cuda()
+        if !gdn_device_supported(device)
             || !keep_rows.device().same_device(device)
             || !active_slots.device().same_device(device)
         {
@@ -5051,7 +5069,7 @@ pub fn speculative_transition_stage_batched_cuda(
             candle::bail!("GDN transition stage destination shape is incompatible");
         }
         let device = layers[0].conv_input.device();
-        if !device.is_cuda()
+        if !gdn_device_supported(device)
             || !keep_rows.device().same_device(device)
             || !destination_slots.device().same_device(device)
             || !keep_rows.is_contiguous()
@@ -5287,7 +5305,7 @@ pub fn pending_transition_publish_batched_cuda(
         candle::bail!("GDN transition publish storage dimensions are incompatible");
     }
     let device = layers[0].pending_keep_rows.device();
-    if !device.is_cuda()
+    if !gdn_device_supported(device)
         || !keep_rows.device().same_device(device)
         || !destination_slots.device().same_device(device)
     {
@@ -5476,7 +5494,7 @@ pub fn pending_transition_apply_batched_cuda(apply: GdnPendingTransitionApply<'_
             candle::bail!("GDN pending transition apply storage is incompatible");
         }
         let device = layers[0].pending_conv_input.device();
-        if !device.is_cuda() || !active_slots.device().same_device(device) {
+        if !gdn_device_supported(device) || !active_slots.device().same_device(device) {
             candle::bail!("GDN pending transition apply tensors must share one CUDA device");
         }
         let activation_tensor_dtype = layers[0].pending_conv_input.dtype();
@@ -5824,7 +5842,7 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
     if x.dtype() != DType::BF16
         || gate.dtype() != DType::BF16
         || weight.dtype() != DType::BF16
-        || !x.device().is_cuda()
+        || !gdn_device_supported(x.device())
         || !x.device().same_device(gate.device())
         || !x.device().same_device(weight.device())
         || !eps.is_finite()
@@ -6511,6 +6529,17 @@ mod tests {
     use super::*;
     use candle_core::{Device, IndexOp, D};
 
+    fn test_device() -> Result<Device> {
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        {
+            Device::new_hip(0)
+        }
+        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        {
+            Device::new_cuda(0)
+        }
+    }
+
     #[derive(Clone, Copy)]
     struct RecurrenceCase {
         bh: usize,
@@ -6580,7 +6609,7 @@ mod tests {
         const HEAD_WIDTH: usize = WIDTH / HEADS;
         const STATE_WIDTH: usize = 4;
 
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         let query_lens = [2usize, 5, 4];
         let cu_seqlens_host = [0u32, 2, 7, 11];
         let token_count = *cu_seqlens_host.last().unwrap() as usize;
@@ -6846,7 +6875,7 @@ mod tests {
     #[test]
     #[ignore = "requires a CUDA device"]
     fn warp_recurrence_matches_scalar_cuda() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         for case in [
             RecurrenceCase {
                 bh: 1,
@@ -6959,7 +6988,7 @@ mod tests {
     #[test]
     #[ignore = "requires a CUDA device"]
     fn low_dtype_recurrence_matches_sequential_rounding_cuda() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         for state_dtype in [DType::BF16, DType::F16] {
             for kernel in [
                 RecurrenceKernel::Scalar,
@@ -7000,7 +7029,7 @@ mod tests {
         const HEAD_DIM: usize = 128;
         const CAPACITY: usize = 5;
 
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         let bh = BATCH_SIZE * NUM_HEADS;
         let q = tensor3(
             patterned(bh * SEQ_LEN * HEAD_DIM, 20, 0.02, 0.0),
@@ -7088,7 +7117,7 @@ mod tests {
         const BH: usize = 48;
         const HEAD_DIM: usize = 128;
 
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         for seq_len in [2usize, 63, 64, 65, 129] {
             let q = tensor3(
                 patterned(BH * seq_len * HEAD_DIM, 120, 0.02, 0.0),
@@ -7167,7 +7196,7 @@ mod tests {
         const SEQ_LEN: usize = 65;
         const HEAD_DIM: usize = 128;
 
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         let bh = BATCH_SIZE * NUM_HEADS;
         let q = tensor3(
             patterned(bh * SEQ_LEN * HEAD_DIM, 130, 0.02, 0.0),
@@ -7534,7 +7563,7 @@ mod tests {
     #[test]
     #[ignore = "requires an SM90 CUDA device"]
     fn flashinfer_sm90_prefill_matches_sequential_recurrence() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         for case in [
             FusedPrefillCase {
                 batch_size: 3,
@@ -7675,7 +7704,7 @@ mod tests {
     #[test]
     #[ignore = "requires an SM90 CUDA device"]
     fn sm90_value_major_decode_repeats_with_shuffled_slots() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         for case in [
             ValueMajorDecodeCase {
                 batch_size: 1,
@@ -7908,7 +7937,7 @@ mod tests {
     #[test]
     #[ignore = "requires a CUDA device"]
     fn fused_decode_recurrence_matches_decomposed_cuda() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         for state_dtype in [DType::BF16, DType::F16] {
             run_fused_decode_state_case(
                 &dev,
@@ -8167,7 +8196,7 @@ mod tests {
     #[test]
     #[ignore = "requires a CUDA device"]
     fn speculative_state_commit_matches_prefix_replay_cuda() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         for state_dtype in [DType::F32, DType::BF16, DType::F16] {
             run_speculative_state_commit_case(
                 &dev,
@@ -8186,7 +8215,7 @@ mod tests {
     #[test]
     #[ignore = "requires an SM90 CUDA device"]
     fn speculative_checkpoint_kernels_match_serial_cuda() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         let batch_size = 3;
         let seq_len = 8;
         let checkpoint_lanes = 8;
@@ -9227,7 +9256,7 @@ mod tests {
     #[test]
     #[ignore = "requires an SM90 CUDA device"]
     fn speculative_transition_commit_matches_prefix_replay_cuda() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         for seq_len in [4, 8] {
             for activation_dtype in [DType::F16, DType::BF16] {
                 for state_dtype in [DType::F32, DType::BF16, DType::F16] {
@@ -9535,7 +9564,7 @@ mod tests {
     #[test]
     #[ignore = "requires a CUDA device"]
     fn speculative_transition_stage_is_slot_indexed_cuda() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         for seq_len in [4, 8] {
             for activation_dtype in [DType::F16, DType::BF16] {
                 run_speculative_transition_stage_case(&dev, seq_len, activation_dtype)?;
@@ -9550,7 +9579,7 @@ mod tests {
         const CAPACITY: usize = 6;
         const MAX_ROWS: usize = 8;
 
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         let keep_rows = Tensor::from_vec(vec![3u32, 8, 5], (3,), &dev)?;
         let destination_slots = Tensor::from_vec(vec![4u32, 1, GDN_PAD_SLOT], (3,), &dev)?;
         let layer_keep = [
@@ -9619,7 +9648,7 @@ mod tests {
     #[test]
     #[ignore = "requires an SM90 CUDA device"]
     fn sm90_fused_decode_kernel_variants_match_decomposed_cuda() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         run_fused_decode_case(
             &dev,
             1,
@@ -9664,7 +9693,7 @@ mod tests {
     #[test]
     #[ignore = "requires a CUDA device"]
     fn causal_conv1d_width4_update_matches_full_cuda() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         let batch_size = 3;
         let conv_dim = 257;
         let kernel_size = 4;
@@ -9723,7 +9752,7 @@ mod tests {
     #[test]
     #[ignore = "requires a CUDA device"]
     fn bench_recurrence_kernels_cuda() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         let (bh, seq_len, k_dim, v_dim) = (32usize, 4096usize, 128usize, 128usize);
         let q = tensor3(
             patterned(bh * seq_len * k_dim, 1, 0.02, 0.0),
@@ -9856,7 +9885,7 @@ mod tests {
     #[test]
     #[ignore = "requires a CUDA device"]
     fn causal_conv1d_full_continuation_matches_one_shot_cuda() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         let batch_size = 2;
         let conv_dim = 19;
         let seq_len = 7;
@@ -9965,7 +9994,7 @@ mod tests {
     #[test]
     #[ignore = "requires a CUDA device"]
     fn causal_conv1d_strided_nonzero_offset_matches_reference_cuda() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         let batch_size = 3;
         let conv_dim = 19;
         let kernel_size = 4;
@@ -10045,7 +10074,7 @@ mod tests {
     #[test]
     #[ignore = "requires a CUDA device"]
     fn rmsnorm_gated_strided_nonzero_offset_matches_reference_cuda() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         let (batch_size, seq_len, heads, hidden_dim) = (3, 2, 5, 17);
         let x_physical_dim = hidden_dim + 7;
         let value_dim = heads * hidden_dim;
@@ -10107,7 +10136,7 @@ mod tests {
     #[test]
     #[ignore = "requires a CUDA device"]
     fn rmsnorm_gated_hidden128_matches_reference_cuda() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         let (batch_size, rows, hidden_dim) = (1, 1027, 128);
         for dtype in [DType::BF16, DType::F16] {
             let x = Tensor::from_vec(
@@ -10251,7 +10280,7 @@ mod tests {
         const HEAD_DIM: usize = GDN_FP8_GROUP_SIZE;
         const EPS: f64 = 1.0e-6;
 
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         for seq_len in [3usize, 257] {
             let mut x_values = patterned(
                 BATCH_SIZE * seq_len * NUM_V_HEADS * HEAD_DIM,
@@ -10326,7 +10355,7 @@ mod tests {
     #[test]
     #[ignore = "requires a CUDA device"]
     fn pooled_state_kernels_match_gathered_cuda() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         let capacity = 6usize;
         let batch = 3usize;
         let slots_host: Vec<u32> = vec![4, 1, 5];
@@ -10472,7 +10501,7 @@ mod tests {
     #[test]
     #[ignore = "requires a CUDA device"]
     fn pooled_causal_conv_padding_rows_are_zero_and_stateless_cuda() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         let capacity = 5usize;
         let batch = 3usize;
         let conv_dim = 7usize;
@@ -10563,7 +10592,7 @@ mod tests {
     #[test]
     #[ignore = "requires a CUDA device"]
     fn pooled_decomposed_recurrence_padding_rows_are_zero_and_stateless_cuda() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         let capacity = 5usize;
         let batch = 3usize;
         let num_heads = 2usize;
@@ -10840,7 +10869,7 @@ mod tests {
     #[test]
     #[ignore = "requires a CUDA device"]
     fn fused_decode_dispatches_zero_padding_without_touching_state_cuda() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         run_fused_decode_padding_case(
             &dev,
             GdnDecodeKernel::Baseline,
@@ -10905,7 +10934,7 @@ mod tests {
         const STEPS: usize = 14;
         const NORM_EPS: f64 = 1.0e-6;
 
-        let dev = Device::new_cuda(0)?;
+        let dev = test_device()?;
         let key_dim = NUM_K_HEADS * HEAD_DIM;
         let value_dim = NUM_V_HEADS * HEAD_DIM;
         let conv_dim = 2 * key_dim + value_dim;

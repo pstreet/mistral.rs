@@ -856,9 +856,38 @@ P3 = polish, Deferred = do not do on RDNA.
       1776 both): prefill 55->105 tok/s (+91%), decode 15.0->16.5
       (+10%) via MISTRALRS_NO_FAST_MMVQ/MMQ=1 chute baseline; dual
       release rebuilt with zero GPU DT_NEEDED.
+      GDN FUSED-KERNEL PORT LANDED 2026-09-29 (uncommitted): the
+      is_cuda() gates that kept the fused GDN kernels off the hip
+      role are gone; a single gdn_device_supported predicate (cuda
+      everywhere, +hip in dual) now guards all 24 call sites
+      (backend gating/recurrence/conv x5, layer spec/fp8/stash x5,
+      packed cu_seqlens x2, norm rmsnorm-gated x1, plus the module's
+      internal support checks). The launchers were already
+      role-typed (RoleDevice/RoleStorage since Phase 1); the 27
+      gdn kernel tests now build role-aware devices (new_hip in
+      dual) so the whole suite runs on the hip role.
+      RESULTS: dual gdn suite 21/26 with --include-ignored; the 5
+      failures are IDENTICAL on rocm-only gfx1151 (pre-existing):
+      2x sm90-class arch gates (ValueMajor4 unsupported on gfx1151
+      by design), 1x stale spec-transition test (slot-capacity
+      validation from the 8445372b8 OOB fix, vendor-independent),
+      2x fp8-quantized rmsnorm/norm kernels return zeros on
+      gfx1151 BOTH roles (fp8-GDN models only; standard bar skips
+      them via #[ignore]). Serving: Qwen3.5-4B dual-hip prefill
+      105->148.6 tok/s, decode 16.5->28.6 tok/s (+73%), correct
+      1776. Qwen3.6-35B MoE decode 0.78->0.81 (noise): the
+      dominant MoE-model cost is the EXPERTS path -
+      cpu_indexed_moe_forward dequantizes the full 512-expert
+      weight set per call (gguf/mod.rs is_cuda gate at :513) while
+      rocm takes cuda::qmatmul_indexed_moe_forward (2.69 decode /
+      114 prefill vs 0.81 / 4.5 dual). gguf/cuda_hip.rs is the
+      187-line stub shell (hip_bail!) - THE next port, same shape
+      as fast_mmq_hip; also unlocks forward_grouped
+      (grouped_moe_mmq*) whose NVIDIA-typed signatures were kept in
+      the launcher port.
       PHASE 2 REMAINING: hqq hip-side op coverage (gated tests),
-      healthcheck alert wiring, MoE grouped fusion on hip,
-      GDN fused-kernel port to the hip role (below).
+      healthcheck alert wiring, MoE indexed+grouped port to the
+      hip role (TOP priority, dominant dual-hip cost).
       PROJECTOR ITEM RESOLVED 2026-09-28 (not a code bug): the
       `visual.patch_embed` multimodal gap does NOT reproduce on the
       current tree - Qwen3.8-27B + mmproj serves text AND vision

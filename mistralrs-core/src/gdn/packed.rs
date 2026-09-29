@@ -74,7 +74,7 @@ impl PackedGdnLayout {
     }
 
     pub(crate) fn cu_seqlens(&self, device: &Device) -> Result<Option<&Tensor>> {
-        if !device.is_cuda() {
+        if !crate::cuda::gdn::gdn_device_supported(device) {
             return Ok(None);
         }
         self.cu_seqlens
@@ -84,7 +84,7 @@ impl PackedGdnLayout {
     }
 
     fn cuda_ragged_transforms_supported(&self, source: &Tensor) -> bool {
-        source.device().is_cuda()
+        crate::cuda::gdn::gdn_device_supported(source.device())
             && matches!(source.dtype(), DType::BF16 | DType::F32)
             && self.cu_seqlens.contains_key(&source.device().location())
     }
