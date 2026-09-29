@@ -948,7 +948,23 @@ P3 = polish, Deferred = do not do on RDNA.
       pre-existing; rocm quant 316/1 (fp8), core 27/5; all three
       check shapes clean. The MoE hip port is now COMPLETE
       (gather, fused decode, grouped prefill, LoRA decode,
-      grouped LoRA). MTP-ON/PAGED-ON SMOKE 2026-09-29
+      grouped LoRA). HQQ HIP PORT LANDED 2026-09-29 (uncommitted):
+      the GPU dequantize() was the only Cuda-only hqq op (bitpack
+      closures already fall back to tensor ops with hip_fwd twins,
+      proven by layer construction on hip). dequant_for_dtype_hip!
+      mirrors the macro on hip types (15 arms generated from the
+      CUDA body, then hand-fixed); dequantize_hip branches off
+      is_hip. Test gates opened (test_device now new_hip in dual):
+      quant dual 320/0 (hqq4/hqq8/uqff/apply_isq green; single-
+      chunk embedding exact, max_diff=0). LESSON: generating the
+      copy by script duplicated the just-added is_hip branch into
+      the copy -> infinite self-recursion (TCO loop); always diff
+      generated copies. The chunk test stays gated: multi-chunk
+      gathers are nondeterministically wrong while single-chunk is
+      exact, and it fails with the identical max_diff=29.890572 on
+      the pristine rocm-only tree - pre-existing shared chunk-path
+      race (likely upload-vs-compute stream ordering), tracked
+      separately. MTP-ON/PAGED-ON SMOKE 2026-09-29
       (Qwen3.6-35B dual hip:0, defaults: paged_attn=on mtp=on):
       short prefill 198.5, long prefill (230 tok) 616.6, decode
       23.3 tok/s, correct 1776 - breaks even vs mtp-off/paged-off
