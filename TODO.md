@@ -908,10 +908,35 @@ P3 = polish, Deferred = do not do on RDNA.
       by design, 5x the known gfx1151 gdn set, identical on
       rocm-only); rocm quant 316/1 (fp8 documented) + moe 6/0
       (flips are no-ops there); all three cargo check shapes clean.
-      PHASE 2 REMAINING: hqq hip-side op coverage (gated tests),
-      healthcheck alert wiring, MoE stage 2 (dev-typed entries +
-      backends fast-path gates: grouped prefill, fused decode,
-      dispatch/reduce; also un-stub fast_mmq grouped entries).
+      MOE STAGE 2 LANDED 2026-09-29 (uncommitted): fused decode +
+      grouped prefill serve on the hip role. cuda_hip.rs gained
+      device-free hip entries (dev from weights, routing as plain
+      tensors): indexed_moe_fused_decode_hip (gemv fused gate_up +
+      down aggregate, all 11 dtypes), moe_dispatch_build_hip,
+      quantize_input_q8_1_hip (owned buffer; workspace variant
+      renamed quantize_input_q8_1_workspace), grouped_moe_gemm_
+      prequantized_hip, weighted reduces (flat/bf16/same-dtype).
+      fast_mmq_hip.rs gained mmq_moe_launcher + six grouped_hip
+      bodies (pair_packed, from_glu packed/sorted_pair/pair, plain
+      grouped, pair) on the existing MMQ/FIXUP workspaces; routing
+      tables cross via the hip_u32_ptrs! macro (utils; bare
+      statements, storage borrows must stay caller-scope - a match
+      arm returning the guard does NOT compile). backends.rs:
+      select_cuda_fast_path flipped to device_has_fused_gguf,
+      forward_decode_hip + forward_grouped_hip, LoRA decode stays
+      Ok(None) on hip (gather_lora covers it). Tests: 9 hip MoE
+      tests green (fused decode Q4K + Q4K/Q5K, grouped Q4K +
+      Q4K/Q5K + F32-reduce + Q8_1-prequantized). Serving
+      Qwen3.6-35B dual hip:0: decode 20.2 -> 23.4, short prefill
+      119.8 -> 214.9, long prefill (230 tok) 610.1 tok/s, correct
+      1776. Bars: quant dual 316/0; core dual 30 passed + same 11
+      pre-existing (6 new_cuda probe-gated, 5 gfx1151 gdn); rocm
+      quant 316/2 (fp8 documented + hqq_embedding_chunks, the
+      latter fails on the PRISTINE tree too - environmental, not
+      this change); rocm core 27/5 (known gdn set); all three
+      check shapes clean. REMAINING: LoRA MoE decode port
+      (IndexedMoeLora*, moe_gemv_lora kernels present), hqq
+      hip-side op coverage, healthcheck alert wiring.
       PROJECTOR ITEM RESOLVED 2026-09-28 (not a code bug): the
       `visual.patch_embed` multimodal gap does NOT reproduce on the
       current tree - Qwen3.8-27B + mmproj serves text AND vision

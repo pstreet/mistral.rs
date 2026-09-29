@@ -133,3 +133,21 @@ pub fn hip_slice_ptr_mut_on_stream<'a, T: HipDeviceRepr>(
     let (ptr, guard) = v.device_ptr_mut(stream);
     (ptr + (lo * std::mem::size_of::<T>()) as u64, guard)
 }
+
+/// Bind `($ptr, $guard)` for a u32 routing table tensor on a stream.
+/// Bare statements, so the storage borrows live in the caller scope.
+macro_rules! hip_u32_ptrs {
+    ($table:expr, $stream:expr, $ptr:ident, $guard:ident) => {
+        let (__tbl_storage, __tbl_layout) = $table.storage_and_layout();
+        let candle_core::Storage::Hip(__tbl_hip) = &*__tbl_storage else {
+            candle_core::bail!("expected Hip u32 routing table");
+        };
+        let __tbl_slice = __tbl_hip.as_cuda_slice::<u32>()?;
+        let ($ptr, $guard) = $crate::utils::hip_slice_ptr_on_stream(
+            __tbl_slice,
+            __tbl_layout.start_offset(),
+            $stream,
+        );
+    };
+}
+pub(crate) use hip_u32_ptrs;

@@ -21,7 +21,7 @@ use candle_core::{
 
 use super::ffi;
 use crate::{
-    utils::{hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream},
+    utils::{hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream, hip_u32_ptrs},
     GluActivationType,
 };
 
@@ -231,6 +231,44 @@ fn mmq_launcher(dtype: GgmlDType) -> Option<MmqLauncher> {
         GgmlDType::Q4K => ffi::launch_mmq_gguf_q4_k,
         GgmlDType::Q5K => ffi::launch_mmq_gguf_q5_k,
         GgmlDType::Q6K => ffi::launch_mmq_gguf_q6_k,
+        _ => return None,
+    };
+    Some(f)
+}
+
+type MmqMoeLauncher = unsafe extern "C" fn(
+    tmp_fixup: *mut std::ffi::c_void,
+    x: *const std::ffi::c_void,
+    y: *const std::ffi::c_void,
+    ids_dst: *const i32,
+    expert_bounds: *const i32,
+    dst: *mut std::ffi::c_void,
+    ncols_x: i64,
+    nrows_x: i64,
+    ncols_dst: i64,
+    stride_row_x: i64,
+    stride_col_dst: i64,
+    num_experts: i64,
+    ncols_max: i64,
+    cc: i32,
+    nsm: i32,
+    smpbo: i64,
+    warp_size: i32,
+    stream: *mut std::ffi::c_void,
+);
+
+fn mmq_moe_launcher(dtype: GgmlDType) -> Option<MmqMoeLauncher> {
+    let f: MmqMoeLauncher = match dtype {
+        GgmlDType::Q4_0 => ffi::launch_mmq_gguf_q4_0_moe,
+        GgmlDType::Q4_1 => ffi::launch_mmq_gguf_q4_1_moe,
+        GgmlDType::Q5_0 => ffi::launch_mmq_gguf_q5_0_moe,
+        GgmlDType::Q5_1 => ffi::launch_mmq_gguf_q5_1_moe,
+        GgmlDType::Q8_0 => ffi::launch_mmq_gguf_q8_0_moe,
+        GgmlDType::Q2K => ffi::launch_mmq_gguf_q2_k_moe,
+        GgmlDType::Q3K => ffi::launch_mmq_gguf_q3_k_moe,
+        GgmlDType::Q4K => ffi::launch_mmq_gguf_q4_k_moe,
+        GgmlDType::Q5K => ffi::launch_mmq_gguf_q5_k_moe,
+        GgmlDType::Q6K => ffi::launch_mmq_gguf_q6_k_moe,
         _ => return None,
     };
     Some(f)
@@ -918,6 +956,721 @@ pub fn grouped_pair(
     _dev: &candle_core::cuda::CudaDevice,
 ) -> Result<(Tensor, Tensor)> {
     hip_bail_moe!("fast_mmq::grouped_pair")
+}
+
+// ================= hip-role grouped MoE entries =================
+// Same contracts as the `grouped*` entries above, but device-free: the
+// Hip device is taken from the weights and the routing tables are plain
+// u32 tensors, so the core call sites stay device-agnostic.
+
+/// Run one GGUF-quantized MoE projection with llama.cpp-style grouped MMQ.
+#[allow(clippy::too_many_arguments)]
+pub fn grouped_hip(
+    weight: &QTensor,
+    xs: &Tensor,
+    ids_src: &Tensor,
+    ids_dst: &Tensor,
+    expert_bounds: &Tensor,
+    total_assignments: usize,
+    ncols_max: usize,
+    num_experts: usize,
+) -> Result<Tensor> {
+    let dtype = weight.dtype();
+    if !supports(dtype) {
+        candle_core::bail!("fast_mmq grouped_hip: unsupported quant dtype {dtype:?}");
+    }
+    let Device::Hip(dev) = weight.device() else {
+        candle_core::bail!("fast_mmq grouped_hip: weights must live on Hip");
+    };
+
+    let (_, k) = xs.dims2()?;
+
+    let (weight_experts, nrows, ncols) = weight.shape().dims3()?;
+    if weight_experts != num_experts {
+        candle_core::bail!(
+            "fast_mmq grouped_hip: expected {num_experts} experts, got {weight_experts}"
+        );
+    }
+    if k != ncols {
+        candle_core::bail!(
+            "fast_mmq grouped_hip: shape mismatch: weight cols {ncols} vs input tail {k}"
+        );
+    }
+    let qk = qk_for(dtype);
+    if k % qk != 0 {
+        candle_core::bail!("fast_mmq grouped_hip: k={k} not divisible by qk={qk}");
+    }
+
+    let input_ty = xs.dtype();
+    if !matches!(input_ty, DType::BF16 | DType::F16 | DType::F32) {
+        candle_core::bail!(
+            "fast_mmq grouped_hip: input dtype must be BF16, F16, or F32, got {input_ty:?}"
+        );
+    }
+
+    let xs = xs.contiguous()?;
+    let (xs_storage, xs_layout) = xs.storage_and_layout();
+    let Storage::Hip(xs_hip) = &*xs_storage else {
+        candle_core::bail!("fast_mmq grouped_hip: input must live on Hip");
+    };
+    let xs_offset = xs_layout.start_offset();
+    let type_x = match input_ty {
+        DType::F32 => 0,
+        DType::F16 => 1,
+        DType::BF16 => 30,
+        _ => unreachable!(),
+    };
+
+    let stream = dev.cuda_stream();
+    let stream_ptr = stream.cu_stream();
+    let k_padded = pad(pad(k, MATRIX_ROW_PADDING), 4 * QK8_1);
+
+    let blocks_per_row = k_padded / (4 * QK8_1);
+    let workspace_main = total_assignments * blocks_per_row * BLOCK_Q8_1_MMQ_SIZE;
+    let workspace_extra = MMQ_X_MAX * BLOCK_Q8_1_MMQ_SIZE;
+    let workspace_bytes = workspace_main + workspace_extra;
+    let mut workspace = workspace_ensure(&MMQ_WORKSPACE, &dev, workspace_bytes, &stream)?;
+    let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
+    let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
+
+    let fixup_bytes = fixup_workspace_bytes(&dev)?;
+    let mut fixup_workspace = workspace_ensure(&FIXUP_WORKSPACE, &dev, fixup_bytes, &stream)?;
+    let (fixup_ptr, _fixup_guard) = fixup_workspace.ptr_mut();
+    let fixup_ptr = fixup_ptr as *mut std::ffi::c_void;
+
+    let out = unsafe { dev.alloc::<f32>(total_assignments * nrows)? };
+
+    let weight_ptr = weight.device_ptr()? as *const std::ffi::c_void;
+    let stride_row_x = (k / qk) as i64;
+    let stride_col_dst = nrows as i64;
+    let di = get_device_info(&dev)?;
+
+    let quantize = quantize_launcher(ds_layout_for(dtype));
+    let launcher = mmq_moe_launcher(dtype).expect("supports() checked");
+
+    hip_u32_ptrs!(ids_src, &stream, ids_src_ptr, _ids_src_guard);
+    hip_u32_ptrs!(ids_dst, &stream, ids_dst_ptr, _ids_dst_guard);
+    hip_u32_ptrs!(expert_bounds, &stream, bounds_ptr, _bounds_guard);
+    let (out_ptr, _out_guard) = hip_slice_ptr_on_stream(&out, 0, &stream);
+
+    unsafe {
+        match input_ty {
+            DType::BF16 => {
+                let slice = xs_hip.as_cuda_slice::<half::bf16>()?;
+                let (xs_ptr, _xs_guard) = hip_slice_ptr_on_stream(slice, xs_offset, &stream);
+                quantize(
+                    xs_ptr as *const std::ffi::c_void,
+                    ids_src_ptr as *const i32,
+                    scratch_ptr,
+                    type_x,
+                    k as i64,
+                    k as i64,
+                    0,
+                    0,
+                    k_padded as i64,
+                    total_assignments as i64,
+                    1,
+                    1,
+                    stream_ptr,
+                );
+            }
+            DType::F16 => {
+                let slice = xs_hip.as_cuda_slice::<half::f16>()?;
+                let (xs_ptr, _xs_guard) = hip_slice_ptr_on_stream(slice, xs_offset, &stream);
+                quantize(
+                    xs_ptr as *const std::ffi::c_void,
+                    ids_src_ptr as *const i32,
+                    scratch_ptr,
+                    type_x,
+                    k as i64,
+                    k as i64,
+                    0,
+                    0,
+                    k_padded as i64,
+                    total_assignments as i64,
+                    1,
+                    1,
+                    stream_ptr,
+                );
+            }
+            DType::F32 => {
+                let slice = xs_hip.as_cuda_slice::<f32>()?;
+                let (xs_ptr, _xs_guard) = hip_slice_ptr_on_stream(slice, xs_offset, &stream);
+                quantize(
+                    xs_ptr as *const std::ffi::c_void,
+                    ids_src_ptr as *const i32,
+                    scratch_ptr,
+                    type_x,
+                    k as i64,
+                    k as i64,
+                    0,
+                    0,
+                    k_padded as i64,
+                    total_assignments as i64,
+                    1,
+                    1,
+                    stream_ptr,
+                );
+            }
+            _ => unreachable!(),
+        }
+
+        launcher(
+            fixup_ptr,
+            weight_ptr,
+            scratch_ptr as *const std::ffi::c_void,
+            ids_dst_ptr as *const i32,
+            bounds_ptr as *const i32,
+            out_ptr as *mut std::ffi::c_void,
+            k as i64,
+            nrows as i64,
+            total_assignments as i64,
+            stride_row_x,
+            stride_col_dst,
+            num_experts as i64,
+            ncols_max as i64,
+            di.cc,
+            di.nsm,
+            di.smpbo,
+            di.warp_size,
+            stream_ptr,
+        );
+    }
+
+    drop(_out_guard);
+    drop(_bounds_guard);
+    drop(_ids_dst_guard);
+    drop(_ids_src_guard);
+
+    let out_shape: Shape = vec![total_assignments, nrows].into();
+    Ok(wrap_hip_output(out, &dev, out_shape))
+}
+
+struct GroupedGluRunHip<'a> {
+    weight: &'a QTensor,
+    gate: &'a Tensor,
+    up: &'a Tensor,
+    row_stride: usize,
+    ids_src: Option<&'a Tensor>,
+    ids_dst: &'a Tensor,
+    expert_bounds: &'a Tensor,
+    total_assignments: usize,
+    ncols_max: usize,
+    num_experts: usize,
+    activation: i32,
+    dev: &'a CudaDevice,
+}
+
+fn grouped_from_glu_hip(run: GroupedGluRunHip<'_>) -> Result<Tensor> {
+    let GroupedGluRunHip {
+        weight,
+        gate,
+        up,
+        row_stride,
+        ids_src,
+        ids_dst,
+        expert_bounds,
+        total_assignments,
+        ncols_max,
+        num_experts,
+        activation,
+        dev,
+    } = run;
+    let dtype = weight.dtype();
+    if !supports(dtype) {
+        candle_core::bail!("fast_mmq grouped_from_glu_hip: unsupported quant dtype {dtype:?}");
+    }
+
+    let (gate_rows, k) = gate.dims2()?;
+    let (up_rows, up_k) = up.dims2()?;
+    if gate_rows != total_assignments || up_rows != total_assignments || up_k != k {
+        candle_core::bail!(
+            "fast_mmq grouped_from_glu_hip: gate/up shape mismatch {:?} vs {:?}, total_assignments={total_assignments}",
+            gate.shape(),
+            up.shape()
+        );
+    }
+    if gate.dtype() != DType::F32 || up.dtype() != DType::F32 {
+        candle_core::bail!(
+            "fast_mmq grouped_from_glu_hip: gate/up must be F32, got {:?} and {:?}",
+            gate.dtype(),
+            up.dtype()
+        );
+    }
+
+    let (weight_experts, nrows, ncols) = weight.shape().dims3()?;
+    if weight_experts != num_experts {
+        candle_core::bail!(
+            "fast_mmq grouped_from_glu_hip: expected {num_experts} experts, got {weight_experts}"
+        );
+    }
+    if k != ncols {
+        candle_core::bail!(
+            "fast_mmq grouped_from_glu_hip: shape mismatch: weight cols {ncols} vs input tail {k}"
+        );
+    }
+    let qk = qk_for(dtype);
+    if k % qk != 0 {
+        candle_core::bail!("fast_mmq grouped_from_glu_hip: k={k} not divisible by qk={qk}");
+    }
+
+    let (gate_storage, gate_layout) = gate.storage_and_layout();
+    let Storage::Hip(gate_hip) = &*gate_storage else {
+        candle_core::bail!("fast_mmq grouped_from_glu_hip: gate must live on Hip");
+    };
+    let (up_storage, up_layout) = up.storage_and_layout();
+    let Storage::Hip(up_hip) = &*up_storage else {
+        candle_core::bail!("fast_mmq grouped_from_glu_hip: up must live on Hip");
+    };
+    if gate_layout.stride() != [row_stride, 1] || up_layout.stride() != [row_stride, 1] {
+        candle_core::bail!("fast_mmq grouped_from_glu_hip: invalid gate/up row stride");
+    }
+
+    let stream = dev.cuda_stream();
+    let stream_ptr = stream.cu_stream();
+    let k_padded = pad(pad(k, MATRIX_ROW_PADDING), 4 * QK8_1);
+
+    let blocks_per_row = k_padded / (4 * QK8_1);
+    let workspace_main = total_assignments * blocks_per_row * BLOCK_Q8_1_MMQ_SIZE;
+    let workspace_extra = MMQ_X_MAX * BLOCK_Q8_1_MMQ_SIZE;
+    let workspace_bytes = workspace_main + workspace_extra;
+    let mut workspace = workspace_ensure(&MMQ_WORKSPACE, dev, workspace_bytes, &stream)?;
+    let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
+    let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
+
+    let fixup_bytes = fixup_workspace_bytes(dev)?;
+    let mut fixup_workspace = workspace_ensure(&FIXUP_WORKSPACE, dev, fixup_bytes, &stream)?;
+    let (fixup_ptr, _fixup_guard) = fixup_workspace.ptr_mut();
+    let fixup_ptr = fixup_ptr as *mut std::ffi::c_void;
+
+    let out = unsafe { dev.alloc::<f32>(total_assignments * nrows)? };
+
+    let weight_ptr = weight.device_ptr()? as *const std::ffi::c_void;
+    let stride_row_x = (k / qk) as i64;
+    let stride_col_dst = nrows as i64;
+    let di = get_device_info(dev)?;
+
+    let quantize = quantize_glu_f32_launcher(ds_layout_for(dtype));
+    let launcher = mmq_moe_launcher(dtype).expect("supports() checked");
+
+    let gate_slice = gate_hip.as_cuda_slice::<f32>()?;
+    let up_slice = up_hip.as_cuda_slice::<f32>()?;
+    let (gate_ptr, _gate_guard) =
+        hip_slice_ptr_on_stream(gate_slice, gate_layout.start_offset(), &stream);
+    let (up_ptr, _up_guard) = hip_slice_ptr_on_stream(up_slice, up_layout.start_offset(), &stream);
+    let src_storage = ids_src.map(|t| t.storage_and_layout());
+    let (ids_src_ptr, _ids_src_guard) = match &src_storage {
+        Some((storage, layout)) => {
+            let Storage::Hip(hip) = &**storage else {
+                candle_core::bail!("expected Hip u32 routing table");
+            };
+            let slice = hip.as_cuda_slice::<u32>()?;
+            let (ptr, guard) = hip_slice_ptr_on_stream(slice, layout.start_offset(), &stream);
+            (ptr, Some(guard))
+        }
+        None => (0, None),
+    };
+    hip_u32_ptrs!(ids_dst, &stream, ids_dst_ptr, _ids_dst_guard);
+    hip_u32_ptrs!(expert_bounds, &stream, bounds_ptr, _bounds_guard);
+    let (out_ptr, _out_guard) = hip_slice_ptr_on_stream(&out, 0, &stream);
+
+    unsafe {
+        quantize(
+            gate_ptr as *const f32,
+            up_ptr as *const f32,
+            ids_src_ptr as *const i32,
+            scratch_ptr,
+            k as i64,
+            row_stride as i64,
+            k_padded as i64,
+            total_assignments as i64,
+            activation,
+            stream_ptr,
+        );
+
+        launcher(
+            fixup_ptr,
+            weight_ptr,
+            scratch_ptr as *const std::ffi::c_void,
+            ids_dst_ptr as *const i32,
+            bounds_ptr as *const i32,
+            out_ptr as *mut std::ffi::c_void,
+            k as i64,
+            nrows as i64,
+            total_assignments as i64,
+            stride_row_x,
+            stride_col_dst,
+            num_experts as i64,
+            ncols_max as i64,
+            di.cc,
+            di.nsm,
+            di.smpbo,
+            di.warp_size,
+            stream_ptr,
+        );
+    }
+
+    drop(_out_guard);
+    drop(_bounds_guard);
+    drop(_ids_dst_guard);
+    drop(_ids_src_guard);
+    drop(_up_guard);
+    drop(_gate_guard);
+
+    let out_shape: Shape = vec![total_assignments, nrows].into();
+    Ok(wrap_hip_output(out, dev, out_shape))
+}
+
+/// Run one grouped MoE projection after fusing `activation(gate) * up` directly
+/// into the MMQ activation quantization layout.
+#[allow(clippy::too_many_arguments)]
+pub fn grouped_from_glu_pair_hip(
+    weight: &QTensor,
+    gate: &Tensor,
+    up: &Tensor,
+    ids_src: &Tensor,
+    ids_dst: &Tensor,
+    expert_bounds: &Tensor,
+    total_assignments: usize,
+    ncols_max: usize,
+    num_experts: usize,
+    activation: i32,
+) -> Result<Tensor> {
+    let Device::Hip(dev) = weight.device() else {
+        candle_core::bail!("fast_mmq grouped_from_glu_pair_hip: weights must live on Hip");
+    };
+    let gate = gate.contiguous()?;
+    let up = up.contiguous()?;
+    let row_stride = gate.dim(1)?;
+    grouped_from_glu_hip(GroupedGluRunHip {
+        weight,
+        gate: &gate,
+        up: &up,
+        row_stride,
+        ids_src: Some(ids_src),
+        ids_dst,
+        expert_bounds,
+        total_assignments,
+        ncols_max,
+        num_experts,
+        activation,
+        dev: &dev,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn grouped_from_glu_sorted_pair_hip(
+    weight: &QTensor,
+    gate: &Tensor,
+    up: &Tensor,
+    ids_dst: &Tensor,
+    expert_bounds: &Tensor,
+    total_assignments: usize,
+    ncols_max: usize,
+    num_experts: usize,
+    activation: i32,
+) -> Result<Tensor> {
+    let Device::Hip(dev) = weight.device() else {
+        candle_core::bail!("fast_mmq grouped_from_glu_sorted_pair_hip: weights must live on Hip");
+    };
+    let gate = gate.contiguous()?;
+    let up = up.contiguous()?;
+    let row_stride = gate.dim(1)?;
+    grouped_from_glu_hip(GroupedGluRunHip {
+        weight,
+        gate: &gate,
+        up: &up,
+        row_stride,
+        ids_src: None,
+        ids_dst,
+        expert_bounds,
+        total_assignments,
+        ncols_max,
+        num_experts,
+        activation,
+        dev: &dev,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn grouped_from_glu_packed_hip(
+    weight: &QTensor,
+    gate_up: &Tensor,
+    ids_src: &Tensor,
+    ids_dst: &Tensor,
+    expert_bounds: &Tensor,
+    total_assignments: usize,
+    ncols_max: usize,
+    num_experts: usize,
+    activation: i32,
+) -> Result<Tensor> {
+    let Device::Hip(dev) = weight.device() else {
+        candle_core::bail!("fast_mmq grouped_from_glu_packed_hip: weights must live on Hip");
+    };
+    let gate_up = gate_up.contiguous()?;
+    let (_, _, k) = weight.shape().dims3()?;
+    if gate_up.dims2()? != (total_assignments, 2 * k) {
+        candle_core::bail!("fast_mmq grouped_from_glu_packed_hip: gate/up shape mismatch");
+    }
+    let gate = gate_up.narrow(1, 0, k)?;
+    let up = gate_up.narrow(1, k, k)?;
+    grouped_from_glu_hip(GroupedGluRunHip {
+        weight,
+        gate: &gate,
+        up: &up,
+        row_stride: 2 * k,
+        ids_src: Some(ids_src),
+        ids_dst,
+        expert_bounds,
+        total_assignments,
+        ncols_max,
+        num_experts,
+        activation,
+        dev: &dev,
+    })
+}
+
+/// Run two GGUF-quantized MoE projections with llama.cpp-style grouped MMQ.
+/// Gate/up share one MMQ activation quantization pass and one packed output.
+#[allow(clippy::too_many_arguments)]
+pub fn grouped_pair_packed_hip(
+    gate: &QTensor,
+    up: &QTensor,
+    xs: &Tensor,
+    ids_src: &Tensor,
+    ids_dst: &Tensor,
+    expert_bounds: &Tensor,
+    total_assignments: usize,
+    topk: usize,
+    num_experts: usize,
+) -> Result<Tensor> {
+    let dtype = gate.dtype();
+    if dtype != up.dtype() {
+        candle_core::bail!(
+            "fast_mmq grouped_pair_hip: matching gate/up dtypes, got {:?} and {:?}",
+            dtype,
+            up.dtype()
+        );
+    }
+    if !supports(dtype) {
+        candle_core::bail!("fast_mmq grouped_pair_hip: unsupported quant dtype {dtype:?}");
+    }
+    let Device::Hip(dev) = gate.device() else {
+        candle_core::bail!("fast_mmq grouped_pair_hip: weights must live on Hip");
+    };
+
+    let (num_tokens, k) = xs.dims2()?;
+    if total_assignments != num_tokens * topk {
+        candle_core::bail!(
+            "fast_mmq grouped_pair_hip: total_assignments={total_assignments} does not match num_tokens={num_tokens} * topk={topk}"
+        );
+    }
+
+    let (gate_experts, nrows, ncols) = gate.shape().dims3()?;
+    let (up_experts, up_nrows, up_ncols) = up.shape().dims3()?;
+    if gate_experts != num_experts || up_experts != num_experts {
+        candle_core::bail!(
+            "fast_mmq grouped_pair_hip: expected {num_experts} experts, got gate={gate_experts} up={up_experts}"
+        );
+    }
+    if nrows != up_nrows || ncols != up_ncols {
+        candle_core::bail!(
+            "fast_mmq grouped_pair_hip: gate/up shape mismatch {:?} vs {:?}",
+            gate.shape(),
+            up.shape()
+        );
+    }
+    if k != ncols {
+        candle_core::bail!(
+            "fast_mmq grouped_pair_hip: shape mismatch: weight cols {ncols} vs input tail {k}"
+        );
+    }
+    let qk = qk_for(dtype);
+    if k % qk != 0 {
+        candle_core::bail!("fast_mmq grouped_pair_hip: k={k} not divisible by qk={qk}");
+    }
+
+    let input_ty = xs.dtype();
+    if !matches!(input_ty, DType::BF16 | DType::F16 | DType::F32) {
+        candle_core::bail!(
+            "fast_mmq grouped_pair_hip: input dtype must be BF16, F16, or F32, got {input_ty:?}"
+        );
+    }
+
+    let xs = xs.contiguous()?;
+    let (xs_storage, xs_layout) = xs.storage_and_layout();
+    let Storage::Hip(xs_hip) = &*xs_storage else {
+        candle_core::bail!("fast_mmq grouped_pair_hip: input must live on Hip");
+    };
+    let xs_offset = xs_layout.start_offset();
+    let type_x = match input_ty {
+        DType::F32 => 0,
+        DType::F16 => 1,
+        DType::BF16 => 30,
+        _ => unreachable!(),
+    };
+
+    let stream = dev.cuda_stream();
+    let stream_ptr = stream.cu_stream();
+    let k_padded = pad(pad(k, MATRIX_ROW_PADDING), 4 * QK8_1);
+
+    let blocks_per_row = k_padded / (4 * QK8_1);
+    let workspace_main = total_assignments * blocks_per_row * BLOCK_Q8_1_MMQ_SIZE;
+    let workspace_extra = MMQ_X_MAX * BLOCK_Q8_1_MMQ_SIZE;
+    let workspace_bytes = workspace_main + workspace_extra;
+    let mut workspace = workspace_ensure(&MMQ_WORKSPACE, &dev, workspace_bytes, &stream)?;
+    let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
+    let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
+
+    let fixup_bytes = fixup_workspace_bytes(&dev)?;
+    let mut fixup_workspace = workspace_ensure(&FIXUP_WORKSPACE, &dev, fixup_bytes, &stream)?;
+    let (fixup_ptr, _fixup_guard) = fixup_workspace.ptr_mut();
+    let fixup_ptr = fixup_ptr as *mut std::ffi::c_void;
+
+    let output = unsafe { dev.alloc::<f32>(total_assignments * nrows * 2)? };
+
+    let gate_ptr = gate.device_ptr()? as *const std::ffi::c_void;
+    let up_ptr = up.device_ptr()? as *const std::ffi::c_void;
+    let stride_row_x = (k / qk) as i64;
+    let stride_col_dst = (2 * nrows) as i64;
+    let di = get_device_info(&dev)?;
+
+    let quantize = quantize_launcher(ds_layout_for(dtype));
+    let launcher = mmq_moe_launcher(dtype).expect("supports() checked");
+
+    hip_u32_ptrs!(ids_src, &stream, ids_src_ptr, _ids_src_guard);
+    hip_u32_ptrs!(ids_dst, &stream, ids_dst_ptr, _ids_dst_guard);
+    hip_u32_ptrs!(expert_bounds, &stream, bounds_ptr, _bounds_guard);
+    let (gate_out_ptr, _gate_out_guard) = hip_slice_ptr_on_stream(&output, 0, &stream);
+    let (up_out_ptr, _up_out_guard) = hip_slice_ptr_on_stream(&output, nrows, &stream);
+
+    unsafe {
+        match input_ty {
+            DType::BF16 => {
+                let slice = xs_hip.as_cuda_slice::<half::bf16>()?;
+                let (xs_ptr, _xs_guard) = hip_slice_ptr_on_stream(slice, xs_offset, &stream);
+                quantize(
+                    xs_ptr as *const std::ffi::c_void,
+                    ids_src_ptr as *const i32,
+                    scratch_ptr,
+                    type_x,
+                    k as i64,
+                    k as i64,
+                    0,
+                    0,
+                    k_padded as i64,
+                    total_assignments as i64,
+                    1,
+                    1,
+                    stream_ptr,
+                );
+            }
+            DType::F16 => {
+                let slice = xs_hip.as_cuda_slice::<half::f16>()?;
+                let (xs_ptr, _xs_guard) = hip_slice_ptr_on_stream(slice, xs_offset, &stream);
+                quantize(
+                    xs_ptr as *const std::ffi::c_void,
+                    ids_src_ptr as *const i32,
+                    scratch_ptr,
+                    type_x,
+                    k as i64,
+                    k as i64,
+                    0,
+                    0,
+                    k_padded as i64,
+                    total_assignments as i64,
+                    1,
+                    1,
+                    stream_ptr,
+                );
+            }
+            DType::F32 => {
+                let slice = xs_hip.as_cuda_slice::<f32>()?;
+                let (xs_ptr, _xs_guard) = hip_slice_ptr_on_stream(slice, xs_offset, &stream);
+                quantize(
+                    xs_ptr as *const std::ffi::c_void,
+                    ids_src_ptr as *const i32,
+                    scratch_ptr,
+                    type_x,
+                    k as i64,
+                    k as i64,
+                    0,
+                    0,
+                    k_padded as i64,
+                    total_assignments as i64,
+                    1,
+                    1,
+                    stream_ptr,
+                );
+            }
+            _ => unreachable!(),
+        }
+
+        for (weight_ptr, out_ptr) in [
+            (gate_ptr, gate_out_ptr as *mut std::ffi::c_void),
+            (up_ptr, up_out_ptr as *mut std::ffi::c_void),
+        ] {
+            launcher(
+                fixup_ptr,
+                weight_ptr,
+                scratch_ptr as *const std::ffi::c_void,
+                ids_dst_ptr as *const i32,
+                bounds_ptr as *const i32,
+                out_ptr,
+                k as i64,
+                nrows as i64,
+                total_assignments as i64,
+                stride_row_x,
+                stride_col_dst,
+                num_experts as i64,
+                num_tokens as i64,
+                di.cc,
+                di.nsm,
+                di.smpbo,
+                di.warp_size,
+                stream_ptr,
+            );
+        }
+    }
+
+    drop(_gate_out_guard);
+    drop(_up_out_guard);
+    drop(_bounds_guard);
+    drop(_ids_dst_guard);
+    drop(_ids_src_guard);
+
+    let out_shape: Shape = vec![total_assignments, 2 * nrows].into();
+    Ok(wrap_hip_output(output, &dev, out_shape))
+}
+
+/// Run two GGUF-quantized MoE projections with llama.cpp-style grouped MMQ.
+#[allow(clippy::too_many_arguments)]
+pub fn grouped_pair_hip(
+    gate: &QTensor,
+    up: &QTensor,
+    xs: &Tensor,
+    ids_src: &Tensor,
+    ids_dst: &Tensor,
+    expert_bounds: &Tensor,
+    total_assignments: usize,
+    topk: usize,
+    num_experts: usize,
+) -> Result<(Tensor, Tensor)> {
+    let output = grouped_pair_packed_hip(
+        gate,
+        up,
+        xs,
+        ids_src,
+        ids_dst,
+        expert_bounds,
+        total_assignments,
+        topk,
+        num_experts,
+    )?;
+    let (_, nrows, _) = gate.shape().dims3()?;
+    let gate = output.narrow(1, 0, nrows)?.contiguous()?;
+    let up = output.narrow(1, nrows, nrows)?.contiguous()?;
+    Ok((gate, up))
 }
 
 #[cfg(test)]
