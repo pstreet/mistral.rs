@@ -975,10 +975,25 @@ P3 = polish, Deferred = do not do on RDNA.
       (214.9/610.1/23.4). MTP only wins on draft acceptance; these
       short deterministic probes show no uplift. Paged-attn pays
       under multi-turn/concurrency load, not single-stream speed.
-      REMAINING: chunk-race investigation (pre-existing shared chunk-path
-      race, fails pristine rocm-only; single-chunk exact on hip so the
-      dequant port is proven innocent - separate track), then
-      healthcheck alert wiring.
+      HEALTHCHECK ALERT WIRING LANDED 2026-09-29 (uncommitted):
+      the 01:45 pkill incident mechanics verified live: SIGTERM kill
+      shows Result=success/ExecMainStatus=15, identical to a deliberate
+      stop, so Restart=on-failure restarts nothing; the watchdog then
+      exited silently on the inactive service (is-active || exit 0) -
+      4.5h of silence. No alert path existed at all (restarts only
+      echoed to the check's own journal). Fix: alert() via local mail
+      ($USER) + ntfy (topic mistralrs-strix-halo; knobs
+      MISTRALRS_ALERT_MAIL/_NTFY_TOPIC), deduped per cause with a 30m
+      cooldown; failed state -> restart + alert; inactive with no
+      marker -> start + alert; activating-class states exit quiet;
+      wedge restarts now alert too. mistralrs-server-stop.sh leaves
+      the userstop marker so intentional stops stay quiet (marker
+      consumed on sight). Live file is a symlink to the deploy copy,
+      same convention as the wrapper. Verified with a stub harness
+      (fake systemctl/journalctl/curl/mail, 6 scenarios: down,
+      marked-stop, failed, activating, healthy, wedge-x2 + cooldown)
+      without touching prod. REMAINING: chunk-race investigation
+      (pre-existing shared chunk-path race, separate track).
       PROJECTOR ITEM RESOLVED 2026-09-28 (not a code bug): the
       `visual.patch_embed` multimodal gap does NOT reproduce on the
       current tree - Qwen3.8-27B + mmproj serves text AND vision
