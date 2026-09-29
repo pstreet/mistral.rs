@@ -975,6 +975,36 @@ P3 = polish, Deferred = do not do on RDNA.
       (214.9/610.1/23.4). MTP only wins on draft acceptance; these
       short deterministic probes show no uplift. Paged-attn pays
       under multi-turn/concurrency load, not single-stream speed.
+      HEALTHCHECK ALERT WIRING LANDED 2026-09-29 (committed 09bd4d872).
+      GFX1151 GAPS CLOSED 2026-09-29 (uncommitted): the 5 --include-
+      ignored gdn failures + the fp8 roundtrip are all green now
+      (gdn 81/0 both roles; quant rocm 316/0, dual 320/0).
+      (1) fp8-quantized norm/spec-norm returned zeros: ROOT CAUSE in
+      gdn.cu, not the kernels - `#if CUDART_VERSION >= 11080` is
+      false under hipcc (no CUDART_VERSION), so gdn_fp8_e4m3 fell
+      into the `value(0)` stub arm even though the rocm_compat
+      cuda_fp8.h shim was already included two lines above. One-line
+      fix: `|| defined(USE_ROCM)` (verified __hip_fp8_e4m3 has a
+      device-side float ctor on gfx1151: OCP+FNUZ both on).
+      (2) 2x sm90 tests now early-skip (vacuous pass + note) when
+      !gdn_vmajor_arch, same conditional idiom as the file's other
+      arch gates; still fully exercised on Hopper.
+      (3) stale spec test: the post-8445372b8 slot-capacity
+      validation (base+len <= capacity) turned the test's own slots
+      OOB (17+8 > 23) - regenerated `% (capacity - seq_len)`,
+      shuffling intent preserved.
+      (4) fp8 roundtrip: scalar_fp8 ops had hip_fwd twins with the
+      right bodies but cuda-only gates (`all(cuda, not(rocm))` on
+      BOTH methods, so no GPU path in rocm-only OR dual) plus a
+      cuda-only ffi module gate; the twins were also still typed
+      CudaStorage. Flipped cuda_fwd->any/hip_fwd->dual/ffi->any and
+      ported both hip_fwd signatures to HipStorage (shared-body
+      alloc_zeros exists on both roles). Roundtrip passes on hip
+      (mean abs diff 0.0116). NOTE: one dual quant run showed 2
+      transient hqq embedding failures that pass in isolation and
+      on re-run - parallel-GPU flake on this box, same family as
+      the chunk race, not this change. REMAINING: chunk-race
+      investigation (separate track).
       HEALTHCHECK ALERT WIRING LANDED 2026-09-29 (uncommitted):
       the 01:45 pkill incident mechanics verified live: SIGTERM kill
       shows Result=success/ExecMainStatus=15, identical to a deliberate

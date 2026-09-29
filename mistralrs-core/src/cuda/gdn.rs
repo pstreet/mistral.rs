@@ -7705,6 +7705,10 @@ mod tests {
     #[ignore = "requires an SM90 CUDA device"]
     fn sm90_value_major_decode_repeats_with_shuffled_slots() -> Result<()> {
         let dev = test_device()?;
+        if !gdn_vmajor_arch(gdn_cuda_device_properties(dev.as_role_device()?)?.arch) {
+            eprintln!("skip: ValueMajor kernels need a Hopper-class arch");
+            return Ok(());
+        }
         for case in [
             ValueMajorDecodeCase {
                 batch_size: 1,
@@ -8658,7 +8662,7 @@ mod tests {
         let conv_width = 4;
         let conv_dim = 2 * num_k_heads * head_k_dim + num_v_heads * head_v_dim;
         let mut active_slots_host = (0..=seq_len)
-            .map(|row| ((row * 2 + 1) % capacity) as u32)
+            .map(|row| ((row * 2 + 1) % (capacity - seq_len)) as u32)
             .collect::<Vec<_>>();
         active_slots_host.push(GDN_PAD_SLOT);
         let mut keep_rows_host = (1..=seq_len).map(|rows| rows as u32).collect::<Vec<_>>();
@@ -10935,6 +10939,10 @@ mod tests {
         const NORM_EPS: f64 = 1.0e-6;
 
         let dev = test_device()?;
+        if !gdn_vmajor_arch(gdn_cuda_device_properties(dev.as_role_device()?)?.arch) {
+            eprintln!("skip: GdnValueMajor decode needs a Hopper-class arch");
+            return Ok(());
+        }
         let key_dim = NUM_K_HEADS * HEAD_DIM;
         let value_dim = NUM_V_HEADS * HEAD_DIM;
         let conv_dim = 2 * key_dim + value_dim;

@@ -51,7 +51,7 @@ impl CustomOp1 for Fp8ToDtype {
         Ok((output, input_l.shape().clone()))
     }
 
-    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_fwd(
         &self,
         input_s: &candle_core::CudaStorage,
@@ -124,20 +124,18 @@ impl CustomOp1 for Fp8ToDtype {
 
         Ok((res, input_l.shape().clone()))
     }
-    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
     /// Dual-role twin of cuda_fwd: the same kernels through the hip
     /// role's bindings (companion-plugin FFI included).
     fn hip_fwd(
         &self,
-        input_s: &candle_core::CudaStorage,
+        input_s: &candle_core::HipStorage,
         input_l: &candle_core::Layout,
-    ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
-        use crate::utils::{hip_slice_ptr, hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
+    ) -> Result<(candle_core::HipStorage, candle_core::Shape)> {
+        use crate::utils::hip_slice_ptr;
         use candle_core::cuda::cudarc::driver::sys::CUstream;
-        use candle_core::{backend::BackendStorage, CudaStorage};
+        use candle_core::{backend::BackendStorage, HipStorage};
         use half::{bf16, f16};
-
-        use crate::utils::slice_ptr;
 
         if !super::ffi::HAVE_SCALAR_FP8_KERNELS {
             candle_core::bail!("Do not have scalar FP8 kernels.");
@@ -291,7 +289,7 @@ impl CustomOp1 for DtypeToFp8 {
         Ok((output, input_l.shape().clone()))
     }
 
-    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_fwd(
         &self,
         input_s: &candle_core::CudaStorage,
@@ -360,20 +358,18 @@ impl CustomOp1 for DtypeToFp8 {
         let res = CudaStorage::wrap_cuda_slice(output, dev.clone());
         Ok((res, input_l.shape().clone()))
     }
-    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
     /// Dual-role twin of cuda_fwd: the same kernels through the hip
     /// role's bindings (companion-plugin FFI included).
     fn hip_fwd(
         &self,
-        input_s: &candle_core::CudaStorage,
+        input_s: &candle_core::HipStorage,
         input_l: &candle_core::Layout,
-    ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
-        use crate::utils::{hip_slice_ptr, hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
+    ) -> Result<(candle_core::HipStorage, candle_core::Shape)> {
+        use crate::utils::hip_slice_ptr;
         use candle_core::cuda::cudarc::driver::sys::CUstream;
-        use candle_core::{backend::BackendStorage, CudaStorage};
+        use candle_core::{backend::BackendStorage, HipStorage};
         use half::{bf16, f16};
-
-        use crate::utils::slice_ptr;
 
         if !super::ffi::HAVE_SCALAR_FP8_KERNELS {
             candle_core::bail!("Do not have scalar FP8 kernels.");

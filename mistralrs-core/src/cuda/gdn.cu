@@ -5,7 +5,7 @@
 #include <cuda_pipeline.h>
 #include <cuda_runtime.h>
 
-#if CUDART_VERSION >= 11080
+#if CUDART_VERSION >= 11080 || defined(USE_ROCM)
 #include <cuda_fp8.h>
 using gdn_fp8_e4m3 = __nv_fp8_e4m3;
 #else

@@ -1,4 +1,4 @@
-#[cfg(all(feature = "cuda", not(feature = "rocm")))]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) mod ffi;
 
 pub(crate) mod ops;
