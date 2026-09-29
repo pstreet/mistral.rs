@@ -108,6 +108,7 @@ impl GdnInputProjection {
         batch_size: usize,
         seq_len: usize,
     ) -> Result<GdnProjection> {
+        crate::cuda::gdn::probe_tensors_debug("gdn-proj-x", seq_len, &[x]);
         match self {
             Self::Grouped {
                 in_proj_qkvz,
@@ -145,9 +146,21 @@ impl GdnInputProjection {
                                 "packed GDN B/A returned the wrong output count",
                             )
                         })?;
+                    crate::cuda::gdn::probe_tensors_debug(
+                        "gdn-proj-ba-merged",
+                        seq_len,
+                        &[&mixed_b, &mixed_a],
+                    );
                     (mixed_b, mixed_a)
                 } else {
-                    (in_proj_b.forward(x)?, in_proj_a.forward(x)?)
+                    let mixed_b = in_proj_b.forward(x)?;
+                    let mixed_a = in_proj_a.forward(x)?;
+                    crate::cuda::gdn::probe_tensors_debug(
+                        "gdn-proj-ba-split",
+                        seq_len,
+                        &[&mixed_b, &mixed_a],
+                    );
+                    (mixed_b, mixed_a)
                 };
                 GdnProjection::from_split(
                     mixed_qkv, mixed_z, mixed_b, mixed_a, dims, batch_size, seq_len,
@@ -170,13 +183,10 @@ impl GdnInputProjection {
                 } else {
                     shared_qkv_z(x, in_proj_qkv, in_proj_z)?
                 };
+                let mixed_ba = in_proj_ba.forward(x)?;
+                crate::cuda::gdn::probe_tensors_debug("gdn-proj-ba-grouped", seq_len, &[&mixed_ba]);
                 GdnProjection::from_split_grouped_ba(
-                    mixed_qkv,
-                    mixed_z,
-                    in_proj_ba.forward(x)?,
-                    dims,
-                    batch_size,
-                    seq_len,
+                    mixed_qkv, mixed_z, mixed_ba, dims, batch_size, seq_len,
                 )
             }
         }

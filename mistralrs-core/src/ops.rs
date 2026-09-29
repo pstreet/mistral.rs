@@ -7324,6 +7324,44 @@ mod tests {
 
     use super::MergedDenseProjection;
 
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[test]
+    fn hip_moe_router_topk_matches_cpu() -> candle_core::Result<()> {
+        use super::{moe_router_topk, MoeRouterScoreFunction, MoeRouterSelectedWeight};
+        let hip = Device::new_hip(0)?;
+        let logits_cpu = Tensor::from_vec(
+            (0..64u32)
+                .map(|i| ((i * 37) % 64) as f32 / 64.0 - 0.5)
+                .collect::<Vec<_>>(),
+            (2, 32),
+            &Device::Cpu,
+        )?;
+        let config = super::MoeRouterTopKConfig {
+            top_k: 4,
+            score_function: MoeRouterScoreFunction::Softmax,
+            selected_weight: MoeRouterSelectedWeight::Softmax,
+            renormalize: true,
+            norm_min: 0.0,
+            output_scale: 1.0,
+            logit_clip: None,
+        };
+        let expected = moe_router_topk(&logits_cpu, config, None, None)?;
+        let got = moe_router_topk(&logits_cpu.to_device(&hip)?, config, None, None)?;
+        let expected_v = expected.values.to_vec2::<f32>()?;
+        let got_v = got.values.to_device(&Device::Cpu)?.to_vec2::<f32>()?;
+        assert!(
+            got_v.iter().flatten().all(|v| v.is_finite()),
+            "hip router produced non-finite weights"
+        );
+        let expected_i = expected.indices.to_vec2::<u32>()?;
+        let got_i = got.indices.to_device(&Device::Cpu)?.to_vec2::<u32>()?;
+        assert_eq!(got_i, expected_i, "router indices differ");
+        for (g, e) in got_v.iter().flatten().zip(expected_v.iter().flatten()) {
+            assert!((g - e).abs() <= 1e-5, "router weight {g} vs {e}");
+        }
+        Ok(())
+    }
+
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     const CUDA_F32_REL_TOLERANCE: f32 = 1e-5;
     #[cfg(any(feature = "cuda", feature = "rocm"))]

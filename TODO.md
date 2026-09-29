@@ -857,8 +857,55 @@ P3 = polish, Deferred = do not do on RDNA.
       (+10%) via MISTRALRS_NO_FAST_MMVQ/MMQ=1 chute baseline; dual
       release rebuilt with zero GPU DT_NEEDED.
       PHASE 2 REMAINING: hqq hip-side op coverage (gated tests),
-      multimodal projector fix, healthcheck alert wiring, MoE grouped
-      fusion on hip.
+      healthcheck alert wiring, MoE grouped fusion on hip,
+      GDN fused-kernel port to the hip role (below).
+      PROJECTOR ITEM RESOLVED 2026-09-28 (not a code bug): the
+      `visual.patch_embed` multimodal gap does NOT reproduce on the
+      current tree - Qwen3.8-27B + mmproj serves text AND vision
+      correctly on dual hip:0 (test image: "blue circle inside red
+      square"). The incident-era journal claim was stale. Unit sweep
+      of the qwen mmproj bindings: 123/0.
+      INVESTIGATION 2026-09-28 (dual-hip MoE NaN, ROOT-CAUSED as
+      environment, with two real bugs found and fixed on the way):
+      Qwen3.6-35B + gemma4-26B "argmax received invalid logits" at
+      first decode on DUAL ONLY; rocm-only serves the same files
+      fine; dense models fine on dual. Probe chain
+      (MISTRALRS_NAN_TRACE=1, new gdn-proj-x/ba probes in
+      gdn/projection.rs): prefill healthy; at decode the residual
+      entering the first GDN layer carries 16/2048 NaN (a 64-byte
+      corruption) ONLY when GTT (shared APU memory) is near-exhausted
+      (prod 22GB + 35B 22GB resident). The F32 b/a gate GEMV (small
+      dense rocBLAS gemv) amplifies it to all-NaN - which is why
+      gdn-ba always fired first. Reproduced deliberately: 35B +
+      27B filler instance -> NaN; same server alone -> correct 1776.
+      NOT a fork code bug: every suspect op passes at unit level on
+      hip (argsort incl. 512-wide tie-free; router topk; MoE gather
+      3-expert + mixed-kquant + 512-expert topk-8 scale; MMVQ plain
+      + fused at real shapes Q4K/Q5K/Q6K k=2048; F32 [32,2048] gate
+      projections via both GgufMatMul and UnquantLinear wrappers).
+      WHY dual-only: is_cuda()-gated fused GDN kernels (gating,
+      decode recurrence, chunked prefill) run on rocm-single but not
+      on the hip role -> dual decode takes the generic path (rocBLAS
+      gemv + generic recurrence, ~1.3 tok/s vs 18.5 fused) and only
+      that path touches the pressure-fragile allocation pattern.
+      Fix for dual = GDN fused-kernel port to the hip role (S4-scale
+      follow-up, same shape as the launcher port). Guidance: do not
+      smoke big models on dual with prod resident; the signature is
+      gdn-ba nan=first + slow decode.
+      FIXES LANDED 2026-09-28 (this tree): (1) candle ArgSort had no
+      hip_fwd -> "no hip implementation for argsort" killed gemma4
+      vision decode; hip twin added + tie-free wide-row tests (the
+      first bf16 wide test failure was tie aliasing, not a kernel
+      bug - odd-mantissa generator documented in the test).
+      (2) startup race: the engine thread holds the pipeline mutex
+      through warmup while main raced it with try_lock().unwrap()
+      (lib.rs) -> panic on any slow warmup; now lock().await.
+      (3) gdn-proj-x/ba-split probes added (env-gated, same pattern
+      as the incident probes). Bars: quant dual 316/0, candle dual
+      32/0, quant rocm 316/1 (fp8 documented), candle rocm 27/1
+      (same), core hip router/moe/gather tests green; the 6
+      Device::new_cuda MoE tests fail on this box in dual by design
+      (probe-gated, no NVIDIA driver) and are outside the cascade.
       S1 DONE 2026-09-26 (candle): kernels twin builds standalone
       (11 PTX, symlink-free, sm_80 fallback GPU-less); dual check
       green alongside default + rocm; 4 dual tests pass (CPU op +

@@ -994,12 +994,9 @@ mod tests {
     #[test]
     fn hip_mmq_fused_qkv_matches_plains() -> Result<()> {
         let hip = Device::new_hip(0)?;
-        let q =
-            QTensor::quantize_onto(&patterned((384, HIDDEN), 11, 0.03)?, GgmlDType::Q4K, &hip)?;
-        let k =
-            QTensor::quantize_onto(&patterned((256, HIDDEN), 29, 0.03)?, GgmlDType::Q4K, &hip)?;
-        let v =
-            QTensor::quantize_onto(&patterned((128, HIDDEN), 47, 0.03)?, GgmlDType::Q4K, &hip)?;
+        let q = QTensor::quantize_onto(&patterned((384, HIDDEN), 11, 0.03)?, GgmlDType::Q4K, &hip)?;
+        let k = QTensor::quantize_onto(&patterned((256, HIDDEN), 29, 0.03)?, GgmlDType::Q4K, &hip)?;
+        let v = QTensor::quantize_onto(&patterned((128, HIDDEN), 47, 0.03)?, GgmlDType::Q4K, &hip)?;
         let xs = patterned((64, HIDDEN), 3, 0.2)?
             .to_dtype(DType::BF16)?
             .to_device(&hip)?;

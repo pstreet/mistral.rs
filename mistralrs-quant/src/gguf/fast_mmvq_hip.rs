@@ -953,6 +953,8 @@ mod tests {
     use candle_core::Module as _;
     use std::sync::Arc;
 
+    use crate::{GgufMatMul, QuantMethod, QuantMethodConfig};
+
     const HIDDEN: usize = 256;
     const INTERMEDIATE: usize = 512;
     const TOLERANCE: f32 = 5e-3;
@@ -998,6 +1000,16 @@ mod tests {
 
     fn chute_reference(w: &Arc<QTensor>, xs: &Tensor) -> Result<Tensor> {
         QMatMul::from_arc(w.clone())?.forward(xs)
+    }
+
+    fn dequant_reference(w: &Arc<QTensor>, xs: &Tensor) -> Result<Tensor> {
+        let weights = w.dequantize(xs.device())?.to_dtype(DType::F32)?;
+        let (rows, _) = w.shape().dims2()?;
+        let flat = xs.to_dtype(DType::F32)?.flatten(0, xs.rank() - 2)?;
+        let out = flat.matmul(&weights.t()?)?;
+        let mut shape: Vec<usize> = xs.dims()[..xs.rank() - 1].to_vec();
+        shape.push(rows);
+        out.reshape(shape)
     }
 
     #[test]
@@ -1049,12 +1061,9 @@ mod tests {
     #[test]
     fn hip_mmvq_fused_qkv_matches_plains() -> Result<()> {
         let hip = Device::new_hip(0)?;
-        let q =
-            QTensor::quantize_onto(&patterned((384, HIDDEN), 11, 0.03)?, GgmlDType::Q4K, &hip)?;
-        let k =
-            QTensor::quantize_onto(&patterned((256, HIDDEN), 29, 0.03)?, GgmlDType::Q4K, &hip)?;
-        let v =
-            QTensor::quantize_onto(&patterned((128, HIDDEN), 47, 0.03)?, GgmlDType::Q4K, &hip)?;
+        let q = QTensor::quantize_onto(&patterned((384, HIDDEN), 11, 0.03)?, GgmlDType::Q4K, &hip)?;
+        let k = QTensor::quantize_onto(&patterned((256, HIDDEN), 29, 0.03)?, GgmlDType::Q4K, &hip)?;
+        let v = QTensor::quantize_onto(&patterned((128, HIDDEN), 47, 0.03)?, GgmlDType::Q4K, &hip)?;
         let xs = patterned((1, 2, 2, HIDDEN), 3, 0.2)?
             .to_dtype(DType::BF16)?
             .to_device(&hip)?;
@@ -1063,5 +1072,144 @@ mod tests {
         assert_close(&q_out, &plain(&q, &xs)?)?;
         assert_close(&k_out, &plain(&k, &xs)?)?;
         assert_close(&v_out, &plain(&v, &xs)?)
+    }
+
+    #[test]
+    fn hip_mmvq_real_shapes_match_chute() -> Result<()> {
+        // Qwen3.6-35B GDN in_proj_qkv: k=2048, out=8192, Q4K, decode-sized
+        // batch. Small-shape tests pass while these sizes NaN in serving.
+        let hip = Device::new_hip(0)?;
+        const K: usize = 2048;
+        let cases: [(GgmlDType, usize, usize); 4] = [
+            (GgmlDType::Q4K, 4096, 2048),
+            (GgmlDType::Q4K, 2048, 2048),
+            (GgmlDType::Q6K, 512, 2048),
+            (GgmlDType::Q5K, 2048, 2048),
+        ];
+        for (dtype, rows, k) in cases {
+            let w = Arc::new(QTensor::quantize_onto(
+                &patterned((rows, k), 11, 0.03)?,
+                dtype,
+                &hip,
+            )?);
+            let xs = patterned((1, 1, k), 3, 0.2)?
+                .to_dtype(DType::BF16)?
+                .to_device(&hip)?;
+            let got = plain(&w, &xs)?;
+            let got_max = got
+                .abs()?
+                .max_all()?
+                .to_dtype(DType::F32)?
+                .to_scalar::<f32>()?;
+            assert!(
+                got_max.is_finite(),
+                "plain {dtype:?} rows={rows} k={k} produced non-finite output"
+            );
+            assert_close(&got, &dequant_reference(&w, &xs)?)?;
+        }
+
+        let q = Arc::new(QTensor::quantize_onto(
+            &patterned((4096, K), 11, 0.03)?,
+            GgmlDType::Q4K,
+            &hip,
+        )?);
+        let k_w = Arc::new(QTensor::quantize_onto(
+            &patterned((2048, K), 29, 0.03)?,
+            GgmlDType::Q4K,
+            &hip,
+        )?);
+        let v = Arc::new(QTensor::quantize_onto(
+            &patterned((2048, K), 47, 0.03)?,
+            GgmlDType::Q4K,
+            &hip,
+        )?);
+        let xs = patterned((1, 1, K), 3, 0.2)?
+            .to_dtype(DType::BF16)?
+            .to_device(&hip)?;
+        let (q_out, k_out, v_out) = fused_qkv(&q, &k_w, &v, &xs)?;
+        for (name, out) in [("q", &q_out), ("k", &k_out), ("v", &v_out)] {
+            let max = out
+                .abs()?
+                .max_all()?
+                .to_dtype(DType::F32)?
+                .to_scalar::<f32>()?;
+            assert!(max.is_finite(), "fused_qkv {name} non-finite");
+        }
+        assert_close(&q_out, &plain(&q, &xs)?)?;
+        assert_close(&k_out, &plain(&k_w, &xs)?)?;
+        assert_close(&v_out, &plain(&v, &xs)?)
+    }
+
+    #[test]
+    fn hip_gguf_matmul_f32_gate_projection_matches_cpu() -> Result<()> {
+        // Qwen3.6-35B stores the GDN beta/alpha gates as F32 [64, 2048]
+        // while the working dense Qwen3.5-4B stores them Q8_0: this exact
+        // projection NaNs in dual-build serving at decode.
+        let hip = Device::new_hip(0)?;
+        for (dtype, rows, k) in [
+            (GgmlDType::F32, 64, 2048),
+            (GgmlDType::F32, 64, 2560),
+            (GgmlDType::Q8_0, 64, 2048),
+        ] {
+            let w = Arc::new(QTensor::quantize_onto(
+                &patterned((rows, k), 11, 0.03)?,
+                dtype,
+                &hip,
+            )?);
+            for input_ty in [DType::BF16, DType::F32] {
+                let xs = patterned((1, 1, k), 3, 0.2)?
+                    .to_dtype(input_ty)?
+                    .to_device(&hip)?;
+                let got = crate::GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: w.clone(),
+                    b: None,
+                })?
+                .forward(&xs)?;
+                let got_max = got
+                    .abs()?
+                    .max_all()?
+                    .to_dtype(DType::F32)?
+                    .to_scalar::<f32>()?;
+                assert!(
+                    got_max.is_finite(),
+                    "{dtype:?} [{rows}, {k}] {input_ty:?} produced non-finite output"
+                );
+                assert_close(&got, &dequant_reference(&w, &xs)?)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn hip_unquant_f32_gate_projection_matches_cpu() -> Result<()> {
+        // F32 GGUF tensors skip the packed path and land as dense
+        // UnquantLinear weights; the Qwen3.6 GDN b/a gates take this path.
+        let hip = Device::new_hip(0)?;
+        for (rows, k) in [(32usize, 2048usize), (64, 2048), (32, 2560)] {
+            let weight = patterned((rows, k), 11, 0.03)?
+                .to_device(&hip)?
+                .to_dtype(DType::F32)?;
+            let layer = crate::UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(weight, None),
+            ))?;
+            let xs = patterned((1, 1, k), 3, 0.2)?
+                .to_dtype(DType::F32)?
+                .to_device(&hip)?;
+            let got = layer.forward(&xs)?;
+            let got_max = got
+                .abs()?
+                .max_all()?
+                .to_dtype(DType::F32)?
+                .to_scalar::<f32>()?;
+            assert!(
+                got_max.is_finite(),
+                "unquant F32 [{rows}, {k}] produced non-finite output"
+            );
+            let expected = crate::UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(patterned((rows, k), 11, 0.03)?, None),
+            ))?;
+            assert_close(&got, &expected.forward(&xs.to_device(&Device::Cpu)?)?)?;
+        }
+        Ok(())
     }
 }

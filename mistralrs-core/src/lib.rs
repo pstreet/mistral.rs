@@ -1682,7 +1682,9 @@ impl MistralRs {
             Self::create_engine_instance(pipeline.clone(), method, engine_config, reboot_state)
                 .expect("Failed to create engine instance");
 
-        let pipeline_name = pipeline.try_lock().unwrap().name();
+        // The engine thread holds the pipeline lock through warmup; block
+        // instead of racing it with try_lock.
+        let pipeline_name = pipeline.lock().await.name();
         let (id, alias_map) = match model_id_override {
             Some(override_id) => {
                 let mut alias_map = HashMap::new();

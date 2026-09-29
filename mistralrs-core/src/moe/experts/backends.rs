@@ -740,6 +740,308 @@ mod tests {
     fn q4k_grouped_prefill_matches_gather_pipeline() -> Result<()> {
         run_q4k_fast_cuda_matches_gather(GROUPED_PREFILL_MIN_TOKENS, GROUPED_PREFILL_MIN_TOKENS)
     }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    fn run_gather_on(device: &Device, tokens: usize, seq_len: usize) -> Result<Tensor> {
+        const EXPERTS: usize = 3;
+        const HIDDEN: usize = 256;
+        const INTERMEDIATE: usize = 512;
+        const TOPK: usize = 2;
+
+        let fast = FastExpertsWeights {
+            fused_gate_proj: quant_method_with(
+                tensor((EXPERTS, INTERMEDIATE, HIDDEN), 0.1)?,
+                GgmlDType::Q4K,
+                device,
+            )?,
+            fused_up_proj: quant_method_with(
+                tensor((EXPERTS, INTERMEDIATE, HIDDEN), 0.7)?,
+                GgmlDType::Q4K,
+                device,
+            )?,
+            fused_down_proj: quant_method_with(
+                tensor((EXPERTS, HIDDEN, INTERMEDIATE), 1.3)?,
+                GgmlDType::Q4K,
+                device,
+            )?,
+            sharded: false,
+        };
+
+        let xs = tensor((1, tokens, HIDDEN), 3.1)?
+            .to_dtype(DType::BF16)?
+            .to_device(device)?;
+        let xs_flat = xs.reshape((tokens, HIDDEN))?;
+        let topk_ids = Tensor::from_vec(
+            (0..tokens)
+                .flat_map(|token| {
+                    [
+                        u32::try_from(token % EXPERTS).expect("expert index is bounded"),
+                        u32::try_from((token + 1) % EXPERTS).expect("expert index is bounded"),
+                    ]
+                })
+                .collect::<Vec<_>>(),
+            (tokens, TOPK),
+            device,
+        )?;
+        let topk_weights = Tensor::from_vec(
+            (0..tokens)
+                .flat_map(|_| vec![0.6f32, 0.4])
+                .collect::<Vec<_>>(),
+            (tokens, TOPK),
+            device,
+        )?;
+        let forward = MoEForward {
+            xs: &xs,
+            xs_flat: &xs_flat,
+            topk_weights: &topk_weights,
+            topk_ids: &topk_ids,
+            original_dtype: DType::BF16,
+            shape: MoEForwardShape {
+                batch_size: 1,
+                seq_len,
+                hidden_dim: HIDDEN,
+                num_tokens: tokens,
+                phase: MoEForwardPhase::Prefill,
+            },
+            lora: None,
+        };
+        let config = MoEForwardConfig {
+            num_experts: EXPERTS,
+            num_experts_per_tok: TOPK,
+            act: Activation::Silu,
+        };
+        Ok(fast
+            .forward_gather(&forward, config)?
+            .to_device(&Device::Cpu)?)
+    }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[test]
+    fn hip_gather_matches_cpu_gather_pipeline() -> Result<()> {
+        let hip = Device::new_hip(0)?;
+        for (tokens, seq_len) in [(2, 2), (8, 8)] {
+            let actual = run_gather_on(&hip, tokens, seq_len)?.to_dtype(DType::F32)?;
+            let expected = run_gather_on(&Device::Cpu, tokens, seq_len)?.to_dtype(DType::F32)?;
+            let max = actual.abs()?.max_all()?.to_scalar::<f32>()?;
+            assert!(max.is_finite(), "hip gather produced non-finite values");
+            let error = (&actual - &expected)?
+                .abs()?
+                .max_all()?
+                .to_scalar::<f32>()?;
+            let scale = expected.abs()?.max_all()?.to_scalar::<f32>()?;
+            assert!(
+                error <= 0.15 * (1.0 + scale),
+                "hip gather max error {error} at reference scale {scale}"
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    fn run_gather_on_mixed(
+        device: &Device,
+        gate_dtype: GgmlDType,
+        down_dtype: GgmlDType,
+    ) -> Result<Tensor> {
+        const EXPERTS: usize = 3;
+        const HIDDEN: usize = 256;
+        const INTERMEDIATE: usize = 512;
+        const TOKENS: usize = 4;
+        const TOPK: usize = 2;
+
+        let fast = FastExpertsWeights {
+            fused_gate_proj: quant_method_with(
+                tensor((EXPERTS, INTERMEDIATE, HIDDEN), 0.1)?,
+                gate_dtype,
+                device,
+            )?,
+            fused_up_proj: quant_method_with(
+                tensor((EXPERTS, INTERMEDIATE, HIDDEN), 0.7)?,
+                gate_dtype,
+                device,
+            )?,
+            fused_down_proj: quant_method_with(
+                tensor((EXPERTS, HIDDEN, INTERMEDIATE), 1.3)?,
+                down_dtype,
+                device,
+            )?,
+            sharded: false,
+        };
+
+        let xs = tensor((1, TOKENS, HIDDEN), 3.1)?
+            .to_dtype(DType::BF16)?
+            .to_device(device)?;
+        let xs_flat = xs.reshape((TOKENS, HIDDEN))?;
+        let topk_ids = Tensor::from_vec(
+            (0..TOKENS)
+                .flat_map(|token| {
+                    [
+                        u32::try_from(token % EXPERTS).expect("expert index is bounded"),
+                        u32::try_from((token + 1) % EXPERTS).expect("expert index is bounded"),
+                    ]
+                })
+                .collect::<Vec<_>>(),
+            (TOKENS, TOPK),
+            device,
+        )?;
+        let topk_weights = Tensor::from_vec(
+            (0..TOKENS)
+                .flat_map(|_| vec![0.6f32, 0.4])
+                .collect::<Vec<_>>(),
+            (TOKENS, TOPK),
+            device,
+        )?;
+        let forward = MoEForward {
+            xs: &xs,
+            xs_flat: &xs_flat,
+            topk_weights: &topk_weights,
+            topk_ids: &topk_ids,
+            original_dtype: DType::BF16,
+            shape: MoEForwardShape {
+                batch_size: 1,
+                seq_len: TOKENS,
+                hidden_dim: HIDDEN,
+                num_tokens: TOKENS,
+                phase: MoEForwardPhase::Prefill,
+            },
+            lora: None,
+        };
+        let config = MoEForwardConfig {
+            num_experts: EXPERTS,
+            num_experts_per_tok: TOPK,
+            act: Activation::Silu,
+        };
+        Ok(fast
+            .forward_gather(&forward, config)?
+            .to_device(&Device::Cpu)?)
+    }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[test]
+    fn hip_mixed_kquant_gather_matches_cpu() -> Result<()> {
+        let hip = Device::new_hip(0)?;
+        for (gate, down) in [
+            (GgmlDType::Q4K, GgmlDType::Q5K),
+            (GgmlDType::Q6K, GgmlDType::Q8_0),
+        ] {
+            let actual = run_gather_on_mixed(&hip, gate, down)?.to_dtype(DType::F32)?;
+            let expected = run_gather_on_mixed(&Device::Cpu, gate, down)?.to_dtype(DType::F32)?;
+            let max = actual.abs()?.max_all()?.to_scalar::<f32>()?;
+            assert!(
+                max.is_finite(),
+                "hip gather produced non-finite values for {gate:?}/{down:?}"
+            );
+            let error = (&actual - &expected)?
+                .abs()?
+                .max_all()?
+                .to_scalar::<f32>()?;
+            let scale = expected.abs()?.max_all()?.to_scalar::<f32>()?;
+            assert!(
+                error <= 0.2 * (1.0 + scale),
+                "hip gather {gate:?}/{down:?} max error {error} at scale {scale}"
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[test]
+    fn hip_moe_scale_gather_matches_cpu() -> Result<()> {
+        // Router-scale MoE gather: 512 experts, topk 8. On the hip role of a
+        // dual build this is the dequant + index_select + bmm path (the
+        // is_cuda()-gated grouped kernel does not run), which the rocm-only
+        // build never exercises.
+        const EXPERTS: usize = 512;
+        const HIDDEN: usize = 512;
+        const INTERMEDIATE: usize = 256;
+        const TOKENS: usize = 16;
+        const TOPK: usize = 8;
+
+        let build = |device: &Device| -> Result<FastExpertsWeights> {
+            Ok(FastExpertsWeights {
+                fused_gate_proj: quant_method_with(
+                    tensor((EXPERTS, INTERMEDIATE, HIDDEN), 0.1)?,
+                    GgmlDType::Q4K,
+                    device,
+                )?,
+                fused_up_proj: quant_method_with(
+                    tensor((EXPERTS, INTERMEDIATE, HIDDEN), 0.7)?,
+                    GgmlDType::Q4K,
+                    device,
+                )?,
+                fused_down_proj: quant_method_with(
+                    tensor((EXPERTS, HIDDEN, INTERMEDIATE), 1.3)?,
+                    GgmlDType::Q4K,
+                    device,
+                )?,
+                sharded: false,
+            })
+        };
+
+        let forward_with = |fast: &FastExpertsWeights, device: &Device| -> Result<Tensor> {
+            let xs = tensor((1, TOKENS, HIDDEN), 3.1)?
+                .to_dtype(DType::BF16)?
+                .to_device(device)?;
+            let xs_flat = xs.reshape((TOKENS, HIDDEN))?;
+            let ids: Vec<u32> = (0..TOKENS)
+                .flat_map(|token| {
+                    (0..TOPK).map(move |k| {
+                        u32::try_from((token * 31 + k * 7) % EXPERTS)
+                            .expect("expert index is bounded")
+                    })
+                })
+                .collect();
+            let topk_ids = Tensor::from_vec(ids, (TOKENS, TOPK), device)?;
+            let weights: Vec<f32> = (0..TOKENS)
+                .flat_map(|token| {
+                    (0..TOPK).map(move |k| (1 + (token * 5 + k * 3) % 7) as f32 / 28.0)
+                })
+                .collect();
+            let topk_weights = Tensor::from_vec(weights, (TOKENS, TOPK), device)?;
+            let forward = MoEForward {
+                xs: &xs,
+                xs_flat: &xs_flat,
+                topk_weights: &topk_weights,
+                topk_ids: &topk_ids,
+                original_dtype: DType::BF16,
+                shape: MoEForwardShape {
+                    batch_size: 1,
+                    seq_len: TOKENS,
+                    hidden_dim: HIDDEN,
+                    num_tokens: TOKENS,
+                    phase: MoEForwardPhase::Prefill,
+                },
+                lora: None,
+            };
+            let config = MoEForwardConfig {
+                num_experts: EXPERTS,
+                num_experts_per_tok: TOPK,
+                act: Activation::Silu,
+            };
+            Ok(fast
+                .forward_gather(&forward, config)?
+                .to_device(&Device::Cpu)?)
+        };
+
+        let hip = Device::new_hip(0)?;
+        let actual = forward_with(&build(&hip)?, &hip)?.to_dtype(DType::F32)?;
+        let expected = forward_with(&build(&Device::Cpu)?, &Device::Cpu)?.to_dtype(DType::F32)?;
+        let max = actual.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(
+            max.is_finite(),
+            "hip moe-scale gather produced non-finite values"
+        );
+        let error = (&actual - &expected)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        let scale = expected.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(
+            error <= 0.15 * (1.0 + scale),
+            "hip moe-scale gather max error {error} at reference scale {scale}"
+        );
+        Ok(())
+    }
 }
 
 impl FastExpertsWeights {
