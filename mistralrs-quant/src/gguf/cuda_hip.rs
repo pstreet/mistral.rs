@@ -1224,6 +1224,345 @@ impl<'a> IndexedMoeLoraWeights<'a> {
     }
 }
 
+/// Hip-role routing for indexed MoE LoRA decode: plain tensors, the
+/// device comes from the weights.
+pub struct IndexedMoeRoutingHip<'a> {
+    topk_ids: &'a Tensor,
+    batch: usize,
+    topk: usize,
+    num_experts: usize,
+}
+
+impl<'a> IndexedMoeRoutingHip<'a> {
+    pub fn new(topk_ids: &'a Tensor, batch: usize, topk: usize, num_experts: usize) -> Self {
+        Self {
+            topk_ids,
+            batch,
+            topk,
+            num_experts,
+        }
+    }
+}
+
+const MOE_OUTPUT_F32: i32 = 0;
+const MOE_OUTPUT_F16: i32 = 1;
+const MOE_OUTPUT_BF16: i32 = 2;
+
+fn moe_output_type_hip(dtype: DType) -> Option<i32> {
+    match dtype {
+        DType::F32 => Some(MOE_OUTPUT_F32),
+        DType::F16 => Some(MOE_OUTPUT_F16),
+        DType::BF16 => Some(MOE_OUTPUT_BF16),
+        _ => None,
+    }
+}
+
+fn q8_1_bytes_checked(num_rows: usize, k_padded: usize) -> Result<usize> {
+    let q8_1_block_size = GgmlDType::Q8_1.block_size();
+    let q8_1_type_size = GgmlDType::Q8_1.type_size();
+    let num_blocks_per_row = k_padded
+        .checked_div(q8_1_block_size)
+        .ok_or_else(|| candle_core::Error::msg("indexed MoE LoRA block size overflow"))?;
+    num_rows
+        .checked_mul(num_blocks_per_row)
+        .and_then(|elements| elements.checked_mul(q8_1_type_size))
+        .ok_or_else(|| candle_core::Error::msg("indexed MoE LoRA size overflow"))
+}
+
+trait MoeLoraOutputHip: CudaDType + DeviceRepr {}
+
+impl MoeLoraOutputHip for f32 {}
+impl MoeLoraOutputHip for half::f16 {}
+impl MoeLoraOutputHip for half::bf16 {}
+
+type GateUpPairHipFn = unsafe extern "C" fn(
+    *const std::ffi::c_void,
+    *const std::ffi::c_void,
+    *const std::ffi::c_void,
+    *const u32,
+    *mut std::ffi::c_void,
+    i32,
+    i32,
+    i32,
+    i32,
+    i32,
+    i32,
+    i32,
+    *mut std::ffi::c_void,
+) -> i32;
+
+type LoraDownHipFn = unsafe extern "C" fn(
+    *const std::ffi::c_void,
+    *const std::ffi::c_void,
+    *const u32,
+    *mut std::ffi::c_void,
+    i32,
+    i32,
+    i32,
+    i32,
+    i32,
+    i32,
+    i32,
+    *mut std::ffi::c_void,
+) -> i32;
+
+fn lora_gate_up_launcher_hip(dtype: GgmlDType) -> Option<GateUpPairHipFn> {
+    match dtype {
+        GgmlDType::Q8_0 => Some(ffi::launch_moe_gemv_gate_up_pair_q8_0_q8_1),
+        GgmlDType::Q4_0 => Some(ffi::launch_moe_gemv_gate_up_pair_q4_0_q8_1),
+        GgmlDType::Q4_1 => Some(ffi::launch_moe_gemv_gate_up_pair_q4_1_q8_1),
+        GgmlDType::Q5_0 => Some(ffi::launch_moe_gemv_gate_up_pair_q5_0_q8_1),
+        GgmlDType::Q5_1 => Some(ffi::launch_moe_gemv_gate_up_pair_q5_1_q8_1),
+        GgmlDType::Q8_1 => Some(ffi::launch_moe_gemv_gate_up_pair_q8_1_q8_1),
+        GgmlDType::Q2K => Some(ffi::launch_moe_gemv_gate_up_pair_q2k_q8_1),
+        GgmlDType::Q3K => Some(ffi::launch_moe_gemv_gate_up_pair_q3k_q8_1),
+        GgmlDType::Q4K => Some(ffi::launch_moe_gemv_gate_up_pair_q4k_q8_1),
+        GgmlDType::Q5K => Some(ffi::launch_moe_gemv_gate_up_pair_q5k_q8_1),
+        GgmlDType::Q6K => Some(ffi::launch_moe_gemv_gate_up_pair_q6k_q8_1),
+        _ => None,
+    }
+}
+
+fn lora_down_launcher_hip(dtype: GgmlDType) -> Option<LoraDownHipFn> {
+    match dtype {
+        GgmlDType::Q8_0 => Some(ffi::launch_moe_gemv_lora_down_q8_0_q8_1),
+        GgmlDType::Q4_0 => Some(ffi::launch_moe_gemv_lora_down_q4_0_q8_1),
+        GgmlDType::Q4_1 => Some(ffi::launch_moe_gemv_lora_down_q4_1_q8_1),
+        GgmlDType::Q5_0 => Some(ffi::launch_moe_gemv_lora_down_q5_0_q8_1),
+        GgmlDType::Q5_1 => Some(ffi::launch_moe_gemv_lora_down_q5_1_q8_1),
+        GgmlDType::Q8_1 => Some(ffi::launch_moe_gemv_lora_down_q8_1_q8_1),
+        GgmlDType::Q2K => Some(ffi::launch_moe_gemv_lora_down_q2k_q8_1),
+        GgmlDType::Q3K => Some(ffi::launch_moe_gemv_lora_down_q3k_q8_1),
+        GgmlDType::Q4K => Some(ffi::launch_moe_gemv_lora_down_q4k_q8_1),
+        GgmlDType::Q5K => Some(ffi::launch_moe_gemv_lora_down_q5k_q8_1),
+        GgmlDType::Q6K => Some(ffi::launch_moe_gemv_lora_down_q6k_q8_1),
+        _ => None,
+    }
+}
+
+pub struct IndexedMoeLoraDecodeHip<'a> {
+    weights: IndexedMoeLoraWeights<'a>,
+    routing: IndexedMoeRoutingHip<'a>,
+    dev: CudaDevice,
+    hidden: usize,
+    intermediate: usize,
+    gate_up_launch: GateUpPairHipFn,
+    down_launch: LoraDownHipFn,
+}
+
+impl<'a> IndexedMoeLoraDecodeHip<'a> {
+    pub fn new(
+        weights: IndexedMoeLoraWeights<'a>,
+        routing: IndexedMoeRoutingHip<'a>,
+    ) -> Result<Option<Self>> {
+        let gate_dtype = weights.gate.dtype();
+        if weights.up.dtype() != gate_dtype {
+            return Ok(None);
+        }
+        let Some(gate_up_launch) = lora_gate_up_launcher_hip(gate_dtype) else {
+            return Ok(None);
+        };
+        let Some(down_launch) = lora_down_launcher_hip(weights.down.dtype()) else {
+            return Ok(None);
+        };
+        let (num_experts, intermediate, hidden) = weights.gate.shape().dims3()?;
+        if num_experts == 0 || intermediate == 0 || hidden == 0 {
+            candle_core::bail!("indexed MoE LoRA weight dimensions must be nonzero");
+        }
+        if num_experts != routing.num_experts {
+            candle_core::bail!("indexed MoE LoRA expert count does not match routing");
+        }
+        if weights.up.shape().dims3()? != (num_experts, intermediate, hidden)
+            || weights.down.shape().dims3()? != (num_experts, hidden, intermediate)
+        {
+            candle_core::bail!("indexed MoE LoRA weight geometry does not match");
+        }
+        let Device::Hip(dev) = weights.gate.device() else {
+            candle_core::bail!("indexed MoE LoRA weights must live on Hip");
+        };
+        for tensor in [weights.up, weights.down] {
+            let Device::Hip(weight_dev) = tensor.device() else {
+                candle_core::bail!("indexed MoE LoRA weights must live on Hip");
+            };
+            if weight_dev.id() != dev.id() {
+                candle_core::bail!("indexed MoE LoRA weights must share a Hip device");
+            }
+        }
+        let Device::Hip(routes_dev) = routing.topk_ids.device() else {
+            candle_core::bail!("indexed MoE LoRA routes must live on Hip");
+        };
+        if routes_dev.id() != dev.id() {
+            candle_core::bail!("indexed MoE LoRA routes must share a Hip device");
+        }
+        if routing.batch == 0 || routing.topk == 0 {
+            candle_core::bail!("indexed MoE LoRA routing dimensions must be nonzero");
+        }
+        let routes = routing
+            .batch
+            .checked_mul(routing.topk)
+            .ok_or_else(|| candle_core::Error::msg("indexed MoE LoRA route count overflow"))?;
+        if routing.topk_ids.elem_count() < routes {
+            candle_core::bail!("indexed MoE LoRA route buffer is too small");
+        }
+        for dim in [
+            num_experts,
+            intermediate,
+            hidden,
+            routing.batch,
+            routing.topk,
+        ] {
+            i32::try_from(dim)?;
+        }
+        i32::try_from(pad(hidden, MATRIX_ROW_PADDING))?;
+        i32::try_from(pad(intermediate, MATRIX_ROW_PADDING))?;
+        intermediate
+            .checked_mul(2)
+            .ok_or_else(|| candle_core::Error::msg("indexed MoE LoRA output size overflow"))?;
+
+        Ok(Some(Self {
+            weights,
+            routing,
+            dev,
+            hidden,
+            intermediate,
+            gate_up_launch,
+            down_launch,
+        }))
+    }
+
+    fn validate_input(&self, input: &Tensor, rows: usize, features: usize) -> Result<Tensor> {
+        if input.dims2()? != (rows, features) {
+            candle_core::bail!("indexed MoE LoRA input shape does not match weights");
+        }
+        let Device::Hip(input_dev) = input.device() else {
+            candle_core::bail!("indexed MoE LoRA input must live on Hip");
+        };
+        if input_dev.id() != self.dev.id() {
+            candle_core::bail!("indexed MoE LoRA input must share a Hip device");
+        }
+        input.contiguous()
+    }
+
+    fn gate_up_t<T: MoeLoraOutputHip>(&self, input: &Tensor, output_type: i32) -> Result<Tensor> {
+        let input = self.validate_input(input, self.routing.batch, self.hidden)?;
+        let k_padded = pad(self.hidden, MATRIX_ROW_PADDING);
+        let q8_bytes = q8_1_bytes_checked(self.routing.batch, k_padded)?;
+        let mut q8 = u8_workspace_ensure(&self.dev, q8_bytes)?;
+        quantize_tensor_into_q8_1(&input, &mut q8.slice, &self.dev)?;
+
+        let output_len = self
+            .routing
+            .batch
+            .checked_mul(self.routing.topk)
+            .and_then(|routes| routes.checked_mul(self.intermediate))
+            .and_then(|elements| elements.checked_mul(2))
+            .ok_or_else(|| candle_core::Error::msg("indexed MoE LoRA output size overflow"))?;
+        let mut output = unsafe { self.dev.alloc::<T>(output_len)? };
+        let cuda_stream = self.dev.cuda_stream();
+        let stream = cuda_stream.cu_stream();
+        let gate_ptr = self.weights.gate.device_ptr()? as *const std::ffi::c_void;
+        let up_ptr = self.weights.up.device_ptr()? as *const std::ffi::c_void;
+
+        {
+            let (input_ptr, _ig) = hip_slice_ptr(&q8.slice, 0);
+            hip_u32_ptrs!(self.routing.topk_ids, &cuda_stream, ids_ptr, _idg);
+            let (output_ptr, _og) = hip_slice_ptr_mut_on_stream(&mut output, 0, &cuda_stream);
+            let status = unsafe {
+                (self.gate_up_launch)(
+                    gate_ptr,
+                    up_ptr,
+                    input_ptr as *const std::ffi::c_void,
+                    ids_ptr as *const u32,
+                    output_ptr as *mut std::ffi::c_void,
+                    self.intermediate as i32,
+                    self.hidden as i32,
+                    self.routing.batch as i32,
+                    self.routing.topk as i32,
+                    k_padded as i32,
+                    self.routing.num_experts as i32,
+                    output_type,
+                    stream,
+                )
+            };
+            check_hip_launch(status, "moe_gemv_gate_up_pair")?;
+        }
+
+        Ok(Tensor::from((
+            Storage::Hip(CudaStorage::wrap_cuda_slice(output, self.dev.clone())),
+            Shape::from((self.routing.batch, self.routing.topk, self.intermediate * 2)),
+        )))
+    }
+
+    pub fn gate_up(&self, input: &Tensor) -> Result<Option<Tensor>> {
+        let Some(output_type) = moe_output_type_hip(input.dtype()) else {
+            return Ok(None);
+        };
+        match input.dtype() {
+            DType::F32 => self.gate_up_t::<f32>(input, output_type).map(Some),
+            DType::F16 => self.gate_up_t::<half::f16>(input, output_type).map(Some),
+            DType::BF16 => self.gate_up_t::<half::bf16>(input, output_type).map(Some),
+            _ => Ok(None),
+        }
+    }
+
+    fn down_t<T: MoeLoraOutputHip>(&self, input: &Tensor, output_type: i32) -> Result<Tensor> {
+        let routes = self.routing.batch * self.routing.topk;
+        let input = self.validate_input(input, routes, self.intermediate)?;
+        let k_padded = pad(self.intermediate, MATRIX_ROW_PADDING);
+        let q8_bytes = q8_1_bytes_checked(routes, k_padded)?;
+        let mut q8 = u8_workspace_ensure(&self.dev, q8_bytes)?;
+        quantize_tensor_into_q8_1(&input, &mut q8.slice, &self.dev)?;
+
+        let output_len = routes
+            .checked_mul(self.hidden)
+            .ok_or_else(|| candle_core::Error::msg("indexed MoE LoRA output size overflow"))?;
+        let mut output = unsafe { self.dev.alloc::<T>(output_len)? };
+        let cuda_stream = self.dev.cuda_stream();
+        let stream = cuda_stream.cu_stream();
+        let down_ptr = self.weights.down.device_ptr()? as *const std::ffi::c_void;
+
+        {
+            let (input_ptr, _ig) = hip_slice_ptr(&q8.slice, 0);
+            hip_u32_ptrs!(self.routing.topk_ids, &cuda_stream, ids_ptr, _idg);
+            let (output_ptr, _og) = hip_slice_ptr_mut_on_stream(&mut output, 0, &cuda_stream);
+            let status = unsafe {
+                (self.down_launch)(
+                    down_ptr,
+                    input_ptr as *const std::ffi::c_void,
+                    ids_ptr as *const u32,
+                    output_ptr as *mut std::ffi::c_void,
+                    self.hidden as i32,
+                    self.intermediate as i32,
+                    self.routing.batch as i32,
+                    self.routing.topk as i32,
+                    k_padded as i32,
+                    self.routing.num_experts as i32,
+                    output_type,
+                    stream,
+                )
+            };
+            check_hip_launch(status, "moe_gemv_lora_down")?;
+        }
+
+        Ok(Tensor::from((
+            Storage::Hip(CudaStorage::wrap_cuda_slice(output, self.dev.clone())),
+            Shape::from((self.routing.batch, self.routing.topk, self.hidden)),
+        )))
+    }
+
+    pub fn down(&self, input: &Tensor) -> Result<Option<Tensor>> {
+        let Some(output_type) = moe_output_type_hip(input.dtype()) else {
+            return Ok(None);
+        };
+        match input.dtype() {
+            DType::F32 => self.down_t::<f32>(input, output_type).map(Some),
+            DType::F16 => self.down_t::<half::f16>(input, output_type).map(Some),
+            DType::BF16 => self.down_t::<half::bf16>(input, output_type).map(Some),
+            _ => Ok(None),
+        }
+    }
+}
+
 use candle_core::cuda::{cudarc::driver::CudaSlice as NvCudaSlice, CudaDevice as NvCudaDevice};
 
 #[allow(dead_code)]

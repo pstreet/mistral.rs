@@ -464,6 +464,112 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[test]
+    fn hip_fast_decode_lora_matches_gather_pipeline() -> Result<()> {
+        const EXPERTS: usize = 3;
+        const HIDDEN: usize = 64;
+        const INTERMEDIATE: usize = 96;
+        const RANK: usize = 8;
+        const TOKENS: usize = 2;
+        const TOPK: usize = 2;
+
+        let device = Device::new_hip(0)?;
+        let fast = FastExpertsWeights {
+            fused_gate_proj: quant_method(tensor((EXPERTS, INTERMEDIATE, HIDDEN), 0.1)?, &device)?,
+            fused_up_proj: quant_method(tensor((EXPERTS, INTERMEDIATE, HIDDEN), 0.7)?, &device)?,
+            fused_down_proj: quant_method(tensor((EXPERTS, HIDDEN, INTERMEDIATE), 1.3)?, &device)?,
+            sharded: false,
+        };
+
+        let registry = LoraLayerRegistry::new();
+        let site = registry.register_expert(
+            LoraSiteKey::new("test.layers.0.experts"),
+            LoraExpertSiteSpec::new(
+                EXPERTS,
+                HIDDEN,
+                INTERMEDIATE,
+                LoraExpertProjectionNames::new("gate_proj", "up_proj", "down_proj"),
+                Shard::default(),
+                Shard::default(),
+            )?,
+            DType::F32,
+            device.clone(),
+        )?;
+        registry.finalize()?;
+        let adapter = LoraExpertWeights::new(
+            &site,
+            Some(lora_projection(
+                EXPERTS,
+                RANK,
+                HIDDEN,
+                INTERMEDIATE,
+                1.9,
+                DType::F32,
+                &device,
+            )?),
+            Some(lora_projection(
+                EXPERTS,
+                RANK,
+                HIDDEN,
+                INTERMEDIATE,
+                2.3,
+                DType::F32,
+                &device,
+            )?),
+            Some(lora_projection(
+                EXPERTS,
+                RANK,
+                INTERMEDIATE,
+                HIDDEN,
+                2.7,
+                DType::F32,
+                &device,
+            )?),
+        )?;
+        let mut execution = LoraExecution::new(registry.runtime_id(), vec![Some(1); TOKENS]);
+        execution.insert_expert(&site, 1, adapter)?;
+        let execution = Arc::new(execution);
+        let lora = with_lora_execution(Some(execution), || LoraExpertExecution::current(&site))?
+            .expect("expert LoRA is active");
+
+        let xs = tensor((TOKENS, 1, HIDDEN), 3.1)?.to_device(&device)?;
+        let xs_flat = xs.reshape((TOKENS, HIDDEN))?;
+        let topk_ids = Tensor::from_slice(&[0u32, 2, 1, 0], (TOKENS, TOPK), &device)?;
+        let topk_weights = Tensor::from_slice(&[0.65f32, 0.35, 0.4, 0.6], (TOKENS, TOPK), &device)?;
+        let forward = MoEForward {
+            xs: &xs,
+            xs_flat: &xs_flat,
+            topk_weights: &topk_weights,
+            topk_ids: &topk_ids,
+            original_dtype: DType::F32,
+            shape: MoEForwardShape {
+                batch_size: TOKENS,
+                seq_len: 1,
+                hidden_dim: HIDDEN,
+                num_tokens: TOKENS,
+                phase: MoEForwardPhase::Decode,
+            },
+            lora: Some(lora),
+        };
+        let config = MoEForwardConfig {
+            num_experts: EXPERTS,
+            num_experts_per_tok: TOPK,
+            act: Activation::Silu,
+        };
+
+        let actual = fast
+            .forward_cuda(&forward, config)?
+            .expect("hip takes the LoRA decode path");
+        let expected = fast.forward_gather_lora(&forward, config)?;
+        let error = (&actual - &expected)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(error <= 0.08, "hip LoRA decode max error {error}");
+        Ok(())
+    }
+
     fn run_quantized_grouped_prefill_lora(dtype: DType, tolerance: f32) -> Result<()> {
         const EXPERTS: usize = 3;
         const HIDDEN: usize = 64;
@@ -620,6 +726,168 @@ mod tests {
     #[test]
     fn quantized_grouped_prefill_lora_bf16_matches_gather_pipeline() -> Result<()> {
         run_quantized_grouped_prefill_lora(DType::BF16, 0.12)
+    }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    fn run_hip_grouped_prefill_lora(dtype: DType, tolerance: f32) -> Result<()> {
+        const EXPERTS: usize = 3;
+        const HIDDEN: usize = 64;
+        const INTERMEDIATE: usize = 96;
+        const RANK: usize = 8;
+        const TOKENS: usize = GROUPED_PREFILL_MIN_TOKENS;
+        const TOPK: usize = 2;
+
+        let device = Device::new_hip(0)?;
+        let fast = FastExpertsWeights {
+            fused_gate_proj: quant_method(
+                (tensor((EXPERTS, INTERMEDIATE, HIDDEN), 0.1)? * 4.0)?,
+                &device,
+            )?,
+            fused_up_proj: quant_method(
+                (tensor((EXPERTS, INTERMEDIATE, HIDDEN), 0.7)? * 4.0)?,
+                &device,
+            )?,
+            fused_down_proj: quant_method(
+                (tensor((EXPERTS, HIDDEN, INTERMEDIATE), 1.3)? * 4.0)?,
+                &device,
+            )?,
+            sharded: false,
+        };
+
+        let registry = LoraLayerRegistry::new();
+        let site = registry.register_expert(
+            LoraSiteKey::new("test.layers.0.experts"),
+            LoraExpertSiteSpec::new(
+                EXPERTS,
+                HIDDEN,
+                INTERMEDIATE,
+                LoraExpertProjectionNames::new("gate_proj", "up_proj", "down_proj"),
+                Shard::default(),
+                Shard::default(),
+            )?,
+            dtype,
+            device.clone(),
+        )?;
+        registry.finalize()?;
+        let adapter = LoraExpertWeights::new(
+            &site,
+            Some(lora_projection(
+                EXPERTS,
+                RANK,
+                HIDDEN,
+                INTERMEDIATE,
+                1.9,
+                dtype,
+                &device,
+            )?),
+            Some(lora_projection(
+                EXPERTS,
+                RANK,
+                HIDDEN,
+                INTERMEDIATE,
+                2.3,
+                dtype,
+                &device,
+            )?),
+            Some(lora_projection(
+                EXPERTS,
+                RANK,
+                INTERMEDIATE,
+                HIDDEN,
+                2.7,
+                dtype,
+                &device,
+            )?),
+        )?;
+        let mut execution = LoraExecution::new(registry.runtime_id(), vec![Some(1); TOKENS]);
+        execution.insert_expert(&site, 1, adapter)?;
+        let execution = Arc::new(execution);
+        let lora = with_lora_execution(Some(execution), || LoraExpertExecution::current(&site))?
+            .expect("expert LoRA is active");
+
+        let xs = (tensor((1, TOKENS, HIDDEN), 3.1)? * 4.0)?
+            .to_dtype(dtype)?
+            .to_device(&device)?;
+        let xs_flat = xs.reshape((TOKENS, HIDDEN))?;
+        let topk_ids = (0..TOKENS)
+            .flat_map(|token| {
+                [
+                    u32::try_from(token % EXPERTS).expect("expert index is bounded"),
+                    u32::try_from((token + 1) % EXPERTS).expect("expert index is bounded"),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let topk_ids = Tensor::from_vec(topk_ids, (TOKENS, TOPK), &device)?;
+        let topk_weights = (0..TOKENS)
+            .flat_map(|token| {
+                let cycle = u16::try_from(token % 5).expect("cycle is bounded");
+                let first = 0.25 + 0.5 * f32::from(cycle) / 4.0;
+                [first, 1.0 - first]
+            })
+            .collect::<Vec<_>>();
+        let topk_weights = Tensor::from_vec(topk_weights, (TOKENS, TOPK), &device)?;
+        let forward = MoEForward {
+            xs: &xs,
+            xs_flat: &xs_flat,
+            topk_weights: &topk_weights,
+            topk_ids: &topk_ids,
+            original_dtype: dtype,
+            shape: MoEForwardShape {
+                batch_size: 1,
+                seq_len: TOKENS,
+                hidden_dim: HIDDEN,
+                num_tokens: TOKENS,
+                phase: MoEForwardPhase::Prefill,
+            },
+            lora: Some(lora),
+        };
+        let config = MoEForwardConfig {
+            num_experts: EXPERTS,
+            num_experts_per_tok: TOPK,
+            act: Activation::Silu,
+        };
+
+        assert!(matches!(
+            FastExpertsWeights::select_cuda_fast_path(&forward),
+            Some(MoECudaFastPath::GroupedPrefill)
+        ));
+        assert!(fast.grouped_lora_preserves_route_order());
+        let actual = fast
+            .forward_grouped(&forward, config)?
+            .expect("Q4_0 uses the grouped prefill path");
+        let expected = fast.forward_gather_lora(&forward, config)?;
+        assert_eq!(actual.dtype(), dtype);
+        assert_eq!(expected.dtype(), dtype);
+        let actual = actual.to_dtype(DType::F32)?;
+        let expected = expected.to_dtype(DType::F32)?;
+        let error = (&actual - &expected)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        let scale = expected.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(
+            error <= tolerance * (1.0 + scale),
+            "hip grouped prefill {dtype:?} max error {error} at reference scale {scale}"
+        );
+        Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[test]
+    fn hip_grouped_prefill_lora_f32_matches_gather_pipeline() -> Result<()> {
+        run_hip_grouped_prefill_lora(DType::F32, 0.08)
+    }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[test]
+    fn hip_grouped_prefill_lora_f16_matches_gather_pipeline() -> Result<()> {
+        run_hip_grouped_prefill_lora(DType::F16, 0.1)
+    }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[test]
+    fn hip_grouped_prefill_lora_bf16_matches_gather_pipeline() -> Result<()> {
+        run_hip_grouped_prefill_lora(DType::BF16, 0.12)
     }
 
     fn quant_method_with(
@@ -1844,7 +2112,7 @@ impl FastExpertsWeights {
         // LoRA decode kernels are not ported yet; gather_lora covers this path.
         #[cfg(all(feature = "cuda", feature = "rocm"))]
         if forward.xs_flat.device().is_hip() {
-            return Ok(None);
+            return self.forward_decode_lora_hip(forward, config);
         }
         let Some(gate_qt) = self.fused_gate_proj.get_qtensor() else {
             return Ok(None);
@@ -1911,6 +2179,72 @@ impl FastExpertsWeights {
             forward.shape.num_tokens,
             config.num_experts_per_tok,
             dev,
+        )?;
+        Ok(Some(output.to_dtype(forward.original_dtype)?))
+    }
+
+    /// Indexed MoE LoRA decode on the hip role. Same contract as
+    /// `forward_decode_lora`, dispatching to the hip-role LoRA kernels.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    fn forward_decode_lora_hip(
+        &self,
+        forward: &MoEForward,
+        config: MoEForwardConfig,
+    ) -> Result<Option<Tensor>> {
+        let Some(gate_qt) = self.fused_gate_proj.get_qtensor() else {
+            return Ok(None);
+        };
+        let Some(up_qt) = self.fused_up_proj.get_qtensor() else {
+            return Ok(None);
+        };
+        let Some(down_qt) = self.fused_down_proj.get_qtensor() else {
+            return Ok(None);
+        };
+        let topk_ids_flat = forward.topk_ids.flatten_all()?.contiguous()?;
+        let weights = mistralrs_quant::IndexedMoeLoraWeights::new(&gate_qt, &up_qt, &down_qt);
+        let routing = mistralrs_quant::IndexedMoeRoutingHip::new(
+            &topk_ids_flat,
+            forward.shape.num_tokens,
+            config.num_experts_per_tok,
+            config.num_experts,
+        );
+        let Some(decode) = mistralrs_quant::IndexedMoeLoraDecodeHip::new(weights, routing)? else {
+            return Ok(None);
+        };
+        let Some(gate_up) = decode.gate_up(forward.xs_flat)? else {
+            return Ok(None);
+        };
+
+        let lora = forward.lora.as_ref().expect("LoRA path requires execution");
+        let gate_up =
+            lora.add_gate_up_delta_combined_owned(forward.xs_flat, gate_up, forward.topk_ids)?;
+        let intermediate = gate_up.dim(D::Minus1)? / 2;
+        let down_input = crate::ops::split_mul_and_act(&gate_up, intermediate, config.act)?;
+        let down_input_flat = down_input.reshape((
+            forward.shape.num_tokens * config.num_experts_per_tok,
+            intermediate,
+        ))?;
+        let Some(down_base) = decode.down(&down_input_flat)? else {
+            candle_core::bail!("indexed MoE LoRA down projection rejected a supported dtype");
+        };
+        let down = lora.add_delta_owned(
+            LoraExpertProjection::Down,
+            &down_input,
+            down_base,
+            forward.topk_ids,
+            None,
+            LoraExpertInputMode::RoutedRows,
+        )?;
+
+        let down = down.reshape((
+            forward.shape.num_tokens * config.num_experts_per_tok,
+            forward.shape.hidden_dim,
+        ))?;
+        let output = mistralrs_quant::moe_weighted_reduce_flat_same_dtype_hip(
+            &down,
+            forward.topk_weights,
+            forward.shape.num_tokens,
+            config.num_experts_per_tok,
         )?;
         Ok(Some(output.to_dtype(forward.original_dtype)?))
     }

@@ -178,6 +178,8 @@ pub use gguf::cuda::{
     grouped_moe_gemm_prequantized_hip, moe_dispatch_build_hip, moe_weighted_reduce_flat_bf16_hip,
     moe_weighted_reduce_flat_hip, moe_weighted_reduce_flat_same_dtype_hip, quantize_input_q8_1_hip,
 };
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub use gguf::cuda::{IndexedMoeLoraDecodeHip, IndexedMoeRoutingHip};
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 #[doc(hidden)]
 pub use gguf::fast_mmq::grouped_from_glu_sorted_pair as grouped_moe_mmq_from_glu_sorted_pair;
