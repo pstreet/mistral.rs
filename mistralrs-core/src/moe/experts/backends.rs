@@ -1480,7 +1480,7 @@ impl FastExpertsWeights {
             .process_routed_stats(forward.xs_flat, ids)?;
         self.fused_up_proj
             .process_routed_stats(forward.xs_flat, ids)?;
-        let ys = if forward.xs.device().is_cuda() {
+        let ys = if mistralrs_quant::device_has_fused_gguf(forward.xs.device()) {
             let xs =
                 forward
                     .xs_flat
@@ -1539,25 +1539,26 @@ impl FastExpertsWeights {
         self.fused_up_proj
             .process_routed_stats(forward.xs_flat, ids)?;
 
-        let (gather_input, gather_ids) = if forward.xs.device().is_cuda() {
-            (
-                forward
-                    .xs_flat
-                    .reshape((num_tokens, 1, forward.shape.hidden_dim))?,
-                ids.clone(),
-            )
-        } else {
-            (
-                forward.xs.reshape((
-                    forward.shape.batch_size,
-                    forward.shape.seq_len,
-                    1,
-                    1,
-                    forward.shape.hidden_dim,
-                ))?,
-                ids.reshape((forward.shape.batch_size, forward.shape.seq_len, top_k))?,
-            )
-        };
+        let (gather_input, gather_ids) =
+            if mistralrs_quant::device_has_fused_gguf(forward.xs.device()) {
+                (
+                    forward
+                        .xs_flat
+                        .reshape((num_tokens, 1, forward.shape.hidden_dim))?,
+                    ids.clone(),
+                )
+            } else {
+                (
+                    forward.xs.reshape((
+                        forward.shape.batch_size,
+                        forward.shape.seq_len,
+                        1,
+                        1,
+                        forward.shape.hidden_dim,
+                    ))?,
+                    ids.reshape((forward.shape.batch_size, forward.shape.seq_len, top_k))?,
+                )
+            };
         let gate_base = self
             .fused_gate_proj
             .gather_forward(&gather_input, &gather_ids)?
@@ -1575,7 +1576,7 @@ impl FastExpertsWeights {
         let down_input = crate::ops::mul_and_act(&gate, &up, config.act)?;
         self.fused_down_proj
             .process_routed_stats(&down_input, ids)?;
-        let down_base = if forward.xs.device().is_cuda() {
+        let down_base = if mistralrs_quant::device_has_fused_gguf(forward.xs.device()) {
             self.fused_down_proj.gather_forward(&down_input, ids)?
         } else {
             self.fused_down_proj.gather_forward(

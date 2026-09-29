@@ -215,6 +215,7 @@ pub use mxfp4::MXFP4Layer;
 pub use pending_layer::{pending_isq_channel, PendingIsqLayer};
 pub use pertensor_fp8::PerTensorFP8Linear;
 pub use unquantized::UnquantLinear;
+pub use utils::device_has_fused_gguf;
 pub use utils::flash_attn_sinks_metal;
 pub use utils::flash_attn_sinks_varlen_metal;
 #[cfg(any(feature = "cuda", feature = "rocm"))]

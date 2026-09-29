@@ -31,7 +31,9 @@ use candle_core::cuda::cudarc::{
     driver::{CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr},
 };
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-use candle_core::{CudaDevice, Device, Tensor};
+use candle_core::{CudaDevice, Tensor};
+
+use candle_core::Device;
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn get_cuda_device(x: &Tensor) -> candle_core::Result<&CudaDevice> {
@@ -54,8 +56,7 @@ pub(crate) fn test_gpu_device() -> Device {
 
 /// Devices covered by the fused GGUF launchers: CUDA in every GPU shape,
 /// plus Hip in dual builds (where the `_hip` modules replace the launchers).
-#[cfg(any(feature = "cuda", feature = "rocm"))]
-pub(crate) fn device_has_fused_gguf(device: &Device) -> bool {
+pub fn device_has_fused_gguf(device: &Device) -> bool {
     if device.is_cuda() {
         return true;
     }

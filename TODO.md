@@ -885,9 +885,33 @@ P3 = polish, Deferred = do not do on RDNA.
       as fast_mmq_hip; also unlocks forward_grouped
       (grouped_moe_mmq*) whose NVIDIA-typed signatures were kept in
       the launcher port.
+      MOE INDEXED PORT LANDED 2026-09-29 (uncommitted): stage 1 of
+      the MoE port - the gather-path entries in gguf/cuda_hip.rs are
+      real (qtensor/qmatmul_indexed_moe_forward: quantize the
+      activation to Q8_1 once in a per-device leaked workspace, then
+      launch the hipcc-built indexed MoE kernels via the same FFI
+      surface; all 11 weight dtypes). The gather gate (gguf/mod.rs)
+      and the three gather-SHAPING gates in moe/experts/backends.rs
+      (forward_gather + gather_lora input/down reshaping) now use
+      the all-shape device_has_fused_gguf predicate (made pub for
+      core) - on hip they take the 3D/2D cuda-style shapes the
+      indexed kernel contract requires. Dev-typed entries
+      (moe_dispatch_build, weighted reduce, grouped prequantized,
+      fused decode, LoRA decode) stay NVIDIA-typed stubs until the
+      backends.rs fast paths become role-aware (stage 2).
+      RESULTS (Qwen3.6-35B dual hip:0, mtp off, paged-attn off):
+      prefill 4.5 -> 119.8 tok/s (26x), decode 0.81 -> 20.2 tok/s
+      (25x), correct 1776. Combined with the GDN port the MoE model
+      now outruns the (pressure-degraded) rocm-only baseline.
+      Bars: quant dual 316/0; core dual moe/gdn --include-ignored
+      24 passed + 11 pre-existing failures (6x new_cuda probe-gated
+      by design, 5x the known gfx1151 gdn set, identical on
+      rocm-only); rocm quant 316/1 (fp8 documented) + moe 6/0
+      (flips are no-ops there); all three cargo check shapes clean.
       PHASE 2 REMAINING: hqq hip-side op coverage (gated tests),
-      healthcheck alert wiring, MoE indexed+grouped port to the
-      hip role (TOP priority, dominant dual-hip cost).
+      healthcheck alert wiring, MoE stage 2 (dev-typed entries +
+      backends fast-path gates: grouped prefill, fused decode,
+      dispatch/reduce; also un-stub fast_mmq grouped entries).
       PROJECTOR ITEM RESOLVED 2026-09-28 (not a code bug): the
       `visual.patch_embed` multimodal gap does NOT reproduce on the
       current tree - Qwen3.8-27B + mmproj serves text AND vision
