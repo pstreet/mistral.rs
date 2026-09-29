@@ -752,14 +752,13 @@ P3 = polish, Deferred = do not do on RDNA.
       Phase 2 (QStorage-on-hip + real launchers through the proven
       loader; multimodal gate placement), then the serving smoke with
       real GGUF weights and caps gguf=on.
-      PHASE 2 MILESTONE PROVEN 2026-09-28 (uncommitted, see INCIDENT
-      below for why the tree is not yet committed): GGUF SERVES ON
+      PHASE 2 MILESTONE PROVEN 2026-09-28 (committed 792958ff5): GGUF SERVES ON
       HIP:0. Qwen3.5-4B Q8_0 through the fully hot-pluggable dual
       binary: weights via QStorage::Hip + companion plugins, rms-norm
       + rope + softmax + GLU + dequant GEMM all on hip, correct answer
       ("1776", finish=stop, coherent thinking), 13.7 tok/s decode /
       67 tok/s prefill (4B Q8 sharing the APU). Caps line: gguf=on.
-      LANDED (uncommitted): candle QStorage-on-hip (quantized/cuda.rs
+      LANDED (candle d93ca2ae): candle QStorage-on-hip (quantized/cuda.rs
       split into role shells + shared body per the S1 pattern;
       QStorage::Hip variant + ~20 dispatch-arm twins; ggml_file
       creation; QMatMul hip_fwd; role-typed device_ptr_with_guard;
@@ -840,7 +839,7 @@ P3 = polish, Deferred = do not do on RDNA.
       release builds cannot clobber the running binary; smokes stay
       on --profile fast (separate target dir); consider the healthcheck
       alert path a TODO.
-      LAUNCHER PORT LANDED 2026-09-28 (uncommitted): fused MMVQ +
+      LAUNCHER PORT LANDED 2026-09-28 (committed 97875e4b9): fused MMVQ +
       MMQ serve the hip role. The kernels were already hipcc-built on
       both sides; the port is dispatch wiring only: real launchers in
       fast_mmvq_hip.rs (plain/fused_glu/fused_qkv) and fast_mmq_hip.rs
@@ -856,7 +855,7 @@ P3 = polish, Deferred = do not do on RDNA.
       1776 both): prefill 55->105 tok/s (+91%), decode 15.0->16.5
       (+10%) via MISTRALRS_NO_FAST_MMVQ/MMQ=1 chute baseline; dual
       release rebuilt with zero GPU DT_NEEDED.
-      GDN FUSED-KERNEL PORT LANDED 2026-09-29 (uncommitted): the
+      GDN FUSED-KERNEL PORT LANDED 2026-09-29 (committed aab9e0291): the
       is_cuda() gates that kept the fused GDN kernels off the hip
       role are gone; a single gdn_device_supported predicate (cuda
       everywhere, +hip in dual) now guards all 24 call sites
@@ -885,7 +884,7 @@ P3 = polish, Deferred = do not do on RDNA.
       as fast_mmq_hip; also unlocks forward_grouped
       (grouped_moe_mmq*) whose NVIDIA-typed signatures were kept in
       the launcher port.
-      MOE INDEXED PORT LANDED 2026-09-29 (uncommitted): stage 1 of
+      MOE INDEXED PORT LANDED 2026-09-29 (committed ec5cdda76): stage 1 of
       the MoE port - the gather-path entries in gguf/cuda_hip.rs are
       real (qtensor/qmatmul_indexed_moe_forward: quantize the
       activation to Q8_1 once in a per-device leaked workspace, then
@@ -908,7 +907,7 @@ P3 = polish, Deferred = do not do on RDNA.
       by design, 5x the known gfx1151 gdn set, identical on
       rocm-only); rocm quant 316/1 (fp8 documented) + moe 6/0
       (flips are no-ops there); all three cargo check shapes clean.
-      MOE STAGE 2 LANDED 2026-09-29 (uncommitted): fused decode +
+      MOE STAGE 2 LANDED 2026-09-29 (committed 62e33b6b0): fused decode +
       grouped prefill serve on the hip role. cuda_hip.rs gained
       device-free hip entries (dev from weights, routing as plain
       tensors): indexed_moe_fused_decode_hip (gemv fused gate_up +
@@ -936,7 +935,7 @@ P3 = polish, Deferred = do not do on RDNA.
       this change); rocm core 27/5 (known gdn set); all three
       check shapes clean. (The hqq rocm failure passed on re-run:
       flaky/environmental, fails pristine too.)
-      LORA MOE DECODE LANDED 2026-09-29 (uncommitted):
+      LORA MOE DECODE LANDED 2026-09-29 (committed c0653b5b6):
       IndexedMoeRoutingHip + IndexedMoeLoraDecodeHip in cuda_hip.rs
       (weights struct reused device-free; dev cloned from gate;
       gate_up pair + lora down launches, F32/F16/BF16 outputs via a
@@ -949,7 +948,14 @@ P3 = polish, Deferred = do not do on RDNA.
       pre-existing; rocm quant 316/1 (fp8), core 27/5; all three
       check shapes clean. The MoE hip port is now COMPLETE
       (gather, fused decode, grouped prefill, LoRA decode,
-      grouped LoRA). REMAINING: hqq hip-side op coverage,
+      grouped LoRA). MTP-ON/PAGED-ON SMOKE 2026-09-29
+      (Qwen3.6-35B dual hip:0, defaults: paged_attn=on mtp=on):
+      short prefill 198.5, long prefill (230 tok) 616.6, decode
+      23.3 tok/s, correct 1776 - breaks even vs mtp-off/paged-off
+      (214.9/610.1/23.4). MTP only wins on draft acceptance; these
+      short deterministic probes show no uplift. Paged-attn pays
+      under multi-turn/concurrency load, not single-stream speed.
+      REMAINING: hqq hip-side op coverage,
       healthcheck alert wiring.
       PROJECTOR ITEM RESOLVED 2026-09-28 (not a code bug): the
       `visual.patch_embed` multimodal gap does NOT reproduce on the
