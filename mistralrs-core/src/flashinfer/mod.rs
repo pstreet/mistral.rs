@@ -536,7 +536,12 @@ impl AttentionBackend for FlashInferAttentionBackend {
     }
 
     fn supports_layer(&self, spec: AttentionLayerSpec) -> bool {
-        if !cfg!(feature = "cuda") || !crate::perf_flags::flashinfer_decode_enabled() {
+        // NVIDIA-role kernels only: the hipcc-built paged-attention set
+        // excludes FlashInfer (RDNA lacks the ldmatrix/cp.async paths), so
+        // dual builds serving the hip role must not claim it either.
+        if !cfg!(all(feature = "cuda", not(feature = "rocm")))
+            || !crate::perf_flags::flashinfer_decode_enabled()
+        {
             return false;
         }
         spec.k_head_dim == spec.v_head_dim

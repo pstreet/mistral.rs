@@ -972,6 +972,55 @@ P3 = polish, Deferred = do not do on RDNA.
       (214.9/610.1/23.4). MTP only wins on draft acceptance; these
       short deterministic probes show no uplift. Paged-attn pays
       under multi-turn/concurrency load, not single-stream speed.
+      DUAL-SERVING BRING-UP + 27B BENCHMARK 2026-09-30 (uncommitted):
+      restarting prod for an orcarouter-27B benchmark revealed the
+      Sep 28 16:20 rebuild had put the DUAL binary into prod (boot log:
+      Device::Hip + git rev 3d7c712c5) - and the 27B (default model,
+      hybrid GDN + mmproj, MTP n=2, split Q8_0/Q4_0 KV) could NOT load:
+      a chain of role-blind gates, each fixed and verified by the next
+      blocker appearing: (1) server-core's "cuda+rocm" feature did NOT
+      expand to cuda+rocm individually (unlike mistralrs-core) - every
+      all(cuda,rocm) cfg in server-core was dead code; a PAPROBE warn
+      run was invisible under the wrapper's RUST_LOG=mistralrs_core
+      (probe via a spare-port from-config instance). (2)
+      configure_paged_attn had no hip arm -> PA silently off ->
+      demand-load reserved no KV pool (need ~24327 vs the healthy
+      ~40711 MB fingerprint) -> MTP attach failed (the gemma4-MTP
+      merge made MTP REQUIRE paged attention). (3) split-KV and
+      block-quant KV cache validation gates were is_cuda()-only. (4)
+      post-load device sync + memory estimation skipped on hip. (5)
+      flashinfer supports_layer claimed FlashInfer in dual via
+      cfg!(feature="cuda") although the hipcc paged-attn set EXCLUDES
+      flashinfer (RDNA lacks ldmatrix/cp.async; documented in
+      mistralrs-paged-attn/build.rs) -> models silently resolved the
+      FlashInferHnd layout -> gated with the established
+      all(cuda, not(rocm)) NVIDIA-role cfg. (6) decode-graph dispatch/
+      precapture/host-staging gates were is_cuda()-only (930
+      incompatible_shape skips, 0 resident graphs). (7) the graph
+      spec-state mem probe matched Device::Cuda only. (8) graph
+      state-index padding used GDN_PAD_SLOT (u32::MAX), predating the
+      8445372b8 OOB-fix invariant enforced by set_state_indices_tensors
+      -> precapture CRASHED the server; padded with the dedicated
+      GraphPad row instead (hybrid_graph_slots carries pad_row).
+      BENCHMARK (Q6_K 27B, dual hip:0, PA on, MTP n=2, temp 0.3):
+      37x48 -> 1776 3/3 stop; short prefill (69 tok) ~184 T/s; long
+      prefill (346 tok) 80.4 T/s; arithmetic-probe decode 14.1-14.3;
+      essay 600tok decode 10.4-10.7 T/s vs the historical 13.9-17.8
+      (which predates the hybrid-GDN serving path AND ran with decode
+      graphs). REMAINING PERF GAPS: decode graphs still not captured -
+      "CUDA graph capture arena overflowed on retry" (hybrid+MTP
+      capture sizing; shape-independent, never exercised before
+      because the earlier gates blocked the chain) + one more
+      dispatch gate (866 incompatible_shape during the bench); both
+      journaled as the follow-up. NOTE: /tmp/opencode/mtp_bench.py
+      referenced by the toml no longer exists; recreate for MTP A/Bs.
+      HEALTHCHECK MARKER FIX (same window): the stop marker was
+      consumed on sight, so during the ~10 min release-build window
+      the watchdog re-started prod on the OLD binary inode mid-build;
+      marker now means "deliberately stopped right now" - fresh (<4h)
+      marker + down = quiet AND KEPT, service active = consume,
+      stale = expire + alert. Stub-harness verified on 5 marker
+      scenarios.
       HEALTHCHECK ALERT WIRING LANDED 2026-09-29 (committed 09bd4d872).
       GFX1151 GAPS CLOSED 2026-09-29 (uncommitted): the 5 --include-
       ignored gdn failures + the fp8 roundtrip are all green now

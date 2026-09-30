@@ -52,7 +52,11 @@ default = ["swagger-ui"]
 swagger-ui = ["dep:utoipa-swagger-ui"]
 cuda = ["mistralrs-core/cuda"]
 rocm = ["mistralrs-core/rocm"]
-"cuda+rocm" = ["mistralrs-core/cuda+rocm"]
+"cuda+rocm" = [
+    "cuda",
+    "rocm",
+    "mistralrs-core/cuda+rocm",
+]
 cudnn = ["mistralrs-core/cudnn"]
 metal = ["mistralrs-core/metal"]
 flash-attn = ["cuda", "mistralrs-core/flash-attn"]

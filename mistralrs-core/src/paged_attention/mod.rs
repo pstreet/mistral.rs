@@ -483,7 +483,7 @@ pub fn calculate_cache_config(
         };
         // Weight loading enqueues stream-ordered frees without draining; sync so the memory
         // reading and the cache allocation right after this see the real free VRAM.
-        if device.is_cuda() {
+        if device.is_cuda() || crate::paged_attention::cache_engine::is_hip_role(device) {
             #[cfg(feature = "cuda")]
             {
                 MemoryUsage.synchronize_cuda_context(device)?;
@@ -492,7 +492,9 @@ pub fn calculate_cache_config(
             #[cfg(not(feature = "cuda"))]
             device.synchronize()?;
         }
-        let post_load_memory = if model_weight_size_in_bytes.is_none() && device.is_cuda() {
+        let post_load_memory = if model_weight_size_in_bytes.is_none()
+            && (device.is_cuda() || crate::paged_attention::cache_engine::is_hip_role(device))
+        {
             Some(MemoryUsage.query(device)?)
         } else {
             None

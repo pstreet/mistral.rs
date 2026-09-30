@@ -1838,7 +1838,7 @@ impl NormalPipeline {
             || seqlen_offsets.len() != batch
             || context_lens.len() != batch
             || position_ids.len() != batch
-            || !input_ids.device().is_cuda()
+            || !crate::pipeline::cuda_graph::is_cuda_graph_device(&input_ids.device())
         {
             record_cuda_graph_dispatch(
                 CudaGraphComponent::Target,
@@ -1895,7 +1895,7 @@ impl NormalPipeline {
                 position_ids,
                 metadata,
                 state_indices: hybrid_slots.as_ref().map(|slots| slots.real.as_slice()),
-                pad_slot: hybrid_slots.as_ref().map(|_| GDN_PAD_SLOT),
+                pad_slot: hybrid_slots.as_ref().and_then(|slots| slots.pad_row),
             },
             bucket,
         )?
@@ -1956,7 +1956,7 @@ impl NormalPipeline {
     ) -> candle_core::Result<()> {
         let device = self.device();
         if !cuda_decode_graphs_enabled()
-            || !device.is_cuda()
+            || !crate::pipeline::cuda_graph::is_cuda_graph_device(&device)
             || !self.model.supports_cuda_decode_graphs()
             || !cuda_decode_graph_supported_for_model(self.metadata.model_metadata.as_deref())
             || self.model.has_speculative_proposer()
@@ -1999,7 +1999,7 @@ impl NormalPipeline {
             .filter(|bucket| *bucket <= max_bucket)
         {
             let Some(step) = CudaGraphDecodeStep::padded(
-                inputs.step_inputs(live.as_deref(), hybrid_slots.map(|_| GDN_PAD_SLOT)),
+                inputs.step_inputs(live.as_deref(), hybrid_slots),
                 bucket,
             )?
             else {

@@ -829,6 +829,7 @@ impl CudaGraphPrecaptureInputs {
 pub(crate) struct HybridGraphSlots {
     pub(crate) real: Vec<u32>,
     pub(crate) storage_generation: u64,
+    pub(crate) pad_row: Option<u32>,
 }
 
 /// The batch's live recurrent slots after reserving graph capacity.
@@ -838,10 +839,13 @@ pub(crate) fn hybrid_graph_slots(
     let Some(real) = cache.state_indices_host().map(<[u32]>::to_vec) else {
         return Ok(None);
     };
-    cache.graph_pad_slot()?;
+    let pad_row = cache
+        .graph_pad_slot()?
+        .and_then(|row| u32::try_from(row).ok());
     Ok(Some(HybridGraphSlots {
         real,
         storage_generation: cache.recurrent_storage_generation(),
+        pad_row,
     }))
 }
 
@@ -1680,14 +1684,23 @@ impl CudaGraphSpecStateUsage {
             if let std::collections::hash_map::Entry::Vacant(entry) =
                 usage.device_totals.entry(location)
             {
-                let Device::Cuda(device) = tensor.device() else {
-                    candle_core::bail!("CUDA graph speculative state expected CUDA tensors");
+                let (info, total) = match tensor.device() {
+                    Device::Cuda(device) => device
+                        .cuda_stream()
+                        .context()
+                        .mem_get_info()
+                        .map_err(candle_core::Error::wrap)?,
+                    #[cfg(all(feature = "cuda", feature = "rocm"))]
+                    Device::Hip(device) => device
+                        .cuda_stream()
+                        .context()
+                        .mem_get_info()
+                        .map_err(candle_core::Error::wrap)?,
+                    _ => {
+                        candle_core::bail!("CUDA graph speculative state expected GPU tensors")
+                    }
                 };
-                let (_, total) = device
-                    .cuda_stream()
-                    .context()
-                    .mem_get_info()
-                    .map_err(candle_core::Error::wrap)?;
+                let _ = info;
                 entry.insert(total);
             }
         }
@@ -3779,6 +3792,17 @@ impl CudaGraphHostStaging {
     }
 }
 
+/// Devices whose decode graphs are capturable: the CUDA role everywhere,
+/// plus the Hip role in dual builds (the hipcc-built graph/capture API).
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn is_cuda_graph_device(device: &candle_core::Device) -> bool {
+    device.is_cuda() || device.is_hip()
+}
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+pub(crate) fn is_cuda_graph_device(device: &candle_core::Device) -> bool {
+    device.is_cuda()
+}
+
 fn copy_var_map(
     dst: &CudaGraphVarMap,
     src: &HashMap<DeviceLocation, Tensor>,
@@ -3792,7 +3816,7 @@ fn copy_var_map(
         let src = src
             .get(location)
             .ok_or_else(|| candle_core::Error::msg(format!("{name} missing {location:?}")))?;
-        if src.device().is_cpu() && dst.device().is_cuda() {
+        if src.device().is_cpu() && is_cuda_graph_device(&dst.device()) {
             host_staging.copy_from(name, *location, src, dst)?;
         } else {
             dst.set(src)?;
@@ -3907,7 +3931,7 @@ fn copy_rope_positions(
 ) -> candle_core::Result<()> {
     let positions = decode_positions_tensor(position_ids, seq_len, &Device::Cpu)?;
     for (location, dst) in dst {
-        if dst.device().is_cuda() {
+        if is_cuda_graph_device(&dst.device()) {
             host_staging.copy_from("rope_positions", *location, &positions, dst)?;
         } else {
             dst.set(&positions)?;

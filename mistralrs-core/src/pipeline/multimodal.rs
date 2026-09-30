@@ -2056,7 +2056,7 @@ impl MultimodalPipeline {
         } else {
             None
         };
-        let graph_pad_slot = hybrid_slots.as_ref().map(|_| GDN_PAD_SLOT);
+        let graph_pad_slot = hybrid_slots.as_ref().and_then(|slots| slots.pad_row);
         let Some(step) = CudaGraphDecodeStep::padded(
             CudaGraphDecodeStepInputs {
                 input_ids,
@@ -2140,7 +2140,7 @@ impl MultimodalPipeline {
         let device = self.device();
         let probe = Tensor::zeros((1, 1), DType::U32, &device)?;
         if !cuda_decode_graphs_enabled()
-            || !device.is_cuda()
+            || !crate::pipeline::cuda_graph::is_cuda_graph_device(&device)
             || !self.model.supports_cuda_decode_graphs_for_args(
                 &*self.model.default_model_specific_args(&probe),
             )
@@ -2236,7 +2236,7 @@ impl MultimodalPipeline {
             } else {
                 RecurrentBatchKind::Prefill
             };
-            let graph_pad_slot = hybrid_slots.map(|_| GDN_PAD_SLOT);
+            let graph_pad_slot = hybrid_slots;
             let width_max_bucket = cuda_graph_precapture_max_batch(
                 CudaGraphComponent::Target,
                 q_len,

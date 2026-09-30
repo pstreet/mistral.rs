@@ -2007,20 +2007,28 @@ fn mistralrs_instance_info(loader: &dyn Loader) {
 /// Determines whether paged attention should be enabled based on device type and preferences.
 fn configure_paged_attn(device: &Device, paged_attn: Option<bool>) -> bool {
     if mistralrs_core::distributed::use_nccl() {
-        paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA)
-    } else if device.is_cpu() {
+        return paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA);
+    }
+    if device.is_cpu() {
         if paged_attn == Some(true) {
             warn!("Paged attention is not supported on CPU.");
         }
-
-        defaults::PAGED_ATTN_CPU
-    } else if device.is_cuda() {
-        paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA)
-    } else if device.is_metal() {
-        paged_attn.unwrap_or(defaults::PAGED_ATTN_METAL)
-    } else {
-        false
+        return defaults::PAGED_ATTN_CPU;
     }
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if device.is_hip() {
+        // Dual builds serve the AMD role as Device::Hip; without this arm
+        // the auto default falls through to `false` and every paged-attn
+        // dependent feature (prefix cache, MTP) silently disables.
+        return paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA);
+    }
+    if device.is_cuda() {
+        return paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA);
+    }
+    if device.is_metal() {
+        return paged_attn.unwrap_or(defaults::PAGED_ATTN_METAL);
+    }
+    false
 }
 
 /// Initializes the cache configuration for paged attention based on provided parameters.

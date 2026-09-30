@@ -11,6 +11,15 @@ use super::config::{KvCacheLayout, ModelConfigLike};
 #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
 use crate::flashinfer::{register_fa3_prefill_caches, Fa3PrefillWorkspaceRegistration};
 
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn is_hip_role(device: &Device) -> bool {
+    device.is_hip()
+}
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+pub(crate) fn is_hip_role(_device: &Device) -> bool {
+    false
+}
+
 #[cfg(all(any(feature = "cuda", feature = "rocm"), target_family = "unix"))]
 fn cuda_supports_fp8(device: &Device) -> bool {
     if !device.is_cuda() || !mistralrs_paged_attn::USE_FP8 {
@@ -141,7 +150,7 @@ impl PagedCacheType {
                 .get(layer_idx)
                 .and_then(Option::as_ref)
                 .unwrap_or(device);
-            if layer_device.is_cuda() {
+            if layer_device.is_cuda() || is_hip_role(layer_device) {
                 #[cfg(all(any(feature = "cuda", feature = "rocm"), target_family = "unix"))]
                 if *self == Self::F8E4M3 && !cuda_supports_fp8(layer_device) {
                     return Err(
@@ -269,7 +278,7 @@ impl CacheEngine {
                     .get(layer_idx)
                     .and_then(Option::as_ref)
                     .unwrap_or(device);
-                if !layer_device.is_cuda() {
+                if !layer_device.is_cuda() && !is_hip_role(layer_device) {
                     candle_core::bail!("Split K/V cache types are only supported on CUDA/ROCm");
                 }
             }
@@ -340,7 +349,7 @@ impl CacheEngine {
         ) {
             candle_core::bail!("Block-quantized KV cache requires the Standard layout");
         }
-        if !layer_device.is_cuda() {
+        if !layer_device.is_cuda() && !is_hip_role(layer_device) {
             candle_core::bail!("Block-quantized KV cache is only supported on CUDA/ROCm");
         }
         let k_kind = match cache_config.k_type() {
