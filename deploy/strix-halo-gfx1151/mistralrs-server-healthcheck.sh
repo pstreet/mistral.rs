@@ -30,6 +30,7 @@ ALERT_FILE="$CACHE_DIR/$SVC-health.alerted"
 MAX_FAILS=2
 MIN_UPTIME=240
 ALERT_COOLDOWN=1800
+MARKER_TTL=14400
 ALERT_MAIL="${MISTRALRS_ALERT_MAIL:-$USER}"
 NTFY_TOPIC="${MISTRALRS_NTFY_TOPIC:-mistralrs-strix-halo}"
 
@@ -55,7 +56,11 @@ alert() { # alert <dedup-key> <subject> <message>
 
 state=$(systemctl --user is-active "$SVC" 2>/dev/null || echo unknown)
 case "$state" in
-    active) ;; # wedge logic below
+    active)
+        # The stop marker only means something while the service is down;
+        # once it runs again, consume it so later unexpected stops alert.
+        [ -f "$MARKER_FILE" ] && rm -f "$MARKER_FILE"
+        ;; # wedge logic below
     activating|deactivating|reloading) exit 0 ;; # transient, check next minute
     failed)
         rm -f "$MARKER_FILE" # a crash is never an intentional stop
@@ -69,8 +74,12 @@ case "$state" in
         exit 0 ;;
     *)
         if [ -f "$MARKER_FILE" ]; then
-            rm -f "$MARKER_FILE"
-            exit 0 # intentional stop, stay quiet
+            now=$(date +%s)
+            marker_age=$(( now - $(stat -c %Y "$MARKER_FILE" 2>/dev/null || echo 0) ))
+            if [ "$marker_age" -lt "$MARKER_TTL" ]; then
+                exit 0 # intentional stop, marker still fresh, stay quiet
+            fi
+            rm -f "$MARKER_FILE" # stale beyond the TTL: treat as unexpected
         fi
         echo 0 > "$FAIL_FILE"
         if systemctl --user start "$SVC" 2>/dev/null; then
