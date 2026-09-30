@@ -1998,6 +1998,13 @@ impl NormalPipeline {
         for bucket in cuda_graph_precapture_batches(CudaGraphComponent::Target, 1)
             .filter(|bucket| *bucket <= max_bucket)
         {
+            let free = crate::pipeline::cuda_graph::graph_arena_device_free(&device)?;
+            if free < crate::pipeline::cuda_graph::DECODE_GRAPH_PRECAPTURE_MIN_FREE_BYTES {
+                info!(
+                    "CUDA decode graph precapture stopping early: {free} bytes free, keeping earlier captures"
+                );
+                break;
+            }
             let Some(step) = CudaGraphDecodeStep::padded(
                 inputs.step_inputs(live.as_deref(), hybrid_slots),
                 bucket,
@@ -2014,7 +2021,7 @@ impl NormalPipeline {
             if state.contains(&key) {
                 continue;
             }
-            self.capture_cuda_decode_graph_step(
+            match self.capture_cuda_decode_graph_step(
                 &mut state,
                 key,
                 &step,
@@ -2025,8 +2032,15 @@ impl NormalPipeline {
                     recurrent_batch_kind: RecurrentBatchKind::Decode,
                 },
                 false,
-            )?;
-            captured += 1;
+            ) {
+                Ok(_) => captured += 1,
+                Err(err) => {
+                    warn!(
+                        "CUDA decode graph precapture failed for one bucket (kept earlier captures; lazy fallback for this shape): {err}"
+                    );
+                    continue;
+                }
+            }
         }
         if captured > 0 {
             info!(

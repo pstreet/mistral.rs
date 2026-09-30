@@ -87,6 +87,17 @@ const CUDA_GRAPH_EVICTIONS_METRIC: &str = "mistralrs_cuda_graph_evictions_total"
 const CUDA_GRAPH_RESIDENT_ENTRIES_METRIC: &str = "mistralrs_cuda_graph_resident_entries";
 // A few capture-time allocations (metadata graph vars) the warmup did not make.
 const DECODE_GRAPH_MIN_ARENA_BYTES: usize = 32 * 1024 * 1024;
+
+/// Capture attempts per graph (1 initial + growth retries). Each overflow
+/// doubles the arena, so the budget bounds growth at 8x the first estimate.
+const DECODE_GRAPH_CAPTURE_ATTEMPTS: usize = 4;
+
+/// Precapture stops taking new buckets once free device memory (as the
+/// device-memory query reports it) falls below this floor. Resident graphs
+/// pin their arenas for the process lifetime, so an unbounded precapture
+/// can walk the device straight into a fatal out-of-memory inside a kernel
+/// launch; the floor keeps the remaining shapes on the lazy path instead.
+pub(crate) const DECODE_GRAPH_PRECAPTURE_MIN_FREE_BYTES: usize = 8 * 1024 * 1024 * 1024;
 static NEXT_CUDA_DECODE_GRAPH_GENERATION: AtomicU64 = AtomicU64::new(1);
 static CUDA_GRAPH_MEMORY_POOL_SCOPES: OnceLock<Mutex<HashMap<usize, MemoryPoolScopeState>>> =
     OnceLock::new();
@@ -2079,8 +2090,13 @@ impl CudaDecodeGraphState {
             Some(&observed) => observed
                 .saturating_add(observed / 8)
                 .saturating_add(DECODE_GRAPH_MIN_ARENA_BYTES),
+            // Measured on the hybrid+MTP 27B, capture consumption lands
+            // within ~0.1% of the warmup's cumulative alloc bytes; the old
+            // x6 pinned six-times-oversized arenas per graph, which drained
+            // iGPU "available" (host-derived) and starved later buckets.
+            // x2 plus the overflow regrow path sizes surprises instead.
             None => warmup_bytes
-                .saturating_mul(6)
+                .saturating_mul(2)
                 .saturating_add(DECODE_GRAPH_MIN_ARENA_BYTES),
         }
     }
@@ -2430,6 +2446,35 @@ fn release_cuda_graph_entries(entries: Vec<CudaDecodeGraphEntry>) {
     }
 }
 
+/// Free device memory as the driver reports it. On integrated GPUs the
+/// MemoryUsage query derives "available" from host RAM times a fraction,
+/// which collapses once a large KV pool pins GTT-backed host pages - that
+/// pessimism zeroed arenas and blocked precapture entirely on a loaded
+/// server. The graph-arena budget is the allocator's own view: the GTT
+/// heap free for the hip role, the VRAM free for the cuda role.
+pub(crate) fn graph_arena_device_free(device: &Device) -> candle_core::Result<usize> {
+    match device {
+        Device::Cuda(dev) => {
+            let (free, _total) = dev
+                .cuda_stream()
+                .context()
+                .mem_get_info()
+                .map_err(candle_core::Error::wrap)?;
+            Ok(free)
+        }
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        Device::Hip(dev) => {
+            let (free, _total) = dev
+                .cuda_stream()
+                .context()
+                .mem_get_info()
+                .map_err(candle_core::Error::wrap)?;
+            Ok(free)
+        }
+        _ => Ok(usize::MAX),
+    }
+}
+
 // Clamp a computed decode-graph arena to what the device can actually provide.
 // A pathological dry-run sum must not turn into an impossible allocation;
 // the overflow regrow path sizes back up if the clamp undershoots.
@@ -2439,10 +2484,10 @@ fn clamp_decode_arena_bytes(
     available_bytes: usize,
     device: &Device,
 ) -> usize {
-    requested_bytes.min(crate::paged_attention::device_memory_cap(
-        available_bytes,
-        device,
-    ))
+    requested_bytes.min(
+        crate::paged_attention::device_memory_cap(available_bytes, device)
+            .max(DECODE_GRAPH_MIN_ARENA_BYTES),
+    )
 }
 
 #[cfg(feature = "rocm")]
@@ -2450,7 +2495,7 @@ fn clamp_decode_arena_to_device(
     device: &Device,
     requested_bytes: usize,
 ) -> candle_core::Result<usize> {
-    let available = crate::MemoryUsage.query(device)?.available();
+    let available = graph_arena_device_free(device)?;
     let clamped = clamp_decode_arena_bytes(requested_bytes, available, device);
     if clamped < requested_bytes {
         tracing::debug!(
@@ -2579,7 +2624,14 @@ where
     }
 
     let mut logits = None;
-    for attempt in 0..2 {
+    // An attempt that overflows aborts at the first failed allocation, so
+    // `consumed` counts only the prefix of the forward that ran - the tail is
+    // invisible. The fresh-bucket warmup heuristic can underestimate by 2x or
+    // more (hybrid+MTP capture needs ~19x the warmup's raw-alloc bytes), so a
+    // fixed 12.5% margin cannot bridge the gap. Grow by max(prefix+margin,
+    // 2x current) per retry, bounded by the attempt budget.
+    let mut current_arena_bytes = arena_bytes;
+    for attempt in 0..DECODE_GRAPH_CAPTURE_ATTEMPTS {
         tracing::debug!(target: "mistralrs", "[cudarc] CAPTURE forward attempt={attempt}");
         // A panicking forward must still discard the in-flight capture; the caller falls back to eager.
         let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2613,26 +2665,32 @@ where
         );
         if overflowed {
             end_cuda_capture_discard(&stream);
-            if attempt == 0 {
-                graph_input_ids.device().synchronize()?;
-                let consumed = stream.capture_arena_consumed();
-                let new_bytes = consumed + consumed / 8 + DECODE_GRAPH_MIN_ARENA_BYTES;
-                tracing::debug!("CUDA decode graph arena grew {arena_bytes} -> {new_bytes} bytes");
-                let arena: Arc<CudaSlice<u8>> = Arc::new(
-                    unsafe { cuda_device.alloc::<u8>(new_bytes) }
-                        .map_err(candle_core::Error::wrap)?,
-                );
-                stream
-                    .begin_capture_arena(arena.clone())
-                    .map_err(candle_core::Error::wrap)?;
-                arena_keepalive = Some(arena);
-                continue;
-            }
-            restore_event_tracking_after_capture(&stream, restore_event_tracking);
-            return Err(
-                candle_core::Error::msg("CUDA graph capture arena overflowed on retry")
+            let consumed = stream.capture_arena_consumed();
+            let new_bytes = (consumed + consumed / 8 + DECODE_GRAPH_MIN_ARENA_BYTES)
+                .max(current_arena_bytes.saturating_mul(2));
+            if attempt + 1 == DECODE_GRAPH_CAPTURE_ATTEMPTS {
+                restore_event_tracking_after_capture(&stream, restore_event_tracking);
+                return Err(
+                    candle_core::Error::msg(format!(
+                        "CUDA graph capture arena overflowed on retry (needed > {new_bytes} bytes, consumed prefix {consumed})"
+                    ))
                     .context("CUDA graph captured forward failed"),
+                );
+            }
+            tracing::debug!(
+                "CUDA decode graph arena grew {current_arena_bytes} -> {new_bytes} bytes (attempt {attempt}, consumed prefix {consumed})"
             );
+            graph_input_ids.device().synchronize()?;
+            let arena: Arc<CudaSlice<u8>> = Arc::new(
+                unsafe { cuda_device.alloc::<u8>(new_bytes) }
+                    .map_err(candle_core::Error::wrap)?,
+            );
+            stream
+                .begin_capture_arena(arena.clone())
+                .map_err(candle_core::Error::wrap)?;
+            arena_keepalive = Some(arena);
+            current_arena_bytes = new_bytes;
+            continue;
         }
         match result {
             Ok(logits_out) => {

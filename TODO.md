@@ -972,7 +972,48 @@ P3 = polish, Deferred = do not do on RDNA.
       (214.9/610.1/23.4). MTP only wins on draft acceptance; these
       short deterministic probes show no uplift. Paged-attn pays
       under multi-turn/concurrency load, not single-stream speed.
-      DUAL-SERVING BRING-UP + 27B BENCHMARK 2026-09-30 (uncommitted):
+      DECODE-GRAPH CAPTURE CHAIN FIXED 2026-09-30 (commit pending): the
+      dual-prod 27B captured ZERO decode graphs (866 incompatible_shape
+      skips) and hybrid+MTP precapture crashed; six fixes, each surfacing
+      the next. (1) The multimodal dispatch device gate never persisted:
+      the earlier session's edit script died on a LATER assertion before
+      the file write, silently reverting ALL its replacements (the
+      follow-up script fixed only the precapture site) - lesson: multi-
+      replacement edit scripts write once at the end; grep EVERY site
+      after. (2) Arena retry growth anchored to the ABORTED PREFIX: an
+      overflowing arena fails the alloc hard so the forward aborts at the
+      first failed allocation, and consumed counts only what ran; the
+      old +12.5%+32MB single retry cannot bridge. Now max(prefix*9/8+MIN,
+      2x current) per retry, 4 attempts. (3) The fresh-bucket x6 estimate
+      pinned 6x-oversized arenas (measured capture-consumed == warmup
+      within 0.1% on this model) - 48GB of pinning starved later buckets;
+      now x2+MIN. (4) The arena clamp used MemoryUsage's iGPU "available"
+      (host RAM x fraction), which collapses once the KV pool pins
+      GTT-backed host pages - it zeroed arenas, a guaranteed failure; now
+      the clamp and the guard use the device-true free (mem_get_info: GTT
+      for hip, VRAM for cuda) with a DECODE_GRAPH_MIN_ARENA_BYTES floor.
+      (5) Unbounded precapture marched pinned arenas into a FATAL hip OOM
+      inside reshape_and_cache_kernel.cu (C-side check = process death);
+      now a DECODE_GRAPH_PRECAPTURE_MIN_FREE_BYTES (8GB) guard before
+      each bucket breaks cleanly, keeping captures, remaining shapes
+      lazy. (6) One bucket's capture failure no longer clears ALL
+      captured graphs (per-bucket tolerance, both pipelines). VALIDATED
+      (27B smoke on the release binary, 4GB pool): 18 graphs through
+      batch bucket 32 in 50.85s, guard stopped at 3.99GB free keeping
+      them, resident=18, replay cache_hit=88, 1776 3/3, decode 15.4-15.5
+      T/s vs 14.1-14.3 pre-graphs (+8%). PROD FINDING: the uncapped
+      [paged_attn] pool (utilization 0.9 -> 77.6GB, 3.12M-token capacity)
+      leaves ~2.1GB host available after the 27B load, so the guard
+      correctly declines all capture; pool cap sizing is a serving-
+      posture decision (max-model-context upper bound + two-resident
+      budget, user-directed). Session notes: five machine reboots (user
+      eGPU bring-up) repeatedly wiped /tmp/opencode - validation moved
+      onto the durable release binary directly; an RTX 3090 (sm86, 24GB,
+      CUDA 13.3 UMD) is now attached for the CUDA role - auto-selection
+      still picks Hip as serving role; FlashInfer's build-shape gate
+      means dual+3090 will not claim it (device-aware refinement =
+      follow-up); FA2 buildable (flash-attn feature), FA3 not (Hopper).
+      DUAL-SERVING BRING-UP + 27B BENCHMARK 2026-09-30 (committed 94e1171c5):
       restarting prod for an orcarouter-27B benchmark revealed the
       Sep 28 16:20 rebuild had put the DUAL binary into prod (boot log:
       Device::Hip + git rev 3d7c712c5) - and the 27B (default model,

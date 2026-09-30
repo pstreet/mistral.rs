@@ -1997,7 +1997,7 @@ impl MultimodalPipeline {
             || seqlen_offsets.len() != batch
             || context_lens.len() != batch
             || position_ids.len() != batch
-            || !input_ids.device().is_cuda()
+            || !crate::pipeline::cuda_graph::is_cuda_graph_device(&input_ids.device())
         {
             record_cuda_graph_dispatch(
                 CudaGraphComponent::Target,
@@ -2227,6 +2227,13 @@ impl MultimodalPipeline {
             runtime_batch_shapes,
         ));
         for (q_len, max_bucket) in widths {
+            let free = crate::pipeline::cuda_graph::graph_arena_device_free(&device)?;
+            if free < crate::pipeline::cuda_graph::DECODE_GRAPH_PRECAPTURE_MIN_FREE_BYTES {
+                info!(
+                    "CUDA decode graph precapture stopping early: {free} bytes free, keeping earlier captures"
+                );
+                break;
+            }
             let inputs = CudaGraphPrecaptureInputs::new(ctx, q_len, &device, self.device_mapper())?;
             let live = hybrid_slots.map(|pad_slot| vec![pad_slot]);
             let recurrent_batch_kind = if q_len == 1 {
@@ -2263,7 +2270,7 @@ impl MultimodalPipeline {
                 }
                 // The live step's slot table is whatever the pad slot is; the model only sees it
                 // through the installed graph buffers
-                self.capture_cuda_decode_graph_step(
+                match self.capture_cuda_decode_graph_step(
                     &mut state,
                     key,
                     &step,
@@ -2275,8 +2282,15 @@ impl MultimodalPipeline {
                         speculative,
                     },
                     false,
-                )?;
-                captured += 1;
+                ) {
+                    Ok(_) => captured += 1,
+                    Err(err) => {
+                        warn!(
+                            "CUDA decode graph precapture failed for one bucket (kept earlier captures; lazy fallback for this shape): {err}"
+                        );
+                        continue;
+                    }
+                }
             }
         }
         if speculative {
