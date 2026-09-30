@@ -963,12 +963,9 @@ P3 = polish, Deferred = do not do on RDNA.
       chunk embedding exact, max_diff=0). LESSON: generating the
       copy by script duplicated the just-added is_hip branch into
       the copy -> infinite self-recursion (TCO loop); always diff
-      generated copies. The chunk test stays gated: multi-chunk
-      gathers are nondeterministically wrong while single-chunk is
-      exact, and it fails with the identical max_diff=29.890572 on
-      the pristine rocm-only tree - pre-existing shared chunk-path
-      race (likely upload-vs-compute stream ordering), tracked
-      separately. MTP-ON/PAGED-ON SMOKE 2026-09-29
+      generated copies. The chunk test stayed gated at the time;
+      RESOLVED 2026-09-30 (see the CHUNK RACE entry below): NULL-stream
+      kernel launches, fixed fleet-wide. MTP-ON/PAGED-ON SMOKE 2026-09-29
       (Qwen3.6-35B dual hip:0, defaults: paged_attn=on mtp=on):
       short prefill 198.5, long prefill (230 tok) 616.6, decode
       23.3 tok/s, correct 1776 - breaks even vs mtp-off/paged-off
@@ -1002,9 +999,9 @@ P3 = polish, Deferred = do not do on RDNA.
       alloc_zeros exists on both roles). Roundtrip passes on hip
       (mean abs diff 0.0116). NOTE: one dual quant run showed 2
       transient hqq embedding failures that pass in isolation and
-      on re-run - parallel-GPU flake on this box, same family as
-      the chunk race, not this change. REMAINING: chunk-race
-      investigation (separate track).
+      on re-run - flake on this box, root-caused 2026-09-30 as the
+      NULL-stream launches (see the CHUNK RACE entry), fixed
+      fleet-wide.
       HEALTHCHECK ALERT WIRING LANDED 2026-09-29 (uncommitted):
       the 01:45 pkill incident mechanics verified live: SIGTERM kill
       shows Result=success/ExecMainStatus=15, identical to a deliberate
@@ -1022,8 +1019,42 @@ P3 = polish, Deferred = do not do on RDNA.
       same convention as the wrapper. Verified with a stub harness
       (fake systemctl/journalctl/curl/mail, 6 scenarios: down,
       marked-stop, failed, activating, healthy, wedge-x2 + cooldown)
-      without touching prod. REMAINING: chunk-race investigation
-      (pre-existing shared chunk-path race, separate track).
+      without touching prod.
+      CHUNK RACE ROOT-CAUSED AND FIXED 2026-09-30 (uncommitted): the
+      hqq chunked-embedding corruption (pre-existing on BOTH roles,
+      pristine tree too) was NULL-STREAM LAUNCHES: 32 kernels across
+      5 files (ops.cu bitwise/leftshift, hqq.cu dequant x15, afq x9,
+      gptq q_gemm x4, plus a streamless cudaMemset in the afq
+      quantizer) launched with <<<grid, block>>> and NO stream arg -
+      the NULL/legacy stream, which has no ordering against candle's
+      CU_STREAM_NON_BLOCKING compute stream. In the chunk loop,
+      bitwise_and read its `packed` input while the index_select
+      filling it was still pending -> stale/garbage nibbles -> the
+      per-chunk wrong-token values. THE HUNT (lessons): the
+      deterministic failure was localized with a CPU dequant value
+      catalog matcher (each wrong element matched SOME other token's
+      exact dequant -> stale-row reads, matcher coincidences included)
+      and a production-vs-standalone per-chunk diff (standalone
+      exact, production wrong -> cross-op ordering, not inputs);
+      upload-ordering / params-cache / keepalive / pinned-upload fixes
+      ALL changed the failure rate but none fixed it - they only
+      perturbed host-GPU timing (the red herring era). The device-side
+      assertion in candle's indexing kernel (ids OOB) after partial
+      fixes + a grep for `<<<...>>>` without a 4th stream arg found
+      the class. Runtime primitives verified INNOCENT via ctypes
+      microbench: hipMemcpy and hipMemcpyAsync-on-stream both 300/300
+      correct (the earlier cudarc-hip blocking-copy experiment was
+      reverted; candle experiments fully reverted, tree clean).
+      FIX: cudaStream_t threaded through all 32 launches +
+      cudaMemsetAsync; declares gained `stream: *mut c_void`
+      (role-neutral, kernel_decl dual-dlsym compatible); call sites
+      pass dev.cuda_stream().cu_stream(). hqq chunks test UN-GATED
+      fleet-wide. BARS: chunks 30/30 + 30/30 (rocm-only + dual, was
+      flaky 1/3..10/10 cold); quant rocm 316-317/0 (1 transient in
+      one run, 6/6 clean re-runs single-threaded); dual 321/0; core
+      gdn 81/0; checks x3 clean. NOTE: candle tree carries fmt-only
+      drift in 5 files (4 appeared mid-session + candle-nn/ops.rs) -
+      NOT from this fix, left untouched.
       PROJECTOR ITEM RESOLVED 2026-09-28 (not a code bug): the
       `visual.patch_embed` multimodal gap does NOT reproduce on the
       current tree - Qwen3.8-27B + mmproj serves text AND vision

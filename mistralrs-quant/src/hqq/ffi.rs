@@ -8,7 +8,8 @@ macro_rules! dequant_kernel {
                 zero: *const $scalar,
                 out: *const $scalar,
                 h: i32,
-                w: i32
+                w: i32,
+                stream: *mut std::ffi::c_void
                 );
             }
         }

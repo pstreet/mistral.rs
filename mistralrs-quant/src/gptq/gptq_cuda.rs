@@ -207,6 +207,7 @@ impl GptqLayer {
                     n,
                     groups,
                     self.bits,
+                    dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                 )
             };
 
@@ -252,6 +253,7 @@ impl GptqLayer {
                         BLOCK_M_SIZE_MAX,
                         groups,
                         self.bits,
+                        dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                     )
                 }
             }
@@ -270,6 +272,7 @@ impl GptqLayer {
                         last_chunk_size,
                         groups,
                         self.bits,
+                        dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                     )
                 }
             }
@@ -286,6 +289,7 @@ impl GptqLayer {
                     n,
                     k,
                     self.bits,
+                    dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                 )
             }
         }

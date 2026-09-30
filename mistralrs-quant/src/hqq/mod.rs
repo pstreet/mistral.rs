@@ -92,6 +92,7 @@ macro_rules! dequant_for_dtype {
                     out_ptr as *mut $scale_t,
                     h as i32,
                     w as i32,
+                    $dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                 );
             }
             drop(out_guard);
@@ -148,6 +149,7 @@ macro_rules! dequant_for_dtype_hip {
                     out_ptr as *mut $scale_t,
                     h as i32,
                     w as i32,
+                    $dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                 );
             }
             drop(out_guard);
@@ -1743,13 +1745,6 @@ mod tests {
         Ok(())
     }
 
-    // Pre-existing shared chunk-path race (NOT the hip port): multi-chunk
-    // gathers go wrong nondeterministically while single-chunk is exact
-    // (max_diff=0) on hip, and this test fails with the identical
-    // max_diff=29.890572 signature on the pristine rocm-only tree. Likely
-    // an upload-vs-compute stream ordering issue in the shared chunking
-    // code; tracked separately. Re-gate when that lands.
-    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
     #[test]
     fn hqq_embedding_chunks_preserve_shape_and_values() -> Result<()> {
         const TEST_CHUNK_ELEMENTS: usize = 45;

@@ -307,31 +307,31 @@ afq_quantize_kernel(const T *__restrict__ w, uint32_t *__restrict__ w_q,
 #define DEFINE_DEQUANT_LAUNCHER(bits, gs, dtype, dtype_name)                   \
   extern "C" void afq_dequantize_##bits##bit_gs##gs##_##dtype_name(            \
       const uint32_t *w_q, const dtype *scales, const dtype *biases,           \
-      dtype *output, int rows, int cols) {                                     \
+      dtype *output, int rows, int cols, cudaStream_t stream) {                 \
     uint64_t total = (uint64_t)rows * cols;                                    \
     unsigned int blocks = (unsigned int)cdiv_u64(total, AFQ_BLOCK_SIZE);       \
     afq_dequantize_kernel<dtype, bits, gs>                                     \
-        <<<blocks, AFQ_BLOCK_SIZE>>>(w_q, scales, biases, output, rows, cols); \
+        <<<blocks, AFQ_BLOCK_SIZE, 0, stream>>>(w_q, scales, biases, output, rows, cols); \
   }
 
 #define DEFINE_DEQUANT_3BIT_LAUNCHER(gs, dtype, dtype_name)                    \
   extern "C" void afq_dequantize_3bit_gs##gs##_##dtype_name(                   \
       const uint8_t *w_q, const dtype *scales, const dtype *biases,            \
-      dtype *output, int rows, int cols) {                                     \
+      dtype *output, int rows, int cols, cudaStream_t stream) {                 \
     uint64_t total = (uint64_t)rows * cols;                                    \
     unsigned int blocks = (unsigned int)cdiv_u64(total, AFQ_BLOCK_SIZE);       \
     afq_dequantize_3bit_kernel<dtype, gs>                                      \
-        <<<blocks, AFQ_BLOCK_SIZE>>>(w_q, scales, biases, output, rows, cols); \
+        <<<blocks, AFQ_BLOCK_SIZE, 0, stream>>>(w_q, scales, biases, output, rows, cols); \
   }
 
 #define DEFINE_DEQUANT_6BIT_LAUNCHER(gs, dtype, dtype_name)                    \
   extern "C" void afq_dequantize_6bit_gs##gs##_##dtype_name(                   \
       const uint8_t *w_q, const dtype *scales, const dtype *biases,            \
-      dtype *output, int rows, int cols) {                                     \
+      dtype *output, int rows, int cols, cudaStream_t stream) {                 \
     uint64_t total = (uint64_t)rows * cols;                                    \
     unsigned int blocks = (unsigned int)cdiv_u64(total, AFQ_BLOCK_SIZE);       \
     afq_dequantize_6bit_kernel<dtype, gs>                                      \
-        <<<blocks, AFQ_BLOCK_SIZE>>>(w_q, scales, biases, output, rows, cols); \
+        <<<blocks, AFQ_BLOCK_SIZE, 0, stream>>>(w_q, scales, biases, output, rows, cols); \
   }
 
 // 2-bit dequantize launchers
@@ -398,14 +398,15 @@ DEFINE_DEQUANT_LAUNCHER(8, 128, __nv_bfloat16, bf16)
 #define DEFINE_EMBEDDING_LAUNCHER(bits, gs, dtype, dtype_name)                 \
   extern "C" void afq_embedding_##bits##bit_gs##gs##_##dtype_name(             \
       const uint8_t *w_q, const dtype *scales, const dtype *biases,            \
-      const uint32_t *indices, dtype *output, int num_indices, int hidden) {   \
+      const uint32_t *indices, dtype *output, int num_indices,                 \
+      int hidden, cudaStream_t stream) {                                       \
     constexpr int packs_per_thread =                                           \
         bits == 3 ? 8 : bits == 6 ? 4 : 8 / bits;                              \
     uint64_t total = (uint64_t)num_indices * hidden / packs_per_thread;        \
     if (total == 0)                                                            \
       return;                                                                  \
     unsigned int blocks = (unsigned int)cdiv_u64(total, AFQ_BLOCK_SIZE);       \
-    afq_embedding_kernel<dtype, bits, gs><<<blocks, AFQ_BLOCK_SIZE>>>(         \
+    afq_embedding_kernel<dtype, bits, gs><<<blocks, AFQ_BLOCK_SIZE, 0, stream>>>(         \
         w_q, scales, biases, indices, output, num_indices, hidden);            \
   }
 
@@ -466,7 +467,7 @@ DEFINE_EMBEDDING_LAUNCHER(8, 128, __nv_bfloat16, bf16)
 #define DEFINE_QUANT_LAUNCHER(bits, gs, dtype, dtype_name)                     \
   extern "C" void afq_quantize_##bits##bit_gs##gs##_##dtype_name(              \
       const dtype *w, uint32_t *w_q, dtype *scales, dtype *biases, int rows,   \
-      int cols) {                                                              \
+      int cols, cudaStream_t stream) {                                          \
     uint64_t groups_per_row = cols / gs;                                       \
     uint64_t total_groups = (uint64_t)rows * groups_per_row;                   \
     uint64_t warps_per_block = AFQ_BLOCK_SIZE / AFQ_WARP_SIZE;                 \
@@ -474,9 +475,10 @@ DEFINE_EMBEDDING_LAUNCHER(8, 128, __nv_bfloat16, bf16)
         (unsigned int)cdiv_u64(total_groups, warps_per_block);                 \
     /* Zero out w_q first */                                                   \
     uint64_t packed_cols = (uint64_t)cols * bits / 32;                         \
-    cudaMemset(w_q, 0, (uint64_t)rows * packed_cols * sizeof(uint32_t));       \
+    cudaMemsetAsync(w_q, 0, (uint64_t)rows * packed_cols * sizeof(uint32_t), \
+                    stream);                                                    \
     afq_quantize_kernel<dtype, bits, gs>                                       \
-        <<<blocks, AFQ_BLOCK_SIZE>>>(w, w_q, scales, biases, rows, cols);      \
+        <<<blocks, AFQ_BLOCK_SIZE, 0, stream>>>(w, w_q, scales, biases, rows, cols);      \
   }
 
 // 2-bit quantize launchers

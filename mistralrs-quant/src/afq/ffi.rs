@@ -25,6 +25,7 @@ macro_rules! dequant_kernel_power_of_2 {
                 output: *mut $scalar,
                 rows: i32,
                 cols: i32,
+                stream: *mut std::ffi::c_void,
             );
             }
         }
@@ -42,6 +43,7 @@ macro_rules! dequant_kernel_3bit {
                 output: *mut $scalar,
                 rows: i32,
                 cols: i32,
+                stream: *mut std::ffi::c_void,
             );
             }
         }
@@ -59,6 +61,7 @@ macro_rules! dequant_kernel_6bit {
                 output: *mut $scalar,
                 rows: i32,
                 cols: i32,
+                stream: *mut std::ffi::c_void,
             );
             }
         }
@@ -81,6 +84,7 @@ macro_rules! embedding_kernel {
                 output: *mut $scalar,
                 num_ids: i32,
                 hidden: i32,
+                stream: *mut std::ffi::c_void,
             );
             }
         }
@@ -102,6 +106,7 @@ macro_rules! quant_kernel {
                 biases: *mut $scalar,
                 rows: i32,
                 cols: i32,
+                stream: *mut std::ffi::c_void,
             );
             }
         }
@@ -125,6 +130,7 @@ macro_rules! qmv_kernel_power_of_2 {
                 m: i32,
                 n: i32,
                 k: i32,
+                stream: *mut std::ffi::c_void,
             );
             }
         }
@@ -144,6 +150,7 @@ macro_rules! qmv_kernel_3bit {
                 m: i32,
                 n: i32,
                 k: i32,
+                stream: *mut std::ffi::c_void,
             );
             }
         }
@@ -163,6 +170,7 @@ macro_rules! qmv_kernel_6bit {
                 m: i32,
                 n: i32,
                 k: i32,
+                stream: *mut std::ffi::c_void,
             );
             }
         }
@@ -186,6 +194,7 @@ macro_rules! qmm_kernel {
                 m: i32,
                 n: i32,
                 k: i32,
+                stream: *mut std::ffi::c_void,
             );
             }
         }

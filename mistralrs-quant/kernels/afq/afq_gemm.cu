@@ -357,37 +357,40 @@ afq_qmm_kernel(const T *__restrict__ x, const uint32_t *__restrict__ w_q,
 #define DEFINE_QMV_LAUNCHER(bits, gs, dtype, dtype_name)                       \
   extern "C" void afq_qmv_##bits##bit_gs##gs##_##dtype_name(                   \
       const dtype *x, const uint32_t *w_q, const dtype *scales,                \
-      const dtype *biases, dtype *y, int M, int N, int K) {                    \
+      const dtype *biases, dtype *y, int M, int N, int K,                      \
+      cudaStream_t stream) {                                                   \
     int total_outputs = M * N;                                                 \
     int warps_needed = total_outputs;                                          \
     int threads = warps_needed * AFQ_WARP_SIZE;                                \
     int blocks = cdiv(threads, QMV_BLOCK_SIZE);                                \
     afq_qmv_kernel<dtype, bits, gs>                                            \
-        <<<blocks, QMV_BLOCK_SIZE>>>(x, w_q, scales, biases, y, M, N, K);      \
+        <<<blocks, QMV_BLOCK_SIZE, 0, stream>>>(x, w_q, scales, biases, y, M, N, K);      \
   }
 
 #define DEFINE_QMV_3BIT_LAUNCHER(gs, dtype, dtype_name)                        \
   extern "C" void afq_qmv_3bit_gs##gs##_##dtype_name(                          \
       const dtype *x, const uint8_t *w_q, const dtype *scales,                 \
-      const dtype *biases, dtype *y, int M, int N, int K) {                    \
+      const dtype *biases, dtype *y, int M, int N, int K,                      \
+      cudaStream_t stream) {                                                   \
     int total_outputs = M * N;                                                 \
     int warps_needed = total_outputs;                                          \
     int threads = warps_needed * AFQ_WARP_SIZE;                                \
     int blocks = cdiv(threads, QMV_BLOCK_SIZE);                                \
     afq_qmv_3bit_kernel<dtype, gs>                                             \
-        <<<blocks, QMV_BLOCK_SIZE>>>(x, w_q, scales, biases, y, M, N, K);      \
+        <<<blocks, QMV_BLOCK_SIZE, 0, stream>>>(x, w_q, scales, biases, y, M, N, K);      \
   }
 
 #define DEFINE_QMV_6BIT_LAUNCHER(gs, dtype, dtype_name)                        \
   extern "C" void afq_qmv_6bit_gs##gs##_##dtype_name(                          \
       const dtype *x, const uint8_t *w_q, const dtype *scales,                 \
-      const dtype *biases, dtype *y, int M, int N, int K) {                    \
+      const dtype *biases, dtype *y, int M, int N, int K,                      \
+      cudaStream_t stream) {                                                   \
     int total_outputs = M * N;                                                 \
     int warps_needed = total_outputs;                                          \
     int threads = warps_needed * AFQ_WARP_SIZE;                                \
     int blocks = cdiv(threads, QMV_BLOCK_SIZE);                                \
     afq_qmv_6bit_kernel<dtype, gs>                                             \
-        <<<blocks, QMV_BLOCK_SIZE>>>(x, w_q, scales, biases, y, M, N, K);      \
+        <<<blocks, QMV_BLOCK_SIZE, 0, stream>>>(x, w_q, scales, biases, y, M, N, K);      \
   }
 
 // 2-bit QMV launchers
@@ -454,14 +457,15 @@ DEFINE_QMV_LAUNCHER(8, 128, __nv_bfloat16, bf16)
 #define DEFINE_QMM_LAUNCHER(bits, gs, dtype, dtype_name)                       \
   extern "C" void afq_qmm_##bits##bit_gs##gs##_##dtype_name(                   \
       const dtype *x, const uint32_t *w_q, const dtype *scales,                \
-      const dtype *biases, dtype *y, int M, int N, int K) {                    \
+      const dtype *biases, dtype *y, int M, int N, int K,                      \
+      cudaStream_t stream) {                                                   \
     constexpr int TILE_M = 32;                                                 \
     constexpr int TILE_N = 32;                                                 \
     constexpr int TILE_K = 32;                                                 \
     dim3 grid(cdiv(N, TILE_N), cdiv(M, TILE_M));                               \
     dim3 block(TILE_N, TILE_M);                                                \
     afq_qmm_kernel<dtype, bits, gs, TILE_M, TILE_N, TILE_K>                    \
-        <<<grid, block>>>(x, w_q, scales, biases, y, M, N, K);                 \
+        <<<grid, block, 0, stream>>>(x, w_q, scales, biases, y, M, N, K);       \
   }
 
 // 4-bit QMM launchers (most common)

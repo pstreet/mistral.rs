@@ -137,6 +137,7 @@ impl CustomOp1 for Leftshift {
                         d_out_ptr as *mut std::ffi::c_void,
                         u32::try_from(elem_count)?,
                         self.0 as i32,
+                        dev.cuda_stream().cu_stream() as *mut c_void,
                     )
                 };
                 drop(d_out_guard);
@@ -151,6 +152,7 @@ impl CustomOp1 for Leftshift {
                         d_out_ptr as *mut std::ffi::c_void,
                         u32::try_from(elem_count)?,
                         self.0 as i32,
+                        dev.cuda_stream().cu_stream() as *mut c_void,
                     )
                 };
                 drop(d_out_guard);
@@ -196,6 +198,7 @@ impl CustomOp1 for Leftshift {
                         d_out_ptr as *mut std::ffi::c_void,
                         u32::try_from(elem_count)?,
                         self.0 as i32,
+                        dev.cuda_stream().cu_stream() as *mut c_void,
                     )
                 };
                 drop(d_out_guard);
@@ -210,6 +213,7 @@ impl CustomOp1 for Leftshift {
                         d_out_ptr as *mut std::ffi::c_void,
                         u32::try_from(elem_count)?,
                         self.0 as i32,
+                        dev.cuda_stream().cu_stream() as *mut c_void,
                     )
                 };
                 drop(d_out_guard);
@@ -540,18 +544,21 @@ impl CustomOp2 for BitWise {
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                         BitWiseBinaryOpEnum::Or => ffi::bitwise_or_u8(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                         BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_u8(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                     }
                 };
@@ -568,18 +575,21 @@ impl CustomOp2 for BitWise {
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                         BitWiseBinaryOpEnum::Or => ffi::bitwise_or_u32(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                         BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_u32(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                     }
                 };
@@ -596,18 +606,21 @@ impl CustomOp2 for BitWise {
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                         BitWiseBinaryOpEnum::Or => ffi::bitwise_or_i64(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                         BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_i64(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                     }
                 };
@@ -624,18 +637,21 @@ impl CustomOp2 for BitWise {
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                         BitWiseBinaryOpEnum::Or => ffi::bitwise_or_i32(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                         BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_i32(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                     }
                 };
@@ -764,18 +780,21 @@ impl CustomOp2 for BitWise {
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                         BitWiseBinaryOpEnum::Or => ffi::bitwise_or_u8(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                         BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_u8(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                     }
                 };
@@ -792,18 +811,21 @@ impl CustomOp2 for BitWise {
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                         BitWiseBinaryOpEnum::Or => ffi::bitwise_or_u32(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                         BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_u32(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                     }
                 };
@@ -820,18 +842,21 @@ impl CustomOp2 for BitWise {
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                         BitWiseBinaryOpEnum::Or => ffi::bitwise_or_i64(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                         BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_i64(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                     }
                 };
@@ -848,18 +873,21 @@ impl CustomOp2 for BitWise {
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                         BitWiseBinaryOpEnum::Or => ffi::bitwise_or_i32(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                         BitWiseBinaryOpEnum::Xor => ffi::bitwise_xor_i32(
                             d_in1_ptr,
                             d_in2_ptr,
                             d_out_ptr as *mut c_void,
                             u32::try_from(elem_count)?,
+                            dev.cuda_stream().cu_stream() as *mut c_void,
                         ),
                     }
                 };

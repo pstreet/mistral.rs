@@ -229,53 +229,59 @@ __global__ void bitwise_xor__kernel(const T *d_in1, const T *d_in2, T *d_out,
 }
 
 template <typename T>
-void bitwise_and(const T *d_in1, const T *d_in2, T *d_out, int N) {
+void bitwise_and(const T *d_in1, const T *d_in2, T *d_out, int N,
+                  cudaStream_t stream) {
   int nthreads = next_power_of_2(N);
   if (nthreads > 1024) {
     nthreads = 1024;
   }
   const int nblocks = (N + nthreads - 1) / nthreads;
-  bitwise_and__kernel<<<nblocks, nthreads>>>(d_in1, d_in2, d_out, N);
+  bitwise_and__kernel<<<nblocks, nthreads, 0, stream>>>(d_in1, d_in2, d_out,
+                                                        N);
   CUDA_CHECK(cudaGetLastError());
 }
 
 template <typename T>
-void bitwise_or(const T *d_in1, const T *d_in2, T *d_out, int N) {
+void bitwise_or(const T *d_in1, const T *d_in2, T *d_out, int N,
+                  cudaStream_t stream) {
   int nthreads = next_power_of_2(N);
   if (nthreads > 1024) {
     nthreads = 1024;
   }
   const int nblocks = (N + nthreads - 1) / nthreads;
-  bitwise_or__kernel<<<nblocks, nthreads>>>(d_in1, d_in2, d_out, N);
+  bitwise_or__kernel<<<nblocks, nthreads, 0, stream>>>(d_in1, d_in2, d_out,
+                                                        N);
   CUDA_CHECK(cudaGetLastError());
 }
 
 template <typename T>
-void bitwise_xor(const T *d_in1, const T *d_in2, T *d_out, int N) {
+void bitwise_xor(const T *d_in1, const T *d_in2, T *d_out, int N,
+                  cudaStream_t stream) {
   int nthreads = next_power_of_2(N);
   if (nthreads > 1024) {
     nthreads = 1024;
   }
   const int nblocks = (N + nthreads - 1) / nthreads;
-  bitwise_xor__kernel<<<nblocks, nthreads>>>(d_in1, d_in2, d_out, N);
+  bitwise_xor__kernel<<<nblocks, nthreads, 0, stream>>>(d_in1, d_in2, d_out,
+                                                        N);
   CUDA_CHECK(cudaGetLastError());
 }
 
 #define BITWISE_OP(TYPENAME, RUST_NAME)                                        \
-  extern "C" void bitwise_and_##RUST_NAME(const TYPENAME *d_in1,               \
-                                          const TYPENAME *d_in2,               \
-                                          TYPENAME *d_out, uint32_t N) {       \
-    bitwise_and(d_in1, d_in2, d_out, N);                                       \
+  extern "C" void bitwise_and_##RUST_NAME(                                     \
+      const TYPENAME *d_in1, const TYPENAME *d_in2, TYPENAME *d_out,           \
+      uint32_t N, cudaStream_t stream) {                                       \
+    bitwise_and(d_in1, d_in2, d_out, N, stream);                               \
   }                                                                            \
-  extern "C" void bitwise_or_##RUST_NAME(const TYPENAME *d_in1,                \
-                                         const TYPENAME *d_in2,                \
-                                         TYPENAME *d_out, uint32_t N) {        \
-    bitwise_or(d_in1, d_in2, d_out, N);                                        \
+  extern "C" void bitwise_or_##RUST_NAME(                                      \
+      const TYPENAME *d_in1, const TYPENAME *d_in2, TYPENAME *d_out,           \
+      uint32_t N, cudaStream_t stream) {                                       \
+    bitwise_or(d_in1, d_in2, d_out, N, stream);                                \
   }                                                                            \
-  extern "C" void bitwise_xor_##RUST_NAME(const TYPENAME *d_in1,               \
-                                          const TYPENAME *d_in2,               \
-                                          TYPENAME *d_out, uint32_t N) {       \
-    bitwise_xor(d_in1, d_in2, d_out, N);                                       \
+  extern "C" void bitwise_xor_##RUST_NAME(                                     \
+      const TYPENAME *d_in1, const TYPENAME *d_in2, TYPENAME *d_out,           \
+      uint32_t N, cudaStream_t stream) {                                        \
+    bitwise_xor(d_in1, d_in2, d_out, N, stream);                               \
   }
 
 BITWISE_OP(uint8_t, u8)
@@ -293,20 +299,22 @@ __global__ void leftshift_kernel(const T *d_in1, T *d_out, const uint32_t N,
 }
 
 template <typename T>
-void leftshift(const T *d_in1, T *d_out, int N, const int32_t k) {
+void leftshift(const T *d_in1, T *d_out, int N, const int32_t k,
+               cudaStream_t stream) {
   int nthreads = next_power_of_2(N);
   if (nthreads > 1024) {
     nthreads = 1024;
   }
   const int nblocks = (N + nthreads - 1) / nthreads;
-  leftshift_kernel<<<nblocks, nthreads>>>(d_in1, d_out, N, k);
+  leftshift_kernel<<<nblocks, nthreads, 0, stream>>>(d_in1, d_out, N, k);
   CUDA_CHECK(cudaGetLastError());
 }
 
 #define LEFTSHIFT_OP(TYPENAME, RUST_NAME)                                      \
   extern "C" void leftshift_##RUST_NAME(                                       \
-      const TYPENAME *d_in1, TYPENAME *d_out, uint32_t N, int32_t k) {         \
-    leftshift(d_in1, d_out, N, k);                                             \
+      const TYPENAME *d_in1, TYPENAME *d_out, uint32_t N, int32_t k,           \
+      cudaStream_t stream) {                                                   \
+    leftshift(d_in1, d_out, N, k, stream);                                     \
   }
 
 LEFTSHIFT_OP(uint8_t, u8)

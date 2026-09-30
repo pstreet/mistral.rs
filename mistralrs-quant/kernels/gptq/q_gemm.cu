@@ -750,7 +750,8 @@ pick_gemm_half_q_half_gptq_kernel(bool first_block, const int m_count,
 extern "C" void gemm_half_q_half_cuda_part(
     const half *a, const uint32_t *b_q_weight, const uint32_t *b_gptq_qzeros,
     const half *b_gptq_scales, const int *b_q_perm, half *c, int size_m,
-    int size_n, int size_k, int m_count, int groups, int bit) {
+    int size_n, int size_k, int m_count, int groups, int bit,
+    cudaStream_t stream) {
   dim3 blockDim, gridDim;
   blockDim.x = BLOCK_KN_SIZE;
   blockDim.y = 1;
@@ -762,7 +763,7 @@ extern "C" void gemm_half_q_half_cuda_part(
   fp_gemm_half_q_half_gptq_kernel kernel =
       pick_gemm_half_q_half_gptq_kernel(true, m_count, bit);
 
-  kernel<<<gridDim, blockDim, 0>>>(a, b_q_weight, b_gptq_qzeros, b_gptq_scales,
+  kernel<<<gridDim, blockDim, 0, stream>>>(a, b_q_weight, b_gptq_qzeros, b_gptq_scales,
                                    c, size_m, size_n, size_k, groups, b_q_perm);
 }
 
@@ -1177,7 +1178,8 @@ extern "C" void reconstruct_exllama(const uint32_t *b_q_weight,
                                     const uint32_t *b_gptq_qzeros,
                                     const half *b_gptq_scales,
                                     const int *b_q_perm, half *out, int height,
-                                    int width, int groups, int bit) {
+                                    int width, int groups, int bit,
+                                    cudaStream_t stream) {
   dim3 blockDim, gridDim;
   blockDim.x = BLOCK_KN_SIZE;
   blockDim.y = 1;
@@ -1193,7 +1195,7 @@ extern "C" void reconstruct_exllama(const uint32_t *b_q_weight,
     reconstruct_exllama_kernel = reconstruct_exllama_8bit_kernel;
   }
 
-  reconstruct_exllama_kernel<<<gridDim, blockDim, 0>>>(
+  reconstruct_exllama_kernel<<<gridDim, blockDim, 0, stream>>>(
       b_q_weight, b_q_perm, b_gptq_qzeros, b_gptq_scales, height, width, groups,
       out);
 }
@@ -1390,7 +1392,8 @@ extern "C" void gemm_half_q_half_alt(const half *a, const uint32_t *b_q_weight,
                                      const uint32_t *b_gptq_qzeros,
                                      const half *b_gptq_scales,
                                      const int *b_g_idx, half *c, int size_m,
-                                     int size_n, int size_k, int bit) {
+                                     int size_n, int size_k, int bit,
+    cudaStream_t stream) {
   dim3 blockDim, gridDim;
   blockDim.x = BLOCK_KN_SIZE;
   blockDim.y = 1;
@@ -1404,7 +1407,7 @@ extern "C" void gemm_half_q_half_alt(const half *a, const uint32_t *b_q_weight,
     kernel = gemm_half_q_half_alt_8bit_kernel;
   }
 
-  kernel<<<gridDim, blockDim, 0>>>((const half2 *)a, b_q_weight, c,
+  kernel<<<gridDim, blockDim, 0, stream>>>((const half2 *)a, b_q_weight, c,
                                    b_gptq_scales, b_gptq_qzeros, b_g_idx,
                                    size_m, size_k / 32 * bit, size_n);
 }
@@ -1494,7 +1497,7 @@ extern "C" void reconstruct_gptq(const uint32_t *b_q_weight,
                                  const uint32_t *b_gptq_qzeros,
                                  const half *b_gptq_scales, const int *b_g_idx,
                                  half *out, int height, int width, int groups,
-                                 int bit) {
+                                 int bit, cudaStream_t stream) {
   dim3 blockDim, gridDim;
   blockDim.x = BLOCK_KN_SIZE;
   blockDim.y = 1;
@@ -1511,7 +1514,7 @@ extern "C" void reconstruct_gptq(const uint32_t *b_q_weight,
     gridDim.y = DIVIDE(height, 32);
   }
 
-  kernel<<<gridDim, blockDim, 0>>>(b_q_weight, b_gptq_scales, b_gptq_qzeros,
+  kernel<<<gridDim, blockDim, 0, stream>>>(b_q_weight, b_gptq_scales, b_gptq_qzeros,
                                    b_g_idx, height, width, groups, out);
 }
 

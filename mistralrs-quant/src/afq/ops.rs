@@ -1777,7 +1777,7 @@ mod cuda_backend {
     use half::{bf16, f16};
 
     macro_rules! dispatch_afq_embedding {
-        ($postfix:ident, $scalar:ty, $wq:expr, $scales:expr, $biases:expr, $ids:expr, $out:expr, $bits:expr, $group_size:expr, $num_ids:expr, $hidden:expr) => {{
+        ($postfix:ident, $scalar:ty, $wq:expr, $scales:expr, $biases:expr, $ids:expr, $out:expr, $bits:expr, $group_size:expr, $num_ids:expr, $hidden:expr, $stream:expr) => {{
             paste::paste! {
                 match ($bits, $group_size) {
                     (2, 32) => ffi::[<afq_embedding_2bit_gs32_ $postfix>](
@@ -1788,6 +1788,7 @@ mod cuda_backend {
                         $out as *mut $scalar,
                         $num_ids as i32,
                         $hidden as i32,
+                        $stream,
                     ),
                     (2, 64) => ffi::[<afq_embedding_2bit_gs64_ $postfix>](
                         $wq as *const u8,
@@ -1797,6 +1798,7 @@ mod cuda_backend {
                         $out as *mut $scalar,
                         $num_ids as i32,
                         $hidden as i32,
+                        $stream,
                     ),
                     (2, 128) => ffi::[<afq_embedding_2bit_gs128_ $postfix>](
                         $wq as *const u8,
@@ -1806,6 +1808,7 @@ mod cuda_backend {
                         $out as *mut $scalar,
                         $num_ids as i32,
                         $hidden as i32,
+                        $stream,
                     ),
                     (3, 32) => ffi::[<afq_embedding_3bit_gs32_ $postfix>](
                         $wq as *const u8,
@@ -1815,6 +1818,7 @@ mod cuda_backend {
                         $out as *mut $scalar,
                         $num_ids as i32,
                         $hidden as i32,
+                        $stream,
                     ),
                     (3, 64) => ffi::[<afq_embedding_3bit_gs64_ $postfix>](
                         $wq as *const u8,
@@ -1824,6 +1828,7 @@ mod cuda_backend {
                         $out as *mut $scalar,
                         $num_ids as i32,
                         $hidden as i32,
+                        $stream,
                     ),
                     (3, 128) => ffi::[<afq_embedding_3bit_gs128_ $postfix>](
                         $wq as *const u8,
@@ -1833,6 +1838,7 @@ mod cuda_backend {
                         $out as *mut $scalar,
                         $num_ids as i32,
                         $hidden as i32,
+                        $stream,
                     ),
                     (4, 32) => ffi::[<afq_embedding_4bit_gs32_ $postfix>](
                         $wq as *const u8,
@@ -1842,6 +1848,7 @@ mod cuda_backend {
                         $out as *mut $scalar,
                         $num_ids as i32,
                         $hidden as i32,
+                        $stream,
                     ),
                     (4, 64) => ffi::[<afq_embedding_4bit_gs64_ $postfix>](
                         $wq as *const u8,
@@ -1851,6 +1858,7 @@ mod cuda_backend {
                         $out as *mut $scalar,
                         $num_ids as i32,
                         $hidden as i32,
+                        $stream,
                     ),
                     (4, 128) => ffi::[<afq_embedding_4bit_gs128_ $postfix>](
                         $wq as *const u8,
@@ -1860,6 +1868,7 @@ mod cuda_backend {
                         $out as *mut $scalar,
                         $num_ids as i32,
                         $hidden as i32,
+                        $stream,
                     ),
                     (6, 32) => ffi::[<afq_embedding_6bit_gs32_ $postfix>](
                         $wq as *const u8,
@@ -1869,6 +1878,7 @@ mod cuda_backend {
                         $out as *mut $scalar,
                         $num_ids as i32,
                         $hidden as i32,
+                        $stream,
                     ),
                     (6, 64) => ffi::[<afq_embedding_6bit_gs64_ $postfix>](
                         $wq as *const u8,
@@ -1878,6 +1888,7 @@ mod cuda_backend {
                         $out as *mut $scalar,
                         $num_ids as i32,
                         $hidden as i32,
+                        $stream,
                     ),
                     (6, 128) => ffi::[<afq_embedding_6bit_gs128_ $postfix>](
                         $wq as *const u8,
@@ -1887,6 +1898,7 @@ mod cuda_backend {
                         $out as *mut $scalar,
                         $num_ids as i32,
                         $hidden as i32,
+                        $stream,
                     ),
                     (8, 32) => ffi::[<afq_embedding_8bit_gs32_ $postfix>](
                         $wq as *const u8,
@@ -1896,6 +1908,7 @@ mod cuda_backend {
                         $out as *mut $scalar,
                         $num_ids as i32,
                         $hidden as i32,
+                        $stream,
                     ),
                     (8, 64) => ffi::[<afq_embedding_8bit_gs64_ $postfix>](
                         $wq as *const u8,
@@ -1905,6 +1918,7 @@ mod cuda_backend {
                         $out as *mut $scalar,
                         $num_ids as i32,
                         $hidden as i32,
+                        $stream,
                     ),
                     (8, 128) => ffi::[<afq_embedding_8bit_gs128_ $postfix>](
                         $wq as *const u8,
@@ -1914,6 +1928,7 @@ mod cuda_backend {
                         $out as *mut $scalar,
                         $num_ids as i32,
                         $hidden as i32,
+                        $stream,
                     ),
                     _ => candle_core::bail!(
                         "Unsupported bits/group_size combination: {}/{}",
@@ -1985,6 +2000,7 @@ mod cuda_backend {
                             b_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (2, 64) => ffi::afq_quantize_2bit_gs64_f16(
                             w_ptr as *const f16,
@@ -1993,6 +2009,7 @@ mod cuda_backend {
                             b_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (2, 128) => ffi::afq_quantize_2bit_gs128_f16(
                             w_ptr as *const f16,
@@ -2001,6 +2018,7 @@ mod cuda_backend {
                             b_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 32) => ffi::afq_quantize_4bit_gs32_f16(
                             w_ptr as *const f16,
@@ -2009,6 +2027,7 @@ mod cuda_backend {
                             b_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 64) => ffi::afq_quantize_4bit_gs64_f16(
                             w_ptr as *const f16,
@@ -2017,6 +2036,7 @@ mod cuda_backend {
                             b_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 128) => ffi::afq_quantize_4bit_gs128_f16(
                             w_ptr as *const f16,
@@ -2025,6 +2045,7 @@ mod cuda_backend {
                             b_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 32) => ffi::afq_quantize_8bit_gs32_f16(
                             w_ptr as *const f16,
@@ -2033,6 +2054,7 @@ mod cuda_backend {
                             b_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 64) => ffi::afq_quantize_8bit_gs64_f16(
                             w_ptr as *const f16,
@@ -2041,6 +2063,7 @@ mod cuda_backend {
                             b_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 128) => ffi::afq_quantize_8bit_gs128_f16(
                             w_ptr as *const f16,
@@ -2049,6 +2072,7 @@ mod cuda_backend {
                             b_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         _ => candle_core::bail!(
                             "Unsupported bits/group_size combination: {bits}/{group_size}"
@@ -2103,6 +2127,7 @@ mod cuda_backend {
                             b_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (2, 64) => ffi::afq_quantize_2bit_gs64_f32(
                             w_ptr as *const f32,
@@ -2111,6 +2136,7 @@ mod cuda_backend {
                             b_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (2, 128) => ffi::afq_quantize_2bit_gs128_f32(
                             w_ptr as *const f32,
@@ -2119,6 +2145,7 @@ mod cuda_backend {
                             b_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 32) => ffi::afq_quantize_4bit_gs32_f32(
                             w_ptr as *const f32,
@@ -2127,6 +2154,7 @@ mod cuda_backend {
                             b_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 64) => ffi::afq_quantize_4bit_gs64_f32(
                             w_ptr as *const f32,
@@ -2135,6 +2163,7 @@ mod cuda_backend {
                             b_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 128) => ffi::afq_quantize_4bit_gs128_f32(
                             w_ptr as *const f32,
@@ -2143,6 +2172,7 @@ mod cuda_backend {
                             b_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 32) => ffi::afq_quantize_8bit_gs32_f32(
                             w_ptr as *const f32,
@@ -2151,6 +2181,7 @@ mod cuda_backend {
                             b_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 64) => ffi::afq_quantize_8bit_gs64_f32(
                             w_ptr as *const f32,
@@ -2159,6 +2190,7 @@ mod cuda_backend {
                             b_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 128) => ffi::afq_quantize_8bit_gs128_f32(
                             w_ptr as *const f32,
@@ -2167,6 +2199,7 @@ mod cuda_backend {
                             b_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         _ => candle_core::bail!(
                             "Unsupported bits/group_size combination: {bits}/{group_size}"
@@ -2223,6 +2256,7 @@ mod cuda_backend {
                             b_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (2, 64) => ffi::afq_quantize_2bit_gs64_bf16(
                             w_ptr as *const bf16,
@@ -2231,6 +2265,7 @@ mod cuda_backend {
                             b_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (2, 128) => ffi::afq_quantize_2bit_gs128_bf16(
                             w_ptr as *const bf16,
@@ -2239,6 +2274,7 @@ mod cuda_backend {
                             b_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 32) => ffi::afq_quantize_4bit_gs32_bf16(
                             w_ptr as *const bf16,
@@ -2247,6 +2283,7 @@ mod cuda_backend {
                             b_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 64) => ffi::afq_quantize_4bit_gs64_bf16(
                             w_ptr as *const bf16,
@@ -2255,6 +2292,7 @@ mod cuda_backend {
                             b_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 128) => ffi::afq_quantize_4bit_gs128_bf16(
                             w_ptr as *const bf16,
@@ -2263,6 +2301,7 @@ mod cuda_backend {
                             b_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 32) => ffi::afq_quantize_8bit_gs32_bf16(
                             w_ptr as *const bf16,
@@ -2271,6 +2310,7 @@ mod cuda_backend {
                             b_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 64) => ffi::afq_quantize_8bit_gs64_bf16(
                             w_ptr as *const bf16,
@@ -2279,6 +2319,7 @@ mod cuda_backend {
                             b_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 128) => ffi::afq_quantize_8bit_gs128_bf16(
                             w_ptr as *const bf16,
@@ -2287,6 +2328,7 @@ mod cuda_backend {
                             b_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         _ => candle_core::bail!(
                             "Unsupported bits/group_size combination: {bits}/{group_size}"
@@ -2383,8 +2425,18 @@ mod cuda_backend {
 
                 unsafe {
                     dispatch_afq_embedding!(
-                        f16, f16, wq_ptr, s_ptr, b_ptr, ids_ptr, out_ptr, bits, group_size,
-                        num_ids, hidden
+                        f16,
+                        f16,
+                        wq_ptr,
+                        s_ptr,
+                        b_ptr,
+                        ids_ptr,
+                        out_ptr,
+                        bits,
+                        group_size,
+                        num_ids,
+                        hidden,
+                        dev.cuda_stream().cu_stream() as *mut std::ffi::c_void
                     );
                 }
                 drop(out_guard);
@@ -2409,8 +2461,18 @@ mod cuda_backend {
 
                 unsafe {
                     dispatch_afq_embedding!(
-                        f32, f32, wq_ptr, s_ptr, b_ptr, ids_ptr, out_ptr, bits, group_size,
-                        num_ids, hidden
+                        f32,
+                        f32,
+                        wq_ptr,
+                        s_ptr,
+                        b_ptr,
+                        ids_ptr,
+                        out_ptr,
+                        bits,
+                        group_size,
+                        num_ids,
+                        hidden,
+                        dev.cuda_stream().cu_stream() as *mut std::ffi::c_void
                     );
                 }
                 drop(out_guard);
@@ -2435,8 +2497,18 @@ mod cuda_backend {
 
                 unsafe {
                     dispatch_afq_embedding!(
-                        bf16, bf16, wq_ptr, s_ptr, b_ptr, ids_ptr, out_ptr, bits, group_size,
-                        num_ids, hidden
+                        bf16,
+                        bf16,
+                        wq_ptr,
+                        s_ptr,
+                        b_ptr,
+                        ids_ptr,
+                        out_ptr,
+                        bits,
+                        group_size,
+                        num_ids,
+                        hidden,
+                        dev.cuda_stream().cu_stream() as *mut std::ffi::c_void
                     );
                 }
                 drop(out_guard);
@@ -2510,6 +2582,7 @@ mod cuda_backend {
                             out_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (2, 64) => ffi::afq_dequantize_2bit_gs64_f16(
                             wq_ptr as *const u32,
@@ -2518,6 +2591,7 @@ mod cuda_backend {
                             out_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (2, 128) => ffi::afq_dequantize_2bit_gs128_f16(
                             wq_ptr as *const u32,
@@ -2526,6 +2600,7 @@ mod cuda_backend {
                             out_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (3, 32) => ffi::afq_dequantize_3bit_gs32_f16(
                             wq_ptr as *const u8,
@@ -2534,6 +2609,7 @@ mod cuda_backend {
                             out_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (3, 64) => ffi::afq_dequantize_3bit_gs64_f16(
                             wq_ptr as *const u8,
@@ -2542,6 +2618,7 @@ mod cuda_backend {
                             out_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (3, 128) => ffi::afq_dequantize_3bit_gs128_f16(
                             wq_ptr as *const u8,
@@ -2550,6 +2627,7 @@ mod cuda_backend {
                             out_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 32) => ffi::afq_dequantize_4bit_gs32_f16(
                             wq_ptr as *const u32,
@@ -2558,6 +2636,7 @@ mod cuda_backend {
                             out_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 64) => ffi::afq_dequantize_4bit_gs64_f16(
                             wq_ptr as *const u32,
@@ -2566,6 +2645,7 @@ mod cuda_backend {
                             out_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 128) => ffi::afq_dequantize_4bit_gs128_f16(
                             wq_ptr as *const u32,
@@ -2574,6 +2654,7 @@ mod cuda_backend {
                             out_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (6, 32) => ffi::afq_dequantize_6bit_gs32_f16(
                             wq_ptr as *const u8,
@@ -2582,6 +2663,7 @@ mod cuda_backend {
                             out_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (6, 64) => ffi::afq_dequantize_6bit_gs64_f16(
                             wq_ptr as *const u8,
@@ -2590,6 +2672,7 @@ mod cuda_backend {
                             out_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (6, 128) => ffi::afq_dequantize_6bit_gs128_f16(
                             wq_ptr as *const u8,
@@ -2598,6 +2681,7 @@ mod cuda_backend {
                             out_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 32) => ffi::afq_dequantize_8bit_gs32_f16(
                             wq_ptr as *const u32,
@@ -2606,6 +2690,7 @@ mod cuda_backend {
                             out_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 64) => ffi::afq_dequantize_8bit_gs64_f16(
                             wq_ptr as *const u32,
@@ -2614,6 +2699,7 @@ mod cuda_backend {
                             out_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 128) => ffi::afq_dequantize_8bit_gs128_f16(
                             wq_ptr as *const u32,
@@ -2622,6 +2708,7 @@ mod cuda_backend {
                             out_ptr as *mut f16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         _ => candle_core::bail!(
                             "Unsupported bits/group_size combination: {bits}/{group_size}"
@@ -2658,6 +2745,7 @@ mod cuda_backend {
                             out_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (2, 64) => ffi::afq_dequantize_2bit_gs64_f32(
                             wq_ptr as *const u32,
@@ -2666,6 +2754,7 @@ mod cuda_backend {
                             out_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (2, 128) => ffi::afq_dequantize_2bit_gs128_f32(
                             wq_ptr as *const u32,
@@ -2674,6 +2763,7 @@ mod cuda_backend {
                             out_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (3, 32) => ffi::afq_dequantize_3bit_gs32_f32(
                             wq_ptr as *const u8,
@@ -2682,6 +2772,7 @@ mod cuda_backend {
                             out_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (3, 64) => ffi::afq_dequantize_3bit_gs64_f32(
                             wq_ptr as *const u8,
@@ -2690,6 +2781,7 @@ mod cuda_backend {
                             out_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (3, 128) => ffi::afq_dequantize_3bit_gs128_f32(
                             wq_ptr as *const u8,
@@ -2698,6 +2790,7 @@ mod cuda_backend {
                             out_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 32) => ffi::afq_dequantize_4bit_gs32_f32(
                             wq_ptr as *const u32,
@@ -2706,6 +2799,7 @@ mod cuda_backend {
                             out_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 64) => ffi::afq_dequantize_4bit_gs64_f32(
                             wq_ptr as *const u32,
@@ -2714,6 +2808,7 @@ mod cuda_backend {
                             out_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 128) => ffi::afq_dequantize_4bit_gs128_f32(
                             wq_ptr as *const u32,
@@ -2722,6 +2817,7 @@ mod cuda_backend {
                             out_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (6, 32) => ffi::afq_dequantize_6bit_gs32_f32(
                             wq_ptr as *const u8,
@@ -2730,6 +2826,7 @@ mod cuda_backend {
                             out_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (6, 64) => ffi::afq_dequantize_6bit_gs64_f32(
                             wq_ptr as *const u8,
@@ -2738,6 +2835,7 @@ mod cuda_backend {
                             out_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (6, 128) => ffi::afq_dequantize_6bit_gs128_f32(
                             wq_ptr as *const u8,
@@ -2746,6 +2844,7 @@ mod cuda_backend {
                             out_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 32) => ffi::afq_dequantize_8bit_gs32_f32(
                             wq_ptr as *const u32,
@@ -2754,6 +2853,7 @@ mod cuda_backend {
                             out_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 64) => ffi::afq_dequantize_8bit_gs64_f32(
                             wq_ptr as *const u32,
@@ -2762,6 +2862,7 @@ mod cuda_backend {
                             out_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 128) => ffi::afq_dequantize_8bit_gs128_f32(
                             wq_ptr as *const u32,
@@ -2770,6 +2871,7 @@ mod cuda_backend {
                             out_ptr as *mut f32,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         _ => candle_core::bail!(
                             "Unsupported bits/group_size combination: {bits}/{group_size}"
@@ -2806,6 +2908,7 @@ mod cuda_backend {
                             out_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (2, 64) => ffi::afq_dequantize_2bit_gs64_bf16(
                             wq_ptr as *const u32,
@@ -2814,6 +2917,7 @@ mod cuda_backend {
                             out_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (2, 128) => ffi::afq_dequantize_2bit_gs128_bf16(
                             wq_ptr as *const u32,
@@ -2822,6 +2926,7 @@ mod cuda_backend {
                             out_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (3, 32) => ffi::afq_dequantize_3bit_gs32_bf16(
                             wq_ptr as *const u8,
@@ -2830,6 +2935,7 @@ mod cuda_backend {
                             out_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (3, 64) => ffi::afq_dequantize_3bit_gs64_bf16(
                             wq_ptr as *const u8,
@@ -2838,6 +2944,7 @@ mod cuda_backend {
                             out_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (3, 128) => ffi::afq_dequantize_3bit_gs128_bf16(
                             wq_ptr as *const u8,
@@ -2846,6 +2953,7 @@ mod cuda_backend {
                             out_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 32) => ffi::afq_dequantize_4bit_gs32_bf16(
                             wq_ptr as *const u32,
@@ -2854,6 +2962,7 @@ mod cuda_backend {
                             out_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 64) => ffi::afq_dequantize_4bit_gs64_bf16(
                             wq_ptr as *const u32,
@@ -2862,6 +2971,7 @@ mod cuda_backend {
                             out_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 128) => ffi::afq_dequantize_4bit_gs128_bf16(
                             wq_ptr as *const u32,
@@ -2870,6 +2980,7 @@ mod cuda_backend {
                             out_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (6, 32) => ffi::afq_dequantize_6bit_gs32_bf16(
                             wq_ptr as *const u8,
@@ -2878,6 +2989,7 @@ mod cuda_backend {
                             out_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (6, 64) => ffi::afq_dequantize_6bit_gs64_bf16(
                             wq_ptr as *const u8,
@@ -2886,6 +2998,7 @@ mod cuda_backend {
                             out_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (6, 128) => ffi::afq_dequantize_6bit_gs128_bf16(
                             wq_ptr as *const u8,
@@ -2894,6 +3007,7 @@ mod cuda_backend {
                             out_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 32) => ffi::afq_dequantize_8bit_gs32_bf16(
                             wq_ptr as *const u32,
@@ -2902,6 +3016,7 @@ mod cuda_backend {
                             out_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 64) => ffi::afq_dequantize_8bit_gs64_bf16(
                             wq_ptr as *const u32,
@@ -2910,6 +3025,7 @@ mod cuda_backend {
                             out_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 128) => ffi::afq_dequantize_8bit_gs128_bf16(
                             wq_ptr as *const u32,
@@ -2918,6 +3034,7 @@ mod cuda_backend {
                             out_ptr as *mut bf16,
                             rows as i32,
                             cols as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         _ => candle_core::bail!(
                             "Unsupported bits/group_size combination: {bits}/{group_size}"
@@ -3041,6 +3158,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (2, 64) => ffi::afq_qmv_2bit_gs64_f16(
                             x_ptr as *const f16,
@@ -3051,6 +3169,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (2, 128) => ffi::afq_qmv_2bit_gs128_f16(
                             x_ptr as *const f16,
@@ -3061,6 +3180,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (3, 32) => ffi::afq_qmv_3bit_gs32_f16(
                             x_ptr as *const f16,
@@ -3071,6 +3191,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (3, 64) => ffi::afq_qmv_3bit_gs64_f16(
                             x_ptr as *const f16,
@@ -3081,6 +3202,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (3, 128) => ffi::afq_qmv_3bit_gs128_f16(
                             x_ptr as *const f16,
@@ -3091,6 +3213,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 32) => ffi::afq_qmv_4bit_gs32_f16(
                             x_ptr as *const f16,
@@ -3101,6 +3224,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 64) => ffi::afq_qmv_4bit_gs64_f16(
                             x_ptr as *const f16,
@@ -3111,6 +3235,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 128) => ffi::afq_qmv_4bit_gs128_f16(
                             x_ptr as *const f16,
@@ -3121,6 +3246,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (6, 32) => ffi::afq_qmv_6bit_gs32_f16(
                             x_ptr as *const f16,
@@ -3131,6 +3257,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (6, 64) => ffi::afq_qmv_6bit_gs64_f16(
                             x_ptr as *const f16,
@@ -3141,6 +3268,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (6, 128) => ffi::afq_qmv_6bit_gs128_f16(
                             x_ptr as *const f16,
@@ -3151,6 +3279,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 32) => ffi::afq_qmv_8bit_gs32_f16(
                             x_ptr as *const f16,
@@ -3161,6 +3290,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 64) => ffi::afq_qmv_8bit_gs64_f16(
                             x_ptr as *const f16,
@@ -3171,6 +3301,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 128) => ffi::afq_qmv_8bit_gs128_f16(
                             x_ptr as *const f16,
@@ -3181,6 +3312,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         _ => candle_core::bail!(
                             "Unsupported bits/group_size combination: {bits}/{group_size}"
@@ -3221,6 +3353,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (2, 64) => ffi::afq_qmv_2bit_gs64_f32(
                             x_ptr as *const f32,
@@ -3231,6 +3364,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (2, 128) => ffi::afq_qmv_2bit_gs128_f32(
                             x_ptr as *const f32,
@@ -3241,6 +3375,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (3, 32) => ffi::afq_qmv_3bit_gs32_f32(
                             x_ptr as *const f32,
@@ -3251,6 +3386,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (3, 64) => ffi::afq_qmv_3bit_gs64_f32(
                             x_ptr as *const f32,
@@ -3261,6 +3397,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (3, 128) => ffi::afq_qmv_3bit_gs128_f32(
                             x_ptr as *const f32,
@@ -3271,6 +3408,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 32) => ffi::afq_qmv_4bit_gs32_f32(
                             x_ptr as *const f32,
@@ -3281,6 +3419,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 64) => ffi::afq_qmv_4bit_gs64_f32(
                             x_ptr as *const f32,
@@ -3291,6 +3430,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 128) => ffi::afq_qmv_4bit_gs128_f32(
                             x_ptr as *const f32,
@@ -3301,6 +3441,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (6, 32) => ffi::afq_qmv_6bit_gs32_f32(
                             x_ptr as *const f32,
@@ -3311,6 +3452,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (6, 64) => ffi::afq_qmv_6bit_gs64_f32(
                             x_ptr as *const f32,
@@ -3321,6 +3463,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (6, 128) => ffi::afq_qmv_6bit_gs128_f32(
                             x_ptr as *const f32,
@@ -3331,6 +3474,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 32) => ffi::afq_qmv_8bit_gs32_f32(
                             x_ptr as *const f32,
@@ -3341,6 +3485,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 64) => ffi::afq_qmv_8bit_gs64_f32(
                             x_ptr as *const f32,
@@ -3351,6 +3496,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 128) => ffi::afq_qmv_8bit_gs128_f32(
                             x_ptr as *const f32,
@@ -3361,6 +3507,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         _ => candle_core::bail!(
                             "Unsupported bits/group_size combination: {bits}/{group_size}"
@@ -3404,6 +3551,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (2, 64) => ffi::afq_qmv_2bit_gs64_bf16(
                             x_ptr as *const bf16,
@@ -3414,6 +3562,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (2, 128) => ffi::afq_qmv_2bit_gs128_bf16(
                             x_ptr as *const bf16,
@@ -3424,6 +3573,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (3, 32) => ffi::afq_qmv_3bit_gs32_bf16(
                             x_ptr as *const bf16,
@@ -3434,6 +3584,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (3, 64) => ffi::afq_qmv_3bit_gs64_bf16(
                             x_ptr as *const bf16,
@@ -3444,6 +3595,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (3, 128) => ffi::afq_qmv_3bit_gs128_bf16(
                             x_ptr as *const bf16,
@@ -3454,6 +3606,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 32) => ffi::afq_qmv_4bit_gs32_bf16(
                             x_ptr as *const bf16,
@@ -3464,6 +3617,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 64) => ffi::afq_qmv_4bit_gs64_bf16(
                             x_ptr as *const bf16,
@@ -3474,6 +3628,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (4, 128) => ffi::afq_qmv_4bit_gs128_bf16(
                             x_ptr as *const bf16,
@@ -3484,6 +3639,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (6, 32) => ffi::afq_qmv_6bit_gs32_bf16(
                             x_ptr as *const bf16,
@@ -3494,6 +3650,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (6, 64) => ffi::afq_qmv_6bit_gs64_bf16(
                             x_ptr as *const bf16,
@@ -3504,6 +3661,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (6, 128) => ffi::afq_qmv_6bit_gs128_bf16(
                             x_ptr as *const bf16,
@@ -3514,6 +3672,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 32) => ffi::afq_qmv_8bit_gs32_bf16(
                             x_ptr as *const bf16,
@@ -3524,6 +3683,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 64) => ffi::afq_qmv_8bit_gs64_bf16(
                             x_ptr as *const bf16,
@@ -3534,6 +3694,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         (8, 128) => ffi::afq_qmv_8bit_gs128_bf16(
                             x_ptr as *const bf16,
@@ -3544,6 +3705,7 @@ mod cuda_backend {
                             m as i32,
                             n as i32,
                             k as i32,
+                            dev.cuda_stream().cu_stream() as *mut std::ffi::c_void,
                         ),
                         _ => candle_core::bail!(
                             "Unsupported bits/group_size combination: {bits}/{group_size}"
