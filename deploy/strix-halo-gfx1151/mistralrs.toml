@@ -79,7 +79,7 @@ max_prefill_chunk_tokens = 4096
 # Prefill batch token quantum: larger chunks amortize per-chunk overhead for long prompts.
 
 # ============================================================
-# Qwen3.6 35B MoE (ACTIVE default, eager: first model seeds the instance)
+# Qwen3.6 35B MoE (lazy; the orcarouter 27B is the entry default)
 # ============================================================
 
 [[models]]

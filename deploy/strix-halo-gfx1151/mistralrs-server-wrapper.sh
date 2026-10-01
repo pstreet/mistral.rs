@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Wrapper script for the mistral.rs server with proper ROCm environment
-# Full perf history: $HOME/LocalAI/HANDOFF-mistralrs-candle-rocm.md
+# Full history + journal: mistral.rs/TODO.md (the old HANDOFF file was
+# merged into it 2026-09-25)
 
 set -euo pipefail
 

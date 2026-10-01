@@ -43,11 +43,10 @@ P3 = polish, Deferred = do not do on RDNA.
       (avail 57-62GB vs need ~73GB); mmap path (`NO_MMAP=0`) loads the same 37.8GB
       fine. Decode config identical across arms (MTP n=2 greedy, graphs on, Q8_0
       KV 2048MB), so tok/s numbers are comparable; only the load path differed.
-      Follow-up: live `models/mistralrs.toml` runs 35B at Q5_K_XL while the deploy
-      copy already points at Q4_K_XL — flip prod to Q4 (+8% decode, quality-clean)
-      or record why Q5 stays. Follow-up: live `models/mistralrs.toml` runs 35B at
-      Q5_K_XL while the deploy copy already points at Q4_K_XL — flip prod to Q4
-      (+8% decode, quality-clean) or record why Q5 stays.
+      RESOLVED 2026-10-01: the Q4/Q5 "divergence" was the broken config
+      symlink - the deploy copy was a stale unlinked file frozen at Sep
+      28, the live file was canonical and deliberately runs Q5_K_XL.
+      Symlink restored + deploy re-synced to live (fd3ef4b8e); Q5 stays.
 - [x] ~S `ATTN_PROBE` removed (done 2026-09-25, was §1). Verified push-only
       across the crate (no reader; the "end-of-forward dump" in the comment never
       existed — aspirational since `506f72b8a`). Deleted the static + both push
@@ -518,6 +517,16 @@ P3 = polish, Deferred = do not do on RDNA.
       rather than probe->init cycles, pending hardware validation.
 - [ ] ~L multi-backend runtime: CPU + NVIDIA + AMD + Intel in ONE
       process, per-model device assignment. Design agreed 2026-09-26;
+      UPDATE 2026-10-01: an RTX 3090 eGPU (sm86, 24GB, CUDA 13.3 UMD) is
+      now attached - the cuda role has real hardware for the first time,
+      so dual-build two-vendor validation is unblocked (serving stays on
+      the AMD role by doctrine; auto-selection confirms Hip as the serving
+      device with the 3090 present). Known refinement needed before the
+      3090 can claim FlashInfer in a dual build: the supports_layer gate
+      is BUILD-shape-keyed (all(cuda, not(rocm)), commit 94e1171c5) not
+      device-keyed - correct for the hip serving role, suboptimal if a
+      model is ever served on the 3090 via a dual build. FA2 buildable
+      (flash-attn feature), FA3 not (Hopper-only).
       precedent = the ggml/llama.cpp architecture (separate backend
       registration incl. a fully independent Vulkan backend that
       covers all three GPU vendors; their "ROCm backend is the CUDA
@@ -972,6 +981,21 @@ P3 = polish, Deferred = do not do on RDNA.
       (214.9/610.1/23.4). MTP only wins on draft acceptance; these
       short deterministic probes show no uplift. Paged-attn pays
       under multi-turn/concurrency load, not single-stream speed.
+      DOC PASS 2026-10-01: environment-variables.md gained the missing
+      functional knobs (MISTRALRS_NO_FAST_MMVQ, MISTRALRS_MOE_BACKEND,
+      MISTRALRS_FORCE_AVX2) plus the expert/debug cluster
+      (MISTRALRS_NAN_TRACE/NAN_PROBE/LAYER_PROFILE, MRS_ZERO_WS,
+      MRS_POISON_NAN) and a corrected MISTRALRS_DECODE_ARENA_OVERRIDE row
+      (x1.25 + geometric regrow; the old row said 6x). The wrapper's stale
+      HANDOFF pointer now names TODO.md. The 35B "ACTIVE default" toml
+      comment corrected; mistralrs-test.toml header now declares it the
+      pre-router smoke config. TODO items closed: 35B Q4/Q5 follow-up
+      (resolved: the divergence was the broken symlink), stale deploy
+      comments, env-knob documentation (audited: half the listed knobs
+      were already documented or deleted; ROCm-docs remainder split into
+      its own item). The multi-backend item gained the 3090 status note
+      (cuda-role hardware now real; FlashInfer gate needs a device-keyed
+      refinement before a dual-served 3090 can claim it).
       DECODE-GRAPH CAPTURE CHAIN FIXED 2026-09-30 (committed 55b3d270d): the
       dual-prod 27B captured ZERO decode graphs (866 incompatible_shape
       skips) and hybrid+MTP precapture crashed; six fixes, each surfacing
@@ -1291,12 +1315,13 @@ P3 = polish, Deferred = do not do on RDNA.
       not delete it: `cuMemPoolTrimTo`, `cuMemcpy{HtoD,DtoH}Async_v2`, `alloc_pinned`,
       `CudaEvent::elapsed_ms`, `CUDA_ERROR_NOT_SUPPORTED`
       (`cudarc-hip/src/driver/sys.rs:55,260,292,310`). Trivial insurance.
-- [ ] _S stale deploy comments (was §7, trivial):
-    - `deploy/strix-halo-gfx1151/mistralrs.toml:73-75` still labels 35B MoE
-      "ACTIVE default" (it is lazy-loaded; 27B is the entry default)
-    - `mistralrs-test.toml:1-15` describes the pre-router world
-      ("loads ALL [[models]] entries on startup"); `:39` `memory_mb = 512`
-      contradicts the comment block above it. Verify which is authoritative.
+- [x] _S stale deploy comments (was §7; closed 2026-10-01): the 35B MoE
+      "ACTIVE default" label corrected to "lazy; the orcarouter 27B is the
+      entry default" in the re-synced toml; `mistralrs-test.toml` header
+      now states it is a pre-router smoke config (eager loads, no
+      demand-loading, no [router] policy) and points at mistralrs.toml
+      as the live router config. The `memory_mb = 512` there is
+      intentional for smoke runs.
 - [ ] ~M ROCm CI, remaining checklist (was §3, after P0 build-only):
     - [ ] Set up ROCm runner (self-hosted or `rocm/actions` if available)
     - [ ] Add test job running basic inference on ROCm
@@ -1318,18 +1343,24 @@ mistral.rs hot zones, then merge.
       vs upstream `f80854c5` (#3697) look like the same aarch64 repack work.
       Diff the two, converge to one impl.
 - [ ] ~L decide `candle-ug` keep vs drop before upstream `ddf1b879` deletes it.
-- [ ] _S document the ~15 functional but undocumented MRS_/MISTRALRS_ env knobs (was §7)
-      in `docs/src/content/docs/reference/environment-variables.md`
-      (MRS_GDN_KERNEL, MRS_NO_FUSED_QKV/FFN, MRS_NO_FAST_MMVQ, MRS_ATTENTION_DEBUG,
-      MRS_DIFFUSION_DEBUG_DUMP, MISTRALRS_MOE_BACKEND, MISTRALRS_FORCE_AVX2,
-      MISTRALRS_CPU_KV_F32, the standalone-GGUF MISTRALRS_*_GGUF vars, ...).
-      A single batch "debug and tuning envs" section works for the debug leftovers
-      (MRS_PROFILE, LAYER_PROFILE, MRS_TRACE_LAYERS, NAN_PROBE, MRS_DEBUG_PA/CK,
-      MRS_MMQ_DEBUG, MRS_ZERO_WS, MRS_POISON_NAN, MRS_NAN_TRACE, MRS_ATTENTION_DEBUG):
-      either document as expert/knob or delete, now that the NaN hunt is over.
-      Plus ROCm docs: build instructions, `CANDLE_ROCM_PATH`/`CANDLE_ROCM_ARCH`
-      (fix the hardcode-vs-knob issue in P3 first), ROCm example in `examples/`,
-      known limitations vs CUDA (§Deferred + appendices). Can ride along with merge.
+- [x] _S document the functional MRS_/MISTRALRS_ env knobs (was §7; done
+      2026-10-01): the audit showed the old list half stale - `MRS_GDN_KERNEL`
+      (now `MISTRALRS_GDN_KERNEL`), `MISTRALRS_NO_FAST_MMQ`,
+      `CANDLE_NO_FAST_MMQ`, and the GDN/FlashInfer selectors were already
+      documented, and MRS_NO_FUSED_QKV/FFN, MRS_ATTENTION_DEBUG,
+      MRS_DIFFUSION_DEBUG_DUMP, MRS_PROFILE, MRS_TRACE_LAYERS, MRS_DEBUG_PA,
+      MRS_MMQ_DEBUG no longer exist in the tree. Newly documented in
+      `docs/src/content/docs/reference/environment-variables.md`:
+      `MISTRALRS_NO_FAST_MMVQ`, `MISTRALRS_MOE_BACKEND`,
+      `MISTRALRS_FORCE_AVX2`, and the expert/debug cluster
+      (`MISTRALRS_NAN_TRACE`, `MISTRALRS_NAN_PROBE`,
+      `MISTRALRS_LAYER_PROFILE`, `MRS_ZERO_WS`, `MRS_POISON_NAN`); the
+      `MISTRALRS_DECODE_ARENA_OVERRIDE` row was corrected to the measured
+      x1.25 default + geometric regrow (was "6x the warmup").
+- [ ] _S ROCm docs (remainder of the old §7): build instructions,
+      `CANDLE_ROCM_PATH`/`CANDLE_ROCM_ARCH` (fix the hardcode-vs-knob issue
+      in P3 first), ROCm example in `examples/`, known limitations vs CUDA
+      (§Deferred + appendices). Can ride along with merge.
 
 ### mistral.rs (17 behind at audit, 59-file overlap)
 

@@ -72,7 +72,7 @@ See [CPU threads and affinity](/guides/perf/throughput-tuning/#cpu-threads-and-a
 |---|---|
 | `MISTRALRS_CUDA_GRAPHS` | CUDA graph acceleration is enabled by default when supported. Set to `0`, `false`, `no`, or `off` to disable. See [CUDA graphs](/guides/perf/paged-attention/#cuda-graphs). |
 | `MISTRALRS_CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES` | Absolute byte budget for resident decode-graph entries, overriding the default (10x the largest entry, clamped to 4-8% of device memory). Lower it if cached graphs squeeze the KV cache; raise it to keep more batch-shape entries resident instead of recapturing. |
-| `MISTRALRS_DECODE_ARENA_OVERRIDE` | ROCm only. Overrides the decode-graph capture arena size in bytes (default: 6x the warmup allocation plus 32 MiB). Raise it if capture fails with an arena overflow; the size actually needed is emitted on the `[cudarc] CAPTURE` debug log line (visible with `-v` / debug logging). |
+| `MISTRALRS_DECODE_ARENA_OVERRIDE` | ROCm only. Overrides the decode-graph capture arena size in bytes (default: 1.25x the warmup allocation plus 32 MiB). Capture normally needs no override: an overflowing capture aborts cleanly and regrows the arena geometrically (up to four attempts) before giving up; the size actually needed is emitted on the `[cudarc] CAPTURE` debug log line (visible with `-v` / debug logging). |
 | `MISTRALRS_DFLASH_ADAPTIVE` | Set to `1` or `true` to use full DFlash draft depth for batches up to 2 and depth 1 above that. Only applies when `--mtp-n-predict` is not set. |
 | `MISTRALRS_DFLASH_ISQ` | ISQ type for DFlash drafter weights (`q4k`, `q6k`, ... or `none` for bf16); defaults to the target's in-situ quantization type. |
 | `MISTRALRS_FLASHINFER_DECODE` | Disables FlashInfer decode acceleration when set to `0`, `false`, `no`, or `off`. Use only for compatibility troubleshooting. |
@@ -84,8 +84,16 @@ See [CPU threads and affinity](/guides/perf/throughput-tuning/#cpu-threads-and-a
 | `CANDLE_NO_FAST_MMQ` | Candle-side override for candle's own internal fast-matmul paths; independent of the mistral.rs MMQ dispatch. |
 | `CANDLE_DMM_F16_MIN` | Minimum `b*m` rows for the dequantize-to-F16 hipBLASLt GEMM path (default 256). Below it, quantized matmuls fall to the small-batch kernels. |
 | `CANDLE_LT_COMPUTE` | Set to `32` to force F32 accumulation in F16 hipBLASLt GEMMs (direct F16 matmuls and the dequantize-to-F16 path). Default is F16 accumulation; the heuristic failures that once required F32 on RDNA parts are gone on current ROCm stacks, and F32 accumulation is performance-neutral. |
+| `MISTRALRS_NO_FAST_MMVQ` | Mistral.rs dispatch override: set to any value to disable the fused MMVQ decode kernels, routing every quantized GEMV through dequantize GEMMs instead. Unset (default), decode (`b*m <= 8`) uses the fused MMVQ kernels; the large-batch MMQ path is governed separately by `MISTRALRS_NO_FAST_MMQ`. |
+| `MISTRALRS_MOE_BACKEND` | Overrides the MoE experts kernel backend selection: `fused`, `native`, `legacy`, or `wmma` select the fused path, `fast` the fast path, plus `cutile` / `cutlass` where those features are built. Unset (default), selection is automatic. |
+| `MISTRALRS_FORCE_AVX2` | Set to `1` to force the AVX2+FMA CPU attention kernels even when runtime CPU feature detection would not select them (expert; for benchmarking on fixed hardware). |
 | `MISTRALRS_DEEPGEMM_CACHE_DIR` | Overrides the owner-private, content-versioned DeepGEMM cubin and JIT-header cache. Defaults below `XDG_CACHE_HOME`, then `~/.cache`. |
 | `MISTRALRS_DEEPGEMM_NVCC` | Path to the `nvcc` executable used only when a DeepGEMM kernel is absent from the cache. A populated cache does not require runtime `nvcc`. |
+| `MISTRALRS_NAN_TRACE` | Expert NaN debugging: enables the GDN/text-model per-op NaN trace probes used while hunting numerical bugs. Leave unset in production. |
+| `MISTRALRS_NAN_PROBE` | Expert NaN debugging: logs the first tensors whose sum is NaN, to locate a bad layer or component. Leave unset in production. |
+| `MISTRALRS_LAYER_PROFILE` | Expert: prints per-layer wall times for the qwen3-next model family. |
+| `MRS_ZERO_WS` | Expert: zero the persistent hipBLASLt workspace before every matmul, to test whether stale workspace bytes can corrupt results. Never set in production. |
+| `MRS_POISON_NAN` | Expert: fill freshly allocated paged-KV blocks with NaN so any read-before-write fails deterministically. Never set in production. |
 | `MISTRALRS_NO_MLA` | Disables MLA acceleration for DeepSeek V2/V3 when set to `1`. Use only for compatibility troubleshooting. |
 | `MISTRALRS_GGUF_AFFINE_BACKEND` | Set to `on` to speed up GGUF matmuls at batch sizes of 8 or more. Off by default because it keeps a second copy of the quantized weights, taking that memory from the KV cache. Worth enabling for production serving with high concurrency. |
 | `CUDA_TOOLKIT_PATH` | CUDA toolkit root used by cuTile for headers, `tileiras`, and Tile IR bytecode compatibility. Recommended when multiple CUDA toolkits are installed. |

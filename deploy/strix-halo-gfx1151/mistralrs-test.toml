@@ -1,3 +1,10 @@
+# mistralrs-test.toml - SMOKE-TEST config (pre-router era, kept for manual
+# single-model smoke runs). It predates the router world: entries here load
+# EAGERLY at boot and there is no demand-loading, no [router] policy, and
+# the alias/default semantics differ from the production toml. For the
+# live router config (all-lazy, demand-load, eviction) use
+# mistralrs.toml - do not copy this file's structure for new configs.
+#
 # mistralrs.toml - mistral.rs config mirroring models.ini
 #
 # Loaded by: mistralrs from-config -f <this file> (see ~/.config/mistralrs-server-wrapper.sh)
