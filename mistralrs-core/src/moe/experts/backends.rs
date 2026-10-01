@@ -1937,7 +1937,7 @@ impl FastExpertsWeights {
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(super) fn select_cuda_fast_path(forward: &MoEForward) -> Option<MoECudaFastPath> {
-        if !mistralrs_quant::device_has_fused_gguf(forward.xs.device()) {
+        if !mistralrs_quant::device_has_fused_ops(forward.xs.device()) {
             return None;
         }
 
@@ -1978,7 +1978,7 @@ impl FastExpertsWeights {
             .process_routed_stats(forward.xs_flat, ids)?;
         self.fused_up_proj
             .process_routed_stats(forward.xs_flat, ids)?;
-        let ys = if mistralrs_quant::device_has_fused_gguf(forward.xs.device()) {
+        let ys = if mistralrs_quant::device_has_fused_ops(forward.xs.device()) {
             let xs =
                 forward
                     .xs_flat
@@ -2038,7 +2038,7 @@ impl FastExpertsWeights {
             .process_routed_stats(forward.xs_flat, ids)?;
 
         let (gather_input, gather_ids) =
-            if mistralrs_quant::device_has_fused_gguf(forward.xs.device()) {
+            if mistralrs_quant::device_has_fused_ops(forward.xs.device()) {
                 (
                     forward
                         .xs_flat
@@ -2074,7 +2074,7 @@ impl FastExpertsWeights {
         let down_input = crate::ops::mul_and_act(&gate, &up, config.act)?;
         self.fused_down_proj
             .process_routed_stats(&down_input, ids)?;
-        let down_base = if mistralrs_quant::device_has_fused_gguf(forward.xs.device()) {
+        let down_base = if mistralrs_quant::device_has_fused_ops(forward.xs.device()) {
             self.fused_down_proj.gather_forward(&down_input, ids)?
         } else {
             self.fused_down_proj.gather_forward(

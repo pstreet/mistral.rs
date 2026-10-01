@@ -235,7 +235,7 @@ pub use mxfp4::MXFP4Layer;
 pub use pending_layer::{pending_isq_channel, PendingIsqLayer};
 pub use pertensor_fp8::PerTensorFP8Linear;
 pub use unquantized::UnquantLinear;
-pub use utils::device_has_fused_gguf;
+pub use utils::device_has_fused_ops;
 pub use utils::flash_attn_sinks_metal;
 pub use utils::flash_attn_sinks_varlen_metal;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -1963,7 +1963,7 @@ pub fn try_fused_quantized_ffn(
     down: &dyn QuantMethod,
     activation: GluActivationType,
 ) -> Result<Option<Tensor>> {
-    if !crate::utils::device_has_fused_gguf(xs.device()) {
+    if !crate::utils::device_has_fused_ops(xs.device()) {
         return Ok(None);
     }
     if gate.stats_snapshot().is_some()
@@ -2079,7 +2079,7 @@ pub fn try_fused_quantized_gate_up(
     up: &dyn QuantMethod,
     activation: GluActivationType,
 ) -> Result<Option<Tensor>> {
-    if !crate::utils::device_has_fused_gguf(xs.device()) {
+    if !crate::utils::device_has_fused_ops(xs.device()) {
         return Ok(None);
     }
     if gate.stats_snapshot().is_some() || up.stats_snapshot().is_some() {
@@ -2196,7 +2196,7 @@ pub fn try_fused_quantized_qkv(
     k: &dyn QuantMethod,
     v: &dyn QuantMethod,
 ) -> Result<Option<(Tensor, Tensor, Tensor)>> {
-    if !crate::utils::device_has_fused_gguf(xs.device()) {
+    if !crate::utils::device_has_fused_ops(xs.device()) {
         return Ok(None);
     }
     if q.stats_snapshot().is_some() || k.stats_snapshot().is_some() || v.stats_snapshot().is_some()

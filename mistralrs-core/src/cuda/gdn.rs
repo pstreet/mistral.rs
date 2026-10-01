@@ -66,19 +66,12 @@ fn gdn_modern_arch(arch: GpuArch) -> bool {
     }
 }
 
-// The fused GDN kernels serve the compiled vendor in single-vendor builds
-// and the AMD role in dual builds; other devices take the generic paths.
+// The fused GDN kernels ride the same companion as every other fused op,
+// so the shared role predicate decides. The old is_cuda()-first body
+// claimed them for the NVIDIA role in dual builds, whose
+// as_role_storage().expect() sites would then panic instead of degrade.
 pub(crate) fn gdn_device_supported(device: &Device) -> bool {
-    if device.is_cuda() {
-        return true;
-    }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
-    {
-        if device.is_hip() {
-            return true;
-        }
-    }
-    false
+    mistralrs_quant::device_has_fused_ops(device)
 }
 pub(crate) const GDN_DECODE_K_DIM: usize = 128;
 pub(crate) const GDN_DECODE_V_DIM: usize = 128;

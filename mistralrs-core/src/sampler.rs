@@ -2165,7 +2165,7 @@ impl Sampler {
         multiple_sequences: bool,
     ) -> Result<Logprobs> {
         #[cfg(any(feature = "cuda", feature = "rocm"))]
-        if logits.device().is_cuda()
+        if mistralrs_quant::device_has_fused_ops(logits.device())
             && self.can_sample_greedy_on_device(
                 return_logprobs,
                 sample_speculative,
@@ -2179,7 +2179,7 @@ impl Sampler {
         }
 
         #[cfg(any(feature = "cuda", feature = "rocm"))]
-        if logits.device().is_cuda()
+        if mistralrs_quant::device_has_fused_ops(logits.device())
             && self.can_sample_topk_on_device(
                 return_logprobs,
                 sample_speculative,

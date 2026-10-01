@@ -48,15 +48,29 @@ pub(crate) fn get_cuda_device(x: &Tensor) -> candle_core::Result<&CudaDevice> {
 /// exercise the same kernels in every shape.
 #[cfg(all(test, any(feature = "cuda", feature = "rocm")))]
 pub(crate) fn test_gpu_device() -> Device {
+    // MISTRALRS_TEST_DEVICE overrides the default so the same kernel test
+    // bar can be pointed at the non-serving role (e.g. the NVIDIA role of
+    // a dual build during bring-up).
+    match std::env::var("MISTRALRS_TEST_DEVICE").as_deref() {
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        Ok("cuda:0") => return Device::new_cuda(0).expect("cuda:0 for kernel tests"),
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        Ok("hip:0") => return Device::new_hip(0).expect("hip:0 for kernel tests"),
+        _ => {}
+    }
     #[cfg(all(feature = "cuda", feature = "rocm"))]
     return Device::new_hip(0).expect("hip:0 for kernel tests");
     #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     return Device::new_cuda(0).expect("cuda-role device for kernel tests");
 }
 
-/// Devices covered by the fused GGUF launchers: CUDA in every GPU shape,
-/// plus Hip in dual builds (where the `_hip` modules replace the launchers).
-pub fn device_has_fused_gguf(device: &Device) -> bool {
+/// Devices covered by the fork's fused C kernels - the GGUF matmul
+/// launchers, rope, the MoE router/experts, GDN, and on-device sampling:
+/// the single GPU role in single-vendor builds, and the AMD role only in
+/// dual builds (all fused kernels are hipcc-built there and reach the
+/// driver through the companion). The NVIDIA role in dual builds degrades
+/// to the eager/generic paths per the BackendCaps contract.
+pub fn device_has_fused_ops(device: &Device) -> bool {
     #[cfg(all(feature = "cuda", feature = "rocm"))]
     {
         // Dual builds: the fused launchers are hipcc-built and reach the

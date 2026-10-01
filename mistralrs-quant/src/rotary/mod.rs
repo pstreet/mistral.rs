@@ -820,6 +820,153 @@ pub fn apply_rotary_q(
     apply_rotary_q_inner(q, cos, sin, Some(positions), is_neox)
 }
 
+/// Normalize the cos/sin cache to per-token rows `(batch * seq, rot_dim)`,
+/// mirroring the host path's `cache_dims` contract: with positions the
+/// cache is 2D and rows are gathered by the flat position ids; without
+/// positions, `(batch, seq, w)` flattens, and `(seq, w)` broadcasts over
+/// the batch.
+fn tensor_rope_rows(
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: Option<&Tensor>,
+    batch: usize,
+    seq_len: usize,
+) -> Result<(Tensor, Tensor)> {
+    let (cos, sin) = match positions {
+        Some(positions) => {
+            let idx = positions
+                .contiguous()?
+                .flatten_all()?
+                .to_dtype(candle_core::DType::I64)?;
+            (
+                cos.contiguous()?.index_select(&idx, 0)?,
+                sin.contiguous()?.index_select(&idx, 0)?,
+            )
+        }
+        None => {
+            let (mut cos, mut sin) = (cos.contiguous()?, sin.contiguous()?);
+            if cos.rank() == 3 {
+                cos = cos.flatten(0, 1)?;
+                sin = sin.flatten(0, 1)?;
+            }
+            let rows = cos.dim(0)?;
+            if rows == seq_len && batch > 1 {
+                let width = cos.dim(1)?;
+                cos = cos
+                    .broadcast_as((batch, seq_len, width))?
+                    .flatten(0, 1)?;
+                sin = sin
+                    .broadcast_as((batch, seq_len, width))?
+                    .flatten(0, 1)?;
+            }
+            (cos, sin)
+        }
+    };
+    if cos.dims() != sin.dims() {
+        candle_core::bail!(
+            "RoPE cos/sin shape mismatch {:?} {:?}",
+            cos.shape(),
+            sin.shape()
+        );
+    }
+    Ok((cos, sin))
+}
+
+/// Apply rope to one `(batch, seq, heads, head_dim)` tensor with pure
+/// candle ops, so any device storage can serve it. Handles both the
+/// neox (half-split) and interleaved styles and partial rotation
+/// (`rot * 2 < head_dim` passes the tail through unrotated).
+fn tensor_rope_one(
+    x: &Tensor,
+    cos_rows: &Tensor,
+    sin_rows: &Tensor,
+    is_neox: bool,
+) -> Result<Tensor> {
+    use candle_core::D;
+    let (tokens, heads, head_dim) = x.dims3()?;
+    let rot = cos_rows.dim(1)?;
+    if rot == 0 || rot * 2 > head_dim {
+        candle_core::bail!(
+            "RoPE rot dim {} is incompatible with head dim {head_dim}",
+            rot * 2
+        );
+    }
+    let dtype = x.dtype();
+    // (tokens, 1, rot) broadcasting over heads.
+    let cos = cos_rows.to_dtype(dtype)?.unsqueeze(1)?;
+    let sin = sin_rows.to_dtype(dtype)?.unsqueeze(1)?;
+
+    let (rotated, tail) = if is_neox {
+        let x1 = x.narrow(D::Minus1, 0, rot)?;
+        let x2 = x.narrow(D::Minus1, rot, rot)?;
+        let out = Tensor::cat(
+            &[&(x1.broadcast_mul(&cos)? - x2.broadcast_mul(&sin)?)?, &(x2.broadcast_mul(&cos)? + x1.broadcast_mul(&sin)?)?],
+            D::Minus1,
+        )?;
+        (out, head_dim - rot * 2)
+    } else {
+        let pairs = x.narrow(D::Minus1, 0, rot * 2)?.reshape((tokens, heads, rot, 2))?;
+        let cos = cos.unsqueeze(3)?;
+        let sin = sin.unsqueeze(3)?;
+        let even = pairs.narrow(D::Minus1, 0, 1)?;
+        let odd = pairs.narrow(D::Minus1, 1, 1)?;
+        let out = Tensor::cat(
+            &[
+                &(even.broadcast_mul(&cos)? - odd.broadcast_mul(&sin)?)?,
+                &(odd.broadcast_mul(&cos)? + even.broadcast_mul(&sin)?)?,
+            ],
+            3,
+        )?
+        .reshape((tokens, heads, rot * 2))?;
+        (out, head_dim - rot * 2)
+    };
+    if tail > 0 {
+        Ok(Tensor::cat(
+            &[&rotated, &x.narrow(D::Minus1, rot * 2, tail)?],
+            D::Minus1,
+        )?)
+    } else {
+        Ok(rotated)
+    }
+}
+
+/// Device-agnostic rope for GPU devices without the fused kernels (the
+/// NVIDIA role in dual builds); the host-slice `cpu_apply_*` path can only
+/// serve CPU storage.
+fn tensor_apply_rotary_q(
+    q: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: Option<&Tensor>,
+    is_neox: bool,
+) -> Result<Tensor> {
+    let (batch, heads, seq_len, head_dim) = q.dims4()?;
+    let (cos_rows, sin_rows) = tensor_rope_rows(cos, sin, positions, batch, seq_len)?;
+    // (batch, heads, seq, dim) -> (batch * seq, heads, dim) for the op path.
+    let x = q.transpose(1, 2)?.flatten(0, 1)?;
+    let out = tensor_rope_one(&x, &cos_rows, &sin_rows, is_neox)?;
+    out.reshape((batch, seq_len, heads, head_dim))?.transpose(1, 2)
+}
+
+fn tensor_apply_rotary_qk(
+    q: &Tensor,
+    k: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: Option<&Tensor>,
+    is_neox: bool,
+) -> Result<(Tensor, Tensor)> {
+    if q.dtype() != k.dtype() {
+        candle_core::bail!("q/k dtype mismatch {:?} {:?}", q.dtype(), k.dtype());
+    }
+    check_qk_shape(q, k)?;
+    let (q_out, k_out) = rayon::join(
+        || tensor_apply_rotary_q(q, cos, sin, positions, is_neox),
+        || tensor_apply_rotary_q(k, cos, sin, positions, is_neox),
+    );
+    Ok((q_out?, k_out?))
+}
+
 fn apply_rotary_q_inner(
     q: &Tensor,
     cos: &Tensor,
@@ -828,16 +975,15 @@ fn apply_rotary_q_inner(
     is_neox: bool,
 ) -> Result<Tensor> {
     #[cfg(any(feature = "cuda", feature = "rocm"))]
-    if q.device().is_cuda() {
-        return cuda_apply_rotary_q(q, cos, sin, positions, is_neox);
-    }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
-    if q.device().is_hip() {
+    if crate::utils::device_has_fused_ops(q.device()) {
         return cuda_apply_rotary_q(q, cos, sin, positions, is_neox);
     }
     #[cfg(feature = "metal")]
     if q.device().is_metal() {
         return metal_apply_rotary_q(q, cos, sin, positions, is_neox);
+    }
+    if !q.device().is_cpu() {
+        return tensor_apply_rotary_q(q, cos, sin, positions, is_neox);
     }
     cpu_apply_rotary_q(q, cos, sin, positions, is_neox)
 }
@@ -875,16 +1021,15 @@ fn apply_rotary_qk_inner(
         candle_core::bail!("q/k dtype mismatch {:?} {:?}", q.dtype(), k.dtype());
     }
     #[cfg(any(feature = "cuda", feature = "rocm"))]
-    if q.device().is_cuda() {
-        return cuda_apply_rotary_qk(q, k, cos, sin, positions, is_neox);
-    }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
-    if q.device().is_hip() {
+    if crate::utils::device_has_fused_ops(q.device()) {
         return cuda_apply_rotary_qk(q, k, cos, sin, positions, is_neox);
     }
     #[cfg(feature = "metal")]
     if q.device().is_metal() {
         return metal_apply_rotary_qk(q, k, cos, sin, positions, is_neox);
+    }
+    if !q.device().is_cpu() {
+        return tensor_apply_rotary_qk(q, k, cos, sin, positions, is_neox);
     }
     cpu_apply_rotary_qk(q, k, cos, sin, positions, is_neox)
 }
@@ -1672,6 +1817,104 @@ pub fn apply_rotary_inplace_q_positions(
     _is_neox: bool,
 ) -> candle_core::Result<()> {
     candle_core::bail!("apply_rotary is only supported for cuda");
+}
+
+/// The tensor-op rope must match the validated host-slice path exactly on
+/// CPU tensors: every layout (per-token 3D/2D cos, position-indexed cache),
+/// both styles, and partial rotation.
+#[cfg(test)]
+mod tensor_rope_tests {
+    use super::*;
+
+    fn rope_case(
+        b: usize,
+        h: usize,
+        s: usize,
+        d: usize,
+        rot: usize,
+        is_neox: bool,
+        cos_rank3: bool,
+        positions: bool,
+    ) -> Result<()> {
+        let dev = &candle_core::Device::Cpu;
+        let mk = |seed: usize| -> Vec<f32> {
+            (0..b * h * s * d)
+                .map(|i| (((i + seed * 7) % 23) as f32 * 0.37 - 1.1) * 0.5)
+                .collect()
+        };
+        let q = candle_core::Tensor::from_vec(mk(1), (b, h, s, d), dev)?;
+        let k = candle_core::Tensor::from_vec(mk(2), (b, h, s, d), dev)?;
+        let cache_rows = if positions { s * 4 } else { b * s };
+        let inv_freq: Vec<f32> = (0..rot)
+            .map(|i| 1f32 / (10_000f32.powf(2.0 * (i as f32 / rot as f32))))
+            .collect();
+        let cos: Vec<f32> = (0..cache_rows)
+            .flat_map(|r| inv_freq.iter().map(move |&f| (r as f32 * f).cos()))
+            .collect();
+        let sin: Vec<f32> = (0..cache_rows)
+            .flat_map(|r| inv_freq.iter().map(move |&f| (r as f32 * f).sin()))
+            .collect();
+        let (cos, sin) = if cos_rank3 && !positions {
+            (
+                candle_core::Tensor::from_vec(cos, (b, s, rot), dev)?,
+                candle_core::Tensor::from_vec(sin, (b, s, rot), dev)?,
+            )
+        } else {
+            (
+                candle_core::Tensor::from_vec(cos, (cache_rows, rot), dev)?,
+                candle_core::Tensor::from_vec(sin, (cache_rows, rot), dev)?,
+            )
+        };
+        let positions = if positions {
+            let pos: Vec<u32> = (0..b * s).map(|t| ((t % s) * 3) as u32).collect();
+            Some(candle_core::Tensor::from_vec(pos, (b, s), dev)?)
+        } else {
+            None
+        };
+
+        let (q_cpu, k_cpu) = cpu_apply_rotary_qk(&q, &k, &cos, &sin, positions.as_ref(), is_neox)?;
+        let (q_t, k_t) =
+            tensor_apply_rotary_qk(&q, &k, &cos, &sin, positions.as_ref(), is_neox)?;
+        for (label, host, tensor) in [("q", &q_cpu, &q_t), ("k", &k_cpu, &k_t)] {
+            let host = host.flatten_all()?.to_vec1::<f32>()?;
+            let tensor = tensor.flatten_all()?.to_vec1::<f32>()?;
+            assert_eq!(host.len(), tensor.len(), "{label} length");
+            for (i, (a, bb)) in host.iter().zip(tensor.iter()).enumerate() {
+                let diff = (a - bb).abs();
+                assert!(diff < 1e-4, "{label}[{i}]: host {a} vs tensor {bb}");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn tensor_rope_neox_3d() -> Result<()> {
+        rope_case(2, 4, 8, 32, 16, true, true, false)
+    }
+    #[test]
+    fn tensor_rope_neox_2d() -> Result<()> {
+        rope_case(2, 4, 8, 32, 16, true, false, false)
+    }
+    #[test]
+    fn tensor_rope_interleaved_3d() -> Result<()> {
+        rope_case(2, 4, 8, 32, 16, false, true, false)
+    }
+    #[test]
+    fn tensor_rope_neox_positions() -> Result<()> {
+        rope_case(2, 4, 8, 32, 16, true, false, true)
+    }
+    #[test]
+    fn tensor_rope_interleaved_positions() -> Result<()> {
+        rope_case(2, 4, 8, 32, 16, false, false, true)
+    }
+    #[test]
+    fn tensor_rope_partial_rot() -> Result<()> {
+        rope_case(2, 4, 8, 32, 12, true, true, false)
+    }
+    #[test]
+    fn tensor_rope_interleaved_partial() -> Result<()> {
+        rope_case(2, 4, 8, 32, 12, false, true, false)
+    }
 }
 
 #[cfg(test)]

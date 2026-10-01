@@ -755,7 +755,7 @@ impl RecurrentStatePool {
     /// Scatter conv states back to the pool for the given slot indices
     pub fn scatter_conv_state(&mut self, state_indices: &Tensor, values: &Tensor) -> Result<()> {
         #[cfg(feature = "cuda")]
-        if self.device.is_cuda() {
+        if mistralrs_quant::device_has_fused_ops(&self.device) {
             return crate::cuda::indexed_copy::copy_rows(
                 &values.contiguous()?,
                 &self.conv_state,
@@ -802,7 +802,7 @@ impl RecurrentStatePool {
         values: &Tensor,
     ) -> Result<()> {
         #[cfg(feature = "cuda")]
-        if self.device.is_cuda() {
+        if mistralrs_quant::device_has_fused_ops(&self.device) {
             return crate::cuda::indexed_copy::copy_rows(
                 &values.contiguous()?,
                 &self.recurrent_state,

@@ -365,8 +365,8 @@ pub fn moe_router_gemv(xs: &Tensor, w: &Tensor) -> Result<Option<Tensor>> {
     use candle_core::role::backend::CudaStorageSlice;
     use std::ffi::c_void;
 
-    if !xs.device().is_cuda()
-        || !w.device().is_cuda()
+    if !mistralrs_quant::device_has_fused_ops(xs.device())
+        || !mistralrs_quant::device_has_fused_ops(w.device())
         || xs.device().location() != w.device().location()
     {
         return Ok(None);
@@ -486,7 +486,7 @@ pub fn cuda_moe_router_topk_if_supported(
     selection_bias: Option<&Tensor>,
     expert_scale: Option<&Tensor>,
 ) -> Result<Option<TopKOutput>> {
-    if !logits.device().is_cuda() {
+    if !mistralrs_quant::device_has_fused_ops(logits.device()) {
         return Ok(None);
     }
     let n_experts = match logits.dims().last() {
@@ -4720,7 +4720,7 @@ pub(crate) fn try_cuda_rms_norm_strided_4d(
     use candle_core::role::backend::{CudaStorage, CudaStorageSlice};
     use std::ffi::c_void;
 
-    if !input.device().is_cuda() || input.rank() != 4 {
+    if !mistralrs_quant::device_has_fused_ops(input.device()) || input.rank() != 4 {
         return Ok(None);
     }
 
@@ -5661,7 +5661,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope(
     use candle_core::role::backend::{CudaStorage, CudaStorageSlice};
     use std::ffi::c_void;
 
-    if !q.device().is_cuda() {
+    if !mistralrs_quant::device_has_fused_ops(q.device()) {
         return Ok(None);
     }
 
@@ -5985,7 +5985,7 @@ pub(crate) fn try_cuda_rope_sincos_positions(
     use candle_core::role::backend::{CudaStorage, CudaStorageSlice};
     use std::ffi::c_void;
 
-    if !positions.device().is_cuda()
+    if !mistralrs_quant::device_has_fused_ops(positions.device())
         || positions.dtype() != DType::U32
         || inv_freq.dtype() != DType::F32
         || !inv_freq.device().same_device(positions.device())
@@ -6105,7 +6105,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
     use candle_core::role::backend::{CudaStorage, CudaStorageSlice};
     use std::ffi::c_void;
 
-    if !q.device().is_cuda() {
+    if !mistralrs_quant::device_has_fused_ops(q.device()) {
         return Ok(None);
     }
 
@@ -6442,7 +6442,7 @@ pub(crate) fn try_cuda_qkv_rms_norm_rope_positions(
     use candle_core::role::backend::{CudaStorage, CudaStorageSlice};
     use std::ffi::c_void;
 
-    if !q.device().is_cuda() {
+    if !mistralrs_quant::device_has_fused_ops(q.device()) {
         return Ok(None);
     }
 
@@ -6782,15 +6782,41 @@ impl TopKLastDimOp for Tensor {
         // Use optimized parallel topk kernel on CUDA
         // Single kernel call, no post-processing overhead
         #[cfg(any(feature = "cuda", feature = "rocm"))]
-        if self.device().is_cuda() {
+        if mistralrs_quant::device_has_fused_ops(self.device()) {
             return cuda_topk(self, topk);
         }
 
-        // Fallback: full sort (CPU or non-CUDA)
-        let (values, sorted_indices) = self.sort_last_dim(false)?;
-
-        let topk_indices = sorted_indices.narrow(D::Minus1, 0, topk)?.contiguous()?;
-        let topk_values = values.narrow(D::Minus1, 0, topk)?.contiguous()?;
+        // Fallback: full sort. The candle sort kernel allocates
+        // next_power_of_2(ncols) * 4 bytes of dynamic shared memory; at
+        // CUDA's 48 KiB static limit (no opt-in attribute is set) that
+        // caps GPU-servable rows at 8192 elements, so vocab-sized rows
+        // (sampling: ~152k) fail the launch outright
+        // (CUDA_ERROR_INVALID_VALUE). Those rows only occur once per
+        // sampling step, so route them through a host sort and bring back
+        // only the selected top-k.
+        const GPU_SORT_MAX_ROW: usize = 8192;
+        let ncols = self.dims().last().copied().unwrap_or(0);
+        let (topk_indices, topk_values) = if ncols > GPU_SORT_MAX_ROW && !self.device().is_cpu() {
+            let (values, sorted_indices) = self
+                .to_device(&candle_core::Device::Cpu)?
+                .sort_last_dim(false)?;
+            (
+                sorted_indices
+                    .narrow(D::Minus1, 0, topk)?
+                    .contiguous()?
+                    .to_device(self.device())?,
+                values
+                    .narrow(D::Minus1, 0, topk)?
+                    .contiguous()?
+                    .to_device(self.device())?,
+            )
+        } else {
+            let (values, sorted_indices) = self.sort_last_dim(false)?;
+            (
+                sorted_indices.narrow(D::Minus1, 0, topk)?.contiguous()?,
+                values.narrow(D::Minus1, 0, topk)?.contiguous()?,
+            )
+        };
         Ok(TopKOutput {
             values: topk_values,
             indices: topk_indices,
@@ -7322,7 +7348,7 @@ mod tests {
         UnquantLinear,
     };
 
-    use super::MergedDenseProjection;
+    use super::{MergedDenseProjection, TopKLastDimOp};
 
     #[cfg(all(feature = "cuda", feature = "rocm"))]
     #[test]
@@ -9111,6 +9137,50 @@ mod tests {
         let xs = Tensor::rand(-1.0, 1.0, (17, hidden), &device)?;
         let w = Tensor::rand(-1.0, 1.0, (n_experts, hidden), &device)?;
         assert!(super::moe_router_gemv(&xs, &w)?.is_none());
+        Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[test]
+    fn topk_fallback_serves_vocab_rows_on_non_fused_gpu() -> candle_core::Result<()> {
+        // The sort fallback must serve vocab-sized rows on the NVIDIA role
+        // of a dual build: the GPU sort kernel needs more than the 48 KiB
+        // static shared-memory limit there, so rows over the cap route
+        // through a host sort (the sampling top-k does this every step).
+        let Ok(dev) = candle_core::Device::new_cuda(0) else {
+            // No NVIDIA role visible in this test environment; nothing to check.
+            return Ok(());
+        };
+        let n = 151_936usize;
+        let data: Vec<f32> = (0..n)
+            .map(|i| if i == 12345 { 12.9 } else { (i % 977) as f32 * 0.7 - 0.35 })
+            .collect();
+        let t = Tensor::from_vec(data, (1, n), &Device::Cpu)?.to_dtype(DType::BF16)?;
+        let gpu = t.to_device(&dev)?;
+        let expected = t.topk(8)?;
+        let got = gpu.topk(8)?;
+        assert_eq!(
+            got.indices
+                .to_device(&Device::Cpu)?
+                .flatten_all()?
+                .to_vec1::<u32>()?,
+            expected.indices.flatten_all()?.to_vec1::<u32>()?,
+            "vocab-row topk indices must match CPU"
+        );
+        let got_vals: Vec<f32> = got
+            .values
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let want_vals: Vec<f32> = expected
+            .values
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        for (g, w) in got_vals.iter().zip(want_vals.iter()) {
+            assert!((g - w).abs() < 1e-2, "topk value {g} vs {w}");
+        }
         Ok(())
     }
 }

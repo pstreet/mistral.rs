@@ -1009,7 +1009,20 @@ impl Loader for MultimodalLoader {
         let load_device = plan.load_device.clone();
 
         let attention_mechanism = if paged_attn_config.is_some() {
-            AttentionImplementation::PagedAttention
+            // Capability gate: the configured PA stack may not exist for
+            // this device's role in this build (the NVIDIA role in dual
+            // builds has no paged-attention companion yet). Degrade loudly
+            // to eager attention rather than building layers that fault
+            // on their first step.
+            if crate::device_spec::backend_caps(&device).paged_attention {
+                AttentionImplementation::PagedAttention
+            } else {
+                warn!(
+                    "PagedAttention is configured but this device's role in this build has no \
+                     paged-attention kernels; serving with eager attention"
+                );
+                AttentionImplementation::Eager
+            }
         } else {
             AttentionImplementation::Eager
         };

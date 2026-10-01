@@ -981,6 +981,72 @@ P3 = polish, Deferred = do not do on RDNA.
       (214.9/610.1/23.4). MTP only wins on draft acceptance; these
       short deterministic probes show no uplift. Paged-attn pays
       under multi-turn/concurrency load, not single-stream speed.
+      NVIDIA-ROLE SLICE 2: CUSTOM-OP ROLE-KEYING + DECODE-ARC SCOPED
+      2026-10-01 (uncommitted): the ops.rs arc landed. (1) ROLE-KEYING
+      SWEEP: device_has_fused_gguf generalized to device_has_fused_ops
+      (all fused C kernels - gguf launchers, rope, MoE router/experts,
+      GDN, on-device sampling - share one availability rule: single GPU
+      role in single-vendor builds, AMD role only in dual) and 20
+      dual-blind gates swept: rotary dispatchers in mistralrs-quant (THE
+      original fault: the is_cuda() arm fed NVIDIA tensors to hip
+      companion kernels - memory fault on the AMD), 9 ops.rs gates, 2
+      sampler gates, 3 pipeline/sampling.rs submit gates, gdn.rs (whose
+      as_role_storage sites were .expect() panics, not errors),
+      hybrid_cache copy_rows launches, backends.rs renames. (2) TENSOR
+      ROPE: the "eager fallback" for rope was host-slices-only
+      (cpu_apply_* reads literal CPU memory; the NVIDIA role bailed
+      "RoPE positions must be CPU u32"), so wrote a pure-op
+      tensor_apply_rotary_qk mirroring the host contract (per-token 3D
+      and 2D cos, position-indexed caches, both neox and interleaved
+      styles, partial rotation) - 7 unit tests vs the CPU reference, all
+      pass, plus the real-GPU comparison via the new
+      MISTRALRS_TEST_DEVICE=cuda:0 override (hip_rope_matches_cpu and
+      the rope tests green on the 3090). (3) PA CAPABILITY GATE: the
+      pipeline built PagedAttention layers purely from config
+      (attention_mechanism = config.is_some()); all four decision sites
+      (normal/multimodal/embedding/diffusion) now consult BackendCaps
+      and degrade loudly - verified: "PagedAttention is configured but
+      this device's role in this build has no paged-attention kernels;
+      serving with eager attention". This was the third hard fault
+      (reshape_and_cache_q8 as_role_storage bail at first attention
+      write). (4) TOPK SORT-LIMIT FIX (real upstream limit): candle's
+      asort kernel needs next_pow2(ncols)*4 bytes of dynamic shared
+      memory; at CUDA's 48KiB static limit (no opt-in attribute) that
+      caps GPU-servable rows at 8192 - vocab-sized rows (sampling:
+      151,936 -> 1MiB) fail the launch outright with
+      CUDA_ERROR_INVALID_VALUE (isolated by sort_probe/op_bisect_probe:
+      n=4096 OK, n=151,936 FAIL). The TopKLastDimOp fallback now routes
+      oversize rows through a host sort, moving back only the top-k;
+      unit test added (vocab-row topk on the NVIDIA role == CPU).
+      batched_mm_probe validated the expert gather matmul
+      ((8,1,2048)@(8,2048,768) batched F32) bit-correct on the GPU.
+      VALIDATION MATRIX: same binary serves the 16B coherently on
+      hip:0 (no AMD-role regression from the sweep); the 16B on cuda:0
+      loads (709 PTX fns), prefills, and its logits are SANE (traced:
+      absmax 12.9, zero NaN through embed->28 layers->norm->lm_head)
+      with a sane first sample; the ~512 hidden-state outliers are
+      plausible Qwen3 activation behavior, not the bug. REMAINING
+      BLOCKER - THE DECODE ARC: later decode steps produce garbage ->
+      NaN at sampling, and a later run surfaced
+      CUBLAS_STATUS_INTERNAL_ERROR - the signature of an async illegal
+      access in the decode path (1-token q over the full cache)
+      poisoning the context. With default prefix-cache settings there
+      was also a broadcast_add mismatch (scores [1,32,16,17] vs mask
+      [16,16] - a warmup-token residue interacting with the prefix
+      cache on the non-PA path; prefix_cache_n=0 removes that failure).
+      Bisect queue for next sitting: kv-cache read path ops, prefix
+      cache machinery on the normal cache (the [16,17] residue), the
+      m=1 decode GEMM (cuBLAS internal error could be the async
+      surfacing), and role-gate the companion-kernel TEST utilities
+      (quant bar on cuda:0: gguf/dequant tests pass, but
+      count_nonzero/pack_8bit tests launch HIP companion kernels with
+      CUDA pointers - the same dual-blind class, test-side; ops.cu CUB
+      reduce + an SIGSEGV). Housekeeping: prod stopped by user for
+      host memory; smoke instances cleaned; temporary tracer
+      scaffolding stashed (sampler tracer at
+      /tmp/opencode/sampler-tracer-stash.patch; qwen3_moe.rs stage and
+      MoE tracers + gguf/cpu.rs gather tracer remain in-tree,
+      env-gated MISTRALRS_TRACE_FIRST_STEP, excluded from commits).
       NVIDIA-ROLE SERVING SLICE 1 + 16B BACKEND BENCH 2026-10-01
       (checkpoint, uncommitted tail below): the 16B three-backend bench
       (user ask) surfaced the first real NVIDIA-role serving work; four

@@ -1012,7 +1012,9 @@ fn try_submit_cuda_token_batch_inner(
     resident_input: Option<&Tensor>,
     rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
 ) -> Result<Option<CudaTokenBatchSubmission>> {
-    if !can_submit_cuda_token_batch_seqs(seqs) || !logits.device().is_cuda() {
+    if !can_submit_cuda_token_batch_seqs(seqs)
+        || !mistralrs_quant::device_has_fused_ops(logits.device())
+    {
         return Ok(None);
     }
 
@@ -1239,14 +1241,18 @@ fn try_sample_batch_cuda(
         CausalLogitsBatch::PerSequence(logits) => {
             if logits.is_empty()
                 || logits.len() != seqs.len()
-                || logits.iter().any(|logits| !logits.device().is_cuda())
+                || logits
+                    .iter()
+                    .any(|logits| !mistralrs_quant::device_has_fused_ops(logits.device()))
             {
                 return Ok(None);
             }
             stack_final_logits(logits)?
         }
         CausalLogitsBatch::Batched(logits) => {
-            if logits.dim(0)? != seqs.len() || !logits.device().is_cuda() {
+            if logits.dim(0)? != seqs.len()
+                || !mistralrs_quant::device_has_fused_ops(logits.device())
+            {
                 return Ok(None);
             }
             final_batched_logits(logits)?

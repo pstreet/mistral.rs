@@ -308,7 +308,7 @@ impl GgufMatMul {
         matches!(
             &self.w,
             QMatMul::QTensor(q)
-                if crate::utils::device_has_fused_gguf(&q.device())
+                if crate::utils::device_has_fused_ops(&q.device())
                     && fast_mmvq::supports(q.dtype())
         )
     }
@@ -510,7 +510,7 @@ impl QuantMethod for GgufMatMul {
         // - indices: (n_tokens, n_experts_per_tok)
         // - weights (self): (n_experts, out_features, in_features)
         #[cfg(any(feature = "cuda", feature = "rocm"))]
-        let res = if crate::utils::device_has_fused_gguf(x.device()) {
+        let res = if crate::utils::device_has_fused_ops(x.device()) {
             cuda::qmatmul_indexed_moe_forward(&self.w, x, indices)?
         } else {
             cpu::cpu_indexed_moe_forward(&self.w, x, indices)?
