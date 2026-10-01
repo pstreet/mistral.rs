@@ -17,7 +17,7 @@ Use this page to check whether a prebuilt binary exists for your accelerator. If
 | Windows x86_64 | CPU | yes |
 | Intel Mac, unlisted GPU | source build | no |
 
-CPU inference is available in every build shape. `cuda+rocm` is a source-only dual-vendor shape (no prebuilt binaries): the AMD role serves while NVIDIA access is probe-gated (see [cargo features](/reference/cargo-features/)).
+CPU inference is available in every build shape. `cuda,rocm` is a source-only dual-vendor shape (no prebuilt binaries): the AMD role serves while NVIDIA access is probe-gated (see [cargo features](/reference/cargo-features/)).
 
 ## NVIDIA compute capabilities
 

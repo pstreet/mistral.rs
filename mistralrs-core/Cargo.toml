@@ -127,19 +127,15 @@ cuda = [
     "dep:cudaforge",
     "mistralrs-quant/cuda",
     "mistralrs-paged-attn/cuda",
+    # Dual dlsym kernel loading: monotone-attached (compiled, unused in
+    # single-vendor) since features cannot express AND-logic.
+    "dep:libloading",
 ]
 rocm = [
     "candle-core/rocm",
     "candle-nn/rocm",
     "mistralrs-quant/rocm",
     "mistralrs-paged-attn/rocm",
-]
-"cuda+rocm" = [
-    "cuda",
-    "rocm",
-    "candle-core/cuda+rocm",
-    "mistralrs-quant/cuda+rocm",
-    "mistralrs-paged-attn/cuda+rocm",
     "dep:libloading",
 ]
 cudnn = ["candle-core/cudnn"]

@@ -36,7 +36,7 @@ shape too):
 ```bash
 cargo check -p mistralrs-cli                        # CPU-only (unconditional)
 cargo check -p mistralrs-cli --features rocm        # AMD - the prod shape
-cargo check -p mistralrs-cli --features cuda+rocm    # dual-vendor
+cargo check -p mistralrs-cli --features cuda,rocm   # dual-vendor
 ```
 
 Build profiles: iterate with `--profile fast` (parallel codegen, no LTO) for
@@ -206,7 +206,7 @@ Avoid returning TODOs.
 9. **Causal Conv1d padding formula**: For causal convolution (left-pad only, no right-pad), the correct left padding is `effective_kernel_size - stride`, NOT `(kernel_size - 1) * dilation` (which is the total padding for non-causal). For example, with kernel_size=3, stride=2, dilation=1: left_pad = 3 - 2 = 1, not 2. Verify against the HF model's `VoxtralRealtimeCausalConv1d` or equivalent source.
 
 10. **Vendor gating under dual builds**: plain `cfg(feature = "cuda")` marks
-   NVIDIA-original code and stays active in `cuda+rocm` builds; gates for
+   NVIDIA-original code and stays active in multi-vendor (`cuda,rocm`) builds; gates for
    cuda-block-only machinery must read `all(feature = "cuda", not(feature = "rocm"))`,
    and AMD paths gate on plain `feature = "rocm"` - never
    `all(feature = "rocm", not(feature = "cuda"))`, which silently disables in

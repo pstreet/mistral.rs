@@ -20,6 +20,8 @@ doc = false
 
 [dependencies]
 mimalloc = { workspace = true }
+# Bench command CUDA-profiler knob: runtime-resolved driver symbols.
+libloading = { workspace = true, optional = true }
 mistralrs-core = { workspace = true }
 mistralrs-server-core = { workspace = true }
 mistralrs = { workspace = true }
@@ -58,9 +60,8 @@ fuzzy-matcher = "0.3"
 
 [features]
 default = ["code-execution"]
-cuda = ["mistralrs-core/cuda", "mistralrs-server-core/cuda"]
+cuda = ["mistralrs-core/cuda", "mistralrs-server-core/cuda", "dep:libloading"]
 rocm = ["mistralrs-core/rocm", "mistralrs-server-core/rocm"]
-"cuda+rocm" = ["mistralrs-core/cuda+rocm", "mistralrs-server-core/cuda+rocm"]
 cutile = ["cuda", "mistralrs-core/cutile"]
 nccl = ["mistralrs-core/nccl", "mistralrs-server-core/nccl"]
 cudnn = ["mistralrs-core/cudnn", "mistralrs-server-core/cudnn"]

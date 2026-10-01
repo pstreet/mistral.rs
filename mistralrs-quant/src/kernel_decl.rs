@@ -1,20 +1,21 @@
 //! One declaration site for GPU kernel entries, both build shapes.
 //!
-//! Single-vendor rocm links the static archive: entries are plain
-//! `extern "C"` declarations. Dual (`cuda+rocm`) builds resolve them at
-//! runtime from the companion plugin (see `hip_plugin`): same name and
-//! signature, so call sites are untouched in every shape.
+//! ROCm builds (single-vendor or multi-vendor `cuda,rocm`) resolve
+//! entries at runtime from the companion plugin (see `hip_plugin`): same
+//! name and signature, so call sites are untouched in every shape.
+//! Non-rocm consumers (cuda-only) keep the plain `extern "C"`, static
+//! archive declarations.
 
 macro_rules! declare_kernel {
     ($($( #[$attr:meta] )* $name:ident ( $($arg:ident : $ty:ty),* $(,)? ) $(-> $ret:ty)? ; )*) => {$(
         $( #[$attr] )*
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(not(feature = "rocm"))]
         #[allow(dead_code)]
         extern "C" {
             pub(crate) fn $name($($arg : $ty),*) $(-> $ret)?;
         }
         $( #[$attr] )*
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         #[allow(dead_code)]
         #[allow(non_snake_case)]
         pub(crate) unsafe extern "C" fn $name($($arg : $ty),*) $(-> $ret)? {

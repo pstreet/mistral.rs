@@ -144,7 +144,7 @@ pub mod distributed;
 pub mod files;
 mod gdn;
 mod gguf;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 mod hip_plugin;
 mod host_alloc;
 mod kernel_decl;

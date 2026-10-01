@@ -54,9 +54,10 @@ a while on the first build; later builds are incremental. See
 [build from source](/developer/from-source/) for the general flag
 reference.
 
-### Dual-vendor (`cuda+rocm`) builds
+### Dual-vendor (`cuda,rocm`) builds
 
-`--features cuda+rocm` builds one binary carrying both vendors. The AMD
+`--features cuda,rocm` builds one binary carrying both vendors. (Feature
+combinations are plain comma syntax; there is no compound feature.) The AMD
 role serves (every C kernel is hipcc-built); the NVIDIA side is compiled in
 for interop with each driver call gated on cudarc's `is_culib_present()`
 probe, and cudarc's dynamic-loading mode means the binary starts and serves
@@ -71,7 +72,7 @@ pin it explicitly.
 export CUDA_PATH=/usr/local/cuda-13.3
 export PATH=/usr/local/cuda-13.3/bin:$PATH
 export CUDA_COMPUTE_CAP=80
-cargo build --release --locked -p mistralrs-cli --features cuda+rocm
+cargo build --release --locked -p mistralrs-cli --features cuda,rocm
 ```
 
 ## Run

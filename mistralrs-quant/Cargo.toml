@@ -51,17 +51,20 @@ mistralrs-metal-compile = { workspace = true, optional = true, features = ["meta
 cuda = [
     "candle-core/cuda",
     "candle-nn/cuda",
-    "dep:cudaforge"
+    "dep:cudaforge",
+    # Dual dlsym kernel loading: monotone-attached (compiled, unused in
+    # single-vendor) since features cannot express AND-logic.
+    "dep:libloading",
 ]
 rocm = [
     "candle-core/rocm",
     "candle-nn/rocm",
+    "dep:libloading",
 ]
 cutile = [
     "cuda",
     "dep:cutile",
 ]
-"cuda+rocm" = ["cuda", "rocm", "candle-core/cuda+rocm", "dep:libloading"]
 nccl = ["cuda", "candle-core/nccl"]
 metal = [
     "candle-core/metal",

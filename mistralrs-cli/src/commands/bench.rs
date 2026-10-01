@@ -24,9 +24,55 @@ use super::serve::{
 };
 
 #[cfg(feature = "cuda")]
-unsafe extern "C" {
-    fn cudaProfilerStart() -> i32;
-    fn cudaProfilerStop() -> i32;
+mod cuda_profiler {
+    // The old link-time externs silently vanished from multi-vendor builds
+    // (the former compound feature never enabled the CLI's own `cuda`
+    // feature) and would drag a libcudart DT_NEEDED in if they resolved, so
+    // resolve the driver's profiler symbols at runtime instead: the knob
+    // works whenever an NVIDIA runtime is present, on any build shape, and
+    // the binary keeps no GPU link-time dependencies.
+    use std::sync::OnceLock;
+
+    struct Profiler {
+        _lib: &'static libloading::Library,
+        start: unsafe extern "C" fn() -> i32,
+        stop: unsafe extern "C" fn() -> i32,
+    }
+
+    fn profiler() -> Option<&'static Profiler> {
+        static LOADED: OnceLock<Option<Profiler>> = OnceLock::new();
+        LOADED
+            .get_or_init(|| {
+                let lib = Box::leak(Box::new(unsafe {
+                    libloading::Library::new("libcuda.so.1")
+                        .or_else(|_| libloading::Library::new("libcuda.so"))
+                        .ok()?
+                }));
+                // SAFETY: cudaProfilerStart/Stop have been a stable exported
+                // ABI of the NVIDIA driver for over a decade.
+                let start = *unsafe { lib.get(b"cudaProfilerStart") }.ok()?;
+                let stop = *unsafe { lib.get(b"cudaProfilerStop") }.ok()?;
+                Some(Profiler { _lib: lib, start, stop })
+            })
+            .as_ref()
+    }
+
+    pub(super) fn start() {
+        match profiler() {
+            Some(p) => {
+                let _ = unsafe { (p.start)() };
+            }
+            None => println!(
+                "MISTRALRS_BENCH_CUDA_PROFILER_RANGE set but no NVIDIA runtime found; profiler range skipped"
+            ),
+        }
+    }
+
+    pub(super) fn stop() {
+        if let Some(p) = profiler() {
+            let _ = unsafe { (p.stop)() };
+        }
+    }
 }
 
 /// Benchmark result for a single test
@@ -259,9 +305,7 @@ pub async fn run_bench(
     let cuda_profiler_range = std::env::var_os("MISTRALRS_BENCH_CUDA_PROFILER_RANGE").is_some();
     #[cfg(feature = "cuda")]
     if cuda_profiler_range {
-        unsafe {
-            let _ = cudaProfilerStart();
-        }
+        cuda_profiler::start();
     }
 
     let mut ttft_results: Vec<(usize, Vec<(f32, f32)>)> =
@@ -326,9 +370,7 @@ pub async fn run_bench(
 
     #[cfg(feature = "cuda")]
     if cuda_profiler_range {
-        unsafe {
-            let _ = cudaProfilerStop();
-        }
+        cuda_profiler::stop();
     }
 
     // Calculate statistics

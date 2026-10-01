@@ -981,6 +981,50 @@ P3 = polish, Deferred = do not do on RDNA.
       (214.9/610.1/23.4). MTP only wins on draft acceptance; these
       short deterministic probes show no uplift. Paged-attn pays
       under multi-turn/concurrency load, not single-stream speed.
+      COMPOUND FEATURE REMOVED 2026-10-01 (user-directed architecture
+      change): `--features cuda,rocm` (plain comma) is now THE way to
+      build any feature combination; the `cuda+rocm` compound name is
+      gone from every Cargo.toml in both repos, and adding `vulkan`
+      later means just `--features rocm,cuda,vulkan`. Findings along the
+      way: (1) the compound was cargo's only AND-logic workaround - it
+      carried dep:libloading (dual dlsym) and forwarded names, while all
+      178 combination cfg sites (35 mistral.rs + 143 candle-core)
+      already keyed on all(feature="cuda", feature="rocm") and work
+      unchanged under comma syntax. (2) candle-core deliberately
+      compile_error!-rejected plain cuda+rocm ("opt into cuda+rocm
+      explicitly") - that guard is deleted; dual now "just works" and
+      the portability machinery makes surprise combinations harmless.
+      (3) LATENT QUIRK EXPOSED: the cli-level compound never enabled the
+      cli's OWN cuda/rocm features, so every #[cfg(feature="cuda")]
+      CLI code path - including the bench cudaProfiler externs - was
+      silently compiled OUT of every dual build ever shipped; proper
+      features compile it in, which surfaced the unresolved profiler
+      externs; fixed by runtime-dlopening the driver's profiler symbols
+      in bench.rs (portable, probe-gated, no new DT_NEEDED - the knob
+      now actually WORKS in dual builds when an NVIDIA runtime exists).
+      (4) USER-APPROVED SEMANTIC CHANGE: rocm builds are now uniformly
+      portable - cudarc-hip/dynamic-loading + candle-kernels/hip-plugin
+      moved onto the plain rocm feature, and mistralrs-core/quant/
+      paged-attn's rocm build branches ship ALL kernels as companion
+      .so files (the kernel_decl dlsym arm now serves every rocm build;
+      the extern arm is cuda-only). Single-vendor rocm previously
+      linked static kernel archives + libamdhip64; now every GPU
+      artifact has zero GPU DT_NEEDED. VALIDATED: 4-shape checks clean
+      (cpu/rocm/dual-comma; cuda-only still nvcc-broken PRE-EXISTING -
+      gather_kv_cache_kernel.cu compile failure, unrelated to this
+      change); rocm-only artifact ldd = zero GPU DT_NEEDED + serves
+      the 4B end to end (1776, paged attention through the companion,
+      40.6 T/s completion) + quant bar 317/0/1-ignored through the
+      flipped loader; dual release built with `--features cuda,rocm`,
+      deployed to prod: 29 graphs captured in 15.8s, 9 resident,
+      1776 3/3, arithmetic decode 16.6-17.0, essay 12.3 - identical to
+      the compound-built binary's numbers. `--features cuda+rocm` now
+      fails cleanly ("does not contain this feature"). Candle-side:
+      cuda attaches the PTX twin crate (compiled-but-unused in
+      cuda-only, the monotone cost of no-AND); rocm attaches
+      dynamic-loading + hip-plugin; the cuda_backend kernel re-export
+      pair is unchanged (not(all(cuda,rocm)) -> candle_kernels,
+      dual -> twin).
       DOC PASS 2026-10-01: environment-variables.md gained the missing
       functional knobs (MISTRALRS_NO_FAST_MMVQ, MISTRALRS_MOE_BACKEND,
       MISTRALRS_FORCE_AVX2) plus the expert/debug cluster

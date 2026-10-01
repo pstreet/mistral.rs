@@ -343,11 +343,11 @@ fn build_rocm() -> Result<()> {
     anyhow::ensure!(status.success(), "ar failed");
 
     println!("cargo:rustc-link-search={}", build_dir.display());
-    // Hot-pluggable dual builds link the same -fPIC objects into a
-    // companion shared library instead of the static archive (the .so
-    // carries its own amdhip64 DT_NEEDED; the exe links no HIP symbols and
-    // starts on ROCm-less machines). Single-vendor rocm keeps static.
-    if std::env::var("CARGO_FEATURE_CUDA").is_ok() {
+    // Every rocm build links the same -fPIC objects into a companion
+    // shared library instead of the static archive (the .so carries its
+    // own amdhip64 DT_NEEDED; the exe links no HIP symbols and starts on
+    // ROCm-less machines).
+    {
         let so = build_dir.join("libmistralrspagedattention_hip.so");
         if so.exists() {
             std::fs::remove_file(&so).expect("remove stale libmistralrspagedattention_hip.so");
@@ -368,8 +368,6 @@ fn build_rocm() -> Result<()> {
             "cargo:rustc-env=MISTRALRS_PAGED_ATTN_HIP_PLUGIN={}",
             so.display()
         );
-    } else {
-        println!("cargo:rustc-link-lib=static=mistralrspagedattention");
     }
     // FP8 is enabled (ENABLE_FP8), so the f8e4m3 KV path (cache_dtype==3) is
     // selected on RDNA when the config requests FP8 KV. Scales default to 1.0

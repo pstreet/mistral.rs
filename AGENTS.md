@@ -51,7 +51,7 @@ Mistral.rs supports multiple model types and advanced features via dedicated cra
 ## Building
 
 1. Install Rust via rustup (Rust 2021 edition).
-2. Choose optional features (e.g., `rocm` for AMD, `cuda`, `cuda+rocm` for dual-vendor, `flash-attn`, `cudnn`, `metal`, `mkl`, `accelerate`).
+2. Choose optional features (e.g., `rocm` for AMD, `cuda`, `cuda,rocm` for dual-vendor, `flash-attn`, `cudnn`, `metal`, `mkl`, `accelerate`).
 3. Build the entire workspace:
    ```bash
    cargo build --workspace --release --features "<features>"
@@ -84,7 +84,7 @@ You should also look for a model.safetensors.index.json file for the model at ha
   cargo test --workspace
   ```
 
-You should *always* run `cargo check`/`cargo c` before returning to make sure code compiles. If code does not compile, only make edits. For GPU-facing changes, check all three shapes (no features, `--features rocm`, `--features cuda+rocm`): `cargo check` never links, so also build or test the binary shape you touched.
+You should *always* run `cargo check`/`cargo c` before returning to make sure code compiles. If code does not compile, only make edits. For GPU-facing changes, check all three shapes (no features, `--features rocm`, `--features cuda,rocm`): `cargo check` never links, so also build or test the binary shape you touched.
 
 Avoid returning TODOs.
 
@@ -143,11 +143,11 @@ The CI pipeline is defined in `.github/workflows/ci.yml` and includes:
   HIP-synthetic `cc` encoding (gfx1151 -> 1150) lives only at the kernel
   bridge where the llama.cpp-derived C launchers consume it. Build shapes:
   default (CPU-only), `rocm` (AMD, the prod shape), `cuda` (NVIDIA, not
-  maintained in this fork), and `cuda+rocm` (dual-vendor: the AMD role
-  serves - all C kernels are hipcc-built - and NVIDIA access is gated on
-  cudarc's `is_culib_present()` probe; dynamic-loading means the binary
-  starts with no GPU runtimes installed: drivers via dlopen, hipcc
-  kernel sets as companion libraries, all probe-gated).
+  maintained in this fork), and `cuda,rocm` (both features together: the AMD role serves - all C
+  kernels are hipcc-built - and NVIDIA access is gated on cudarc's
+  `is_culib_present()` probe). Every GPU build is portable: drivers
+  resolve via dlopen and kernel sets load from companion libraries, all
+  probe-gated, so the binary starts with no GPU runtimes installed.
 - Update `/docs/src/content/docs/` and examples when adding features or breaking changes.
 - Add tests and examples for new functionality.
 - Commit messages should be clear and follow conventional style where possible.
