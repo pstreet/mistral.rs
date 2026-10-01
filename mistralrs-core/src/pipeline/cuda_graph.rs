@@ -97,7 +97,7 @@ const DECODE_GRAPH_CAPTURE_ATTEMPTS: usize = 4;
 /// pin their arenas for the process lifetime, so an unbounded precapture
 /// can walk the device straight into a fatal out-of-memory inside a kernel
 /// launch; the floor keeps the remaining shapes on the lazy path instead.
-pub(crate) const DECODE_GRAPH_PRECAPTURE_MIN_FREE_BYTES: usize = 8 * 1024 * 1024 * 1024;
+pub(crate) const DECODE_GRAPH_PRECAPTURE_MIN_FREE_BYTES: usize = 16 * 1024 * 1024 * 1024;
 static NEXT_CUDA_DECODE_GRAPH_GENERATION: AtomicU64 = AtomicU64::new(1);
 static CUDA_GRAPH_MEMORY_POOL_SCOPES: OnceLock<Mutex<HashMap<usize, MemoryPoolScopeState>>> =
     OnceLock::new();
@@ -2094,9 +2094,11 @@ impl CudaDecodeGraphState {
             // within ~0.1% of the warmup's cumulative alloc bytes; the old
             // x6 pinned six-times-oversized arenas per graph, which drained
             // iGPU "available" (host-derived) and starved later buckets.
-            // x2 plus the overflow regrow path sizes surprises instead.
+            // x1.25 plus the overflow regrow path (the regrow exists to
+            // absorb undershoot) keeps the pinning close to the real need.
             None => warmup_bytes
-                .saturating_mul(2)
+                .saturating_mul(5)
+                .saturating_div(4)
                 .saturating_add(DECODE_GRAPH_MIN_ARENA_BYTES),
         }
     }

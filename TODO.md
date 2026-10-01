@@ -972,7 +972,7 @@ P3 = polish, Deferred = do not do on RDNA.
       (214.9/610.1/23.4). MTP only wins on draft acceptance; these
       short deterministic probes show no uplift. Paged-attn pays
       under multi-turn/concurrency load, not single-stream speed.
-      DECODE-GRAPH CAPTURE CHAIN FIXED 2026-09-30 (commit pending): the
+      DECODE-GRAPH CAPTURE CHAIN FIXED 2026-09-30 (committed 55b3d270d): the
       dual-prod 27B captured ZERO decode graphs (866 incompatible_shape
       skips) and hybrid+MTP precapture crashed; six fixes, each surfacing
       the next. (1) The multimodal dispatch device gate never persisted:
@@ -1006,7 +1006,37 @@ P3 = polish, Deferred = do not do on RDNA.
       leaves ~2.1GB host available after the 27B load, so the guard
       correctly declines all capture; pool cap sizing is a serving-
       posture decision (max-model-context upper bound + two-resident
-      budget, user-directed). Session notes: five machine reboots (user
+      budget, user-directed).
+      POSTURE APPLIED 2026-10-01 (uncommitted tail): [paged_attn] now sets
+      context_len = 262144 (fleet max native GGUF context: 256k for the
+      27B/35B/coder-next/gemma-4/4B; 128k glimmer/llama; 40k qwen3-16b)
+      -> the 27B pool is 6.5GB / 262,112 tokens instead of 77.6GB /
+      3.12M tokens (~26.1 KB/token at K=Q8_0/V=Q4_0). Two follow-on fixes
+      after the first capped-pool load CRASHED: (a) fresh-bucket arena
+      estimate x2 -> x1.25 of the warmup (every measurement says
+      capture-consumed == warmup within 0.1%; the regrow path exists to
+      absorb undershoot) and the precapture floor 8GB -> 16GB - the crash
+      was the SPEC phase's reshape_and_cache launch OOMing at the 8GB
+      floor with the host 4.3GB into swap; the C-side CUDA_CHECK macro in
+      mistralrs-paged-attn EXITS on OOM instead of returning an error
+      the tolerance could catch (making kernel-launch OOM a process
+      death) - journaled as the follow-up FFI surgery. (b) The decode-graph
+      speculative-state budget (default: largest-entry x10 capped at 8%
+      of device total ~= 10GB) kept only 2 of 29 captured shapes resident
+      (per-shape spec state ~= 4.5GB with FullCheckpoints on the 27B MTP);
+      MISTRALRS_CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES=16GiB in the wrapper
+      keeps 9 shapes resident (single-stream + small concurrent batches)
+      while preserving ~38GB host available - the 32GiB first attempt
+      left only 11GB and broke the two-resident budget, 16GiB is the
+      calibrated balance (27B ~30.5GB fixed + 35B ~34GB fixed + graphs
+      + ~12-16GB transients/headroom fits 122GB host).
+      FINAL PROD STATE 2026-10-01: 27B demand-loads with 28 graphs
+      captured in ~17s, 9 resident, replaying (1776 3/3; arithmetic-probe
+      decode 16.5-16.9 T/s; essay 12.3-12.4 T/s - both +16-17% over the
+      no-graph morning numbers 14.1-14.3 / 10.4-10.7). Prefill ~186 T/s
+      short (69 tok). MTP acceptance ~62%. Historical essay 13.9-17.8
+      remains unmatched but predates the hybrid-GDN serving path
+      (apples-to-oranges). Session notes: five machine reboots (user
       eGPU bring-up) repeatedly wiped /tmp/opencode - validation moved
       onto the durable release binary directly; an RTX 3090 (sm86, 24GB,
       CUDA 13.3 UMD) is now attached for the CUDA role - auto-selection

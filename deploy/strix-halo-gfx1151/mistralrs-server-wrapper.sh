@@ -41,6 +41,13 @@ export MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD=1
 export MISTRALRS_MANAGED_WEIGHTS=1
 export CANDLE_MANAGED_WEIGHTS=1
 export MISTRALRS_CUDA_GRAPHS=1
+# Decode-graph speculative-state budget: the default (largest-entry x10,
+# capped at 8% of device total) keeps only ~2 shapes resident on the 27B
+# (per-shape spec state is ~4.5GB with FullCheckpoints). 16GiB keeps the
+# single-stream + small-batch shapes resident while preserving ~25GiB free
+# for a second resident (35B weights+pool ~= 34GB); the pool is sized by
+# native context (262k -> 6.5GB) instead of 90% of free GTT.
+export MISTRALRS_CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES=17179869184
 # Route rocBLAS's own GEMMs through hipBLASLt. Serving A/B 2026-09-25
 # (35B Q4_K_XL): flat (decode profile has zero BLAS kernels; all-quantized
 # weights never reach plain rocBLAS). Microbench (lt_probe, 78 shapes/dtype)
