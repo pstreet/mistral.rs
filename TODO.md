@@ -1085,6 +1085,21 @@ P3 = polish, Deferred = do not do on RDNA.
       dispatch gate (866 incompatible_shape during the bench); both
       journaled as the follow-up. NOTE: /tmp/opencode/mtp_bench.py
       referenced by the toml no longer exists; recreate for MTP A/Bs.
+      CONFIG SYMLINK RESTORED 2026-10-01: models/mistralrs.toml had become
+      an unlinked regular file sometime before Sep 28, so the live config
+      (35B Q4->Q5 upgrade, prefill 2048->4096, context_len sizing) drifted
+      from the versioned deploy copy and nothing config-side was being
+      committed. Re-synced the deploy copy to the live content
+      (reconstructed exactly - 7187 bytes - after a merge-script failure
+      led to a premature rm of the live file; the full diff captured in
+      the session plus the git-clean deploy base reproduced it and the
+      byte count verified the reconstruction) and restored the symlink
+      models/mistralrs.toml -> ../mistral.rs/deploy/strix-halo-gfx1151/
+      mistralrs.toml. Process lesson (same class as the edit-script one):
+      destructive filesystem steps (rm/symlink swaps) must be chained with
+      && behind the content step, never newline-separated. The stale
+      device-selection comment block (predates the dual-serve world) and
+      the 27B '#mtp = false' note are preserved in git history if wanted.
       HEALTHCHECK MARKER FIX (same window): the stop marker was
       consumed on sight, so during the ~10 min release-build window
       the watchdog re-started prod on the OLD binary inode mid-build;
