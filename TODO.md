@@ -981,6 +981,51 @@ P3 = polish, Deferred = do not do on RDNA.
       (214.9/610.1/23.4). MTP only wins on draft acceptance; these
       short deterministic probes show no uplift. Paged-attn pays
       under multi-turn/concurrency load, not single-stream speed.
+      NVIDIA-ROLE SERVING SLICE 1 + 16B BACKEND BENCH 2026-10-01
+      (checkpoint, uncommitted tail below): the 16B three-backend bench
+      (user ask) surfaced the first real NVIDIA-role serving work; four
+      gates fixed and verified: (1) backend_caps: the dual NVIDIA role
+      now reports quantized_gguf=true (served by the upstream
+      QStorage::Cuda path, PTX from the twin crate) and CPU GGUF is
+      un-refused (the gguf::cpu loader compiled unconditionally; the
+      all-false caps were just conservative - verified serving, 0.6-0.9
+      T/s prefill / 0.1 decode, unusable and skipped by user directive);
+      (2) device_map: the dual NVIDIA device enumeration un-bailed;
+      (3) CANDLE PTX BUG (real, fixed in candle): the shared body's
+      cfg(feature="rocm") arm loaded PTX TEXT as a binary image on the
+      dual NVIDIA role - cuModuleLoadData reads PTX source to NUL, so it
+      read past the unterminated string into garbage and 5/11 modules
+      failed JIT with INVALID_PTX (6/11 loaded by allocator luck); fixed
+      role-keyed with a gpu_ptx_load! shell macro (the gpu_fork_graphs
+      pattern: NVIDIA role -> Ptx::from Src CString; hip role ->
+      from_binary; single-vendor shapes preserved); the new
+      candle-core/examples/ptx_probe.rs reproduces and verifies (11/11
+      modules, 709 functions load on the sm86 3090); (4)
+      device_has_fused_gguf role-keyed: a bare is_cuda() claimed the
+      hipcc-built fused gguf launchers for the NVIDIA role and the first
+      model step died with "weight must live on Hip"; dual now keys on
+      is_hip() only, so the NVIDIA role degrades quant matmuls to the
+      plain dequant-GEMM path (the BackendCaps contract) - this gates
+      BOTH the mmvq and mmq branches at try_fast_forward's entry, so no
+      per-path whack-a-mole. REMAINING for the CUDA datapoint (the known
+      "until symbol prefixing lands" arc, now precisely scoped): the
+      custom-op layer assumes the hip role in dual - mistralrs-core/
+      src/ops.rs has 16 as_role_storage sites; the first model step
+      faults at ROPE (the hip rope kernel launched with NVIDIA pointers
+      ON THE AMD GPU - memory fault, then "expected the serving role's
+      storage"; as_role_storage bails for Storage::Cuda in dual); fix
+      pattern = each fused op falls back to its eager implementation
+      (the device-agnostic candle code that serves CPU today); rope +
+      the MoE dispatch (indexed_moe_forward Hip-bail) are load-bearing
+      for the 16B (Qwen3 MoE, no GDN layers). 16B BENCH NUMBERS (Q4_K_M,
+      no MTP tensors in the GGUF so all backends compare plain): ROCm
+      (hip role, PA 2GB pool + 15 decode graphs, 1.25s capture):
+      prefill 157 T/s @25tok, 717 @165, 984 @1138, 874 @3362; decode
+      45-47 T/s short-context, 26.5 T/s at 3.4k context. CPU: 0.6-0.9
+      prefill, 0.1 decode. CUDA: pending the ops.rs arc. 27B on the
+      3090: infeasible at Q6_K (22GB weights + draft + mmproj + pool >
+      24.5GB usable) - needs a Q4_K_XL conversion (~15-30 min llama.cpp
+      quantize) when the role is wired.
       COMPOUND FEATURE REMOVED 2026-10-01 (user-directed architecture
       change): `--features cuda,rocm` (plain comma) is now THE way to
       build any feature combination; the `cuda+rocm` compound name is

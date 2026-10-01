@@ -335,11 +335,21 @@ pub fn get_all_similar_devices(base: &Device) -> Result<Vec<Device>> {
                 }
             }
         }
-        // NVIDIA devices do not serve in dual builds yet (all C kernels are
-        // hipcc-built); no similar-device enumeration exists for that role.
+        // Dual builds: the NVIDIA role serves GGUF through the upstream
+        // CUDA path (QStorage::Cuda, PTX kernels from the twin crate), so
+        // enumerate its devices the same way the single-vendor build does.
         #[cfg(all(feature = "cuda", feature = "rocm"))]
         Device::Cuda(_) => {
-            candle_core::bail!("NVIDIA devices do not serve in cuda+rocm builds yet");
+            let mut ord = 0;
+            loop {
+                let dev = Device::new_cuda(ord);
+                if let Ok(dev) = dev {
+                    devices.push(dev);
+                    ord += 1;
+                } else {
+                    break;
+                }
+            }
         }
         #[cfg(not(all(feature = "cuda", feature = "rocm")))]
         Device::Cuda(_) => {

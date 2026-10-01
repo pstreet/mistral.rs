@@ -280,7 +280,9 @@ pub fn backend_caps(device: &Device) -> BackendCaps {
             arch: None,
             graphs: false,
             paged_attention: false,
-            quantized_gguf: false,
+            // The CPU GGUF loader (gguf::cpu) compiles unconditionally; the
+            // old all-false caps refused it in every build shape.
+            quantized_gguf: true,
             mtp: false,
         },
         #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -299,13 +301,17 @@ pub fn backend_caps(device: &Device) -> BackendCaps {
             }
             #[cfg(all(feature = "cuda", feature = "rocm"))]
             {
-                // Dual builds: the NVIDIA role resolves for explicit requests
-                // but has no serving kernels (everything is hipcc-built).
+                // Dual builds: the NVIDIA role serves GGUF through the
+                // upstream CUDA path (QStorage::Cuda, PTX kernels from the
+                // candle-kernels-cuda twin, JIT-loaded). Paged attention,
+                // decode graphs, and MTP stay off for this role until the
+                // paged-attention CUDA companion lands (symbol collision:
+                // both vendors' archives export the same C symbols).
                 BackendCaps {
                     arch,
                     graphs: false,
                     paged_attention: false,
-                    quantized_gguf: false,
+                    quantized_gguf: true,
                     mtp: false,
                 }
             }

@@ -57,14 +57,22 @@ pub(crate) fn test_gpu_device() -> Device {
 /// Devices covered by the fused GGUF launchers: CUDA in every GPU shape,
 /// plus Hip in dual builds (where the `_hip` modules replace the launchers).
 pub fn device_has_fused_gguf(device: &Device) -> bool {
-    if device.is_cuda() {
-        return true;
-    }
     #[cfg(all(feature = "cuda", feature = "rocm"))]
-    if device.is_hip() {
-        return true;
+    {
+        // Dual builds: the fused launchers are hipcc-built and reach the
+        // driver through the companion, so only the AMD role has them;
+        // the NVIDIA role serves quantized matmuls through the plain
+        // dequant-GEMM path (the BackendCaps degradation). A bare
+        // is_cuda() here claimed them for the NVIDIA role and the first
+        // model step died with "weight must live on Hip".
+        return device.is_hip();
     }
-    false
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    {
+        // Single-vendor: the one compiled GPU backend has them (in a
+        // rocm-only build Device::Cuda IS the AMD device).
+        device.is_cuda()
+    }
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
