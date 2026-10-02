@@ -138,10 +138,10 @@ pub fn copy_blocks(
     for (layer, ((key_storage, key_layout), (value_storage, value_layout))) in
         zip(&key_storage_layouts, &value_storage_layouts).enumerate()
     {
-        let key_storage = as_cuda_storage(&key_storage)
-            .expect("copy_blocks cache must hold role storage");
-        let value_storage = as_cuda_storage(&value_storage)
-            .expect("copy_blocks cache must hold role storage");
+        let key_storage =
+            as_cuda_storage(&key_storage).expect("copy_blocks cache must hold role storage");
+        let value_storage =
+            as_cuda_storage(&value_storage).expect("copy_blocks cache must hold role storage");
 
         let (key_ptr, value_ptr, key_guard, value_guard) =
             match (&key_storage.slice, &value_storage.slice) {

@@ -7,6 +7,10 @@ use std::{
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 
 use super::SUPPORTED_BLOCK_SIZE;
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+use mistralrs_paged_attn::copy_blocks;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use mistralrs_paged_attn::copy_blocks_auto as copy_blocks;
 
 const KV_CACHE_TENSOR_COUNT: usize = 2;
 const WINDOWED_KV_SLOTS_USED_METRIC: &str = "mistralrs_windowed_kv_slots_used";
@@ -876,7 +880,7 @@ impl WindowedKvPool {
             .collect::<Result<Vec<_>>>()?;
         let key_layers = key_layers.iter_mut().collect::<Vec<_>>();
         let value_layers = value_layers.iter_mut().collect::<Vec<_>>();
-        mistralrs_paged_attn::copy_blocks(key_layers, value_layers, &block_mapping)
+        copy_blocks(key_layers, value_layers, &block_mapping)
     }
 
     pub fn layer_cache(&self, layer: usize) -> Result<(Tensor, Tensor)> {

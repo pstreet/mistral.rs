@@ -1095,6 +1095,27 @@ P3 = polish, Deferred = do not do on RDNA.
       pool) - practical 3090/27B context ~= <=4k tokens, journaled
       as a degraded-path limit (chunked prefill could lift it;
       not pursued for a bench datapoint).
+      NVIDIA-ROLE SLICE 3: PAGED-ATTENTION CUDA COMPANION (in progress
+      2026-10-02; 318a2d301 + 642b77861 committed, dispatch uncommitted):
+      the dual NVIDIA role gets real paged attention instead of eager.
+      (1) NVCC FIX: q4_codebook.cuh kept the Lloyd-Max LUTs as
+      namespace-scope constexpr - hipcc accepts, nvcc rejects
+      (undefined in device code). Now __device__ __constant__ (all
+      uses are in kernels); all 9 dense kernels compile under both
+      nvcc 13.3 and hipcc. (2) BUILD: build_cuda_companion() emits
+      nvcc-built libmistralrspagedattention_cuda.so in dual (dlopened,
+      nothing linked - same symbols as the hip companion, separate
+      RTLD_LOCAL handles, no prefixing needed); cuda_plugin.rs loader
+      + ffi_cuda.rs decls (16 dense entries, cuda_backend CUstream).
+      (3) TWIN: cuda_role/ backend (cache/gather/paged_attention,
+      generated from backend/ + hand fixes: CudaView has no stream()
+      upstream so offset pointers stay on the slice, single workspace
+      copy, cuda_fwd not hip_fwd) + role_dispatch.rs *_auto wrappers
+      routing Storage::Cuda -> twin, else -> hip path. (4) CORE:
+      layers/paged_attention.rs + windowed_pool.rs call the auto
+      wrappers under cfg-dual (single-vendor untouched). REMAINING:
+      twin unit tests on the 3090, caps flip (paged_attention=true
+      for dual-CUDA), 16B serve smoke on cuda:0.
       COMMITTED: acbf47097 (mistral.rs: reset + CK gate + alias) and
       87ce9a6f (candle: dedicated stream + probes). THE THREE-WAY 16B
       BENCH (Qwen3-16B-A3B Q4_K_M, SAME dual binary both roles, bench

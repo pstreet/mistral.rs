@@ -7,7 +7,16 @@ use mistralrs_paged_attn::{
     Fa3DecodeParams, FlashInferDecodeScratch, KvCacheScales as FlashInferKvCacheScales,
     DEFAULT_FP8_KV_CACHE_SCALES,
 };
-use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+use mistralrs_paged_attn::{
+    gather_kv_cache, paged_attention, reshape_and_cache, reshape_and_cache_q4, reshape_and_cache_q8,
+};
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use mistralrs_paged_attn::{
+    gather_kv_cache_auto as gather_kv_cache, paged_attention_auto as paged_attention,
+    reshape_and_cache_auto as reshape_and_cache, reshape_and_cache_q4_auto as reshape_and_cache_q4,
+    reshape_and_cache_q8_auto as reshape_and_cache_q8,
+};
 
 #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
 use crate::attention::sliding_window_left;
@@ -345,7 +354,7 @@ fn write_kv_cache(
                 ),
             }
         }
-        (KvSideWriter::Q8, KvSideWriter::Q8) => mistralrs_paged_attn::reshape_and_cache_q8(
+        (KvSideWriter::Q8, KvSideWriter::Q8) => reshape_and_cache_q8(
             key,
             value,
             key_cache,
@@ -356,7 +365,7 @@ fn write_kv_cache(
             true,
             true,
         ),
-        (KvSideWriter::Q4, KvSideWriter::Q4) => mistralrs_paged_attn::reshape_and_cache_q4(
+        (KvSideWriter::Q4, KvSideWriter::Q4) => reshape_and_cache_q4(
             key,
             value,
             key_cache,
@@ -385,7 +394,7 @@ fn write_kv_cache(
                     true,
                     false,
                 )?,
-                KvSideWriter::Q8 => mistralrs_paged_attn::reshape_and_cache_q8(
+                KvSideWriter::Q8 => reshape_and_cache_q8(
                     key,
                     value,
                     key_cache,
@@ -396,7 +405,7 @@ fn write_kv_cache(
                     true,
                     false,
                 )?,
-                KvSideWriter::Q4 => mistralrs_paged_attn::reshape_and_cache_q4(
+                KvSideWriter::Q4 => reshape_and_cache_q4(
                     key,
                     value,
                     key_cache,
@@ -422,7 +431,7 @@ fn write_kv_cache(
                     false,
                     true,
                 )?,
-                KvSideWriter::Q8 => mistralrs_paged_attn::reshape_and_cache_q8(
+                KvSideWriter::Q8 => reshape_and_cache_q8(
                     key,
                     value,
                     key_cache,
@@ -433,7 +442,7 @@ fn write_kv_cache(
                     false,
                     true,
                 )?,
-                KvSideWriter::Q4 => mistralrs_paged_attn::reshape_and_cache_q4(
+                KvSideWriter::Q4 => reshape_and_cache_q4(
                     key,
                     value,
                     key_cache,
@@ -492,7 +501,7 @@ fn gather_kv_cache_for_layout(
                 Some(bq) => (bq.k.as_ref(), bq.v.as_ref()),
                 None => (scales.k, scales.v),
             };
-            mistralrs_paged_attn::gather_kv_cache(
+            gather_kv_cache(
                 key_cache,
                 value_cache,
                 k,

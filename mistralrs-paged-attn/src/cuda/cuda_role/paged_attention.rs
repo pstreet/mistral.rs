@@ -1391,8 +1391,8 @@ pub fn reshape_and_cache(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::gather_kv::gather_kv_cache;
+    use super::*;
 
     const T_HEADS: usize = 2;
     const T_HEAD: usize = 64;
