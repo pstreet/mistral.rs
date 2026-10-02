@@ -1068,8 +1068,29 @@ P3 = polish, Deferred = do not do on RDNA.
       the design note - Device::Rocm would conflate the API layer
       with the vendor layer that GpuArch::Rocm owns; revisit the
       variant naming at the stage-1 per-backend re-architecture).
-      NEXT: commit, then the three-way 16B bench (CPU/ROCm/CUDA
-      prefill+decode) - the original user ask this arc serves.
+      COMMITTED: acbf47097 (mistral.rs: reset + CK gate + alias) and
+      87ce9a6f (candle: dedicated stream + probes). THE THREE-WAY 16B
+      BENCH (Qwen3-16B-A3B Q4_K_M, SAME dual binary both roles, bench
+      methodology identical): ROCm hip:0 full stack (PA + 18 decode
+      graphs, fused everything): prefill 175 (25 tok) / 779 (165) /
+      1014 (1138) / 867 (3362) T/s; decode 53.1 / 49.7 / 41.0 / 29.7
+      T/s (context-dependent); essays 54 T/s. CUDA cuda:0 degraded
+      stack (eager attention, dequant GEMM, host topk): prefill 21.3
+      (25) / 9.9 (165) T/s; decode 6.8-6.9 T/s (server-reported 12.5
+      tok/s over its own accounting; the bench measures wall-per-token
+      incl. response overhead - use one methodology per comparison,
+      never mix). GAP: ~8x prefill short, ~6-8x decode - the price of
+      the degradation stack until NVIDIA kernels land. KNOWN LIMIT
+      (journaled): CUDA large prefills (>=~2900 tok) OOM in the eager
+      MoE gather - the non-fused arm materializes tokens x topk COPIES
+      of expert weights via index_select (2900x8x6.3MB = 146GB) while
+      the fused grouped-prefill kernel (hip-only) avoids it; 165-tok
+      prompts fit (~8GB). FIX DIRECTION: group-by-expert eager gather
+      (narrow x rows per selected expert + matmul, O(64 expert copies)
+      not O(tokens x topk)) - also speeds up CPU serving which shares
+      this path. CPU: skipped per user directive (0.6-0.9 T/s prefill,
+      0.1 T/s decode - measured, unusable). Both smoke instances
+      cleaned down; prod still stopped by user.
       NVIDIA-ROLE SLICE 2: CUSTOM-OP ROLE-KEYING (committed 65de2242f;
       candle probes committed 4dae95e4) + DECODE-ARC SCOPED
       2026-10-01: the ops.rs arc landed. (1) ROLE-KEYING
