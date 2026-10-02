@@ -2684,8 +2684,7 @@ where
             );
             graph_input_ids.device().synchronize()?;
             let arena: Arc<CudaSlice<u8>> = Arc::new(
-                unsafe { cuda_device.alloc::<u8>(new_bytes) }
-                    .map_err(candle_core::Error::wrap)?,
+                unsafe { cuda_device.alloc::<u8>(new_bytes) }.map_err(candle_core::Error::wrap)?,
             );
             stream
                 .begin_capture_arena(arena.clone())
@@ -3854,9 +3853,11 @@ impl CudaGraphHostStaging {
 
 /// Devices whose decode graphs are capturable: the CUDA role everywhere,
 /// plus the Hip role in dual builds (the hipcc-built graph/capture API).
+/// In dual builds the NVIDIA role is excluded until its graph stack is
+/// role-aware (the capture/staging machinery is Hip-typed there).
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 pub(crate) fn is_cuda_graph_device(device: &candle_core::Device) -> bool {
-    device.is_cuda() || device.is_hip()
+    device.is_hip()
 }
 #[cfg(not(all(feature = "cuda", feature = "rocm")))]
 pub(crate) fn is_cuda_graph_device(device: &candle_core::Device) -> bool {
