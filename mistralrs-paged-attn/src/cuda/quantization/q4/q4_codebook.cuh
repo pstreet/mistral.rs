@@ -13,7 +13,7 @@
 namespace vllm {
 namespace q4 {
 
-constexpr float kQ4LmLevels[16] = {
+__device__ __constant__ float kQ4LmLevels[16] = {
     -0.9688121676445007f, -0.774229109287262f, -0.6181834936141968f,
     -0.4846160411834717f, -0.3652898669242859f, -0.25523099303245544f,
     -0.15097682178020477f, -0.049988243728876114f, 0.049988243728876114f,
@@ -60,7 +60,7 @@ constexpr float kQ4ResMag = 0.029516000300645828f;
 
 // Folded 32-entry dequant LUT: index (sbit<<4)|nib gives
 // levels[nib] + (sbit ? +c : -c). Bit 0 = r<0, bit 1 = r>=0.
-constexpr float kQ4LmResLevels[32] = {
+__device__ __constant__ float kQ4LmResLevels[32] = {
     -0.9983281493186951f, -0.8037450909614563f, -0.6476994752883911f,
     -0.514132022857666f, -0.3948058784008026f, -0.28474700450897217f,
     -0.1804928183555603f, -0.07950424402952194f, 0.020472243428230286f,
