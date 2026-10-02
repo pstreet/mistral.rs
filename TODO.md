@@ -1114,8 +1114,20 @@ P3 = polish, Deferred = do not do on RDNA.
       routing Storage::Cuda -> twin, else -> hip path. (4) CORE:
       layers/paged_attention.rs + windowed_pool.rs call the auto
       wrappers under cfg-dual (single-vendor untouched). REMAINING:
-      twin unit tests on the 3090, caps flip (paged_attention=true
-      for dual-CUDA), 16B serve smoke on cuda:0.
+      twin unit tests on the 3090 (6/6 green: copy_blocks x2,
+      reshape+gather f32-exact, Q8, Q4, Q4+QJL), caps flip
+      (paged_attention=true for dual-CUDA), 16B serve smoke on cuda:0:
+      caps paged_attn=on, 2GB pool (1365 blocks, 43k ctx), HEALTH-OK,
+      coherent thinking traces, zero hard errors. PARITY VERDICT:
+      the 37x48 prompt loops identically under PA and eager
+      (separate-alone servers, temp 0.3) - pre-existing eager-role
+      MoE behavior (vendor-variance class), NOT a PA regression.
+      Decode 6.9-7.0 T/s (no graphs yet - next slice), short prefill
+      47-66 T/s. NOTE: two 16B residents OOM the 3090 (24.1/24.5GB)
+      - A/B servers one at a time. ALSO: graphs=OFF still attempts
+      precapture then warns "expected CUDA input ids" - the graphs
+      slice should skip the chain entirely when caps.graphs is false.
+      COMMITTED: slice-3 companion+twin+dispatch+caps (this queue).
       COMMITTED: acbf47097 (mistral.rs: reset + CK gate + alias) and
       87ce9a6f (candle: dedicated stream + probes). THE THREE-WAY 16B
       BENCH (Qwen3-16B-A3B Q4_K_M, SAME dual binary both roles, bench

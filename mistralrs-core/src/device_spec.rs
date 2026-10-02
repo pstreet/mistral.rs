@@ -308,14 +308,15 @@ pub fn backend_caps(device: &Device) -> BackendCaps {
             {
                 // Dual builds: the NVIDIA role serves GGUF through the
                 // upstream CUDA path (QStorage::Cuda, PTX kernels from the
-                // candle-kernels-cuda twin, JIT-loaded). Paged attention,
-                // decode graphs, and MTP stay off for this role until the
-                // paged-attention CUDA companion lands (symbol collision:
-                // both vendors' archives export the same C symbols).
+                // candle-kernels-cuda twin, JIT-loaded) and paged
+                // attention through the nvcc companion
+                // (libmistralrspagedattention_cuda.so, dlopened).
+                // Decode graphs and MTP stay off for this role until
+                // their CUDA paths land.
                 BackendCaps {
                     arch,
                     graphs: false,
-                    paged_attention: false,
+                    paged_attention: true,
                     quantized_gguf: true,
                     mtp: false,
                 }
