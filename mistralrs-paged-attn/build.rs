@@ -376,37 +376,119 @@ fn build_rocm() -> Result<()> {
     Ok(())
 }
 
+/// NVIDIA-role companion for dual (`cuda+rocm`) builds: the same 9 dense
+/// kernels nvcc-built into a dlopened `.so` (never linked, so the exe
+/// keeps zero GPU DT_NEEDED). Same symbol names as the hip companion -
+/// separate dlopen handles (RTLD_LOCAL) keep them from colliding.
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+fn build_cuda_companion() -> Result<()> {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let nvcc = std::env::var("CUDA_HOME")
+        .or_else(|_| std::env::var("CUDA_PATH"))
+        .map(|p| format!("{p}/bin/nvcc"))
+        .unwrap_or_else(|_| "nvcc".to_string());
+    // Same source as build_cuda()/cudaforge: CUDA_COMPUTE_CAP or 80.
+    let cap: usize = std::env::var("CUDA_COMPUTE_CAP")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(80);
+    let gencode = format!("arch=compute_{cap},code=sm_{cap}");
+    let ptx = format!("arch=compute_{cap},code=compute_{cap}");
+
+    for kernel in PAGED_ATTN_ROCM_KERNELS {
+        println!("cargo:rerun-if-changed={kernel}");
+    }
+
+    let build_dir = out_dir.join("cuda_companion");
+    std::fs::create_dir_all(&build_dir)?;
+    let mut objects = Vec::new();
+    for kernel in PAGED_ATTN_ROCM_KERNELS {
+        let object = build_dir
+            .join(std::path::Path::new(kernel).file_stem().unwrap())
+            .with_extension("o");
+        let mut cmd = Command::new(&nvcc);
+        cmd.arg(kernel)
+            .arg("-Isrc/cuda")
+            .arg("-std=c++17")
+            .arg("-O3")
+            .arg("-U__CUDA_NO_HALF_OPERATORS__")
+            .arg("-U__CUDA_NO_HALF_CONVERSIONS__")
+            .arg("-U__CUDA_NO_HALF2_OPERATORS__")
+            .arg("-U__CUDA_NO_BFLOAT16_CONVERSIONS__")
+            .arg("--expt-relaxed-constexpr")
+            .arg("--expt-extended-lambda")
+            .arg("--use_fast_math")
+            .arg("--compiler-options")
+            .arg("-fPIC")
+            .arg("-gencode")
+            .arg(&gencode)
+            .arg("-gencode")
+            .arg(&ptx)
+            .arg("-c")
+            .arg("-o")
+            .arg(&object);
+        if cap >= 80 {
+            cmd.arg("-DENABLE_FP8");
+        }
+        let status = cmd.status()?;
+        anyhow::ensure!(status.success(), "nvcc failed for {kernel}");
+        objects.push(object);
+    }
+
+    let so = out_dir.join("libmistralrspagedattention_cuda.so");
+    if so.exists() {
+        std::fs::remove_file(&so)?;
+    }
+    let status = Command::new(&nvcc)
+        .arg("--shared")
+        .arg("--cudart")
+        .arg("shared")
+        .arg("-o")
+        .arg(&so)
+        .args(&objects)
+        .status()?;
+    anyhow::ensure!(
+        status.success(),
+        "nvcc failed to link libmistralrspagedattention_cuda.so"
+    );
+    println!(
+        "cargo:rustc-env=MISTRALRS_PAGED_ATTN_CUDA_PLUGIN={}",
+        so.display()
+    );
+    Ok(())
+}
+
 fn main() -> Result<()> {
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_fp8)");
     println!("cargo::rustc-check-cfg=cfg(has_fa3_fp8_paged)");
 
-    // Exactly one backend block compiles; each yields the build result as the
-    // function's return value. In a dual cuda+rocm build the rocm (hipcc)
-    // block wins: both blocks link the same `mistralrspagedattention`
-    // archive, so compiling both would collide.
+    // Dual cuda+rocm: hipcc block builds the hip companion AND nvcc builds
+    // the cuda companion (two dlopened .so files, nothing linked - no
+    // archive collision). Single-vendor shapes keep their static archive.
     #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
     {
-        build_cuda()
+        build_cuda()?;
     }
 
     #[cfg(feature = "rocm")]
     {
-        build_rocm()
+        build_rocm()?;
+    }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    {
+        build_cuda_companion()?;
     }
 
     #[cfg(feature = "metal")]
     {
         mistralrs_metal_compile::compile_metallibs(&PAGED_ATTENTION_METAL_SOURCE_SET)
+            .expect("metal lib compile failed");
     }
 
-    // No backend feature selected: nothing to build.
-    #[cfg(not(any(
-        all(feature = "cuda", target_family = "unix"),
-        feature = "rocm",
-        feature = "metal"
-    )))]
-    {
-        Ok(())
-    }
+    Ok(())
 }

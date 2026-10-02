@@ -9,7 +9,11 @@ pub use candle_core::cuda_backend as role_backend;
 pub use candle_core::hip_backend as role_backend;
 
 mod backend;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) mod cuda_role;
 mod ffi;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) mod ffi_cuda;
 
 #[cfg(not(feature = "rocm"))]
 pub use backend::{
