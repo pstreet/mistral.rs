@@ -2538,6 +2538,29 @@ pub trait Pipeline:
                         )]
                     };
 
+                    // The paged scheduler owns block-cache state, but models whose
+                    // layers serve eagerly (no paged-attention kernels for this
+                    // device's role in this build) still read the live
+                    // normal/hybrid KV cache - which nothing else in this arm
+                    // resets. Without this, warmup (or a prior sequence)
+                    // residue stays in the cache and the next prompt appends
+                    // onto it, so scores span more keys than the mask and the
+                    // first layer faults. Mirror the default scheduler's
+                    // fresh-prompt Reset (Reset on offset 0, In otherwise so
+                    // continuation chunks keep earlier chunks' keys): roles
+                    // with paged attention keep their existing behavior
+                    // untouched.
+                    if is_prompt
+                        && !crate::device_spec::backend_caps(&self.device()).paged_attention
+                        && matches!(
+                            self.cache(),
+                            EitherCache::Normal(_) | EitherCache::Hybrid(_)
+                        )
+                        && input_seqs.first().is_some_and(|seq| seq.token_offset() == 0)
+                    {
+                        self.set_none_cache(input_seqs, false, false, true)?;
+                    }
+
                     let mut logits = vec![None; input_seqs.len()];
                     let mut batched_causal_logits = None;
                     let len_inputs = inputs_iter.len();

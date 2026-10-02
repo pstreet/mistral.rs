@@ -564,6 +564,31 @@ P3 = polish, Deferred = do not do on RDNA.
       code can apply per-vendor quirks (ggml-vulkan precedent).
       Selection precedence: native API by default (cuda/hip),
       Vulkan when explicitly chosen or on Intel-only boxes.
+      DESIGN NOTE 2026-10-02 (dispatch vs selection; vendor equality):
+      vendors stay first-class - the AMD-primary state of dual builds is
+      porting-history accident (the fused stack is hipcc-only today), not
+      doctrine, and the role-keying work is what makes parity incremental
+      (each new NVIDIA kernel flips one gate). Two layers, not one: (1)
+      DISPATCH asks "can this run here?" - capability/transport-keyed,
+      vendor-blind where possible, degrades loudly. This is
+      device_has_fused_ops() (single GPU role in single-vendor; AMD
+      role only in dual) + BackendCaps. "AMD-only in dual" means exactly
+      this: the fused launchers exist solely as hipcc binaries, so only
+      Device::Hip tensors may enter them. (2) SELECTION asks "what runs
+      fastest here?" - irreducibly vendor+arch+SDK-aware: wavefront 64
+      vs warp 32 vs Intel subgroups, MFMA vs Tensor Cores vs XMX, LDS
+      sizes, rocBLAS/hipBLASLt vs cuBLAS/cuBLASLt vs oneMKL heuristics,
+      CK vs FlashInfer vs eager (three maths, same answer), per-SDK bugs
+      and tuning knobs. GpuArch (vendor+arch+transport) feeds selection;
+      the predicate feeds dispatch. REJECTED: is_rocm()/is_vulkan()
+      Device methods - in rocm-only builds Device::Cuda IS the AMD
+      device, so any vendor-named method has shape-dependent semantics
+      (the is_cuda() confusion with flipped polarity); vendor questions
+      go to GpuArch/cfg, role questions to the predicate. Vulkan fits
+      this split: transport (SPIR-V, portable) feeds dispatch, while
+      VkPhysicalDeviceProperties vendorID (0x10DE/0x1002/0x8086) feeds
+      per-vendor selection quirks and tuning. Capabilities decide
+      whether, vendors decide how fast.
       SLICE PLAN (code survey 2026-09-26): candle's
       DeviceLocation/Device enums are the precedented extension
       point (Metal already coexists); cuda_backend is ONE module
@@ -981,8 +1006,73 @@ P3 = polish, Deferred = do not do on RDNA.
       (214.9/610.1/23.4). MTP only wins on draft acceptance; these
       short deterministic probes show no uplift. Paged-attn pays
       under multi-turn/concurrency load, not single-stream speed.
-      NVIDIA-ROLE SLICE 2: CUSTOM-OP ROLE-KEYING + DECODE-ARC SCOPED
-      2026-10-01 (uncommitted): the ops.rs arc landed. (1) ROLE-KEYING
+      DECODE ARC 2026-10-02 RESOLVED (uncommitted: attention/mod.rs CK gate +
+      pipeline/mod.rs paged-arm reset + device_spec.rs rocm:N alias; candle:
+      cuda_backend/body/device.rs dedicated stream + positions_probe/
+      stomp_probe examples): THREE bugs, three fixes, both roles green.
+      (1) WARMUP RESIDUE: the paged-scheduler path never resets the live
+      normal KV cache (no set_none_cache/clone calls in the PagedAttention
+      arm of submit_step) - harmless on the hip role (PA layers ignore
+      it), fatal on the degraded-eager NVIDIA role (kv 17 vs 16 keys,
+      layer-0 mask mismatch). Fix mirrors the default scheduler's
+      fresh-prompt Reset, caps-gated (PA roles untouched) and
+      token_offset==0-guarded (continuation chunks keep prior keys).
+      (2) CROSS-THREAD ORDERING (THE root cause of the NaN/garbage):
+      positions upload lands clean (creation readback [0..10) correct,
+      pre/post-synchronize() reads IDENTICAL - not a stomp) but the
+      rope gather later reads 0x01010101 garbage -> index_select
+      bounds assert (indexing.cu:63) -> NaN logits -> poisoned
+      context (CUBLAS_STATUS_INTERNAL_ERROR). Thread IDs prove the
+      migration: upload on tokio worker 51, consume alternating on
+      rayon workers 34/35, and candle's BackendDevice::new used
+      cuStreamPerThread (0x2) - a DIFFERENT physical stream per
+      calling thread with no ordering between them; work migrated
+      mid-request and read in-flight uploads. Evidence: tracer D2H
+      syncs OR CUDA_LAUNCH_BLOCKING=1 served 3/3 coherent; clean
+      async build NaN'd 4/4 deterministically. FIX (candle): one
+      dedicated stream per device (context.new_stream()) shared by
+      all threads - restores total order; the lost inter-thread
+      concurrency was never sound without explicit events anyway.
+      All probes that EXONERATED everything else: rope math 7/7 vs
+      CPU, expert gather mm bit-exact, sort fallback, U32
+      upload/cast/index_select, rms/GEMM/softmax canary (stomp_probe),
+      sanitizer route DEAD (shadow memory OOMs the 3090 on a 16B
+      serve). (3) CK GATE - and the correction lesson: the first fix
+      keyed the CK flash-attn gate on device_has_fused_ops, which
+      correctly blocks the dual NVIDIA role (bare is_cuda() had fired
+      hipcc FmhaFwdKernel against NVIDIA pointers - async HIP fault
+      aborting the process) but UNLOCKED it for Device::Hip - and
+      ck_flash_attn's launcher is Storage::Cuda-shaped
+      (as_cuda_device() bails on hip: "expected a cuda device, got
+      hip" at first decode step, backtrace via RUST_BACKTRACE=1:
+      rocm/mod.rs:47 <- attention/mod.rs:336 <- PA forward). KEY
+      INSIGHT: in dual builds CK was ALWAYS OFF for hip (the old
+      is_cuda() gate is false for Device::Hip) - dual prod prefill
+      silently used the eager/flash path all along; CK only ever
+      served single-vendor rocm. LESSON: device_has_fused_ops is for
+      kernels that EXIST per role; CK's launcher is single-vendor-
+      shaped, so the gate is cfg-keyed: fires only in single-vendor
+      rocm builds (!cfg!(all(cuda,rocm)) && is_cuda()); a
+      Storage::Hip twin (the 5-op hip_fwd pattern) is the follow-up
+      if CK-on-hip-in-dual is ever wanted.
+      VERIFICATION MATRIX (final, clean tree, no tracers, fully
+      async): cuda:0 4/4+3/3 coherent, 12.4-12.5 tok/s decode, zero
+      errors (eager attention, dequant GEMM, host topk - the full
+      degradation stack working); hip:0 3/3 coherent, 101-102 tok/s,
+      18 graphs captured+replaying, zero errors (identical to the
+      pre-change control - no regression); all three build shapes
+      check clean (mistralrs dual/cpu/rocm 0 errors; candle dual/cpu
+      clean). ALSO LANDED: "rocm:N" accepted as a parse alias of
+      "hip:N" in DeviceSpec (users reach for the ecosystem name; the
+      cargo feature is rocm too; enum variant stays API-named per
+      the design note - Device::Rocm would conflate the API layer
+      with the vendor layer that GpuArch::Rocm owns; revisit the
+      variant naming at the stage-1 per-backend re-architecture).
+      NEXT: commit, then the three-way 16B bench (CPU/ROCm/CUDA
+      prefill+decode) - the original user ask this arc serves.
+      NVIDIA-ROLE SLICE 2: CUSTOM-OP ROLE-KEYING (committed 65de2242f;
+      candle probes committed 4dae95e4) + DECODE-ARC SCOPED
+      2026-10-01: the ops.rs arc landed. (1) ROLE-KEYING
       SWEEP: device_has_fused_gguf generalized to device_has_fused_ops
       (all fused C kernels - gguf launchers, rope, MoE router/experts,
       GDN, on-device sampling - share one availability rule: single GPU
@@ -1020,35 +1110,35 @@ P3 = polish, Deferred = do not do on RDNA.
       unit test added (vocab-row topk on the NVIDIA role == CPU).
       batched_mm_probe validated the expert gather matmul
       ((8,1,2048)@(8,2048,768) batched F32) bit-correct on the GPU.
-      VALIDATION MATRIX: same binary serves the 16B coherently on
+      VALIDATION MATRIX (CORRECTED 2026-10-02 - the original entry
+      misread warmup traces as request traces): the "sane prefill with
+      sane first sample" below was the STARTUP WARMUP ("hello", 1
+      token), not the request. The request prefill NEVER completed in
+      slice 2: with warmup residue in the live normal cache (kv 17 for
+      a 16-token prompt) it died in layer 0 on broadcast_add
+      [1,32,16,17] vs [16,16]. Same binary serves the 16B coherently on
       hip:0 (no AMD-role regression from the sweep); the 16B on cuda:0
-      loads (709 PTX fns), prefills, and its logits are SANE (traced:
-      absmax 12.9, zero NaN through embed->28 layers->norm->lm_head)
-      with a sane first sample; the ~512 hidden-state outliers are
-      plausible Qwen3 activation behavior, not the bug. REMAINING
-      BLOCKER - THE DECODE ARC: later decode steps produce garbage ->
-      NaN at sampling, and a later run surfaced
-      CUBLAS_STATUS_INTERNAL_ERROR - the signature of an async illegal
-      access in the decode path (1-token q over the full cache)
-      poisoning the context. With default prefix-cache settings there
-      was also a broadcast_add mismatch (scores [1,32,16,17] vs mask
-      [16,16] - a warmup-token residue interacting with the prefix
-      cache on the non-PA path; prefix_cache_n=0 removes that failure).
-      Bisect queue for next sitting: kv-cache read path ops, prefix
-      cache machinery on the normal cache (the [16,17] residue), the
-      m=1 decode GEMM (cuBLAS internal error could be the async
-      surfacing), and role-gate the companion-kernel TEST utilities
-      (quant bar on cuda:0: gguf/dequant tests pass, but
+      loads (709 PTX fns). The ~512 hidden-state outliers are
+      plausible Qwen3 activation behavior, not the bug.
+      REMAINING BLOCKER - THE DECODE ARC (see DECODE ARC entry
+      2026-10-02 below for the resolution path): the warmup-residue
+      mask mismatch. NOTE: prefix_cache_n=0 does NOT remove it (a nopc
+      run still showed kv_len=17) - the residue is in the live normal
+      cache via the paged-scheduler path, independent of the prefix
+      cacher. Bisect queue for next sitting: kv-cache read path ops,
+      prefix cache machinery on the normal cache (the [16,17]
+      residue), the m=1 decode GEMM (cuBLAS internal error could be
+      the async surfacing), and role-gate the companion-kernel TEST
+      utilities (quant bar on cuda:0: gguf/dequant tests pass, but
       count_nonzero/pack_8bit tests launch HIP companion kernels with
       CUDA pointers - the same dual-blind class, test-side; ops.cu CUB
       reduce + an SIGSEGV). Housekeeping: prod stopped by user for
-      host memory; smoke instances cleaned; temporary tracer
-      scaffolding stashed (sampler tracer at
-      /tmp/opencode/sampler-tracer-stash.patch; qwen3_moe.rs stage and
-      MoE tracers + gguf/cpu.rs gather tracer remain in-tree,
-      env-gated MISTRALRS_TRACE_FIRST_STEP, excluded from commits).
+      host memory; smoke instances cleaned. All temporary tracer
+      scaffolding since REMOVED (qwen3_moe.rs stage/MoE tracers,
+      gguf/cpu.rs gather tracer, sampler tracer - none stashed;
+      /tmp is ephemeral, do not reference it as durable).
       NVIDIA-ROLE SERVING SLICE 1 + 16B BACKEND BENCH 2026-10-01
-      (checkpoint, uncommitted tail below): the 16B three-backend bench
+      (committed 31d7511a9; candle PTX fix committed cffcc107): the 16B three-backend bench
       (user ask) surfaced the first real NVIDIA-role serving work; four
       gates fixed and verified: (1) backend_caps: the dual NVIDIA role
       now reports quantized_gguf=true (served by the upstream

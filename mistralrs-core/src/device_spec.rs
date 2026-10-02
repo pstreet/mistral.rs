@@ -2,9 +2,10 @@
 //! stack (S3b of the multi-backend roadmap).
 //!
 //! Device strings select API + device together - the API qualifier IS the
-//! vendor-API choice (`cuda:N` = CUDA, `hip:N` = ROCm/HIP, `cpu`, and later
-//! `vulkan:N` for the vendor-agnostic API on any vendor). The index is
-//! per-API enumeration, so `hip:0` and `cuda:0` may address the same card.
+//! vendor-API choice (`cuda:N` = CUDA, `hip:N` = ROCm/HIP with `rocm:N` an
+//! accepted alias, `cpu`, and later `vulkan:N` for the vendor-agnostic API
+//! on any vendor). The index is per-API enumeration, so `hip:0` and
+//! `cuda:0` may address the same card.
 //!
 //! Resolution is probe-gated: with runtime dlopen (`dynamic-loading` on both
 //! vendor crates), calling a driver without its runtime present panics inside
@@ -26,9 +27,9 @@ pub enum DeviceSpec {
     /// `"cuda:N"` - the CUDA API. The NVIDIA role in dual builds; the
     /// compiled vendor (which may be HIP-bound) in single-vendor builds.
     Cuda(usize),
-    /// `"hip:N"` - the HIP API. The AMD role in dual builds; an alias for
-    /// the compiled vendor in single-vendor rocm builds (configs stay
-    /// portable across build shapes).
+    /// `"hip:N"` (alias `"rocm:N"`) - the HIP API. The AMD role in dual
+    /// builds; an alias for the compiled vendor in single-vendor rocm
+    /// builds (configs stay portable across build shapes).
     Hip(usize),
 }
 
@@ -51,7 +52,11 @@ impl DeviceSpec {
             })?;
         let spec = match api.to_ascii_lowercase().as_str() {
             "cuda" => Self::Cuda(idx),
-            "hip" => Self::Hip(idx),
+            // "rocm:N" is an accepted alias of "hip:N": the enum variant is
+            // API-named (HIP is AMD's CUDA-shaped API, mirroring Cuda/Metal/
+            // Vulkan), but users reach for the ecosystem name - and the cargo
+            // feature is `rocm` too. Both strings address the same device.
+            "hip" | "rocm" => Self::Hip(idx),
             "vulkan" => {
                 return Err(candle_core::Error::msg(
                     "device \"vulkan:<idx>\" is not supported yet (the Vulkan backend is \
@@ -388,6 +393,9 @@ mod tests {
         assert_eq!(DeviceSpec::parse(" cpu ").unwrap(), DeviceSpec::Cpu);
         assert_eq!(DeviceSpec::parse("cuda:0").unwrap(), DeviceSpec::Cuda(0));
         assert_eq!(DeviceSpec::parse("HIP:7").unwrap(), DeviceSpec::Hip(7));
+        // "rocm:N" aliases "hip:N" (users reach for the ecosystem name).
+        assert_eq!(DeviceSpec::parse("rocm:0").unwrap(), DeviceSpec::Hip(0));
+        assert_eq!(DeviceSpec::parse("ROCM:2").unwrap(), DeviceSpec::Hip(2));
         // Vulkan parses as a known API but reports the S4 status.
         let err = DeviceSpec::parse("vulkan:1").unwrap_err().to_string();
         assert!(err.contains("S4"), "{err}");
