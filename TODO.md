@@ -1091,6 +1091,46 @@ P3 = polish, Deferred = do not do on RDNA.
       this path. CPU: skipped per user directive (0.6-0.9 T/s prefill,
       0.1 T/s decode - measured, unusable). Both smoke instances
       cleaned down; prod still stopped by user.
+      GROUPED EAGER GATHER 2026-10-02 (uncommitted tail below):
+      unblocked CUDA large prefills (2900 tok: OOM -> 472 T/s;
+      8700 tok: OOM -> 659 T/s; short/medium also jump 21->63 and
+      10->232 T/s - the 64 dense GEMMs beat one strided-batched GEMM
+      over an 8 GB materialized copy). Replaces the O(tokens*t*
+      expert_size) materializing gather (146 GB at 2900 tok) with
+      per-distinct-expert GEMMs on narrow weight views + index_add
+      into a zeroed accumulator: O(tokens*t*(in+out)) activation
+      copies only. Wired first in both gguf/cpu.rs arms (quantized
+      QTensor + plain Tensor, F32 and native dtypes), materializing
+      path kept as fallback for unhandled layouts. Tests: exact vs
+      materializing on CPU (broadcast/per-slot/single-slot/all-to-
+      one-expert), 4D/5D normalization shapes, serving-GPU role,
+      plus large-scale (1138 tok, real 64x768x2048 dims) cuda-vs-cpu
+      agreement. Full quant bar 327/0. LESSON: candle's
+      scatter_add_set enforces stricter rank alignment than index_add
+      and rejects this shape - stayed with the copying index_add
+      (memcpy-class traffic, dwarfed by the GEMMs) with the reason
+      in the comment.
+      LARGE-PREFILL "GIBBERISH" VERDICT - VENDOR VARIANCE, NOT A BUG:
+      cuda large-prefill outputs degenerate (repetition collapse)
+      while hip reasons, yet every eager op proves exact at scale
+      (mask bit-exact to 1138; softmax rows sum to 1.0; KV growth
+      copies bit-exact; grouped gather == CPU at 1138 tok; per-layer
+      absmax tracks within 2%; zero NaN/inf anywhere). Full-logits
+      dump comparison (151936 f32 both roles, same 65-tok prompt):
+      top-1 AGREES, KL 0.0014 (same distribution shape), but median
+      abs diff 0.52 with p1/p99 at -2.9/+3.8. Mechanism: hip prefill
+      runs the FUSED MMQ kernels (quantized-domain math, no dequant)
+      while cuda runs dequant+GEMM - two different algorithms whose
+      rounding differs at O(1) on outlier activations (hidden states
+      carry ~500-magnitude outliers), exactly the known llama.cpp
+      mmq-vs-dequant spread. Greedy decoding amplifies it chaotically
+      (one flipped argmax -> divergent context -> loops); sampling
+      masks it at short contexts. TF32 ruled out
+      (NVIDIA_TF32_OVERRIDE=0 changes nothing). No code fix on the
+      eager path - true parity needs NVIDIA fused kernels (the known
+      backlog). Bench throughput numbers stand (that is what was
+      being measured); cross-backend greedy text equality is not a
+      valid oracle for MoE models across BLAS vendors.
       NVIDIA-ROLE SLICE 2: CUSTOM-OP ROLE-KEYING (committed 65de2242f;
       candle probes committed 4dae95e4) + DECODE-ARC SCOPED
       2026-10-01: the ops.rs arc landed. (1) ROLE-KEYING
