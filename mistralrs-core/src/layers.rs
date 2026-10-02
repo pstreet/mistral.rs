@@ -386,7 +386,7 @@ fn rms_norm_forward_add(
     eps: f64,
 ) -> Result<(Tensor, Tensor)> {
     #[cfg(feature = "cuda")]
-    if x.device().is_cuda()
+    if mistralrs_quant::device_has_fused_ops(x.device())
         && residual.device().same_device(x.device())
         && weight.device().same_device(x.device())
         && x.dtype() == residual.dtype()
@@ -422,7 +422,7 @@ fn rms_norm_forward_residual(
     scale: Option<&Tensor>,
 ) -> Result<Tensor> {
     #[cfg(any(feature = "cuda", feature = "rocm"))]
-    if x.device().is_cuda()
+    if mistralrs_quant::device_has_fused_ops(x.device())
         && residual.device().same_device(x.device())
         && weight.device().same_device(x.device())
         && scale.is_none_or(|scale| scale.device().same_device(x.device()))
@@ -470,7 +470,7 @@ fn rms_norm_forward_residual_then_rms_norm(
     norm_eps: f64,
 ) -> Result<(Tensor, Tensor)> {
     #[cfg(any(feature = "cuda", feature = "rocm"))]
-    if x.device().is_cuda()
+    if mistralrs_quant::device_has_fused_ops(x.device())
         && residual.device().same_device(x.device())
         && residual_weight.device().same_device(x.device())
         && norm_weight.device().same_device(x.device())

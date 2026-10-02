@@ -3645,6 +3645,22 @@ pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resul
         );
     }
 
+    // The fused kernel is hipcc-built: in dual builds the NVIDIA role has
+    // no equivalent (the PTX twin carries no glu kernels), so serve it
+    // with plain upstream ops (unary activation + mul, both in the twin).
+    // Numerically identical to the fused kernel up to op ordering.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if !crate::utils::device_has_fused_ops(a.device()) {
+        let act = match activation {
+            GluActivationType::Silu => candle_nn::ops::silu(a)?,
+            GluActivationType::Gelu => a.gelu()?,
+            GluActivationType::Relu => a.relu()?,
+            GluActivationType::GeluErf => a.gelu_erf()?,
+            GluActivationType::Sigmoid => candle_nn::ops::sigmoid(a)?,
+        };
+        return act.broadcast_mul(b);
+    }
+
     #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     if a.device().is_cuda()
         && matches!(a.dtype(), DType::F16 | DType::BF16 | DType::F32)

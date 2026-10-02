@@ -1068,6 +1068,33 @@ P3 = polish, Deferred = do not do on RDNA.
       the design note - Device::Rocm would conflate the API layer
       with the vendor layer that GpuArch::Rocm owns; revisit the
       variant naming at the stage-1 per-backend re-architecture).
+      27B ON THE 3090 VIA RUNTIME ISQ 2026-10-02 (user-directed;
+      uncommitted tail below): Qwen3.8-27B Q6_K (~22GB, too big for the
+      24.5GB usable) served on cuda:0 with [models.quantization]
+      in_situ_quant = "Q4K" (~15GB). ISQ plan logs "quantizing to q4k,
+      sensitive tensors q6k". Three more dual-blind gates fell on the
+      GDN path (this model is hybrid GDN + full attn): (1)
+      RecurrentStatePool::checkout took the in-place pool path on
+      is_cuda() -> hip-companion clamp_slot_table status 1; gated to
+      device_has_fused_ops so the role uses the gathered copy +
+      generic-scatter commit (already covered). (2)
+      rms_norm_forward_add + the two fused-norm gates in layers.rs
+      (rms_norm_residual, residual_then_norm) claimed the hipcc
+      cuda_add_rms_norm kernels via bare is_cuda(); same predicate
+      swap, eager add+norm follows. (3) fused_glu() (utils/ops.rs)
+      has a cuda-ONLY fast path (all(cuda, not(rocm))) so dual fell
+      into FusedGlu::cuda_fwd -> ffi::fused_glu_f16 (hipcc binary) ->
+      "invalid argument" during ISQ stats forwards; dual NVIDIA role
+      now serves it with upstream unary+mul (all in the PTX twin),
+      numerically identical up to op ordering.
+      27B BENCH cuda:0 ISQ-Q4K: prefill 47.7 (69 tok) / 52.8 (208) /
+      52.6 (1174) T/s; decode 5.3-5.5 T/s; arithmetic correct
+      (37x48=1776); essays coherent. xlarge (8700 tok) OOMs on the
+      prompt step: the eager full-attention scores [1,32,8700,8700]
+      plus transients vs 24.5GB (hip serves 262k via the 2GB PA
+      pool) - practical 3090/27B context ~= <=4k tokens, journaled
+      as a degraded-path limit (chunked prefill could lift it;
+      not pursued for a bench datapoint).
       COMMITTED: acbf47097 (mistral.rs: reset + CK gate + alias) and
       87ce9a6f (candle: dedicated stream + probes). THE THREE-WAY 16B
       BENCH (Qwen3-16B-A3B Q4_K_M, SAME dual binary both roles, bench

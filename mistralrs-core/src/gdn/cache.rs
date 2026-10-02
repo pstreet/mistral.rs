@@ -70,7 +70,11 @@ impl GdnLayerCache {
     /// Check out the rows `indices` of `pool` for one layer forward. On CUDA the kernels update the
     /// pool in place through the slot table; elsewhere this is a gathered copy that `commit` scatters back.
     pub fn checkout(pool: &RecurrentStatePool, indices: &Tensor) -> Result<Self> {
-        if pool.device().is_cuda() {
+        // The in-place pool path runs hipcc-companion kernels (clamp +
+        // row updates with no bounds checks); only the fused-ops role
+        // may take it. Other GPU roles use the gathered copy, committed
+        // back through the generic scatter path.
+        if mistralrs_quant::device_has_fused_ops(pool.device()) {
             // Clamp the slot table to the pool's physical rows first: the
             // kernels below do no bounds checks, so a stale/garbage slot
             // would otherwise become a wild heap write. Valid tables are
