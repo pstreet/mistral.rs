@@ -12,18 +12,16 @@ use std::{
 // serving stack: the AMD role in a dual build (all C kernels are hipcc-built)
 // and the compiled vendor in single-vendor builds. The NVIDIA-original
 // cu*-graph paths below stay for cuda-only builds.
-#[cfg(all(feature = "rocm", not(feature = "cuda")))]
-use candle_core::cuda_backend::cudarc::driver::{
-    sys, CudaEvent, CudaSlice, CudaStream, DevicePtr, PinnedHostSlice,
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+use crate::pipeline::graph_role::GraphStreamExt;
+use crate::pipeline::graph_role;
+use crate::pipeline::graph_role::{
+    graph_alloc_pinned, graph_destroy, graph_end_capture, graph_exec_destroy, graph_instantiate,
+    graph_launch, graph_memcpy_htod_async, graph_stage_ptr, graph_upload, GraphEvent,
+    GraphPinnedHost, GraphStream,
 };
-#[cfg(all(feature = "cuda", not(feature = "rocm")))]
-use candle_core::cuda_backend::cudarc::driver::{
-    sys, CudaEvent, CudaStream, DevicePtr, PinnedHostSlice,
-};
-#[cfg(all(feature = "cuda", feature = "rocm"))]
-use candle_core::hip_backend::cudarc::driver::{
-    sys, CudaEvent, CudaSlice, CudaStream, DevicePtr, PinnedHostSlice,
-};
+#[cfg(feature = "rocm")]
+use candle_core::role::backend::cudarc::driver::CudaSlice as ArenaSlice;
 use candle_core::{DType, Device, DeviceLocation, Storage, Tensor, Var};
 
 #[cfg(target_family = "unix")]
@@ -59,12 +57,9 @@ fn dbg_nanos() -> u128 {
         .unwrap_or(0)
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm")))]
-const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 =
-    sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH as u64;
-#[cfg(feature = "rocm")]
-// hipGraphInstantiateFlagAutoFreeOnLaunch (value 1, not 2 which is Upload)
-const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 = 0x1;
+// AUTO_FREE_ON_LAUNCH: value 1 on both drivers (on CUDA it is NOT the 2
+// that is Upload).
+const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 = 1;
 // Matches the standard CUDA paged-attention V2 partition size.
 const PAGED_ATTENTION_PARTITION_SIZE: usize = 512;
 const TARGET_CUDA_DECODE_GRAPH_CACHE_DEFAULT_CAPACITY: usize = 64;
@@ -104,12 +99,12 @@ static CUDA_GRAPH_MEMORY_POOL_SCOPES: OnceLock<Mutex<HashMap<usize, MemoryPoolSc
 static CUDA_PHASE_TIMINGS_ENABLED: OnceLock<bool> = OnceLock::new();
 
 pub(crate) struct CudaPhaseTimer {
-    start: CudaEvent,
-    stream: Arc<CudaStream>,
+    start: GraphEvent,
+    stream: GraphStream,
 }
 
 impl CudaPhaseTimer {
-    pub(crate) fn start(stream: &Arc<CudaStream>) -> candle_core::Result<Option<Self>> {
+    pub(crate) fn start(stream: &GraphStream) -> candle_core::Result<Option<Self>> {
         let enabled = *CUDA_PHASE_TIMINGS_ENABLED.get_or_init(|| {
             std::env::var(CUDA_PHASE_TIMINGS_ENV)
                 .ok()
@@ -118,13 +113,10 @@ impl CudaPhaseTimer {
         if !enabled {
             return Ok(None);
         }
-        let capture_status = stream.capture_status().map_err(candle_core::Error::wrap)?;
-        if capture_status != sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_NONE {
+        if !stream.capture_status_none()? {
             return Ok(None);
         }
-        let start = stream
-            .record_event(Some(sys::CUevent_flags::CU_EVENT_DEFAULT))
-            .map_err(candle_core::Error::wrap)?;
+        let start = stream.record_timing_event()?;
         Ok(Some(Self {
             start,
             stream: stream.clone(),
@@ -137,10 +129,7 @@ impl CudaPhaseTimer {
         batch: usize,
         rows: usize,
     ) -> candle_core::Result<()> {
-        let end = self
-            .stream
-            .record_event(Some(sys::CUevent_flags::CU_EVENT_DEFAULT))
-            .map_err(candle_core::Error::wrap)?;
+        let end = self.stream.record_timing_event()?;
         end.synchronize().map_err(candle_core::Error::wrap)?;
         let latency_ms = self
             .start
@@ -889,18 +878,18 @@ fn copy_state_indices(
 }
 
 pub(crate) struct CudaGraphHandle {
-    graph: sys::CUgraph,
-    exec: sys::CUgraphExec,
-    stream: Arc<CudaStream>,
+    graph: *mut core::ffi::c_void,
+    exec: *mut core::ffi::c_void,
+    stream: GraphStream,
     // ROCm: capture-time allocations are carved from this arena and it must
     // outlive the exec.
     #[cfg(feature = "rocm")]
-    arena_keepalive: Option<Arc<CudaSlice<u8>>>,
+    arena_keepalive: Option<Arc<ArenaSlice<u8>>>,
 }
 
 #[cfg(feature = "rocm")]
 impl CudaGraphHandle {
-    pub(crate) fn set_arena(&mut self, arena: Option<Arc<CudaSlice<u8>>>) {
+    pub(crate) fn set_arena(&mut self, arena: Option<Arc<ArenaSlice<u8>>>) {
         self.arena_keepalive = arena;
     }
 
@@ -914,132 +903,65 @@ unsafe impl Send for CudaGraphHandle {}
 impl Drop for CudaGraphHandle {
     fn drop(&mut self) {
         let _ = self.stream.synchronize();
-        let _ = self.stream.context().bind_to_thread();
+        let _ = self.stream.bind_context_to_thread();
         if !self.exec.is_null() {
-            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
-            let _ = unsafe { sys::cuGraphExecDestroy(self.exec) };
-            #[cfg(feature = "rocm")]
-            let _ = unsafe { sys::hipGraphExecDestroy(self.exec) };
+            let _ = graph_exec_destroy(&self.stream, self.exec);
             self.exec = std::ptr::null_mut();
         }
         if !self.graph.is_null() {
-            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
-            let _ = unsafe { sys::cuGraphDestroy(self.graph) };
-            #[cfg(feature = "rocm")]
-            let _ = unsafe { sys::hipGraphDestroy(self.graph) };
+            let _ = graph_destroy(&self.stream, self.graph);
             self.graph = std::ptr::null_mut();
         }
     }
 }
 
 impl CudaGraphHandle {
-    pub(crate) fn end_capture(stream: &Arc<CudaStream>) -> candle_core::Result<Option<Self>> {
+    pub(crate) fn end_capture(stream: &GraphStream) -> candle_core::Result<Option<Self>> {
         let mut graph = std::ptr::null_mut();
-        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
-        let result = unsafe { sys::cuStreamEndCapture(stream.cu_stream(), &mut graph) };
+        graph_end_capture(stream, &mut graph)
+            .map_err(|err| err.context("CUDA graph stream end capture failed"))?;
+        // Raw end-capture leaves the hip fork's capturing flag / arena
+        // pointer set, which would route later eager allocs into the stale
+        // arena and OOM. The NVIDIA role has no fork bookkeeping (no-op).
         #[cfg(feature = "rocm")]
-        let result = unsafe { sys::hipStreamEndCapture(stream.cu_stream(), &mut graph) };
-        if graph_result_failed(result) {
-            return Err(candle_core::Error::msg(format!("{result:?}"))
-                .context("CUDA graph stream end capture failed"));
-        }
-        #[cfg(feature = "rocm")]
-        tracing::debug!(
-            target: "mistralrs",
-            "[cudarc] END raw: is_capturing={} arena_active={} consumed={} (before reset)",
-            stream.is_capturing(),
-            stream.capture_arena_active(),
-            stream.capture_arena_consumed()
-        );
-        // Raw end-capture leaves the fork's capturing flag / arena pointer set,
-        // which would route later eager allocs into the stale arena and OOM.
         stream.reset_capture_bookkeeping();
-        #[cfg(feature = "rocm")]
-        tracing::debug!(
-            target: "mistralrs",
-            "[cudarc] END raw: is_capturing={} arena_active={} (after reset)",
-            stream.is_capturing(),
-            stream.capture_arena_active()
-        );
         if graph.is_null() {
             return Ok(None);
         }
 
         let mut exec = std::ptr::null_mut();
-        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
-        let result = unsafe {
-            sys::cuGraphInstantiateWithFlags(&mut exec, graph, CUDA_GRAPH_INSTANTIATE_FLAGS)
-        };
-        #[cfg(feature = "rocm")]
-        let result = unsafe {
-            sys::hipGraphInstantiateWithFlags(&mut exec, graph, CUDA_GRAPH_INSTANTIATE_FLAGS)
-        };
-        if graph_result_failed(result) {
-            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
-            let _ = unsafe { sys::cuGraphDestroy(graph) };
-            #[cfg(feature = "rocm")]
-            let _ = unsafe { sys::hipGraphDestroy(graph) };
-            return Err(candle_core::Error::msg(format!("{result:?}"))
-                .context("CUDA graph instantiate failed"));
+        if let Err(err) = graph_instantiate(stream, graph, &mut exec, CUDA_GRAPH_INSTANTIATE_FLAGS)
+        {
+            let _ = graph_destroy(stream, graph);
+            return Err(err.context("CUDA graph instantiate failed"));
         }
 
-        #[cfg(feature = "rocm")]
-        return Ok(Some(Self {
-            graph,
-            exec,
-            stream: stream.clone(),
-            arena_keepalive: None,
-        }));
-
-        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         Ok(Some(Self {
             graph,
             exec,
             stream: stream.clone(),
+            #[cfg(feature = "rocm")]
+            arena_keepalive: None,
         }))
     }
 
     pub(crate) fn upload(&self) -> candle_core::Result<()> {
-        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
-        let result = unsafe { sys::cuGraphUpload(self.exec, self.stream.cu_stream()) };
-        #[cfg(feature = "rocm")]
-        let result = unsafe { sys::hipGraphUpload(self.exec, self.stream.cu_stream()) };
-        if graph_result_failed(result) {
-            return Err(
-                candle_core::Error::msg(format!("{result:?}")).context("CUDA graph upload failed")
-            );
-        }
-        let _ = self.stream.context().check_err();
+        graph_upload(&self.stream, self.exec)
+            .map_err(|err| err.context("CUDA graph upload failed"))?;
+        let _ = self.stream.graph_check_err();
         Ok(())
     }
 
     pub(crate) fn launch(&self) -> candle_core::Result<()> {
-        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
-        let result = unsafe { sys::cuGraphLaunch(self.exec, self.stream.cu_stream()) };
-        #[cfg(feature = "rocm")]
-        let result = unsafe { sys::hipGraphLaunch(self.exec, self.stream.cu_stream()) };
-        if graph_result_failed(result) {
-            return Err(
-                candle_core::Error::msg(format!("{result:?}")).context("CUDA graph launch failed")
-            );
-        }
-        let _ = self.stream.context().check_err();
+        graph_launch(&self.stream, self.exec)
+            .map_err(|err| err.context("CUDA graph launch failed"))?;
+        let _ = self.stream.graph_check_err();
         Ok(())
     }
 
-    pub(crate) fn stream(&self) -> &Arc<CudaStream> {
+    pub(crate) fn stream(&self) -> &GraphStream {
         &self.stream
     }
-}
-
-#[cfg(all(feature = "cuda", not(feature = "rocm")))]
-fn graph_result_failed(result: sys::CUresult) -> bool {
-    result != sys::CUresult::CUDA_SUCCESS
-}
-
-#[cfg(feature = "rocm")]
-fn graph_result_failed(result: core::ffi::c_int) -> bool {
-    result != 0
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1091,7 +1013,7 @@ type FlashInferDecodeScratchMaps = (
 );
 
 struct CudaGraphPinnedAllocation<T> {
-    allocation: PinnedHostSlice<T>,
+    allocation: GraphPinnedHost<T>,
     ptr: NonNull<T>,
 }
 
@@ -1122,8 +1044,8 @@ struct CudaGraphPinnedBuffer {
 }
 
 struct CudaGraphCopyCompletion {
-    event: CudaEvent,
-    stream: Arc<CudaStream>,
+    event: GraphEvent,
+    stream: GraphStream,
     pending: bool,
     active: bool,
     ordered_after_graph: bool,
@@ -1132,13 +1054,13 @@ struct CudaGraphCopyCompletion {
 pub(crate) struct CudaGraphHostStaging {
     buffers: HashMap<(&'static str, DeviceLocation), CudaGraphPinnedBuffer>,
     completions: HashMap<DeviceLocation, CudaGraphCopyCompletion>,
-    graph_complete: CudaEvent,
-    graph_stream: Arc<CudaStream>,
+    graph_complete: GraphEvent,
+    graph_stream: GraphStream,
     graph_pending: bool,
 }
 
-fn same_cuda_stream(left: &CudaStream, right: &CudaStream) -> bool {
-    Arc::ptr_eq(left.context(), right.context()) && left.cu_stream() == right.cu_stream()
+fn same_cuda_stream(left: &GraphStream, right: &GraphStream) -> bool {
+    left.same_as(right)
 }
 
 impl Drop for CudaGraphHostStaging {
@@ -1807,7 +1729,7 @@ pub struct CudaDecodeGraphLaunch {
     replay_epoch: u64,
     key: CudaDecodeGraphKey,
     input_ids: Tensor,
-    graph_stream: Arc<CudaStream>,
+    graph_stream: GraphStream,
     real_batch: usize,
     source: CudaGraphDecodeStep,
 }
@@ -1817,7 +1739,7 @@ impl CudaDecodeGraphLaunch {
         &self.input_ids
     }
 
-    pub(crate) fn graph_stream(&self) -> &Arc<CudaStream> {
+    pub(crate) fn graph_stream(&self) -> &GraphStream {
         &self.graph_stream
     }
 
@@ -1928,7 +1850,7 @@ impl CudaDecodeGraphEntry {
         }))
     }
 
-    fn release(self) -> (Arc<CudaStream>, candle_core::Result<()>) {
+    fn release(self) -> (GraphStream, candle_core::Result<()>) {
         let Self {
             generation: _,
             replay_epoch,
@@ -1988,24 +1910,21 @@ impl CudaDecodeGraphEntry {
     }
 }
 
-fn unmaterialized_graph_output_drop_error(replay_epoch: u64, error: sys::CUresult) -> bool {
-    replay_epoch == 0 && error == sys::CUresult::CUDA_ERROR_INVALID_VALUE
-}
-
 fn drop_cuda_graph_entry_output<T>(
     output: T,
-    stream: &Arc<CudaStream>,
+    stream: &GraphStream,
     replay_epoch: u64,
     name: &'static str,
     release_result: &mut candle_core::Result<()>,
 ) {
     drop(output);
-    if let Err(err) = stream.context().check_err() {
-        if unmaterialized_graph_output_drop_error(replay_epoch, err.0) {
+    if let Err(err) = stream.graph_check_err() {
+        if replay_epoch == 0 && err.is_invalid_value() {
             return;
         }
         if release_result.is_ok() {
-            *release_result = Err(candle_core::Error::wrap(err)
+            *release_result = Err(err
+                .into_candle()
                 .context(format!("CUDA graph entry {name} release failed")));
         }
     }
@@ -2013,14 +1932,15 @@ fn drop_cuda_graph_entry_output<T>(
 
 fn drop_cuda_graph_entry_resource<T>(
     resource: T,
-    stream: &Arc<CudaStream>,
+    stream: &GraphStream,
     name: &'static str,
     release_result: &mut candle_core::Result<()>,
 ) {
     drop(resource);
-    if let Err(err) = stream.context().check_err() {
+    if let Err(err) = stream.graph_check_err() {
         if release_result.is_ok() {
-            *release_result = Err(candle_core::Error::wrap(err)
+            *release_result = Err(err
+                .into_candle()
                 .context(format!("CUDA graph entry {name} release failed")));
         }
     }
@@ -2435,9 +2355,10 @@ fn release_cuda_graph_entries(entries: Vec<CudaDecodeGraphEntry>) {
         if let Err(err) = release_result {
             tracing::warn!("Failed to release CUDA graph entry storage: {err:?}");
         }
-        if !streams.iter().any(|known: &Arc<CudaStream>| {
-            known.context().cu_device() == stream.context().cu_device()
-        }) {
+        if !streams
+            .iter()
+            .any(|known: &GraphStream| known.cu_device() == stream.cu_device())
+        {
             streams.push(stream);
         }
     }
@@ -2553,15 +2474,12 @@ where
     let graph_input_ids = input_ids.as_detached_tensor();
     // Serving role: the compiled vendor in single-vendor builds, the AMD
     // role in dual builds (this file's kernels are all hipcc-built).
-    let cuda_device = graph_input_ids
-        .device()
-        .as_role_device()
+    let stream = GraphStream::from_graph_device(&graph_input_ids.device())
         .map_err(|_| candle_core::Error::msg("CUDA graph decode expected CUDA input ids"))?;
     graph_input_ids.device().synchronize()?;
-    let stream = cuda_device.cuda_stream();
     let _memory_pool_guard = prepare_cuda_graph_memory_pool(&stream)?;
     let restore_event_tracking = disable_event_tracking_for_capture(&stream);
-    let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+    let _htod_cache_guard = graph_role::graph_enable_htod_cache(&graph_input_ids.device())?;
 
     // ROCm graphs that contain mempool allocation nodes can only be launched
     // once; carve capture-time allocations from a plain pre-allocated arena so
@@ -2591,28 +2509,37 @@ where
         dbg_nanos()
     );
     #[cfg(feature = "rocm")]
-    let mut arena_keepalive: Option<Arc<CudaSlice<u8>>> = None;
+    let mut arena_keepalive: Option<Arc<ArenaSlice<u8>>> = None;
 
+    // Capture allocation strategy per role: the hip role carves capture-time
+    // allocations from a plain pre-allocated arena (hip graphs with mempool
+    // nodes launch once); the NVIDIA role captures through driver mempools
+    // (upstream async allocs) and needs no arena.
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    let use_arena = true;
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    let use_arena = stream.is_hip();
     #[cfg(all(feature = "cuda", not(feature = "rocm")))]
-    if let Err(err) = stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
-    {
-        restore_event_tracking_after_capture(&stream, restore_event_tracking);
-        return Err(
-            candle_core::Error::msg(err.to_string()).context("CUDA graph begin capture failed")
-        );
-    }
+    let use_arena = false;
 
-    #[cfg(feature = "rocm")]
-    if let Err(err) = (|| -> Result<(), candle_core::Error> {
-        let arena: Arc<CudaSlice<u8>> = Arc::new(
-            unsafe { cuda_device.alloc::<u8>(arena_bytes) }.map_err(candle_core::Error::wrap)?,
-        );
-        stream
-            .begin_capture_arena(arena.clone())
-            .map_err(candle_core::Error::wrap)?;
-        arena_keepalive = Some(arena);
-        Ok(())
-    })() {
+    let mut begin_err: Option<candle_core::Error> = None;
+    if use_arena {
+        #[cfg(feature = "rocm")]
+        match graph_role::graph_arena_alloc(&graph_input_ids.device(), arena_bytes)
+            .and_then(|arena| {
+                stream
+                    .begin_capture_arena(arena.clone())
+                    .map_err(candle_core::Error::wrap)
+                    .map(|()| arena)
+            })
+        {
+            Ok(arena) => arena_keepalive = Some(arena),
+            Err(err) => begin_err = Some(err),
+        }
+    } else if let Err(err) = stream.begin_graph_capture(true) {
+        begin_err = Some(err);
+    }
+    if let Some(err) = begin_err {
         restore_event_tracking_after_capture(&stream, restore_event_tracking);
         return Err(
             candle_core::Error::msg(err.to_string()).context("CUDA graph begin capture failed")
@@ -2683,9 +2610,7 @@ where
                 "CUDA decode graph arena grew {current_arena_bytes} -> {new_bytes} bytes (attempt {attempt}, consumed prefix {consumed})"
             );
             graph_input_ids.device().synchronize()?;
-            let arena: Arc<CudaSlice<u8>> = Arc::new(
-                unsafe { cuda_device.alloc::<u8>(new_bytes) }.map_err(candle_core::Error::wrap)?,
-            );
+            let arena = graph_role::graph_arena_alloc(&graph_input_ids.device(), new_bytes)?;
             stream
                 .begin_capture_arena(arena.clone())
                 .map_err(candle_core::Error::wrap)?;
@@ -2806,14 +2731,14 @@ pub(crate) fn cuda_decode_graph_supported_for_model(
 
 #[must_use]
 pub(crate) struct CudaGraphMemoryPoolGuard {
-    stream: Arc<CudaStream>,
+    stream: GraphStream,
     pool: Option<usize>,
 }
 
 impl Drop for CudaGraphMemoryPoolGuard {
     fn drop(&mut self) {
         let Some(pool) = self.pool else { return };
-        if let Err(err) = self.stream.context().bind_to_thread() {
+        if let Err(err) = self.stream.bind_context_to_thread() {
             tracing::warn!("Failed to bind CUDA context while restoring graph memory pool: {err}");
         }
         let scopes = CUDA_GRAPH_MEMORY_POOL_SCOPES.get_or_init(Default::default);
@@ -2832,8 +2757,10 @@ impl Drop for CudaGraphMemoryPoolGuard {
             return;
         }
         let release_threshold = scope.release_threshold;
-        let pool_ptr = pool as sys::CUmemoryPool;
-        if let Err(err) = set_memory_pool_release_threshold(pool_ptr, release_threshold) {
+        let pool_ptr = pool as *mut core::ffi::c_void;
+        if let Err(err) =
+            set_memory_pool_release_threshold(&self.stream, pool_ptr, release_threshold)
+        {
             tracing::warn!("Failed to restore CUDA graph memory pool threshold: {err:?}");
         }
         let _ = self.stream.synchronize();
@@ -2844,60 +2771,33 @@ impl Drop for CudaGraphMemoryPoolGuard {
     }
 }
 
-fn memory_pool_release_threshold(pool: sys::CUmemoryPool) -> candle_core::Result<u64> {
-    let mut value = 0u64;
-    let result = unsafe {
-        sys::cuMemPoolGetAttribute(
-            pool,
-            sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
-            (&mut value as *mut u64).cast(),
-        )
-    };
-    if result != sys::CUresult::CUDA_SUCCESS {
-        return Err(candle_core::Error::msg(format!("{result:?}"))
-            .context("CUDA graph mempool release threshold lookup failed"));
-    }
-    Ok(value)
+fn memory_pool_release_threshold(
+    stream: &GraphStream,
+    pool: *mut core::ffi::c_void,
+) -> candle_core::Result<u64> {
+    graph_role::graph_mempool_release_threshold_get(stream, pool)
+        .map_err(|err| err.context("CUDA graph mempool release threshold lookup failed"))
 }
 
 fn set_memory_pool_release_threshold(
-    pool: sys::CUmemoryPool,
-    mut value: u64,
+    stream: &GraphStream,
+    pool: *mut core::ffi::c_void,
+    value: u64,
 ) -> candle_core::Result<()> {
-    let result = unsafe {
-        sys::cuMemPoolSetAttribute(
-            pool,
-            sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
-            (&mut value as *mut u64).cast(),
-        )
-    };
-    if result != sys::CUresult::CUDA_SUCCESS {
-        return Err(candle_core::Error::msg(format!("{result:?}"))
-            .context("CUDA graph mempool release threshold setup failed"));
-    }
-    Ok(())
+    graph_role::graph_mempool_release_threshold_set(stream, pool, value)
+        .map_err(|err| err.context("CUDA graph mempool release threshold setup failed"))
 }
 
-fn cuda_memory_pool(stream: &Arc<CudaStream>) -> candle_core::Result<sys::CUmemoryPool> {
-    stream
-        .context()
-        .bind_to_thread()
-        .map_err(candle_core::Error::wrap)?;
-    let mut pool = std::ptr::null_mut();
-    let result = unsafe { sys::cuDeviceGetMemPool(&mut pool, stream.context().cu_device()) };
-    if result != sys::CUresult::CUDA_SUCCESS {
-        return Err(candle_core::Error::msg(format!("{result:?}"))
-            .context("CUDA graph mempool lookup failed"));
-    }
-    Ok(pool)
+fn cuda_memory_pool(stream: &GraphStream) -> candle_core::Result<*mut core::ffi::c_void> {
+    graph_role::graph_device_mempool(stream)
+        .map_err(|err| err.context("CUDA graph mempool lookup failed"))
 }
 
 pub(crate) fn cuda_graph_memory_pool_scope_active(device: &Device) -> candle_core::Result<bool> {
-    let Ok(device) = device.as_role_device() else {
+    let Ok(stream) = GraphStream::from_graph_device(device) else {
         return Ok(false);
     };
-    let stream = device.cuda_stream();
-    if !stream.context().has_async_alloc() {
+    if !stream.has_async_alloc() {
         return Ok(false);
     }
     let pool = cuda_memory_pool(&stream)? as usize;
@@ -2908,29 +2808,22 @@ pub(crate) fn cuda_graph_memory_pool_scope_active(device: &Device) -> candle_cor
     Ok(scopes.contains_key(&pool))
 }
 
-fn trim_cuda_graph_memory_bound(stream: &Arc<CudaStream>) -> candle_core::Result<()> {
-    let result = unsafe { sys::cuDeviceGraphMemTrim(stream.context().cu_device()) };
-    if result != sys::CUresult::CUDA_SUCCESS {
-        return Err(
-            candle_core::Error::msg(format!("{result:?}")).context("CUDA graph memory trim failed")
-        );
-    }
-    Ok(())
+fn trim_cuda_graph_memory_bound(stream: &GraphStream) -> candle_core::Result<()> {
+    graph_role::graph_device_mem_trim(stream)
+        .map_err(|err| err.context("CUDA graph memory trim failed"))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cuda", not(feature = "rocm")))]
 fn cuda_graph_memory_attribute(
-    stream: &Arc<CudaStream>,
-    attribute: sys::CUgraphMem_attribute,
+    stream: &GraphStream,
+    attribute: candle_core::cuda_backend::cudarc::driver::sys::CUgraphMem_attribute,
 ) -> candle_core::Result<usize> {
-    stream
-        .context()
-        .bind_to_thread()
-        .map_err(candle_core::Error::wrap)?;
+    use candle_core::cuda_backend::cudarc::driver::sys;
+    stream.bind_context_to_thread()?;
     let mut value = 0usize;
     let result = unsafe {
         sys::cuDeviceGetGraphMemAttribute(
-            stream.context().cu_device(),
+            stream.cu_device(),
             attribute,
             (&mut value as *mut usize).cast(),
         )
@@ -2942,11 +2835,9 @@ fn cuda_graph_memory_attribute(
     Ok(value)
 }
 
-pub(crate) fn trim_cuda_graph_memory(stream: &Arc<CudaStream>) -> candle_core::Result<()> {
+pub(crate) fn trim_cuda_graph_memory(stream: &GraphStream) -> candle_core::Result<()> {
     stream
-        .context()
-        .bind_to_thread()
-        .map_err(candle_core::Error::wrap)
+        .bind_context_to_thread()
         .map_err(|err| err.context("CUDA graph memory trim context bind failed"))?;
     let pool = cuda_memory_pool(stream)? as usize;
     let scopes = CUDA_GRAPH_MEMORY_POOL_SCOPES.get_or_init(Default::default);
@@ -2964,9 +2855,9 @@ pub(crate) fn trim_cuda_graph_memory(stream: &Arc<CudaStream>) -> candle_core::R
 }
 
 pub(crate) fn prepare_cuda_graph_memory_pool(
-    stream: &Arc<CudaStream>,
+    stream: &GraphStream,
 ) -> candle_core::Result<CudaGraphMemoryPoolGuard> {
-    if !stream.context().has_async_alloc() {
+    if !stream.has_async_alloc() {
         return Ok(CudaGraphMemoryPoolGuard {
             stream: stream.clone(),
             pool: None,
@@ -2985,8 +2876,8 @@ pub(crate) fn prepare_cuda_graph_memory_pool(
             .checked_add(1)
             .expect("CUDA graph memory pool guard overflow");
     } else {
-        let release_threshold = memory_pool_release_threshold(pool)?;
-        set_memory_pool_release_threshold(pool, u64::MAX)?;
+        let release_threshold = memory_pool_release_threshold(stream, pool)?;
+        set_memory_pool_release_threshold(stream, pool, u64::MAX)?;
         scopes.insert(
             pool_key,
             MemoryPoolScopeState {
@@ -3001,19 +2892,8 @@ pub(crate) fn prepare_cuda_graph_memory_pool(
         stream: stream.clone(),
         pool: Some(pool_key),
     };
-    for attr in [
-        sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_REUSE_FOLLOW_EVENT_DEPENDENCIES,
-        sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_REUSE_ALLOW_OPPORTUNISTIC,
-        sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_REUSE_ALLOW_INTERNAL_DEPENDENCIES,
-    ] {
-        let mut enabled = 1i32;
-        let result =
-            unsafe { sys::cuMemPoolSetAttribute(pool, attr, (&mut enabled as *mut i32).cast()) };
-        if result != sys::CUresult::CUDA_SUCCESS {
-            return Err(candle_core::Error::msg(format!("{result:?}"))
-                .context("CUDA graph mempool reuse setup failed"));
-        }
-    }
+    graph_role::graph_mempool_reuse_enable(stream, pool)
+        .map_err(|err| err.context("CUDA graph mempool reuse setup failed"))?;
 
     Ok(guard)
 }
@@ -3102,40 +2982,28 @@ fn flashinfer_split_rows(
     Ok(rows)
 }
 
-pub(crate) fn disable_event_tracking_for_capture(stream: &Arc<CudaStream>) -> bool {
-    let restore = stream.context().is_event_tracking();
+pub(crate) fn disable_event_tracking_for_capture(stream: &GraphStream) -> bool {
+    let restore = stream.is_event_tracking();
     if restore {
-        unsafe { stream.context().disable_event_tracking() };
+        unsafe { stream.disable_event_tracking() };
     }
     restore
 }
 
-pub(crate) fn restore_event_tracking_after_capture(stream: &Arc<CudaStream>, restore: bool) {
+pub(crate) fn restore_event_tracking_after_capture(stream: &GraphStream, restore: bool) {
     if restore {
-        unsafe { stream.context().enable_event_tracking() };
+        unsafe { stream.enable_event_tracking() };
     }
 }
 
-pub(crate) fn end_cuda_capture_discard(stream: &Arc<CudaStream>) {
-    if matches!(
-        stream.capture_status(),
-        Ok(status) if status != sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_NONE
-    ) {
+pub(crate) fn end_cuda_capture_discard(stream: &GraphStream) {
+    if !stream.capture_status_none().unwrap_or(true) {
         let mut graph = std::ptr::null_mut();
-        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
-        {
-            let result = unsafe { sys::cuStreamEndCapture(stream.cu_stream(), &mut graph) };
-            if result == sys::CUresult::CUDA_SUCCESS && !graph.is_null() {
-                let _ = unsafe { sys::cuGraphDestroy(graph) };
-            }
+        let _ = graph_end_capture(stream, &mut graph);
+        if !graph.is_null() {
+            let _ = graph_destroy(stream, graph);
         }
         #[cfg(feature = "rocm")]
-        {
-            let result = unsafe { sys::hipStreamEndCapture(stream.cu_stream(), &mut graph) };
-            if result == 0 && !graph.is_null() {
-                let _ = unsafe { sys::hipGraphDestroy(graph) };
-            }
-        }
         stream.reset_capture_bookkeeping();
     }
 }
@@ -3389,24 +3257,16 @@ fn option_tensor_map_from_var_map(
 }
 
 impl CudaGraphPinnedBuffer {
-    fn new(dst: &Var) -> candle_core::Result<Self> {
-        let device = dst.device().as_role_device().map_err(|_| {
-            candle_core::Error::msg("CUDA graph host staging requires a CUDA destination")
-        })?;
-        let stream = device.cuda_stream();
-        let context = stream.context();
+    fn new(dst: &Var, stream: &GraphStream) -> candle_core::Result<Self> {
         let len = dst.elem_count();
         macro_rules! allocate {
             ($variant:ident, $ty:ty) => {{
-                let mut allocation = unsafe {
-                    context
-                        .alloc_pinned::<$ty>(len)
-                        .map_err(candle_core::Error::wrap)?
-                };
-                let ptr = NonNull::new(allocation.as_mut_ptr().map_err(candle_core::Error::wrap)?)
-                    .ok_or_else(|| {
-                        candle_core::Error::msg("CUDA returned a null pinned pointer")
-                    })?;
+                let mut allocation = graph_alloc_pinned::<$ty>(stream, len)?;
+                let ptr = NonNull::new(unsafe {
+                    allocation.as_mut_ptr().map_err(candle_core::Error::wrap)?
+                }).ok_or_else(|| {
+                    candle_core::Error::msg("CUDA returned a null pinned pointer")
+                })?;
                 CudaGraphPinnedData::$variant(CudaGraphPinnedAllocation { allocation, ptr })
             }};
         }
@@ -3430,7 +3290,7 @@ impl CudaGraphPinnedBuffer {
         &mut self,
         src: &Tensor,
         dst: &Var,
-        stream: &Arc<CudaStream>,
+        stream: &GraphStream,
     ) -> candle_core::Result<()> {
         if src.shape() != dst.shape() || src.dtype() != dst.dtype() {
             candle_core::bail!("CUDA graph host staging expected matching tensors");
@@ -3443,9 +3303,6 @@ impl CudaGraphPinnedBuffer {
             candle_core::bail!("CUDA graph host staging expected contiguous source metadata");
         }
         let (dst_storage, dst_layout) = dst.storage_and_layout();
-        let dst_storage = dst_storage.as_role_storage().map_err(|_| {
-            candle_core::Error::msg("CUDA graph host staging expected CUDA destination metadata")
-        })?;
         if !dst_layout.is_contiguous() {
             candle_core::bail!("CUDA graph host staging expected contiguous destination metadata");
         }
@@ -3466,38 +3323,15 @@ impl CudaGraphPinnedBuffer {
                 }
                 host_slice.copy_from_slice(src);
                 self.initialized = true;
-                let dst = dst_storage.as_cuda_slice::<$ty>()?;
-                let dst = dst.slice(dst_offset..dst_offset + len);
-                let (dst_ptr, _dst_guard) = dst.device_ptr(stream);
-                #[cfg(all(feature = "cuda", feature = "rocm"))]
-                let result = unsafe {
-                    sys::hipMemcpyAsync(
-                        dst_ptr as *mut core::ffi::c_void,
-                        host.as_ptr().cast(),
-                        len * std::mem::size_of::<$ty>(),
-                        4, // hipMemcpyKind: hipMemcpyHostToDevice
-                        stream.cu_stream(),
-                    )
-                };
-                #[cfg(not(all(feature = "cuda", feature = "rocm")))]
-                let result = unsafe {
-                    sys::cuMemcpyHtoDAsync_v2(
-                        dst_ptr,
-                        host.as_ptr().cast(),
-                        len * std::mem::size_of::<$ty>(),
-                        stream.cu_stream(),
-                    )
-                };
-                #[cfg(all(feature = "cuda", feature = "rocm"))]
-                if result != 0 {
-                    return Err(candle_core::Error::msg(format!("{result:?}"))
-                        .context("CUDA graph metadata H2D copy failed"));
-                }
-                #[cfg(not(all(feature = "cuda", feature = "rocm")))]
-                if result != sys::CUresult::CUDA_SUCCESS {
-                    return Err(candle_core::Error::msg(format!("{result:?}"))
-                        .context("CUDA graph metadata H2D copy failed"));
-                }
+                let (dst_ptr, _dst_guard) =
+                    graph_stage_ptr::<$ty>(&dst_storage, dst_offset, stream)?;
+                graph_memcpy_htod_async(
+                    stream,
+                    dst_ptr,
+                    host.as_ptr().cast(),
+                    len * std::mem::size_of::<$ty>(),
+                )
+                .map_err(|err| err.context("CUDA graph metadata H2D copy failed"))?;
             }};
         }
 
@@ -3518,15 +3352,12 @@ impl CudaGraphPinnedBuffer {
         &mut self,
         src: &[u32],
         dst: &Var,
-        stream: &Arc<CudaStream>,
+        stream: &GraphStream,
     ) -> candle_core::Result<()> {
         if dst.dtype() != DType::U32 || dst.elem_count() != src.len() {
             candle_core::bail!("CUDA graph host staging expected matching u32 state indices");
         }
         let (dst_storage, dst_layout) = dst.storage_and_layout();
-        let dst_storage = dst_storage.as_role_storage().map_err(|_| {
-            candle_core::Error::msg("CUDA graph host staging expected CUDA state indices")
-        })?;
         if !dst_layout.is_contiguous() {
             candle_core::bail!("CUDA graph host staging expected contiguous state indices");
         }
@@ -3539,22 +3370,15 @@ impl CudaGraphPinnedBuffer {
         }
         host_slice.copy_from_slice(src);
         self.initialized = true;
-        let dst = dst_storage.as_cuda_slice::<u32>()?;
-        let dst_offset = dst_layout.start_offset();
-        let dst = dst.slice(dst_offset..dst_offset + src.len());
-        let (dst_ptr, _dst_guard) = dst.device_ptr(stream);
-        let result = unsafe {
-            sys::cuMemcpyHtoDAsync_v2(
-                dst_ptr,
-                host.as_ptr().cast(),
-                std::mem::size_of_val(src),
-                stream.cu_stream(),
-            )
-        };
-        if result != sys::CUresult::CUDA_SUCCESS {
-            return Err(candle_core::Error::msg(format!("{result:?}"))
-                .context("CUDA graph state index H2D copy failed"));
-        }
+        let (dst_ptr, _dst_guard) =
+            graph_stage_ptr::<u32>(&dst_storage, dst_layout.start_offset(), stream)?;
+        graph_memcpy_htod_async(
+            stream,
+            dst_ptr,
+            host.as_ptr().cast(),
+            std::mem::size_of_val(src),
+        )
+        .map_err(|err| err.context("CUDA graph state index H2D copy failed"))?;
         Ok(())
     }
 
@@ -3563,15 +3387,12 @@ impl CudaGraphPinnedBuffer {
         &mut self,
         src: &[f32],
         dst: &Var,
-        stream: &Arc<CudaStream>,
+        stream: &GraphStream,
     ) -> candle_core::Result<()> {
         if dst.dtype() != DType::F32 || dst.elem_count() != src.len() {
             candle_core::bail!("CUDA graph host staging expected matching f32 metadata");
         }
         let (dst_storage, dst_layout) = dst.storage_and_layout();
-        let dst_storage = dst_storage.as_role_storage().map_err(|_| {
-            candle_core::Error::msg("CUDA graph host staging expected CUDA f32 metadata")
-        })?;
         if !dst_layout.is_contiguous() {
             candle_core::bail!("CUDA graph host staging expected contiguous f32 metadata");
         }
@@ -3584,22 +3405,15 @@ impl CudaGraphPinnedBuffer {
         }
         host_slice.copy_from_slice(src);
         self.initialized = true;
-        let dst = dst_storage.as_cuda_slice::<f32>()?;
-        let dst_offset = dst_layout.start_offset();
-        let dst = dst.slice(dst_offset..dst_offset + src.len());
-        let (dst_ptr, _dst_guard) = dst.device_ptr(stream);
-        let result = unsafe {
-            sys::cuMemcpyHtoDAsync_v2(
-                dst_ptr,
-                host.as_ptr().cast(),
-                std::mem::size_of_val(src),
-                stream.cu_stream(),
-            )
-        };
-        if result != sys::CUresult::CUDA_SUCCESS {
-            return Err(candle_core::Error::msg(format!("{result:?}"))
-                .context("CUDA graph f32 metadata H2D copy failed"));
-        }
+        let (dst_ptr, _dst_guard) =
+            graph_stage_ptr::<f32>(&dst_storage, dst_layout.start_offset(), stream)?;
+        graph_memcpy_htod_async(
+            stream,
+            dst_ptr,
+            host.as_ptr().cast(),
+            std::mem::size_of_val(src),
+        )
+        .map_err(|err| err.context("CUDA graph f32 metadata H2D copy failed"))?;
         Ok(())
     }
 
@@ -3608,15 +3422,12 @@ impl CudaGraphPinnedBuffer {
         &mut self,
         src: &[i64],
         dst: &Var,
-        stream: &Arc<CudaStream>,
+        stream: &GraphStream,
     ) -> candle_core::Result<()> {
         if dst.dtype() != DType::I64 || dst.elem_count() != src.len() {
             candle_core::bail!("CUDA graph host staging expected matching i64 metadata");
         }
         let (dst_storage, dst_layout) = dst.storage_and_layout();
-        let dst_storage = dst_storage.as_role_storage().map_err(|_| {
-            candle_core::Error::msg("CUDA graph host staging expected CUDA i64 metadata")
-        })?;
         if !dst_layout.is_contiguous() {
             candle_core::bail!("CUDA graph host staging expected contiguous i64 metadata");
         }
@@ -3629,32 +3440,22 @@ impl CudaGraphPinnedBuffer {
         }
         host_slice.copy_from_slice(src);
         self.initialized = true;
-        let dst = dst_storage.as_cuda_slice::<i64>()?;
-        let dst_offset = dst_layout.start_offset();
-        let dst = dst.slice(dst_offset..dst_offset + src.len());
-        let (dst_ptr, _dst_guard) = dst.device_ptr(stream);
-        let result = unsafe {
-            sys::cuMemcpyHtoDAsync_v2(
-                dst_ptr,
-                host.as_ptr().cast(),
-                std::mem::size_of_val(src),
-                stream.cu_stream(),
-            )
-        };
-        if result != sys::CUresult::CUDA_SUCCESS {
-            return Err(candle_core::Error::msg(format!("{result:?}"))
-                .context("CUDA graph i64 metadata H2D copy failed"));
-        }
+        let (dst_ptr, _dst_guard) =
+            graph_stage_ptr::<i64>(&dst_storage, dst_layout.start_offset(), stream)?;
+        graph_memcpy_htod_async(
+            stream,
+            dst_ptr,
+            host.as_ptr().cast(),
+            std::mem::size_of_val(src),
+        )
+        .map_err(|err| err.context("CUDA graph i64 metadata H2D copy failed"))?;
         Ok(())
     }
 }
 
 impl CudaGraphHostStaging {
-    pub(crate) fn new(graph_stream: Arc<CudaStream>) -> candle_core::Result<Self> {
-        let graph_complete = graph_stream
-            .context()
-            .new_event(None)
-            .map_err(candle_core::Error::wrap)?;
+    pub(crate) fn new(graph_stream: GraphStream) -> candle_core::Result<Self> {
+        let graph_complete = graph_stream.new_graph_event()?;
         Ok(Self {
             buffers: HashMap::new(),
             completions: HashMap::new(),
@@ -3723,9 +3524,7 @@ impl CudaGraphHostStaging {
     pub(crate) fn order_before_graph(&self) -> candle_core::Result<()> {
         for completion in self.completions.values() {
             if completion.pending && !same_cuda_stream(&completion.stream, &self.graph_stream) {
-                self.graph_stream
-                    .wait(&completion.event)
-                    .map_err(candle_core::Error::wrap)?;
+                self.graph_stream.wait_on_event(&completion.event)?;
             }
         }
         Ok(())
@@ -3742,15 +3541,12 @@ impl CudaGraphHostStaging {
     fn prepare_copy(
         &mut self,
         location: DeviceLocation,
-        stream: &Arc<CudaStream>,
+        stream: &GraphStream,
     ) -> candle_core::Result<()> {
         let completion = match self.completions.entry(location) {
             std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::hash_map::Entry::Vacant(entry) => {
-                let event = stream
-                    .context()
-                    .new_event(Some(sys::CUevent_flags::CU_EVENT_BLOCKING_SYNC))
-                    .map_err(candle_core::Error::wrap)?;
+                let event = stream.new_blocking_event()?;
                 entry.insert(CudaGraphCopyCompletion {
                     event,
                     stream: stream.clone(),
@@ -3765,10 +3561,7 @@ impl CudaGraphHostStaging {
         }
         if self.graph_pending && !completion.ordered_after_graph {
             if !same_cuda_stream(&completion.stream, &self.graph_stream) {
-                completion
-                    .stream
-                    .wait(&self.graph_complete)
-                    .map_err(candle_core::Error::wrap)?;
+                completion.stream.wait_on_event(&self.graph_complete)?;
             }
             completion.ordered_after_graph = true;
         }
@@ -3783,12 +3576,12 @@ impl CudaGraphHostStaging {
         src: &Tensor,
         dst: &Var,
     ) -> candle_core::Result<()> {
-        let stream = dst.device().as_role_device()?.cuda_stream();
+        let stream = GraphStream::from_graph_device(&dst.device())?;
         self.prepare_copy(location, &stream)?;
         let buffer = match self.buffers.entry((name, location)) {
             std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(CudaGraphPinnedBuffer::new(dst)?)
+                entry.insert(CudaGraphPinnedBuffer::new(dst, &stream)?)
             }
         };
         buffer.copy_from(src, dst, &stream)
@@ -3801,12 +3594,12 @@ impl CudaGraphHostStaging {
         src: &[u32],
         dst: &Var,
     ) -> candle_core::Result<()> {
-        let stream = dst.device().as_role_device()?.cuda_stream();
+        let stream = GraphStream::from_graph_device(&dst.device())?;
         self.prepare_copy(location, &stream)?;
         let buffer = match self.buffers.entry((name, location)) {
             std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(CudaGraphPinnedBuffer::new(dst)?)
+                entry.insert(CudaGraphPinnedBuffer::new(dst, &stream)?)
             }
         };
         buffer.copy_from_u32_slice(src, dst, &stream)
@@ -3820,12 +3613,12 @@ impl CudaGraphHostStaging {
         src: &[f32],
         dst: &Var,
     ) -> candle_core::Result<()> {
-        let stream = dst.device().as_role_device()?.cuda_stream();
+        let stream = GraphStream::from_graph_device(&dst.device())?;
         self.prepare_copy(location, &stream)?;
         let buffer = match self.buffers.entry((name, location)) {
             std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(CudaGraphPinnedBuffer::new(dst)?)
+                entry.insert(CudaGraphPinnedBuffer::new(dst, &stream)?)
             }
         };
         buffer.copy_from_f32_slice(src, dst, &stream)
@@ -3839,12 +3632,12 @@ impl CudaGraphHostStaging {
         src: &[i64],
         dst: &Var,
     ) -> candle_core::Result<()> {
-        let stream = dst.device().as_role_device()?.cuda_stream();
+        let stream = GraphStream::from_graph_device(&dst.device())?;
         self.prepare_copy(location, &stream)?;
         let buffer = match self.buffers.entry((name, location)) {
             std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(CudaGraphPinnedBuffer::new(dst)?)
+                entry.insert(CudaGraphPinnedBuffer::new(dst, &stream)?)
             }
         };
         buffer.copy_from_i64_slice(src, dst, &stream)
@@ -4576,7 +4369,7 @@ mod tests {
         let location = device.location();
         let state_indices = Var::from_tensor(&Tensor::zeros((3,), DType::U32, &device)?)?;
         let mut state_indices_map = HashMap::from([(location, state_indices)]);
-        let mut host_staging = CudaGraphHostStaging::new(device.as_role_device()?.cuda_stream())?;
+        let mut host_staging = CudaGraphHostStaging::new(GraphStream::from_graph_device(&device)?);
         host_staging.update(|host_staging| {
             buffers.copy_from(&updated, &[256], 1, host_staging)?;
             copy_state_indices(&state_indices_map, &[3, 5, 7], host_staging)
@@ -4614,7 +4407,7 @@ mod tests {
     #[ignore = "requires a CUDA device"]
     fn graph_staging_orders_secondary_streams_both_directions() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
-        let graph_stream = device.as_role_device()?.cuda_stream();
+        let graph_stream = GraphStream::from_graph_device(&device)?;
         let copy_stream = graph_stream.fork()?;
         assert!(!same_cuda_stream(&graph_stream, &copy_stream));
         let location = device.location();
@@ -4637,17 +4430,17 @@ mod tests {
     #[ignore = "requires a CUDA device"]
     fn graph_memory_pool_scope_restores_release_threshold() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
-        let stream = device.as_role_device()?.cuda_stream();
+        let stream = GraphStream::from_graph_device(&device)?;
         let pool = cuda_memory_pool(&stream)?;
-        let original = memory_pool_release_threshold(pool)?;
+        let original = memory_pool_release_threshold(&stream, pool)?;
 
         let first = prepare_cuda_graph_memory_pool(&stream)?;
         let second = prepare_cuda_graph_memory_pool(&stream)?;
-        assert_eq!(memory_pool_release_threshold(pool)?, u64::MAX);
+        assert_eq!(memory_pool_release_threshold(&stream, pool)?, u64::MAX);
         drop(first);
-        assert_eq!(memory_pool_release_threshold(pool)?, u64::MAX);
+        assert_eq!(memory_pool_release_threshold(&stream, pool)?, u64::MAX);
         drop(second);
-        assert_eq!(memory_pool_release_threshold(pool)?, original);
+        assert_eq!(memory_pool_release_threshold(&stream, pool)?, original);
         Ok(())
     }
 
@@ -4657,7 +4450,7 @@ mod tests {
     #[ignore = "requires a CUDA device"]
     fn graph_memory_cleanup_returns_allocator_to_baseline() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
-        let stream = device.as_role_device()?.cuda_stream();
+        let stream = GraphStream::from_graph_device(&device)?;
         let used_attribute = sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_USED_MEM_CURRENT;
         let reserved_attribute = sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_RESERVED_MEM_CURRENT;
         trim_cuda_graph_memory(&stream)?;
@@ -4667,7 +4460,7 @@ mod tests {
         let guard = prepare_cuda_graph_memory_pool(&stream)?;
         let input = Var::from_tensor(&Tensor::from_vec(vec![1f32, 2.0], 2, &device)?)?;
         let restore_event_tracking = disable_event_tracking_for_capture(&stream);
-        stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)?;
+        stream.begin_graph_capture(true)?;
         let output = input.as_detached_tensor().affine(2.0, 1.0)?;
         let graph = CudaGraphHandle::end_capture(&stream)?
             .ok_or_else(|| anyhow::anyhow!("CUDA graph capture returned no graph"))?;
@@ -4698,7 +4491,7 @@ mod tests {
     #[ignore = "requires a CUDA device"]
     fn unlaunched_graph_cleanup_returns_allocator_to_baseline() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
-        let stream = device.as_role_device()?.cuda_stream();
+        let stream = GraphStream::from_graph_device(&device)?;
         let used_attribute = sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_USED_MEM_CURRENT;
         let reserved_attribute = sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_RESERVED_MEM_CURRENT;
         trim_cuda_graph_memory(&stream)?;
@@ -4708,7 +4501,7 @@ mod tests {
         let guard = prepare_cuda_graph_memory_pool(&stream)?;
         let input = Var::from_tensor(&Tensor::from_vec(vec![1f32, 2.0], 2, &device)?)?;
         let restore_event_tracking = disable_event_tracking_for_capture(&stream);
-        stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)?;
+        stream.begin_graph_capture(true)?;
         let logits = input.as_detached_tensor().affine(2.0, 1.0)?;
         let graph = CudaGraphHandle::end_capture(&stream)?
             .ok_or_else(|| anyhow::anyhow!("CUDA graph capture returned no graph"))?;
@@ -4739,8 +4532,7 @@ mod tests {
     #[ignore = "requires a CUDA device"]
     fn graph_replay_retains_captured_output_storage() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
-        let cuda_device = device.as_role_device()?;
-        let stream = cuda_device.cuda_stream();
+        let stream = GraphStream::from_graph_device(&device)?;
         let _memory_pool_guard = prepare_cuda_graph_memory_pool(&stream)?;
 
         let input = Var::from_tensor(&Tensor::from_vec(vec![1f32, 2.0], 2, &device)?)?;
@@ -4749,7 +4541,7 @@ mod tests {
         drop(warmup);
 
         let restore_event_tracking = disable_event_tracking_for_capture(&stream);
-        stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)?;
+        stream.begin_graph_capture(true)?;
         let output = input.as_detached_tensor().affine(2.0, 1.0)?;
         let graph = CudaGraphHandle::end_capture(&stream)?
             .ok_or_else(|| anyhow::anyhow!("CUDA graph capture returned no graph"))?;
@@ -4778,12 +4570,12 @@ mod tests {
     #[ignore = "requires a CUDA device"]
     fn replayed_graph_output_releases_without_driver_error() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
-        let stream = device.as_role_device()?.cuda_stream();
+        let stream = GraphStream::from_graph_device(&device)?;
         let _memory_pool_guard = prepare_cuda_graph_memory_pool(&stream)?;
         let input = Var::from_tensor(&Tensor::from_vec(vec![1f32, 2.0], 2, &device)?)?;
 
         let restore_event_tracking = disable_event_tracking_for_capture(&stream);
-        stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)?;
+        stream.begin_graph_capture(true)?;
         let output = input.as_detached_tensor().affine(2.0, 1.0)?;
         let graph = CudaGraphHandle::end_capture(&stream)?
             .ok_or_else(|| anyhow::anyhow!("CUDA graph capture returned no graph"))?;
@@ -4805,8 +4597,7 @@ mod tests {
     #[ignore = "requires a CUDA device"]
     fn graph_copy_supports_dense_row_source() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
-        let cuda_device = device.as_role_device()?;
-        let stream = cuda_device.cuda_stream();
+        let stream = GraphStream::from_graph_device(&device)?;
         let _memory_pool_guard = prepare_cuda_graph_memory_pool(&stream)?;
 
         let input = Var::from_tensor(&Tensor::from_vec(
@@ -4819,7 +4610,7 @@ mod tests {
         assert!(!source.is_contiguous());
 
         let restore_event_tracking = disable_event_tracking_for_capture(&stream);
-        stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)?;
+        stream.begin_graph_capture(true)?;
         crate::cuda::graph::copy_tensor(&source, &output.as_detached_tensor())?;
         let graph = CudaGraphHandle::end_capture(&stream)?
             .ok_or_else(|| anyhow::anyhow!("CUDA graph capture returned no graph"))?;

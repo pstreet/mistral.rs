@@ -313,7 +313,17 @@ pub(crate) fn submit_forward_lookahead<P: Pipeline + ?Sized>(
     {
         return Ok(Err(result));
     }
+    // The on-device token-batch path is serving-role-only (predicate-gated
+    // upstream); in dual builds only the hip arm can reach here.
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     let stream = launch.graph_stream().clone();
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    let stream = match launch.graph_stream() {
+        crate::pipeline::graph_role::GraphStream::Hip(s) => s.clone(),
+        _ => candle_core::bail!(
+            "one-token lookahead sampling requires the serving (hip) role in dual builds"
+        ),
+    };
     let Some(current) =
         sampling::try_submit_cuda_token_batch(logits, seqs, launch.resident_input(), rng)?
     else {
