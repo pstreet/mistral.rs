@@ -28,6 +28,7 @@ pub(crate) type GraphStream = Arc<candle_core::cuda_backend::cudarc::driver::Cud
 pub(crate) mod graph_driver {
     use super::*;
 
+    #[derive(Debug)]
     pub(crate) struct GraphCheckError(
         pub candle_core::role::backend::cudarc::driver::result::DriverError,
     );
@@ -232,9 +233,13 @@ pub(crate) mod graph_driver {
         graph: &mut *mut core::ffi::c_void,
     ) -> candle_core::Result<()> {
         #[cfg(feature = "rocm")]
-        let code = unsafe { sys::hipStreamEndCapture(stream.cu_stream(), graph.cast()) };
+        let code = unsafe {
+            sys::hipStreamEndCapture(stream.cu_stream(), core::ptr::from_mut(graph).cast())
+        };
         #[cfg(all(feature = "cuda", not(feature = "rocm")))]
-        let code = (unsafe { sys::cuStreamEndCapture(stream.cu_stream(), graph.cast()) }) as i32;
+        let code = (unsafe {
+            sys::cuStreamEndCapture(stream.cu_stream(), core::ptr::from_mut(graph).cast())
+        }) as i32;
         if code != 0 {
             return Err(candle_core::Error::msg(format!(
                 "stream end capture failed with driver code {code}"
@@ -250,10 +255,13 @@ pub(crate) mod graph_driver {
         flags: u64,
     ) -> candle_core::Result<()> {
         #[cfg(feature = "rocm")]
-        let code = unsafe { sys::hipGraphInstantiateWithFlags(exec.cast(), graph.cast(), flags) };
+        let code = unsafe {
+            sys::hipGraphInstantiateWithFlags(core::ptr::from_mut(exec).cast(), graph.cast(), flags)
+        };
         #[cfg(all(feature = "cuda", not(feature = "rocm")))]
-        let code =
-            (unsafe { sys::cuGraphInstantiateWithFlags(exec.cast(), graph.cast(), flags) }) as i32;
+        let code = (unsafe {
+            sys::cuGraphInstantiateWithFlags(core::ptr::from_mut(exec).cast(), graph.cast(), flags)
+        }) as i32;
         if code != 0 {
             return Err(candle_core::Error::msg(format!(
                 "graph instantiate failed with driver code {code}"
@@ -740,6 +748,7 @@ mod imp {
 
     /// The context error of the stream's own backend, kept arm-typed so the
     /// driver result code stays matchable.
+    #[derive(Debug)]
     pub(crate) enum GraphCheckError {
         Hip(hip_drv::result::DriverError),
         Cuda(cu_drv::result::DriverError),
@@ -904,10 +913,16 @@ mod imp {
     ) -> candle_core::Result<()> {
         let code: i32 = match stream {
             GraphStream::Hip(s) => unsafe {
-                hip_drv::sys::hipStreamEndCapture(s.cu_stream(), graph.cast())
+                hip_drv::sys::hipStreamEndCapture(
+                    s.cu_stream(),
+                    core::ptr::from_mut(graph).cast(),
+                )
             },
             GraphStream::Cuda(s) => unsafe {
-                cu_drv::sys::cuStreamEndCapture(s.cu_stream(), graph.cast()) as i32
+                cu_drv::sys::cuStreamEndCapture(
+                    s.cu_stream(),
+                    core::ptr::from_mut(graph).cast(),
+                ) as i32
             },
         };
         if code != 0 {
@@ -926,10 +941,18 @@ mod imp {
     ) -> candle_core::Result<()> {
         let code: i32 = match stream {
             GraphStream::Hip(_) => unsafe {
-                hip_drv::sys::hipGraphInstantiateWithFlags(exec.cast(), graph.cast(), flags)
+                hip_drv::sys::hipGraphInstantiateWithFlags(
+                    core::ptr::from_mut(exec).cast(),
+                    graph.cast(),
+                    flags,
+                )
             },
             GraphStream::Cuda(_) => unsafe {
-                cu_drv::sys::cuGraphInstantiateWithFlags(exec.cast(), graph.cast(), flags) as i32
+                cu_drv::sys::cuGraphInstantiateWithFlags(
+                    core::ptr::from_mut(exec).cast(),
+                    graph.cast(),
+                    flags,
+                ) as i32
             },
         };
         if code != 0 {
@@ -1048,11 +1071,20 @@ mod imp {
         let mut pool: *mut core::ffi::c_void = std::ptr::null_mut();
         let code: i32 = match stream {
             GraphStream::Hip(_) => {
-                (unsafe { hip_drv::sys::cuDeviceGetMemPool(pool.cast(), stream.cu_device()) })
-                    as i32
+                (unsafe {
+                    hip_drv::sys::cuDeviceGetMemPool(
+                        core::ptr::from_mut(&mut pool).cast(),
+                        stream.cu_device(),
+                    )
+                }) as i32
             }
             GraphStream::Cuda(_) => {
-                (unsafe { cu_drv::sys::cuDeviceGetMemPool(pool.cast(), stream.cu_device()) }) as i32
+                (unsafe {
+                    cu_drv::sys::cuDeviceGetMemPool(
+                        core::ptr::from_mut(&mut pool).cast(),
+                        stream.cu_device(),
+                    )
+                }) as i32
             }
         };
         if code != 0 {
@@ -1195,3 +1227,90 @@ mod imp {
 
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 pub(crate) use imp::*;
+
+#[cfg(all(test, feature = "cuda", feature = "rocm"))]
+mod dual_pool_tests {
+    use super::*;
+
+    #[test]
+    fn check_error_invalid_value_semantics() {
+        use candle_core::cuda_backend::cudarc::driver as cu_drv;
+        use candle_core::hip_backend::cudarc::driver as hip_drv;
+        let hip_err = GraphCheckError::Hip(hip_drv::result::DriverError(
+            hip_drv::sys::CUresult::CUDA_ERROR_INVALID_VALUE,
+        ));
+        assert!(hip_err.is_invalid_value());
+        let cuda_err = GraphCheckError::Cuda(cu_drv::result::DriverError(
+            cu_drv::sys::CUresult::CUDA_ERROR_INVALID_VALUE,
+        ));
+        assert!(cuda_err.is_invalid_value());
+        let hip_oom = GraphCheckError::Hip(hip_drv::result::DriverError(
+            hip_drv::sys::CUresult::CUDA_ERROR_OUT_OF_MEMORY,
+        ));
+        assert!(!hip_oom.is_invalid_value());
+    }
+
+    #[test]
+    #[ignore = "requires the dual CUDA role (3090)"]
+    fn cuda_role_mempool_probe() {
+        let dev = candle_core::Device::new_cuda(0).expect("cuda:0");
+        let stream = GraphStream::from_graph_device(&dev).expect("role stream");
+        eprintln!("[pool-test] has_async_alloc={}", stream.has_async_alloc());
+
+        // Raw driver differential: same library, same args, bypassing cudarc.
+        unsafe {
+            let h = libc::dlopen(
+                c"libcuda.so.1".as_ptr(),
+                libc::RTLD_NOW | libc::RTLD_LOCAL,
+            );
+            assert!(!h.is_null(), "dlopen failed");
+            let sym = libc::dlsym(h, c"cuDeviceGetMemPool".as_ptr());
+            assert!(!sym.is_null(), "dlsym failed");
+            type GetPool = unsafe extern "C" fn(*mut *mut core::ffi::c_void, i32) -> u32;
+            let get_pool: GetPool = core::mem::transmute(sym);
+            let mut pool: *mut core::ffi::c_void = std::ptr::null_mut();
+            let raw = get_pool(&mut pool, 0);
+            eprintln!("[pool-test] RAW dlsym call result={raw} pool={:p}", pool);
+
+            let mut ctx: *mut core::ffi::c_void = std::ptr::null_mut();
+            let gctx = libc::dlsym(h, c"cuCtxGetCurrent".as_ptr());
+            type GetCtx = unsafe extern "C" fn(*mut *mut core::ffi::c_void) -> u32;
+            let get_ctx: GetCtx = core::mem::transmute(gctx);
+            let rc = get_ctx(&mut ctx);
+            eprintln!("[pool-test] cuCtxGetCurrent rc={rc} ctx={:p}", ctx);
+        }
+
+        // Layer 2: the cudarc sys wrapper directly, bypassing my dispatcher.
+        unsafe {
+            use candle_core::cuda_backend::cudarc::driver::sys;
+            let mut pool2: sys::CUmemoryPool = std::ptr::null_mut();
+            let r2 = sys::cuDeviceGetMemPool(&mut pool2, 0);
+            eprintln!(
+                "[pool-test] SYS direct result={} (as i32) pool={:?}",
+                r2 as i32, pool2
+            );
+            eprintln!(
+                "[pool-test] enum SUCCESS as i32 = {}",
+                sys::CUresult::CUDA_SUCCESS as i32
+            );
+        }
+
+        // Layer 3: replica of cudarc's first candidate (libcuda.so) via libc.
+        unsafe {
+            let h2 = libc::dlopen(c"libcuda.so".as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL);
+            eprintln!("[pool-test] libcuda.so handle={:p}", h2);
+            let sym2 = libc::dlsym(h2, c"cuDeviceGetMemPool".as_ptr());
+            eprintln!("[pool-test] libcuda.so sym={:p} (vs so.1 earlier)", sym2);
+            type GetPool = unsafe extern "C" fn(*mut *mut core::ffi::c_void, i32) -> u32;
+            let get_pool: GetPool = core::mem::transmute(sym2);
+            let mut pool3: *mut core::ffi::c_void = std::ptr::null_mut();
+            let raw3 = get_pool(&mut pool3, 0);
+            eprintln!("[pool-test] RAW via libcuda.so result={raw3} pool={:p}", pool3);
+        }
+
+        match graph_device_mempool(&stream) {
+            Ok(pool) => eprintln!("[pool-test] pool={:p}", pool),
+            Err(err) => eprintln!("[pool-test] ERR={err:?}"),
+        }
+    }
+}

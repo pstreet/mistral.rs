@@ -49,6 +49,8 @@ use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
+#[cfg(all(any(feature = "cuda", feature = "rocm"), not(all(feature = "cuda", feature = "rocm"))))]
+use crate::pipeline::graph_role::GraphStreamExt;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::pipeline::cuda_graph::{
     capture_cuda_decode_graph, cuda_decode_graph_batch_kind_supported,
@@ -701,8 +703,10 @@ impl Loader for NormalLoader {
         };
         #[cfg(any(feature = "cuda", feature = "rocm"))]
         for device in &available_devices {
-            if let Ok(dev) = device.as_role_device() {
-                unsafe { dev.disable_event_tracking() };
+            if let Ok(stream) =
+                crate::pipeline::graph_role::GraphStream::from_graph_device(device)
+            {
+                unsafe { stream.disable_event_tracking() };
             }
         }
         let device = if use_distributed {
@@ -2082,11 +2086,17 @@ impl NormalPipeline {
         } = inputs;
         let graph_event =
             CudaGraphEventGuard::new(CudaGraphComponent::Target, CudaGraphEvent::Capture);
-        let cuda_device =
-            step.input_ids.device().as_role_device().map_err(|_| {
+        let graph_device = step.input_ids.device();
+        let _htod_cache_guard =
+            crate::pipeline::graph_role::graph_enable_htod_cache(&graph_device).map_err(|_| {
                 candle_core::Error::msg("CUDA graph decode expected CUDA input ids")
             })?;
-        let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+        // Fork alloc counters live on the hip role's device API; the NVIDIA
+        // role captures through driver mempools and needs no arena sizing.
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        let fork_device = step.input_ids.device().as_hip_device().ok();
+        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        let fork_device = Some(step.input_ids.device().as_role_device()?);
         let metadata = step
             .metadata
             .materialize_decode_tensors()
@@ -2127,10 +2137,12 @@ impl NormalPipeline {
             )
             .with_recurrent_batch_kind(recurrent_batch_kind)
             .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
-            cuda_device.reset_alloc_counter();
+            if let Some(dev) = &fork_device {
+                dev.reset_alloc_counter();
+            }
             let warmup_logits = self.model.forward(&step.input_ids, &mut ctx)?;
             step.input_ids.device().synchronize()?;
-            let arena_bytes = cuda_device.alloc_counter();
+            let arena_bytes = fork_device.as_ref().map_or(0, |dev| dev.alloc_counter());
             let live_logits = step.narrow_rows(&warmup_logits)?;
 
             // CUDA stream capture records recurrent writes without executing them.

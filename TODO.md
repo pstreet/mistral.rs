@@ -1128,6 +1128,37 @@ P3 = polish, Deferred = do not do on RDNA.
       precapture then warns "expected CUDA input ids" - the graphs
       slice should skip the chain entirely when caps.graphs is false.
       COMMITTED: slice-3 companion+twin+dispatch+caps (this queue).
+      NVIDIA-ROLE SLICE 4: DECODE GRAPHS (2026-10-03; machinery landed,
+      enablement BLOCKED - see verdict): new graph_role.rs module makes
+      the whole capture/staging/mempool stack role-aware: GraphStream/
+      GraphEvent/GraphPinnedHost are aliases in single-vendor builds and
+      role-dispatching enums in dual, with ~15 normalized driver fns
+      (SUCCESS==0 both drivers). cuda_graph.rs swept onto them (hip path
+      preserved verbatim); execution.rs lookahead extracts the hip arm;
+      gdn.rs phase timers + normal/multimodal replay paths role-keyed;
+      candle re-exports CudaGraphHtodCacheGuard. THREE REAL BUGS fixed
+      in the dispatcher out-params (end_capture/instantiate/mempool):
+      `.cast()` on a `&mut`-local auto-derefs to the null POINTER VALUE
+      instead of the slot address -> NULL out-params -> INVALID_VALUE
+      with null pool; the same slip existed in the single-vendor arm and
+      WOULD HAVE BROKEN PROD ROCM GRAPHS on next rebuild. Regression
+      test pins the mempool out-param. ENABLEMENT VERDICT: the NVIDIA
+      role reaches capture (mempool guard + end-capture + instantiate
+      all work - mempools ARE supported on the 3090 eGPU, attr 115 in
+      cudarc-0.19.8, my earlier attr-118 probe read the wrong ID), but
+      the captured forward dies in 1ms: "moe experts forward ->
+      to_cpu_storage during CUDA graph capture" - the eager grouped MoE
+      gather (the degraded-role path) copies routing tables to HOST for
+      per-expert grouping every forward; structurally illegal inside a
+      capture. Scope: NOT plumbing - needs device-side routing (the
+      fused MoE companion, slice 5) or a capture-friendly grouping
+      variant. Role enablement reverted (is_cuda_graph_device hip-only
+      again, caps graphs=false) so no request pays the failed first
+      lazy capture; the flip is a 2-line change once MoE is capture-safe.
+      Also fixed here: rocm-only shape compiled with the same out-param
+      bug class; the dual-nvcc test env needs TMPDIR on disk (tmpfs
+      quota exhausted by 49G of target dirs; target-dual moved to
+      /home/pstreet/LocalAI/.target-dual-disk permanently).
       COMMITTED: acbf47097 (mistral.rs: reset + CK gate + alias) and
       87ce9a6f (candle: dedicated stream + probes). THE THREE-WAY 16B
       BENCH (Qwen3-16B-A3B Q4_K_M, SAME dual binary both roles, bench

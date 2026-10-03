@@ -12,9 +12,9 @@ use std::{
 // serving stack: the AMD role in a dual build (all C kernels are hipcc-built)
 // and the compiled vendor in single-vendor builds. The NVIDIA-original
 // cu*-graph paths below stay for cuda-only builds.
+use crate::pipeline::graph_role;
 #[cfg(not(all(feature = "cuda", feature = "rocm")))]
 use crate::pipeline::graph_role::GraphStreamExt;
-use crate::pipeline::graph_role;
 use crate::pipeline::graph_role::{
     graph_alloc_pinned, graph_destroy, graph_end_capture, graph_exec_destroy, graph_instantiate,
     graph_launch, graph_memcpy_htod_async, graph_stage_ptr, graph_upload, GraphEvent,
@@ -2525,14 +2525,14 @@ where
     let mut begin_err: Option<candle_core::Error> = None;
     if use_arena {
         #[cfg(feature = "rocm")]
-        match graph_role::graph_arena_alloc(&graph_input_ids.device(), arena_bytes)
-            .and_then(|arena| {
+        match graph_role::graph_arena_alloc(&graph_input_ids.device(), arena_bytes).and_then(
+            |arena| {
                 stream
                     .begin_capture_arena(arena.clone())
                     .map_err(candle_core::Error::wrap)
                     .map(|()| arena)
-            })
-        {
+            },
+        ) {
             Ok(arena) => arena_keepalive = Some(arena),
             Err(err) => begin_err = Some(err),
         }
@@ -2592,6 +2592,7 @@ where
             stream.capture_arena_consumed(),
             dbg_nanos()
         );
+
         if overflowed {
             end_cuda_capture_discard(&stream);
             let consumed = stream.capture_arena_consumed();
@@ -3264,9 +3265,8 @@ impl CudaGraphPinnedBuffer {
                 let mut allocation = graph_alloc_pinned::<$ty>(stream, len)?;
                 let ptr = NonNull::new(unsafe {
                     allocation.as_mut_ptr().map_err(candle_core::Error::wrap)?
-                }).ok_or_else(|| {
-                    candle_core::Error::msg("CUDA returned a null pinned pointer")
-                })?;
+                })
+                .ok_or_else(|| candle_core::Error::msg("CUDA returned a null pinned pointer"))?;
                 CudaGraphPinnedData::$variant(CudaGraphPinnedAllocation { allocation, ptr })
             }};
         }
@@ -3644,10 +3644,11 @@ impl CudaGraphHostStaging {
     }
 }
 
-/// Devices whose decode graphs are capturable: the CUDA role everywhere,
-/// plus the Hip role in dual builds (the hipcc-built graph/capture API).
-/// In dual builds the NVIDIA role is excluded until its graph stack is
-/// role-aware (the capture/staging machinery is Hip-typed there).
+/// Devices whose decode graphs are capturable: the hip role through the
+/// fork's arena capture API. The NVIDIA role stays excluded until the eager
+/// MoE gather is capture-compatible (its per-expert grouping copies routing
+/// tables to host every forward, which stream capture forbids); the
+/// graph_role machinery is role-aware and ready for that flip.
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 pub(crate) fn is_cuda_graph_device(device: &candle_core::Device) -> bool {
     device.is_hip()
@@ -4369,7 +4370,8 @@ mod tests {
         let location = device.location();
         let state_indices = Var::from_tensor(&Tensor::zeros((3,), DType::U32, &device)?)?;
         let mut state_indices_map = HashMap::from([(location, state_indices)]);
-        let mut host_staging = CudaGraphHostStaging::new(GraphStream::from_graph_device(&device)?);
+        let mut host_staging =
+            CudaGraphHostStaging::new(GraphStream::from_graph_device(&device)?)?;
         host_staging.update(|host_staging| {
             buffers.copy_from(&updated, &[256], 1, host_staging)?;
             copy_state_indices(&state_indices_map, &[3, 5, 7], host_staging)
@@ -4752,22 +4754,6 @@ mod tests {
         assert_eq!(default_spec_state_budget(10_000, 200), 800);
         assert_eq!(default_spec_state_budget(10_000, 300), 800);
         assert_eq!(default_spec_state_budget(10_000, 900), 900);
-    }
-
-    #[test]
-    fn only_unmaterialized_graph_output_frees_ignore_invalid_value() {
-        assert!(unmaterialized_graph_output_drop_error(
-            0,
-            sys::CUresult::CUDA_ERROR_INVALID_VALUE
-        ));
-        assert!(!unmaterialized_graph_output_drop_error(
-            1,
-            sys::CUresult::CUDA_ERROR_INVALID_VALUE
-        ));
-        assert!(!unmaterialized_graph_output_drop_error(
-            0,
-            sys::CUresult::CUDA_ERROR_OUT_OF_MEMORY
-        ));
     }
 
     #[test]
