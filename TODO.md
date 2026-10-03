@@ -1172,6 +1172,30 @@ P3 = polish, Deferred = do not do on RDNA.
       bug class struck again (hip_plugin cfg stolen by cuda_plugin
       insert) - ALWAYS check attribute adjacency after module-list
       edits.
+      GRAPHS FLIP FORENSICS (2026-10-03, flip reverted in the same
+      commit as the MoE companion): with MoE device-side the capture
+      machinery runs end to end on the 3090 - mempool guard, capture,
+      instantiate, upload all succeed - but the first cuGraphLaunch of
+      the model-scale graph SEGFAULTS the driver (gdb: rax=0,
+      mov (rax),rax four frames deep in libcuda; same with
+      AUTO_FREE_ON_LAUNCH flag 0 and 1; a pre-launch context bind on
+      the replay thread does not fix it). EVERY ISOLATED COMPONENT
+      CAPTURES+LAUNCHES CLEAN: trivial PTX graph; 600 synthetic
+      memalloc+memset+memcpy nodes; the PA companion reshape+gather
+      pair (after warm + event-tracking disable - two real capture
+      rules: dlopen/cudart-static-init inside a capture window
+      invalidates it, and cuEventCreate from tracking-enabled guards
+      does too); the fused MoE twin (eager == replayed output bit-for-
+      bit within 1e-3). Remaining suspects: the PA DECODE kernel
+      (v1/v2 - the pair probe did not cover it; its launcher may make
+      capture-hostile occupancy/attr queries), the htod-cache interplay
+      (rope uploads pass through enable_cuda_graph_htod_cache during
+      capture), or a driver bug at this graph composition on 610.57
+      eGPU. NEXT for the follow-up: extend the paged-attn capture
+      probe to the v1 decode kernel, then bisect the captured model by
+      layer count. The capture probes are durable #[ignore] tests
+      (graph_role scale probe, paged-attn companion probe, quant
+      fused-decode probe).
       Also fixed here: rocm-only shape compiled with the same out-param
       bug class; the dual-nvcc test env needs TMPDIR on disk (tmpfs
       quota exhausted by 49G of target dirs; target-dual moved to
