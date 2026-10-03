@@ -1196,6 +1196,46 @@ P3 = polish, Deferred = do not do on RDNA.
       layer count. The capture probes are durable #[ignore] tests
       (graph_role scale probe, paged-attn companion probe, quant
       fused-decode probe).
+      NVIDIA-ROLE SLICE 6: GROUPED-PREFILL MMQ + DENSE MMQ COMPANION
+      (2026-10-03): the nvcc companion grew the full prefill kernel set
+      - moe_grouped.cu (dispatch + grouped gemms + weighted reduce),
+      mmq_quantize.cu, and the ten per-dtype mmq_instance_*.cu TUs
+      (there is no umbrella mmq_gguf.cu - first build attempt chased that
+      phantom). ffi_cuda.rs +45 extracted entries (macro now takes an
+      optional -> ret for the int-returning reduce kernels);
+      fast_mmq_cuda.rs = scripted twin of fast_mmq_hip.rs (1689 lines:
+      cuda_backend types, Storage::Cuda, nv_slice_ptr/nv_u32_ptrs utils
+      twins, GpuArch::resolve, one-time attr logic intact); cuda_role.rs
+      grew moe_dispatch_build_cuda + weighted-reduce twins; backends.rs
+      gained forward_grouped_cuda_role (MMQ-only route; grouped lora and
+      non-MMQ dtypes fall back to the eager gather loudly) and
+      select_cuda_fast_path now grants the NVIDIA role GroupedPrefill.
+      Dense MMQ wired too: gguf/mod.rs try_fast_forward routes NVIDIA-role
+      batches > 8 through fast_mmq_cuda::plain (decode batches 1-8 stay
+      on the dequant path until an MMVQ companion slice).
+      RESULTS (16B, 3090): prefill ~64 -> 2157 T/s at 1939 tok (33x,
+      past the hip role's 1014 reference), decode steady 42, zero hard
+      errors, long-context reasoning grounded in the full prompt.
+      27B ISQ-Q4K: prefill 47-53 -> 240.6 T/s (~5x), decode 5.4 -> 8.45
+      T/s - the grouped path also serves runtime-ISQ weights.
+      Correctness: cuda_grouped_prefill_matches_dequant_reference oracle
+      on the 3090 (1% relative = the two-stacked-Q8_1-activation-quantize
+      budget; tolerance split out of assert_close for it) + the dense
+      twin's 6 tests green on hardware.
+      BUG CLASSES THIS SLICE: (1) the cfg-attr detach bug struck a METHOD
+      - inserting forward_grouped_cuda_role above forward_grouped_hip
+      stole its #[cfg], breaking cpu/rocm-only checks (14/29 errors);
+      ALWAYS re-check the attribute above any replaced signature.
+      (2) QTensor::device_ptr_with_guard is role(hip)-typed in dual and
+      its nvidia arm bails 'not implemented' - the twin uses the
+      dual-aware device_ptr() (weights live for the model lifetime).
+      KNOWN DUAL GAP (pre-existing, now journaled): fp8/f8q8 tests abort
+      the dual test binary on the NVIDIA role (hip-compiled kernels
+      dlsym'd via kernel_decl with no role gate; CUDA_CHECK exit()s the
+      process). Not touched by this slice (diff disjoint); needs the
+      same role-gating treatment as the MoE/MMQ paths or companion
+      twins. The dual quant suite must be run with fp8/f8q8 filtered
+      until then.
       Also fixed here: rocm-only shape compiled with the same out-param
       bug class; the dual-nvcc test env needs TMPDIR on disk (tmpfs
       quota exhausted by 49G of target dirs; target-dual moved to

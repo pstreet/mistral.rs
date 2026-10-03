@@ -562,9 +562,37 @@ fn build_cuda_moe_companion() -> Result<(), String> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(80);
 
-    const SOURCES: &[&str] = &["kernels/indexed_moe/indexed_moe.cu"];
+    const SOURCES: &[&str] = &[
+        "kernels/indexed_moe/indexed_moe.cu",
+        // Grouped-prefill MoE + dense/grouped MMQ family: dispatch tables,
+        // grouped GEMMs, weighted reduce, Q8_1 activation quantize, and the
+        // MMQ dequant-MMA kernels (NVIDIA PTX paths under nvcc; the same
+        // sources serve the hip companion through the USE_ROCM WMMA route).
+        "kernels/moe_grouped/moe_grouped.cu",
+        "kernels/mmq_gguf/mmq_quantize.cu",
+        // MMQ is instantiated per dtype (no umbrella TU); each instance
+        // brings the common/mma/vecdotq headers along.
+        "kernels/mmq_gguf/mmq_instance_q2_k.cu",
+        "kernels/mmq_gguf/mmq_instance_q3_k.cu",
+        "kernels/mmq_gguf/mmq_instance_q4_0.cu",
+        "kernels/mmq_gguf/mmq_instance_q4_1.cu",
+        "kernels/mmq_gguf/mmq_instance_q4_k.cu",
+        "kernels/mmq_gguf/mmq_instance_q5_0.cu",
+        "kernels/mmq_gguf/mmq_instance_q5_1.cu",
+        "kernels/mmq_gguf/mmq_instance_q5_k.cu",
+        "kernels/mmq_gguf/mmq_instance_q6_k.cu",
+        "kernels/mmq_gguf/mmq_instance_q8_0.cu",
+    ];
     for src in SOURCES {
         println!("cargo:rerun-if-changed={src}");
+    }
+    for h in [
+        "mmq_common.cuh",
+        "mmq_gguf.cuh",
+        "mmq_mma.cuh",
+        "mmq_vecdotq.cuh",
+    ] {
+        println!("cargo:rerun-if-changed=kernels/mmq_gguf/{h}");
     }
 
     let build_dir = out_dir.join("cuda_companion");

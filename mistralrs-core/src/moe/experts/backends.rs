@@ -1937,14 +1937,17 @@ impl FastExpertsWeights {
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(super) fn select_cuda_fast_path(forward: &MoEForward) -> Option<MoECudaFastPath> {
-        // Dual NVIDIA role: the nvcc fused-decode companion covers decode;
-        // grouped prefill kernels stay hip-only until their slice lands.
+        // Dual NVIDIA role: the nvcc companions cover fused decode and the
+        // grouped MMQ prefill; non-MMQ dtypes fall back inside the grouped
+        // arm (loud degradation per the BackendCaps contract).
         #[cfg(all(feature = "cuda", feature = "rocm"))]
         if forward.xs.device().is_cuda() {
-            return if forward.shape.phase.is_prefill() {
-                None
-            } else {
+            return if !forward.shape.phase.is_prefill()
+                || forward.shape.num_tokens < GROUPED_PREFILL_MIN_TOKENS
+            {
                 Some(MoECudaFastPath::Decode)
+            } else {
+                Some(MoECudaFastPath::GroupedPrefill)
             };
         }
 
@@ -2461,10 +2464,13 @@ impl FastExpertsWeights {
         let num_experts = config.num_experts;
         let total_assignments = forward.shape.num_tokens * topk;
 
-        // Grouped prefill kernels are not ported yet; gather covers this path.
         #[cfg(all(feature = "cuda", feature = "rocm"))]
         if forward.xs_flat.device().is_hip() {
             return self.forward_grouped_hip(forward, config);
+        }
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        if forward.xs_flat.device().is_cuda() {
+            return self.forward_grouped_cuda_role(forward, config);
         }
 
         let dev = forward.xs_flat.device().as_cuda_device()?;
@@ -2770,6 +2776,112 @@ impl FastExpertsWeights {
         } else {
             Ok(Some(down.to_dtype(forward.original_dtype)?))
         }
+    }
+
+    /// Grouped MoE prefill through the nvcc MMQ companion for the NVIDIA
+    /// role of a dual build. Mirrors `forward_grouped_hip`'s MMQ route;
+    /// grouped LoRA and non-MMQ dtypes return Ok(None) to fall back to the
+    /// eager gather.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    pub(super) fn forward_grouped_cuda_role(
+        &self,
+        forward: &MoEForward,
+        config: MoEForwardConfig,
+    ) -> Result<Option<Tensor>> {
+        let topk = config.num_experts_per_tok;
+        let num_experts = config.num_experts;
+        let total_assignments = forward.shape.num_tokens * topk;
+
+        if forward.lora.is_some() {
+            return Ok(None);
+        }
+        let gate_qt = match self.fused_gate_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+        let up_qt = match self.fused_up_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+        let down_qt = match self.fused_down_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+        if gate_qt.dtype() != up_qt.dtype()
+            || !mistralrs_quant::supports_mmq_cuda(gate_qt.dtype())
+            || !mistralrs_quant::supports_mmq_cuda(down_qt.dtype())
+        {
+            return Ok(None);
+        }
+
+        let glu_activation = match config.act {
+            Activation::Silu | Activation::Swish => mistralrs_quant::GluActivationType::Silu,
+            Activation::NewGelu | Activation::GeluPytorchTanh => {
+                mistralrs_quant::GluActivationType::Gelu
+            }
+            Activation::Gelu => mistralrs_quant::GluActivationType::GeluErf,
+            Activation::Relu => mistralrs_quant::GluActivationType::Relu,
+            _ => return Ok(None),
+        };
+
+        let topk_ids_flat = forward.topk_ids.flatten_all()?.contiguous()?;
+        let (expert_bounds, sorted_token_ids, sorted_source_ids) =
+            mistralrs_quant::moe_dispatch_build_cuda(
+                &topk_ids_flat,
+                total_assignments,
+                num_experts,
+                topk,
+            )?;
+
+        let gate_up = mistralrs_quant::grouped_pair_packed_cuda(
+            &gate_qt,
+            &up_qt,
+            forward.xs_flat,
+            &sorted_source_ids,
+            &sorted_token_ids,
+            &expert_bounds,
+            total_assignments,
+            topk,
+            num_experts,
+        )?;
+
+        let down_assignments = mistralrs_quant::grouped_from_glu_packed_cuda(
+            &down_qt,
+            &gate_up,
+            &sorted_token_ids,
+            &sorted_token_ids,
+            &expert_bounds,
+            total_assignments,
+            forward.shape.num_tokens,
+            num_experts,
+            glu_activation as i32,
+        )?;
+
+        let tw_f32 = forward
+            .topk_weights
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .contiguous()?;
+
+        let result = unsafe {
+            if forward.original_dtype == DType::BF16 {
+                mistralrs_quant::moe_weighted_reduce_flat_bf16_cuda(
+                    &down_assignments,
+                    &tw_f32,
+                    forward.shape.num_tokens,
+                    topk,
+                )?
+            } else {
+                mistralrs_quant::moe_weighted_reduce_flat_cuda(
+                    &down_assignments,
+                    &tw_f32,
+                    forward.shape.num_tokens,
+                    topk,
+                )?
+                .to_dtype(forward.original_dtype)?
+            }
+        };
+        Ok(Some(result))
     }
 
     /// Grouped MoE forward for prefill on the hip role. Same contract as

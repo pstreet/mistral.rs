@@ -199,6 +199,17 @@ pub use gguf::fast_mmq::{
     grouped_hip, grouped_pair_hip, grouped_pair_packed_hip,
 };
 #[cfg(all(feature = "cuda", feature = "rocm"))]
+pub use gguf::fast_mmq_cuda::{
+    grouped_from_glu_packed_cuda, grouped_from_glu_pair_cuda, grouped_from_glu_sorted_pair_cuda,
+    grouped_cuda, grouped_pair_cuda, grouped_pair_packed_cuda,
+};
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub use gguf::cuda_role::{
+    moe_dispatch_build_cuda, moe_weighted_reduce_flat_bf16_cuda, moe_weighted_reduce_flat_cuda,
+};
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub use gguf::fast_mmq_cuda::supports as supports_mmq_cuda;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
 pub use gguf::fast_mmq::{
     grouped_from_glu_packed_hip as grouped_moe_mmq_from_glu_packed_hip,
     grouped_from_glu_sorted_pair_hip as grouped_moe_mmq_from_glu_sorted_pair_hip,

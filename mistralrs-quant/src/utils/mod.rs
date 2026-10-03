@@ -173,3 +173,58 @@ macro_rules! hip_u32_ptrs {
     };
 }
 pub(crate) use hip_u32_ptrs;
+
+// ---------------------------------------------------------------------------
+// NVIDIA-role (upstream cuda backend) mirrors for the nvcc-companion twins.
+// ---------------------------------------------------------------------------
+
+/// NVIDIA-role mirrors of the slice helpers above, typed on the upstream
+/// cuda backend's driver types for `_cuda` twins.
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use candle_core::cuda_backend::cudarc::{
+    self as nv_cudarc,
+    driver::{
+        CudaSlice as NvCudaSlice, CudaStream as NvCudaStream, DevicePtr as NvDevicePtr,
+        DevicePtrMut as NvDevicePtrMut, DeviceRepr as NvDeviceRepr,
+    },
+};
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub fn nv_slice_ptr_on_stream<'a, T: NvDeviceRepr>(
+    v: &'a NvCudaSlice<T>,
+    lo: usize,
+    stream: &'a NvCudaStream,
+) -> (u64, nv_cudarc::driver::SyncOnDrop<'a>) {
+    let (ptr, guard) = v.device_ptr(stream);
+    (ptr + (lo * std::mem::size_of::<T>()) as u64, guard)
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub fn nv_slice_ptr_mut_on_stream<'a, T: NvDeviceRepr>(
+    v: &'a mut NvCudaSlice<T>,
+    lo: usize,
+    stream: &'a NvCudaStream,
+) -> (u64, nv_cudarc::driver::SyncOnDrop<'a>) {
+    let (ptr, guard) = v.device_ptr_mut(stream);
+    (ptr + (lo * std::mem::size_of::<T>()) as u64, guard)
+}
+
+/// Bind `($ptr, $guard)` for a u32 routing table tensor on a stream.
+/// Bare statements, so the storage borrows live in the caller scope.
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+macro_rules! nv_u32_ptrs {
+    ($table:expr, $stream:expr, $ptr:ident, $guard:ident) => {
+        let (__tbl_storage, __tbl_layout) = $table.storage_and_layout();
+        let candle_core::Storage::Cuda(__tbl_cuda) = &*__tbl_storage else {
+            candle_core::bail!("expected CUDA-role u32 routing table");
+        };
+        let __tbl_slice = __tbl_cuda.as_cuda_slice::<u32>()?;
+        let ($ptr, $guard) = $crate::utils::nv_slice_ptr_on_stream(
+            __tbl_slice,
+            __tbl_layout.start_offset(),
+            $stream,
+        );
+    };
+}
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) use nv_u32_ptrs;

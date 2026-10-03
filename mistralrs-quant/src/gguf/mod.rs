@@ -24,6 +24,8 @@ mod ffi;
 pub(crate) mod ffi_cuda;
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 pub(crate) mod cuda_role;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub mod fast_mmq_cuda;
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
 mod packed_affine;
 mod weight_source;
@@ -319,6 +321,14 @@ impl GgufMatMul {
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn try_fast_forward(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        // Dual NVIDIA role: dense MMQ for prefill batches through the nvcc
+        // companion; decode batches stay on the dequant path until the MMVQ
+        // companion slice lands.
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        if a.device().is_cuda() && !crate::utils::device_has_fused_ops(a.device()) {
+            return self.try_fast_forward_cuda_role(a);
+        }
+
         if !self.uses_fast_mmvq() || !matches!(a.dtype(), DType::BF16 | DType::F16 | DType::F32) {
             return Ok(None);
         }
@@ -347,6 +357,35 @@ impl GgufMatMul {
         }
 
         Ok(None)
+    }
+
+    /// Dense MMQ for the NVIDIA role of a dual build, prefill batches
+    /// only. Mirrors `try_fast_forward`'s batch > MMVQ_MAX_BATCH branch.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    fn try_fast_forward_cuda_role(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        let QMatMul::QTensor(q) = &self.w else {
+            return Ok(None);
+        };
+        if !matches!(a.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+            return Ok(None);
+        }
+        let flat_batch = a.dims()[..a.dims().len().saturating_sub(1)]
+            .iter()
+            .product::<usize>();
+        if flat_batch <= fast_mmvq::MMVQ_MAX_BATCH {
+            return Ok(None);
+        }
+        if std::env::var("MISTRALRS_NO_FAST_MMQ").is_ok() {
+            return Ok(None);
+        }
+        if !fast_mmq_cuda::batch_supported(
+            q.dtype(),
+            flat_batch,
+            fast_mmq_cuda::device_arch(&q.device())?,
+        ) {
+            return Ok(None);
+        }
+        Ok(Some(fast_mmq_cuda::plain(q, a)?))
     }
 
     #[cfg(all(feature = "cuda", has_marlin_kernels))]

@@ -11,13 +11,14 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use super::ffi_cuda;
+use crate::utils::nv_u32_ptrs;
 use candle_core::backend::BackendStorage;
 use candle_core::cuda_backend::cudarc::driver::{
     CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr, SyncOnDrop,
 };
 use candle_core::cuda_backend::{CudaDevice, CudaStorage};
 use candle_core::quantized::{GgmlDType, QTensor};
-use candle_core::{DType, Result, Shape, Storage, Tensor};
+use candle_core::{Device, DType, Result, Shape, Storage, Tensor};
 
 pub const MATRIX_ROW_PADDING: usize = 512;
 const CUDA_QUANTIZE_BLOCK_SIZE: usize = 256;
@@ -437,6 +438,265 @@ unsafe fn indexed_moe_fused_decode_cuda_inner(
     Ok(Tensor::from((
         Storage::Cuda(CudaStorage::wrap_cuda_slice(final_out, dev.clone())),
         out_shape,
+    )))
+}
+
+// ---------------------------------------------------------------------------
+// Grouped prefill (nvcc MMQ companion route)
+// ---------------------------------------------------------------------------
+
+struct DispatchWorkspaceSlot {
+    slice: CudaSlice<u32>,
+    cap: usize,
+}
+
+type DispatchWsMap = Mutex<HashMap<WorkspaceKey, &'static Mutex<DispatchWorkspaceSlot>>>;
+
+static MOE_DISPATCH_WORKSPACE: OnceLock<DispatchWsMap> = OnceLock::new();
+
+fn dispatch_workspace_ensure(
+    dev: &CudaDevice,
+    len: usize,
+) -> Result<std::sync::MutexGuard<'static, DispatchWorkspaceSlot>> {
+    let len = len.max(1);
+    let map = MOE_DISPATCH_WORKSPACE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = workspace_key(dev);
+    let device_mtx: &'static Mutex<DispatchWorkspaceSlot> = {
+        let mut guard = map.lock().unwrap();
+        match guard.get(&key).copied() {
+            Some(mtx) => mtx,
+            None => {
+                let slice = unsafe { dev.alloc::<u32>(len)? };
+                let leaked = Box::leak(Box::new(Mutex::new(DispatchWorkspaceSlot {
+                    slice,
+                    cap: len,
+                })));
+                guard.insert(key, leaked);
+                leaked
+            }
+        }
+    };
+    let mut slot = device_mtx.lock().unwrap();
+    if slot.cap < len {
+        slot.slice = unsafe { dev.alloc::<u32>(len)? };
+        slot.cap = len;
+    }
+    Ok(slot)
+}
+
+fn wrap_cuda_u32_table(slice: CudaSlice<u32>, dev: &CudaDevice, len: usize) -> Tensor {
+    Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(slice, dev.clone())),
+        Shape::from(len),
+    ))
+}
+
+fn check_cuda_launch(status: i32, what: &str) -> Result<()> {
+    if status != 0 {
+        candle_core::bail!("{what} kernel failed on the CUDA role: status {status}");
+    }
+    Ok(())
+}
+
+/// Build expert dispatch tables on the CUDA role: expert_bounds plus token
+/// ids sorted by expert (and the inverse source permutation).
+pub fn moe_dispatch_build_cuda(
+    topk_ids_flat: &Tensor,
+    total_assignments: usize,
+    num_experts: usize,
+    topk: usize,
+) -> Result<(Tensor, Tensor, Tensor)> {
+    let dev = match topk_ids_flat.device() {
+        Device::Cuda(dev) => dev,
+        _ => candle_core::bail!("moe dispatch build requires CUDA-role routing ids"),
+    };
+    let topk_ids_flat = topk_ids_flat.contiguous()?;
+    if topk_ids_flat.elem_count() != total_assignments {
+        candle_core::bail!("moe dispatch build routing does not match total assignments");
+    }
+    let expert_bounds = unsafe { dev.alloc::<u32>(num_experts + 1)? };
+    let sorted_token_ids = unsafe { dev.alloc::<u32>(total_assignments)? };
+    let sorted_source_ids = unsafe { dev.alloc::<u32>(total_assignments)? };
+
+    let cuda_stream = dev.cuda_stream();
+    let stream = cuda_stream.cu_stream() as *mut std::ffi::c_void;
+    let mut dispatch_ws = dispatch_workspace_ensure(dev, 2 * num_experts)?;
+
+    {
+        nv_u32_ptrs!(&topk_ids_flat, &cuda_stream, topk_ptr, _topk_guard);
+        let (bounds_ptr, _bounds_guard) = slice_ptr(&expert_bounds, 0);
+        let (sorted_ptr, _sorted_guard) = slice_ptr(&sorted_token_ids, 0);
+        let (source_ptr, _source_guard) = slice_ptr(&sorted_source_ids, 0);
+        let (counts_ptr, _ws_guard) = slice_ptr_on_stream(&dispatch_ws.slice, 0, &cuda_stream);
+        let counts_ptr = counts_ptr as *mut i32;
+        let cursors_ptr = unsafe { counts_ptr.add(num_experts) };
+
+        unsafe {
+            ffi_cuda::cuda_launch_moe_dispatch(
+                topk_ptr as *const i32,
+                bounds_ptr as *mut i32,
+                sorted_ptr as *mut i32,
+                source_ptr as *mut i32,
+                total_assignments as i32,
+                num_experts as i32,
+                topk as i32,
+                counts_ptr,
+                cursors_ptr,
+                stream,
+            );
+        }
+    }
+
+    Ok((
+        wrap_cuda_u32_table(expert_bounds, dev, num_experts + 1),
+        wrap_cuda_u32_table(sorted_token_ids, dev, total_assignments),
+        wrap_cuda_u32_table(sorted_source_ids, dev, total_assignments),
+    ))
+}
+
+/// Reduce flat per-assignment MoE outputs into F32 per-token outputs,
+/// CUDA role.
+///
+/// # Safety
+/// `topk_weights` must hold `num_tokens * topk` F32 values on the CUDA role.
+pub unsafe fn moe_weighted_reduce_flat_cuda(
+    inputs: &Tensor,
+    topk_weights: &Tensor,
+    num_tokens: usize,
+    topk: usize,
+) -> Result<Tensor> {
+    let expected_assignments = num_tokens
+        .checked_mul(topk)
+        .ok_or_else(|| candle_core::Error::msg("moe_weighted_reduce_flat_cuda: route count overflow"))?;
+    let (total_assignments, hidden) = inputs.dims2()?;
+    if total_assignments != expected_assignments {
+        candle_core::bail!(
+            "moe_weighted_reduce_flat_cuda: input rows {total_assignments} do not match num_tokens={num_tokens} * topk={topk}"
+        );
+    }
+    if inputs.dtype() != DType::F32 {
+        candle_core::bail!(
+            "moe_weighted_reduce_flat_cuda: input dtype must be F32, got {:?}",
+            inputs.dtype()
+        );
+    }
+    let dev = match inputs.device() {
+        Device::Cuda(dev) => dev,
+        _ => candle_core::bail!("moe_weighted_reduce_flat_cuda: input must live on the CUDA role"),
+    };
+
+    let inputs = inputs.contiguous()?;
+    let (storage, layout) = inputs.storage_and_layout();
+    let Storage::Cuda(nv) = &*storage else {
+        candle_core::bail!("moe_weighted_reduce_flat_cuda: input must live on the CUDA role");
+    };
+    let input_slice = nv.as_cuda_slice::<f32>()?;
+    let topk_weights = topk_weights
+        .flatten_all()?
+        .to_dtype(DType::F32)?
+        .contiguous()?;
+    if topk_weights.elem_count() != expected_assignments {
+        candle_core::bail!("moe_weighted_reduce_flat_cuda: weights do not match routing");
+    }
+    let (tw_storage, tw_layout) = topk_weights.storage_and_layout();
+    let Storage::Cuda(tw_nv) = &*tw_storage else {
+        candle_core::bail!("moe_weighted_reduce_flat_cuda: weights must live on the CUDA role");
+    };
+    let tw_slice = tw_nv.as_cuda_slice::<f32>()?;
+
+    let out = unsafe { dev.alloc::<f32>(num_tokens * hidden)? };
+    let cuda_stream = dev.cuda_stream();
+    let stream = cuda_stream.cu_stream() as *mut std::ffi::c_void;
+
+    {
+        let (input_ptr, _ig) = slice_ptr_on_stream(input_slice, layout.start_offset(), &cuda_stream);
+        let (weights_ptr, _wg) = slice_ptr_on_stream(tw_slice, tw_layout.start_offset(), &cuda_stream);
+        let (out_ptr, _og) = slice_ptr(&out, 0);
+        let status = ffi_cuda::cuda_launch_moe_weighted_reduce_flat(
+            input_ptr as *const std::ffi::c_void,
+            weights_ptr as *const f32,
+            out_ptr as *mut std::ffi::c_void,
+            num_tokens as i32,
+            hidden as i32,
+            topk as i32,
+            stream,
+        );
+        check_cuda_launch(status, "moe_weighted_reduce_flat")?;
+    }
+
+    Ok(Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(out, dev.clone())),
+        Shape::from((num_tokens, hidden)),
+    )))
+}
+
+/// Reduce flat per-assignment MoE outputs into BF16 per-token outputs,
+/// CUDA role.
+///
+/// # Safety
+/// `topk_weights` must hold `num_tokens * topk` F32 values on the CUDA role.
+pub unsafe fn moe_weighted_reduce_flat_bf16_cuda(
+    inputs: &Tensor,
+    topk_weights: &Tensor,
+    num_tokens: usize,
+    topk: usize,
+) -> Result<Tensor> {
+    let (total_assignments, hidden) = inputs.dims2()?;
+    if total_assignments != num_tokens * topk {
+        candle_core::bail!(
+            "moe_weighted_reduce_flat_bf16_cuda: input rows {total_assignments} do not match num_tokens={num_tokens} * topk={topk}"
+        );
+    }
+    if inputs.dtype() != DType::F32 {
+        candle_core::bail!(
+            "moe_weighted_reduce_flat_bf16_cuda: input dtype must be F32, got {:?}",
+            inputs.dtype()
+        );
+    }
+    let dev = match inputs.device() {
+        Device::Cuda(dev) => dev,
+        _ => candle_core::bail!("moe_weighted_reduce_flat_bf16_cuda: input must live on the CUDA role"),
+    };
+
+    let inputs = inputs.contiguous()?;
+    let (storage, layout) = inputs.storage_and_layout();
+    let Storage::Cuda(nv) = &*storage else {
+        candle_core::bail!("moe_weighted_reduce_flat_bf16_cuda: input must live on the CUDA role");
+    };
+    let input_slice = nv.as_cuda_slice::<f32>()?;
+    let topk_weights = topk_weights
+        .flatten_all()?
+        .to_dtype(DType::F32)?
+        .contiguous()?;
+    let (tw_storage, tw_layout) = topk_weights.storage_and_layout();
+    let Storage::Cuda(tw_nv) = &*tw_storage else {
+        candle_core::bail!("moe_weighted_reduce_flat_bf16_cuda: weights must live on the CUDA role");
+    };
+    let tw_slice = tw_nv.as_cuda_slice::<f32>()?;
+
+    let out = unsafe { dev.alloc::<half::bf16>(num_tokens * hidden)? };
+    let cuda_stream = dev.cuda_stream();
+    let stream = cuda_stream.cu_stream() as *mut std::ffi::c_void;
+
+    {
+        let (input_ptr, _ig) = slice_ptr_on_stream(input_slice, layout.start_offset(), &cuda_stream);
+        let (weights_ptr, _wg) = slice_ptr_on_stream(tw_slice, tw_layout.start_offset(), &cuda_stream);
+        let (out_ptr, _og) = slice_ptr(&out, 0);
+        let status = ffi_cuda::cuda_launch_moe_weighted_reduce_flat_bf16(
+            input_ptr as *const std::ffi::c_void,
+            weights_ptr as *const f32,
+            out_ptr as *mut std::ffi::c_void,
+            num_tokens as i32,
+            hidden as i32,
+            topk as i32,
+            stream,
+        );
+        check_cuda_launch(status, "moe_weighted_reduce_flat_bf16")?;
+    }
+
+    Ok(Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(out, dev.clone())),
+        Shape::from((num_tokens, hidden)),
     )))
 }
 
