@@ -32,6 +32,8 @@ mod fp8;
 pub mod gemv;
 mod gguf;
 mod gptq;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+mod cuda_plugin;
 #[cfg(feature = "rocm")]
 mod hip_plugin;
 pub mod host_alloc;
@@ -166,6 +168,8 @@ pub use gguf::archive::{
 pub use gguf::cpu::cpu_indexed_moe_forward;
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 pub use gguf::cuda::indexed_moe_fused_decode_hip;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub use gguf::cuda_role::indexed_moe_fused_decode_cuda;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub use gguf::cuda::{
     grouped_moe_gemm_prequantized, indexed_moe_fused_decode, moe_dispatch_build,

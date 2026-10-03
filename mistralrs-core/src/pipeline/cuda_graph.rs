@@ -58,7 +58,7 @@ fn dbg_nanos() -> u128 {
 }
 
 // AUTO_FREE_ON_LAUNCH: value 1 on both drivers (on CUDA it is NOT the 2
-// that is Upload).
+// that is Upload). Exonerated by the flag=0 experiment (same crash).
 const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 = 1;
 // Matches the standard CUDA paged-attention V2 partition size.
 const PAGED_ATTENTION_PARTITION_SIZE: usize = 512;
@@ -2814,7 +2814,7 @@ fn trim_cuda_graph_memory_bound(stream: &GraphStream) -> candle_core::Result<()>
         .map_err(|err| err.context("CUDA graph memory trim failed"))
 }
 
-#[cfg(all(test, feature = "cuda", not(feature = "rocm")))]
+#[cfg(all(test, feature = "cuda"))]
 fn cuda_graph_memory_attribute(
     stream: &GraphStream,
     attribute: candle_core::cuda_backend::cudarc::driver::sys::CUgraphMem_attribute,
@@ -3645,10 +3645,12 @@ impl CudaGraphHostStaging {
 }
 
 /// Devices whose decode graphs are capturable: the hip role through the
-/// fork's arena capture API. The NVIDIA role stays excluded until the eager
-/// MoE gather is capture-compatible (its per-expert grouping copies routing
-/// tables to host every forward, which stream capture forbids); the
-/// graph_role machinery is role-aware and ready for that flip.
+/// fork's arena capture API. The NVIDIA role stays excluded: every
+/// isolated component captures+launches clean (trivial PTX graph, 600
+/// memalloc/memset/memcpy nodes, the PA companion pair, the fused MoE
+/// twin), but the model-scale graph segfaults inside cuGraphLaunch
+/// (gdb: NULL deref 4 frames deep in libcuda). Forensics in the journal;
+/// the flip returns when that interplay is understood.
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 pub(crate) fn is_cuda_graph_device(device: &candle_core::Device) -> bool {
     device.is_hip()
@@ -4447,10 +4449,14 @@ mod tests {
     }
 
     // cudarc-hip takes no capture mode argument
-    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    #[cfg(any(
+        all(feature = "cuda", not(feature = "rocm")),
+        all(feature = "cuda", feature = "rocm")
+    ))]
     #[test]
     #[ignore = "requires a CUDA device"]
     fn graph_memory_cleanup_returns_allocator_to_baseline() -> anyhow::Result<()> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
         let device = Device::new_cuda(0)?;
         let stream = GraphStream::from_graph_device(&device)?;
         let used_attribute = sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_USED_MEM_CURRENT;

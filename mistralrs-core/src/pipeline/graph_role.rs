@@ -999,6 +999,10 @@ mod imp {
         stream: &GraphStream,
         exec: *mut core::ffi::c_void,
     ) -> candle_core::Result<()> {
+        // Driver entry points need the owning context current; the replay
+        // may run on a different worker thread than the capture (tokio
+        // migration), and an unbound thread crashes cuGraphLaunch.
+        stream.bind_context_to_thread()?;
         let code: i32 = match stream {
             GraphStream::Hip(s) => unsafe {
                 hip_drv::sys::hipGraphUpload(exec.cast(), s.cu_stream())
@@ -1019,6 +1023,7 @@ mod imp {
         stream: &GraphStream,
         exec: *mut core::ffi::c_void,
     ) -> candle_core::Result<()> {
+        stream.bind_context_to_thread()?;
         let code: i32 = match stream {
             GraphStream::Hip(s) => unsafe {
                 hip_drv::sys::hipGraphLaunch(exec.cast(), s.cu_stream())
@@ -1250,67 +1255,63 @@ mod dual_pool_tests {
         assert!(!hip_oom.is_invalid_value());
     }
 
+    /// Regression: dispatcher out-params must pass the ADDRESS of the handle
+    /// slot, not the (null) pointer value reinterpreted - a null out-param
+    /// reads back as INVALID_VALUE with a null pool.
     #[test]
     #[ignore = "requires the dual CUDA role (3090)"]
-    fn cuda_role_mempool_probe() {
+    fn cuda_role_mempool_lookup_fills_the_out_param() {
         let dev = candle_core::Device::new_cuda(0).expect("cuda:0");
         let stream = GraphStream::from_graph_device(&dev).expect("role stream");
-        eprintln!("[pool-test] has_async_alloc={}", stream.has_async_alloc());
+        assert!(stream.has_async_alloc(), "the 3090 reports mempool support");
+        let pool = graph_device_mempool(&stream).expect("mempool lookup");
+        assert!(!pool.is_null(), "pool handle must be written, not left null");
+    }
 
-        // Raw driver differential: same library, same args, bypassing cudarc.
-        unsafe {
-            let h = libc::dlopen(
-                c"libcuda.so.1".as_ptr(),
-                libc::RTLD_NOW | libc::RTLD_LOCAL,
-            );
-            assert!(!h.is_null(), "dlopen failed");
-            let sym = libc::dlsym(h, c"cuDeviceGetMemPool".as_ptr());
-            assert!(!sym.is_null(), "dlsym failed");
-            type GetPool = unsafe extern "C" fn(*mut *mut core::ffi::c_void, i32) -> u32;
-            let get_pool: GetPool = core::mem::transmute(sym);
-            let mut pool: *mut core::ffi::c_void = std::ptr::null_mut();
-            let raw = get_pool(&mut pool, 0);
-            eprintln!("[pool-test] RAW dlsym call result={raw} pool={:p}", pool);
+    /// Scale probe: the model-scale captured graph carries hundreds of
+    /// memalloc nodes (capture-time temporaries); the trivial single-alloc
+    /// capture launches fine. If large memalloc chains crash cuGraphLaunch
+    /// on this driver, this reproduces it synthetically.
+    #[test]
+    #[ignore = "requires the dual CUDA role (3090)"]
+    fn cuda_role_many_memalloc_capture_launch() {
+        use crate::pipeline::cuda_graph::{
+            disable_event_tracking_for_capture, prepare_cuda_graph_memory_pool,
+            restore_event_tracking_after_capture, CudaGraphHandle,
+        };
+        let dev = candle_core::Device::new_cuda(0).expect("cuda:0");
+        let stream = GraphStream::from_graph_device(&dev).expect("role stream");
+        let _guard = prepare_cuda_graph_memory_pool(&stream).expect("pool guard");
 
-            let mut ctx: *mut core::ffi::c_void = std::ptr::null_mut();
-            let gctx = libc::dlsym(h, c"cuCtxGetCurrent".as_ptr());
-            type GetCtx = unsafe extern "C" fn(*mut *mut core::ffi::c_void) -> u32;
-            let get_ctx: GetCtx = core::mem::transmute(gctx);
-            let rc = get_ctx(&mut ctx);
-            eprintln!("[pool-test] cuCtxGetCurrent rc={rc} ctx={:p}", ctx);
+        let input = candle_core::Tensor::new(&[1.0f32, 2.0], &dev).unwrap();
+        let restore = disable_event_tracking_for_capture(&stream);
+        stream.begin_graph_capture(true).expect("begin capture");
+        let mut acc = input.clone();
+        for _ in 0..600 {
+            let tmp = (&acc * &acc).unwrap();
+            acc = (&tmp + &acc).unwrap();
+            // Model-graph node classes the pure-alloc synthetic lacked:
+            // async memset (alloc_zeros) and a captured H2D memcpy (the
+            // rope sincos upload class).
+            let zeroed = unsafe {
+                use candle_core::backend::BackendDevice;
+                dev.as_cuda_device().unwrap().alloc_zeros::<f32>(64).unwrap()
+            };
+            drop(zeroed);
+            let host: Vec<f32> = vec![0.5; 64];
+            let uploaded =
+                candle_core::Tensor::from_vec(host, (64,), &dev).unwrap();
+            drop(uploaded);
         }
-
-        // Layer 2: the cudarc sys wrapper directly, bypassing my dispatcher.
-        unsafe {
-            use candle_core::cuda_backend::cudarc::driver::sys;
-            let mut pool2: sys::CUmemoryPool = std::ptr::null_mut();
-            let r2 = sys::cuDeviceGetMemPool(&mut pool2, 0);
-            eprintln!(
-                "[pool-test] SYS direct result={} (as i32) pool={:?}",
-                r2 as i32, pool2
-            );
-            eprintln!(
-                "[pool-test] enum SUCCESS as i32 = {}",
-                sys::CUresult::CUDA_SUCCESS as i32
-            );
-        }
-
-        // Layer 3: replica of cudarc's first candidate (libcuda.so) via libc.
-        unsafe {
-            let h2 = libc::dlopen(c"libcuda.so".as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL);
-            eprintln!("[pool-test] libcuda.so handle={:p}", h2);
-            let sym2 = libc::dlsym(h2, c"cuDeviceGetMemPool".as_ptr());
-            eprintln!("[pool-test] libcuda.so sym={:p} (vs so.1 earlier)", sym2);
-            type GetPool = unsafe extern "C" fn(*mut *mut core::ffi::c_void, i32) -> u32;
-            let get_pool: GetPool = core::mem::transmute(sym2);
-            let mut pool3: *mut core::ffi::c_void = std::ptr::null_mut();
-            let raw3 = get_pool(&mut pool3, 0);
-            eprintln!("[pool-test] RAW via libcuda.so result={raw3} pool={:p}", pool3);
-        }
-
-        match graph_device_mempool(&stream) {
-            Ok(pool) => eprintln!("[pool-test] pool={:p}", pool),
-            Err(err) => eprintln!("[pool-test] ERR={err:?}"),
-        }
+        let output = acc;
+        let graph = CudaGraphHandle::end_capture(&stream)
+            .expect("end capture")
+            .expect("graph");
+        restore_event_tracking_after_capture(&stream, restore);
+        graph.upload().expect("upload");
+        graph.launch().expect("launch");
+        stream.synchronize().expect("sync");
+        let back = output.to_vec1::<f32>().unwrap();
+        assert!(!back.is_empty());
     }
 }

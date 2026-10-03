@@ -1595,6 +1595,114 @@ mod tests {
     }
 
     #[test]
+    /// Companion-kernel capture probe: the model-scale graph segfaults in
+    /// cuGraphLaunch while trivial PTX-only graphs launch fine; this wraps
+    /// the nvcc-companion reshape+gather pair in a stream capture to test
+    /// whether dlopen'd companion kernels are the trigger.
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn companion_kernels_capture_and_launch() -> Result<()> {
+        let Ok(device) = candle::Device::new_cuda(0) else {
+            return Ok(());
+        };
+        let (key, value, slots, block_table, cu_seq_lens) = test_inputs(&device)?;
+        let key_cache = Tensor::zeros(
+            (T_BLOCKS, T_HEADS, T_HEAD / 4, T_BLOCK, 4),
+            DType::F32,
+            &device,
+        )?;
+        let value_cache = Tensor::zeros((T_BLOCKS, T_HEADS, T_HEAD, T_BLOCK), DType::F32, &device)?;
+
+        // Warm the companion eagerly first (the model always does): the
+        // first dlopen pulls cudart static init (fatbin registration)
+        // which is a capture-illegal module op.
+        reshape_and_cache(
+            &key,
+            &value,
+            None,
+            None,
+            &key_cache,
+            &value_cache,
+            &slots,
+            true,
+            true,
+        )?;
+        device.synchronize()?;
+
+        let cuda_device = device
+            .as_cuda_device()
+            .expect("cuda role device");
+        let stream = cuda_device.cuda_stream();
+        stream
+            .context()
+            .bind_to_thread()
+            .map_err(candle::Error::wrap)?;
+        // Mirror the model capture path: event tracking creates events per
+        // pointer access, and cuEventCreate inside a capture window
+        // invalidates it.
+        unsafe { stream.context().disable_event_tracking() };
+        stream
+            .begin_capture(candle_core::cuda_backend::cudarc::driver::sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .map_err(candle::Error::wrap)?;
+        let (k_out, v_out) = (|| {
+            reshape_and_cache(
+                &key,
+                &value,
+                None,
+                None,
+                &key_cache,
+                &value_cache,
+                &slots,
+                true,
+                true,
+            )?;
+            gather_kv_cache(
+                &key_cache,
+                &value_cache,
+                None,
+                None,
+                None,
+                None,
+                &block_table,
+                &cu_seq_lens,
+                T_TOKENS,
+                DType::F32,
+                None,
+                None,
+            )
+        })()?;
+        let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut exec: *mut core::ffi::c_void = std::ptr::null_mut();
+        unsafe {
+            unsafe { stream.context().enable_event_tracking() };
+            let r = candle_core::cuda_backend::cudarc::driver::sys::cuStreamEndCapture(
+                stream.cu_stream(),
+                core::ptr::from_mut(&mut graph).cast(),
+            );
+            assert_eq!(r as i32, 0, "end capture");
+            let r = candle_core::cuda_backend::cudarc::driver::sys::cuGraphInstantiateWithFlags(
+                core::ptr::from_mut(&mut exec).cast(),
+                graph.cast(),
+                0,
+            );
+            assert_eq!(r as i32, 0, "instantiate");
+            let r = candle_core::cuda_backend::cudarc::driver::sys::cuGraphUpload(
+                exec.cast(),
+                stream.cu_stream(),
+            );
+            assert_eq!(r as i32, 0, "upload");
+            let r = candle_core::cuda_backend::cudarc::driver::sys::cuGraphLaunch(
+                exec.cast(),
+                stream.cu_stream(),
+            );
+            assert_eq!(r as i32, 0, "launch");
+        }
+        device.synchronize()?;
+        assert_eq!(max_abs_diff(&k_out, &key)?, 0.0);
+        assert_eq!(max_abs_diff(&v_out, &value)?, 0.0);
+        Ok(())
+    }
+
     fn reshape_gather_native_f32_roundtrip_is_exact() -> Result<()> {
         let Ok(device) = candle::Device::new_cuda(0) else {
             return Ok(());

@@ -533,8 +533,98 @@ fn main() -> Result<(), String> {
     }
 
     #[cfg(feature = "rocm")]
-    return build_rocm();
+    {
+        build_rocm()?;
+        #[cfg(feature = "cuda")]
+        build_cuda_moe_companion()?;
+    }
 
-    #[cfg(not(any(feature = "metal", feature = "cuda", feature = "rocm")))]
+    Ok(())
+}
+
+/// NVIDIA-role MoE companion for dual builds: nvcc-compiles the fused
+/// decode TU (indexed_moe.cu is self-contained: Q8_1 quantize + fused
+/// gate_up + down_aggregate launches for every GGUF dtype) into a
+/// dlopened .so, mirroring mistralrs-paged-attn's CUDA companion. Never
+/// linked, so the exe keeps zero GPU DT_NEEDED.
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+fn build_cuda_moe_companion() -> Result<(), String> {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let nvcc = std::env::var("CUDA_HOME")
+        .or_else(|_| std::env::var("CUDA_PATH"))
+        .map(|p| format!("{p}/bin/nvcc"))
+        .unwrap_or_else(|_| "nvcc".to_string());
+    let cap: usize = std::env::var("CUDA_COMPUTE_CAP")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(80);
+
+    const SOURCES: &[&str] = &["kernels/indexed_moe/indexed_moe.cu"];
+    for src in SOURCES {
+        println!("cargo:rerun-if-changed={src}");
+    }
+
+    let build_dir = out_dir.join("cuda_companion");
+    std::fs::create_dir_all(&build_dir).map_err(|e| e.to_string())?;
+    let mut objects = Vec::new();
+    for src in SOURCES {
+        let object = build_dir.join(
+            std::path::Path::new(src)
+                .file_stem()
+                .expect("source stem")
+                .to_string_lossy()
+                .into_owned()
+                + ".o",
+        );
+        let status = Command::new(&nvcc)
+            .arg(src)
+            .arg("-std=c++17")
+            .arg("-O3")
+            .arg("--use_fast_math")
+            .arg("-U__CUDA_NO_HALF_OPERATORS__")
+            .arg("-U__CUDA_NO_HALF_CONVERSIONS__")
+            .arg("-U__CUDA_NO_HALF2_OPERATORS__")
+            .arg("-U__CUDA_NO_BFLOAT16_CONVERSIONS__")
+            .arg("--expt-relaxed-constexpr")
+            .arg("--compiler-options")
+            .arg("-fPIC")
+            .arg("-gencode")
+            .arg(format!("arch=compute_{cap},code=sm_{cap}"))
+            .arg("-gencode")
+            .arg(format!("arch=compute_{cap},code=compute_{cap}"))
+            .arg("-c")
+            .arg("-o")
+            .arg(&object)
+            .status()
+            .map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err(format!("nvcc failed for {src}"));
+        }
+        objects.push(object);
+    }
+
+    let so = out_dir.join("libmistralrsquant_cuda.so");
+    if so.exists() {
+        std::fs::remove_file(&so).map_err(|e| e.to_string())?;
+    }
+    let status = Command::new(&nvcc)
+        .arg("--shared")
+        .arg("--cudart")
+        .arg("shared")
+        .arg("-o")
+        .arg(&so)
+        .args(&objects)
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err("nvcc failed to link libmistralrsquant_cuda.so".to_string());
+    }
+    println!(
+        "cargo:rustc-env=MISTRALRS_QUANT_CUDA_PLUGIN={}",
+        so.display()
+    );
     Ok(())
 }

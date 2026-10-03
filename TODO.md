@@ -1154,7 +1154,24 @@ P3 = polish, Deferred = do not do on RDNA.
       fused MoE companion, slice 5) or a capture-friendly grouping
       variant. Role enablement reverted (is_cuda_graph_device hip-only
       again, caps graphs=false) so no request pays the failed first
-      lazy capture; the flip is a 2-line change once MoE is capture-safe.
+      lazy capture;       the flip is a 2-line change once MoE is capture-safe.
+      NVIDIA-ROLE SLICE 5: FUSED MOE DECODE COMPANION (2026-10-03, in
+      flight): libmistralrsquant_cuda.so - nvcc-compiled indexed_moe.cu
+      (the ONE TU carrying the whole decode set: Q8_1 quantize
+      bf16/f16/f32 + fused gate_up for 11 dtypes + down_aggregate for
+      11 dtypes - self-contained, compiled clean under nvcc 13.3 on the
+      first try). cuda_plugin.rs loader + ffi_cuda.rs dlsym entries +
+      gguf/cuda_role.rs twin (workspaces + quantize + fused decode,
+      cuda_backend-typed) + backends.rs: forward_decode_cuda_role twin
+      caller + select_cuda_fast_path grants the NVIDIA role DECODE
+      only (grouped prefill stays hip-gated). RESULT: 16B decode on
+      the 3090 6.9 -> 42.8 T/s (6.2x), zero hard errors, text behavior
+      unchanged (same vendor-variance loop as eager/PA parity). Graphs
+      flip re-applied after this (mempool capture now legal - MoE is
+      device-side); smoke pending. ALSO: the lib.rs cfg-attr detach
+      bug class struck again (hip_plugin cfg stolen by cuda_plugin
+      insert) - ALWAYS check attribute adjacency after module-list
+      edits.
       Also fixed here: rocm-only shape compiled with the same out-param
       bug class; the dual-nvcc test env needs TMPDIR on disk (tmpfs
       quota exhausted by 49G of target dirs; target-dual moved to

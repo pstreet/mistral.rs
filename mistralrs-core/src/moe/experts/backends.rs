@@ -1937,6 +1937,17 @@ impl FastExpertsWeights {
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub(super) fn select_cuda_fast_path(forward: &MoEForward) -> Option<MoECudaFastPath> {
+        // Dual NVIDIA role: the nvcc fused-decode companion covers decode;
+        // grouped prefill kernels stay hip-only until their slice lands.
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        if forward.xs.device().is_cuda() {
+            return if forward.shape.phase.is_prefill() {
+                None
+            } else {
+                Some(MoECudaFastPath::Decode)
+            };
+        }
+
         if !mistralrs_quant::device_has_fused_ops(forward.xs.device()) {
             return None;
         }
@@ -2260,6 +2271,10 @@ impl FastExpertsWeights {
         if forward.xs_flat.device().is_hip() {
             return self.forward_decode_hip(forward, config);
         }
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        if forward.xs_flat.device().is_cuda() {
+            return self.forward_decode_cuda_role(forward, config);
+        }
         use candle_core::cuda::cudarc::driver::DevicePtr;
 
         let dev = forward.xs_flat.device().as_cuda_device()?;
@@ -2367,6 +2382,59 @@ impl FastExpertsWeights {
         // SAFETY: tw tensor holds batch * topk f32 values on the weights' device.
         let result = unsafe {
             mistralrs_quant::indexed_moe_fused_decode_hip(
+                &gate_qt,
+                &up_qt,
+                &down_qt,
+                forward.xs_flat,
+                &topk_ids_flat,
+                &tw_f32,
+                forward.shape.num_tokens,
+                config.num_experts_per_tok,
+                act_type,
+            )?
+        };
+
+        Ok(Some(result.to_dtype(forward.original_dtype)?))
+    }
+
+    /// Fused MoE decode through the nvcc companion for the NVIDIA role of a
+    /// dual build. Mirrors `forward_decode_hip`; the kernels are the same
+    /// sources compiled by nvcc instead of hipcc.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    pub(super) fn forward_decode_cuda_role(
+        &self,
+        forward: &MoEForward,
+        config: MoEForwardConfig,
+    ) -> Result<Option<Tensor>> {
+        let gate_qt = match self.fused_gate_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+        let up_qt = match self.fused_up_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+        let down_qt = match self.fused_down_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+
+        let topk_ids_flat = forward.topk_ids.flatten_all()?.contiguous()?;
+        let tw_f32 = forward
+            .topk_weights
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .contiguous()?;
+
+        let act_type = match config.act {
+            Activation::GeluPytorchTanh => mistralrs_quant::ACT_GELU_PYTORCH_TANH,
+            Activation::Silu | Activation::Swish => mistralrs_quant::ACT_SILU,
+            _ => return Ok(None),
+        };
+
+        // SAFETY: tw holds batch * topk f32 values on the weights' device.
+        let result = unsafe {
+            mistralrs_quant::indexed_moe_fused_decode_cuda(
                 &gate_qt,
                 &up_qt,
                 &down_qt,

@@ -20,6 +20,10 @@ pub mod fast_mmvq;
 pub mod fast_mmvq;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 mod ffi;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) mod ffi_cuda;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) mod cuda_role;
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
 mod packed_affine;
 mod weight_source;

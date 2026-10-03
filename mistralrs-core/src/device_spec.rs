@@ -309,9 +309,9 @@ pub fn backend_caps(device: &Device) -> BackendCaps {
                 // Dual builds: the NVIDIA role serves GGUF through the
                 // upstream CUDA path (QStorage::Cuda, PTX kernels from the
                 // candle-kernels-cuda twin, JIT-loaded) and paged attention
-                // through the nvcc companion. Decode graphs stay off until
-                // the eager MoE gather is capture-compatible (host-side
-                // expert grouping); the graph machinery is role-aware.
+                // through the nvcc companion. Decode graphs stay off: every
+                // isolated capture component passes, but the model-scale
+                // graph crashes cuGraphLaunch (see the journal forensics).
                 BackendCaps {
                     arch,
                     graphs: false,
