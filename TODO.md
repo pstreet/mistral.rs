@@ -1320,7 +1320,40 @@ P3 = polish, Deferred = do not do on RDNA.
       reproduced for pool allocs); the htod cache is exonerated by
       reading (capture cannot contain uncached H2D at all). The
       gemv #[ignore] crossover benchmarks now hit the loud dual bail
-      (expected; run them single-vendor). The dual quant suite must be run with fp8/f8q8 filtered
+      (expected; run them single-vendor).
+      GRAPHS ROUND 2 (2026-10-04 later, flip still reverted): the
+      multi-bucket VA-collision theory from round 1 is DEAD - the
+      two-graph collision probe (capture batch-1 + batch-2 graphs
+      from the shared pool, AUTO_FREE, interleaved launches, read
+      the earlier exec's output after the other's launch) is BIT-
+      EXACT. Also exonerated by new passing probes: cuBLAS matmul
+      in capture (the 16B lm_head IS BF16/unquantized so cublas is
+      still in the graph - but a cublas+broadcast-bmul capture
+      replays exactly); the engine's exact pool-guard attributes
+      (release threshold u64::MAX + the three reuse attrs, mirrored
+      into the mmvq probe - still bit-exact); the PA v1 decode
+      kernel (capture probe passes). The raw-dlsym node inventory
+      dump is REMOVED - both call forms misbehave on this driver
+      (count form: INVALID_VALUE; capacity form: SIGSEGV) - bad
+      tooling is worse than none; if needed again use the runtime
+      API or cudarc-hip's wrappers. DIFFERENTIAL: the 27B with
+      graphs on does NOT reach launch - its capture is INVALIDATED
+      by the eager GDN path (host-copy class, same as the original
+      MoE gather blocker) and cudarc unwraps the error -> SIGABRT;
+      the 27B needs the GDN companion (or a capture-safe GDN
+      fallback) before its graphs can even be attempted. WHERE THE
+      16B STANDS: the fault is a k-side rope bmul (256 threads =
+      4 KV heads x 64) reading a wild pointer at first replay, with
+      every isolated mechanism exonerated; the nearest tracked
+      allocation to the wild read is the 303,872-byte LOGITS
+      buffer (batch x 151,936 vocab bf16) - the wild pointer is on
+      the logits side of the VA space. NEXT (the one remaining
+      move): engine-level pointer correlation - instrument the
+      capture to record every allocation's (ptr, size, tensor) and
+      at first-launch check the bmul node params against them to
+      name exactly which buffer went wild; short of that, capture
+      the real forward with a stripped config (no PA scheduler /
+      FA3 schedules) to bisect the engine machinery itself. The dual quant suite must be run with fp8/f8q8 filtered
       until then.
       Also fixed here: rocm-only shape compiled with the same out-param
       bug class; the dual-nvcc test env needs TMPDIR on disk (tmpfs
