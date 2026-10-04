@@ -74,7 +74,10 @@ fn u8_workspace_ensure(
     };
     let mut slot = device_mtx.lock().unwrap();
     if slot.cap < len {
-        slot.slice = unsafe { dev.alloc::<u8>(len)? };
+        // Graph safety: leak the previous slice on growth - captured graphs
+        // may hold its pointer baked in (see the dispatch workspace note).
+        let old = std::mem::replace(&mut slot.slice, unsafe { dev.alloc::<u8>(len)? });
+        std::mem::forget(old);
         slot.cap = len;
     }
     Ok(slot)
@@ -102,7 +105,10 @@ fn f32_workspace_ensure(
     };
     let mut slot = device_mtx.lock().unwrap();
     if slot.cap < len {
-        slot.slice = unsafe { dev.alloc::<f32>(len)? };
+        // Graph safety: leak the previous slice on growth - captured graphs
+        // may hold its pointer baked in (see the dispatch workspace note).
+        let old = std::mem::replace(&mut slot.slice, unsafe { dev.alloc::<f32>(len)? });
+        std::mem::forget(old);
         slot.cap = len;
     }
     Ok(slot)
@@ -478,7 +484,12 @@ fn dispatch_workspace_ensure(
     };
     let mut slot = device_mtx.lock().unwrap();
     if slot.cap < len {
-        slot.slice = unsafe { dev.alloc::<u32>(len)? };
+        // Graph safety: a captured graph may hold this slot's old pointer
+        // baked into its kernels (the hip role's arena keeps such blocks
+        // alive via arena_keepalive; pool allocs here must not free them).
+        // Leak the old slice so its VA stays valid for those graphs.
+        let old = std::mem::replace(&mut slot.slice, unsafe { dev.alloc::<u32>(len)? });
+        std::mem::forget(old);
         slot.cap = len;
     }
     Ok(slot)

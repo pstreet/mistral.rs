@@ -1272,7 +1272,55 @@ P3 = polish, Deferred = do not do on RDNA.
       vs Q8_1-activation-quantize accumulation noise at |v| ~ 76 -
       made relative). fp8 NVIDIA-role parity stays a journaled
       follow-up (portable-FMA TUs would likely nvcc-compile, but
-      no fp8 models in the serving set). The dual quant suite must be run with fp8/f8q8 filtered
+      no fp8 models in the serving set).
+      GRAPHS-CRASH FOLLOW-UP (2026-10-04, flip still reverted - but the
+      crash is now DECOMPOSED INTO THREE UNDERSTOOD SUB-BUGS):
+      (1) THE ORIGINAL DRIVER SEGFAULT WAS CUBLAS-IN-CAPTURE. The A/B
+      with MISTRALRS_NO_FAST_MMVQ=1 + graphs on brought the raw
+      SIGSEGV back - proof: the old dense-decode path put cuBLAS GEMVs
+      inside the captured step (handle/workspace allocs corrupt the
+      exec) and the MMVQ companion slice REMOVED cublas from it. The
+      segfault is FIXED by MMVQ; what remains with MMVQ is a
+      catchable CUDA_ERROR_ILLEGAL_ADDRESS.
+      (2) BROADCAST-OP PARAM UPLOADS MUST NOT BE CAPTURED. Minimal
+      repro (mmvq_plain_bmul_capture_launch_matches_eager in the
+      mmvq twin): plain()+exact-shape bmul replays bit-exact;
+      plain()+BROADCAST bmul replays corrupt (block-boundary zeros,
+      one wild value, ulp noise) - broadcast bmul passes dims/strides
+      via SlicePtrOrNull::params_from_vec, and a FRESH clone_htod
+      upload inside capture bakes an unreliable memcpy-node dependency
+      on this driver. With the htod cache enabled (the engine's
+      design: warmup populates CUDA_PARAM_CACHE, capture reads the
+      fixed cached buffer, miss-in-capture bails loudly) the replay
+      is bit-exact. The engine already enforces this; the repro now
+      pins it as a durable test.
+      (3) THE REMAINING MODEL-SCALE FAULT: k-side rope bmul (exactly
+      256 threads = 4 KV heads x 64) reads a wild pointer at first
+      replay; compute-sanitizer names bmul_bf16+0x1ac0, address 8.5GB
+      past every live allocation; single-graph repros all pass - the
+      mechanism is MULTI-BUCKET VA COLLISION: the precapture bakes
+      placeholder memalloc VAs from the SHARED capture pool into
+      several graph execs; each launch re-materializes its own
+      graph's allocations over the same pool blocks, so execs trash
+      each other's buffers. THIS IS WHY THE HIP ROLE IS IMMUNE (its
+      arena gives each graph a private range) and matches upstream
+      vLLM's static-workspace design. NEXT SLICE: per-graph
+      allocation isolation for the NVIDIA role (dedicated mempool
+      per capture / arena port to the nvidia stream / static
+      workspaces), then re-flip.
+      ALSO THIS SESSION: flags=0 (no AUTO_FREE) with memfree nodes
+      SEGFAULTS the driver - AUTO_FREE_ON_LAUNCH=1 is required and
+      restored; the post-capture trim is env-gated
+      (MISTRALRS_NO_POST_CAPTURE_TRIM) and exonerated; a graph node
+      inventory dump (MISTRALRS_DUMP_GRAPH_NODES, dlsym'd
+      cuGraphGetNodes) is wired after instantiate; the PA v1 decode
+      kernel capture probe passes (companion exonerated); the
+      cuda_role workspaces got leak-on-growth (a captured graph may
+      hold the old pointer; the hip arena's keepalive semantics,
+      reproduced for pool allocs); the htod cache is exonerated by
+      reading (capture cannot contain uncached H2D at all). The
+      gemv #[ignore] crossover benchmarks now hit the loud dual bail
+      (expected; run them single-vendor). The dual quant suite must be run with fp8/f8q8 filtered
       until then.
       Also fixed here: rocm-only shape compiled with the same out-param
       bug class; the dual-nvcc test env needs TMPDIR on disk (tmpfs

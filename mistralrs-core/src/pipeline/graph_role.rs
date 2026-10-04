@@ -979,6 +979,94 @@ mod imp {
         Ok(())
     }
 
+    /// Debug aid (MISTRALRS_DUMP_GRAPH_NODES=1): histogram the captured
+    /// graph's node types through the driver API, dlopen'd raw because
+    /// cudarc's wrapper does not expose the query functions. NVIDIA role
+    /// only - the hip role's graphs replay fine and need no inventory.
+    pub(crate) fn dump_cuda_graph_node_types(graph: *mut core::ffi::c_void) {
+        let names = [
+            "kernel",
+            "memcpy",
+            "memset",
+            "host",
+            "graph",
+            "empty",
+            "wait",
+            "event",
+            "extsem_signal",
+            "extsem_wait",
+            "mem_alloc",
+            "mem_free",
+        ];
+        unsafe {
+            let h = libc::dlopen(c"libcuda.so.1".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+            if h.is_null() {
+                eprintln!("[graph-dump] dlopen libcuda failed");
+                return;
+            }
+            type GetNodes = unsafe extern "C" fn(
+                *mut core::ffi::c_void,
+                *mut *mut core::ffi::c_void,
+                usize,
+                *mut usize,
+            ) -> u32;
+            type GetType = unsafe extern "C" fn(*mut core::ffi::c_void, *mut i32) -> u32;
+            let sym_nodes = libc::dlsym(h, c"cuGraphGetNodes".as_ptr());
+            let sym_type = libc::dlsym(h, c"cuGraphNodeGetType".as_ptr());
+            if sym_nodes.is_null() || sym_type.is_null() {
+                eprintln!("[graph-dump] dlsym failed for the graph query API");
+                return;
+            }
+            let get_nodes: GetNodes = core::mem::transmute(sym_nodes);
+            let get_type: GetType = core::mem::transmute(sym_type);
+            let mut n: usize = 0;
+            let code = get_nodes(graph, core::ptr::null_mut(), 0, core::ptr::from_mut(&mut n));
+            if code != 0 {
+                eprintln!("[graph-dump] cuGraphGetNodes (count) failed: driver code {code}");
+                return;
+            }
+            let mut nodes: Vec<*mut core::ffi::c_void> =
+                vec![core::ptr::null_mut(); n];
+            let mut filled: usize = 0;
+            if get_nodes(
+                graph,
+                nodes.as_mut_ptr(),
+                n,
+                core::ptr::from_mut(&mut filled),
+            ) != 0
+                || filled != n
+            {
+                eprintln!("[graph-dump] cuGraphGetNodes (fill) failed: {filled}/{n}");
+                return;
+            }
+            let mut histogram = [0usize; 12];
+            let mut unknown = 0usize;
+            for node in &nodes {
+                let mut ty: i32 = -1;
+                if get_type(*node, core::ptr::from_mut(&mut ty)) != 0 {
+                    unknown += 1;
+                    continue;
+                }
+                if (0..12).contains(&ty) {
+                    histogram[ty as usize] += 1;
+                } else {
+                    unknown += 1;
+                    eprintln!("[graph-dump] node type {ty} outside the known enum");
+                }
+            }
+            let parts: Vec<String> = names
+                .iter()
+                .zip(histogram)
+                .filter(|(_, count)| *count > 0)
+                .map(|(name, count)| format!("{name}={count}"))
+                .collect();
+            eprintln!(
+                "[graph-dump] {n} nodes: {} (unknown={unknown})",
+                parts.join(" ")
+            );
+        }
+    }
+
     pub(crate) fn graph_exec_destroy(
         stream: &GraphStream,
         exec: *mut core::ffi::c_void,

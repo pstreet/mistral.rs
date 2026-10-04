@@ -20,6 +20,8 @@ use crate::pipeline::graph_role::{
     graph_launch, graph_memcpy_htod_async, graph_stage_ptr, graph_upload, GraphEvent,
     GraphPinnedHost, GraphStream,
 };
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use crate::pipeline::graph_role::dump_cuda_graph_node_types;
 #[cfg(feature = "rocm")]
 use candle_core::role::backend::cudarc::driver::CudaSlice as ArenaSlice;
 use candle_core::{DType, Device, DeviceLocation, Storage, Tensor, Var};
@@ -57,8 +59,11 @@ fn dbg_nanos() -> u128 {
         .unwrap_or(0)
 }
 
-// AUTO_FREE_ON_LAUNCH: value 1 on both drivers (on CUDA it is NOT the 2
-// that is Upload). Exonerated by the flag=0 experiment (same crash).
+// AUTO_FREE_ON_LAUNCH=1 is REQUIRED: the captured graphs contain memfree
+// nodes (Rust temporaries free_async during capture), and persisting those
+// allocations across launches segfaults the driver at launch (verified:
+// flags=0 with MMVQ-era graphs = SIGSEGV in libcuda; flags=1 = the
+// documented pairing for graphs with free nodes).
 const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 = 1;
 // Matches the standard CUDA paged-attention V2 partition size.
 const PAGED_ATTENTION_PARTITION_SIZE: usize = 512;
@@ -934,6 +939,11 @@ impl CudaGraphHandle {
         {
             let _ = graph_destroy(stream, graph);
             return Err(err.context("CUDA graph instantiate failed"));
+        }
+
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        if std::env::var("MISTRALRS_DUMP_GRAPH_NODES").is_ok() && !stream.is_hip() {
+            dump_cuda_graph_node_types(graph);
         }
 
         Ok(Some(Self {
@@ -2765,7 +2775,13 @@ impl Drop for CudaGraphMemoryPoolGuard {
             tracing::warn!("Failed to restore CUDA graph memory pool threshold: {err:?}");
         }
         let _ = self.stream.synchronize();
-        if let Err(err) = trim_cuda_graph_memory_bound(&self.stream) {
+        // A/B probe: skip the post-capture trim. If the captured graph
+        // references pool memory the Rust side freed (a lifetime bug
+        // upstream of the driver), the trim unmaps it and the first
+        // replay faults with ILLEGAL_ADDRESS.
+        if std::env::var("MISTRALRS_NO_POST_CAPTURE_TRIM").is_ok() {
+            tracing::warn!("skipping post-capture graph memory trim (A/B probe)");
+        } else if let Err(err) = trim_cuda_graph_memory_bound(&self.stream) {
             tracing::warn!("Failed to trim CUDA graph memory after capture: {err:?}");
         }
         scopes.remove(&pool);

@@ -1595,6 +1595,95 @@ mod tests {
     }
 
     #[test]
+    /// Capture probe for the PA DECODE attention kernel (v1): the pair
+    /// probe covers reshape+gather only; the decode kernel is the remaining
+    /// per-kernel suspect for the model-scale cuGraphLaunch segfault.
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn companion_decode_kernel_capture_launch() -> Result<()> {
+        let Ok(device) = candle::Device::new_cuda(0) else {
+            return Ok(());
+        };
+        let (key, value, slots, _bt, _cl) = test_inputs(&device)?;
+        let key_cache = Tensor::zeros(
+            (T_BLOCKS, T_HEADS, T_HEAD / 4, T_BLOCK, 4),
+            DType::F32,
+            &device,
+        )?;
+        let value_cache = Tensor::zeros((T_BLOCKS, T_HEADS, T_HEAD, T_BLOCK), DType::F32, &device)?;
+        let q = key.narrow(0, 0, 1)?.contiguous()?;
+        let block_tables = Tensor::from_vec(vec![0u32], (1, 1), &device)?;
+        let context_lens = Tensor::from_vec(vec![T_TOKENS as u32], 1, &device)?;
+        let attn = |k_cache: &Tensor, v_cache: &Tensor| {
+            paged_attention(
+                &q,
+                None,
+                None,
+                None,
+                None,
+                k_cache,
+                v_cache,
+                &block_tables,
+                &context_lens,
+                None,
+                T_TOKENS,
+                1.0 / (T_HEAD as f32).sqrt(),
+                0.0,
+                None,
+                None,
+                None,
+            )
+        };
+
+        // Warm eagerly: module load + one-time attr setup before capture.
+        reshape_and_cache(
+            &key, &value, None, None, &key_cache, &value_cache, &slots, true, true,
+        )?;
+        let eager = attn(&key_cache, &value_cache)?;
+        device.synchronize()?;
+
+        let cuda_device = device.as_cuda_device().expect("cuda role device");
+        let stream = cuda_device.cuda_stream();
+        stream.context().bind_to_thread().map_err(candle::Error::wrap)?;
+        unsafe { stream.context().disable_event_tracking() };
+        stream
+            .begin_capture(candle_core::cuda_backend::cudarc::driver::sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .map_err(candle::Error::wrap)?;
+        reshape_and_cache(
+            &key, &value, None, None, &key_cache, &value_cache, &slots, true, true,
+        )?;
+        let replayed = attn(&key_cache, &value_cache)?;
+        let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut exec: *mut core::ffi::c_void = std::ptr::null_mut();
+        unsafe {
+            let r = candle_core::cuda_backend::cudarc::driver::sys::cuStreamEndCapture(
+                stream.cu_stream(),
+                core::ptr::from_mut(&mut graph).cast(),
+            );
+            assert_eq!(r as i32, 0, "end capture");
+            let r = candle_core::cuda_backend::cudarc::driver::sys::cuGraphInstantiateWithFlags(
+                core::ptr::from_mut(&mut exec).cast(),
+                graph.cast(),
+                0,
+            );
+            assert_eq!(r as i32, 0, "instantiate");
+            let r = candle_core::cuda_backend::cudarc::driver::sys::cuGraphUpload(
+                exec.cast(),
+                stream.cu_stream(),
+            );
+            assert_eq!(r as i32, 0, "upload");
+            let r = candle_core::cuda_backend::cudarc::driver::sys::cuGraphLaunch(
+                exec.cast(),
+                stream.cu_stream(),
+            );
+            assert_eq!(r as i32, 0, "launch");
+            stream.context().enable_event_tracking();
+        }
+        device.synchronize()?;
+        assert_eq!(max_abs_diff(&eager, &replayed)?, 0.0);
+        Ok(())
+    }
+
     /// Companion-kernel capture probe: the model-scale graph segfaults in
     /// cuGraphLaunch while trivial PTX-only graphs launch fine; this wraps
     /// the nvcc-companion reshape+gather pair in a stream capture to test

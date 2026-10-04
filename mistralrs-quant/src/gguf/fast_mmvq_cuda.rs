@@ -1011,6 +1011,103 @@ mod tests {
     }
 
     #[test]
+    /// Capture probe for the dense-decode route: the model-scale graph
+    /// faults replaying a 256-element bmul whose K operand came from the
+    /// MMVQ k-projection inside the capture. Reproduces plain()+bmul as a
+    /// graph to dissect the wild pointer at small scale.
+    #[test]
+    #[ignore = "requires the dual CUDA role (3090)"]
+    fn mmvq_plain_bmul_capture_launch_matches_eager() -> Result<()> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+
+        const NROWS: usize = 256;
+        const NCOLS: usize = 512;
+
+        let dev = Device::new_cuda(0)?;
+        let host: Vec<f32> = (0..NROWS * NCOLS)
+            .map(|i| ((i as f32 * 0.7).sin() * 0.5).abs())
+            .collect();
+        let w_cpu = Tensor::from_vec(host, (NROWS, NCOLS), &Device::Cpu)?;
+        let w = QTensor::quantize_onto(&w_cpu, GgmlDType::Q4K, &dev)?;
+
+        let x_host: Vec<f32> = (0..NCOLS).map(|i| (i as f32 * 0.01).sin()).collect();
+        let xs = Tensor::from_vec(x_host, (1, 1, NCOLS), &dev)?.to_dtype(DType::BF16)?;
+        let cos_host: Vec<f32> = (0..NROWS).map(|i| (i as f32 * 0.02).cos() * 0.5).collect();
+        let cos = Tensor::from_vec(cos_host, (1, 4, 64), &dev)?.to_dtype(DType::BF16)?;
+
+        let run = || -> Result<Tensor> {
+            let k = plain(&w, &xs)?;
+            if std::env::var("MMVQ_PROBE_PLAIN_ONLY").is_ok() {
+                return k.reshape((1, 1, NROWS));
+            }
+            let k4 = k.reshape((1, 4, 64))?;
+            (k4 * &cos)?.reshape((1, 1, NROWS))
+        };
+
+        // Mirror the engine: the htod cache populates CUDA_PARAM_CACHE during
+        // the warmup so capture reads fixed-address params buffers.
+        let _htod_guard = match &dev {
+            Device::Cuda(d) => Some(d.enable_cuda_graph_htod_cache()),
+            _ => None,
+        };
+        let eager = run()?.flatten_all()?;
+        dev.synchronize()?;
+
+        let cuda_dev = match &dev {
+            Device::Cuda(d) => d,
+            _ => candle_core::bail!("expected cuda device"),
+        };
+        let stream = cuda_dev.cuda_stream();
+        stream.context().bind_to_thread().map_err(candle_core::Error::wrap)?;
+        unsafe { stream.context().disable_event_tracking() };
+        stream
+            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .map_err(candle_core::Error::wrap)?;
+        let replayed = run()?.flatten_all()?;
+        let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut exec: *mut core::ffi::c_void = std::ptr::null_mut();
+        unsafe {
+            let r = sys::cuStreamEndCapture(
+                stream.cu_stream(),
+                core::ptr::from_mut(&mut graph).cast(),
+            );
+            assert_eq!(r as i32, 0, "end capture");
+            let r = sys::cuGraphInstantiateWithFlags(
+                core::ptr::from_mut(&mut exec).cast(),
+                graph.cast(),
+                0,
+            );
+            assert_eq!(r as i32, 0, "instantiate");
+            let r = sys::cuGraphUpload(exec.cast(), stream.cu_stream());
+            assert_eq!(r as i32, 0, "upload");
+            let r = sys::cuGraphLaunch(exec.cast(), stream.cu_stream());
+            assert_eq!(r as i32, 0, "launch");
+            stream.context().enable_event_tracking();
+        }
+        dev.synchronize()?;
+
+        let a = eager.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+        let b = replayed.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+        let bad: Vec<(usize, f32, f32)> = a
+            .iter()
+            .zip(b.iter())
+            .enumerate()
+            .filter(|(_, (x, y))| (**x - **y).abs() > 1e-2)
+            .map(|(i, (x, y))| (i, *x, *y))
+            .collect();
+        let mut sorted = bad.clone();
+        sorted.sort_by(|x, y| (y.1 - y.2).abs().partial_cmp(&(x.1 - x.2).abs()).unwrap());
+        eprintln!(
+            "[mmvq-capture-probe] mismatching elements: {} of {}; largest 8 (idx, eager, replayed): {:?}",
+            bad.len(),
+            a.len(),
+            &sorted[..sorted.len().min(8)]
+        );
+        let max_diff = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max);
+        assert!(max_diff < 1e-3, "eager vs replay diff {max_diff}");
+        Ok(())
+    }
+
     fn hip_mmvq_plain_matches_dequant_chute() -> Result<()> {
         let device = Device::new_cuda(0)?;
         for dtype in [GgmlDType::Q4_0, GgmlDType::Q8_0, GgmlDType::Q4K] {
