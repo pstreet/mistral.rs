@@ -3,7 +3,11 @@ pub(crate) mod dflash_context;
 #[cfg(feature = "cuda")]
 pub(crate) mod dynamic_conv;
 pub mod ffi;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) mod ffi_cuda;
 pub mod gdn;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) mod gdn_cuda;
 #[cfg(any(
     all(
         feature = "cuda",

@@ -75,6 +75,11 @@ fn main() {
     #[cfg(feature = "rocm")]
     {
         build_rocm();
+        // Dual builds: the NVIDIA role gets the same GDN kernels from an
+        // nvcc companion (dlopened like the hip one; never linked, so the
+        // exe keeps zero GPU DT_NEEDED).
+        #[cfg(feature = "cuda")]
+        build_cuda_core_companion();
     }
 
     #[cfg(all(feature = "cuda", not(feature = "rocm")))]
@@ -486,4 +491,90 @@ fn set_git_revision() {
             }
         }
     }
+}
+
+/// NVIDIA-role GDN companion for dual builds: nvcc-compiles the GDN TU
+/// (recurrence/conv/gating kernels - portable warp-shuffle and fp16/bf16
+/// math, no tensor-core PTX) into a dlopened .so, mirroring the hip
+/// companion and the quant/paged-attn CUDA companions.
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+fn build_cuda_core_companion() {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let nvcc = std::env::var("CUDA_HOME")
+        .or_else(|_| std::env::var("CUDA_PATH"))
+        .map(|p| format!("{p}/bin/nvcc"))
+        .unwrap_or_else(|_| "nvcc".to_string());
+    let cap: usize = std::env::var("CUDA_COMPUTE_CAP")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(80);
+
+    const SOURCES: &[&str] = &["src/cuda/gdn.cu"];
+    for src in SOURCES {
+        println!("cargo:rerun-if-changed={src}");
+    }
+
+    let build_dir = out_dir.join("cuda_companion");
+    std::fs::create_dir_all(&build_dir).expect("create core cuda_companion dir");
+    let mut objects = Vec::new();
+    for src in SOURCES {
+        let object = build_dir.join(
+            std::path::Path::new(src)
+                .file_stem()
+                .expect("source stem")
+                .to_string_lossy()
+                .into_owned()
+                + ".o",
+        );
+        let status = Command::new(&nvcc)
+            .arg(src)
+            .arg("-std=c++17")
+            .arg("-O3")
+            .arg("--use_fast_math")
+            .arg("-U__CUDA_NO_HALF_OPERATORS__")
+            .arg("-U__CUDA_NO_HALF_CONVERSIONS__")
+            .arg("-U__CUDA_NO_HALF2_OPERATORS__")
+            .arg("-U__CUDA_NO_BFLOAT16_CONVERSIONS__")
+            .arg("--expt-relaxed-constexpr")
+            .arg("--expt-extended-lambda")
+            .arg("--compiler-options")
+            .arg("-fPIC")
+            .arg("-gencode")
+            .arg(format!("arch=compute_{cap},code=sm_{cap}"))
+            .arg("-gencode")
+            .arg(format!("arch=compute_{cap},code=compute_{cap}"))
+            .arg("-c")
+            .arg("-o")
+            .arg(&object)
+            .status()
+            .expect("failed to run nvcc for the core companion");
+        if !status.success() {
+            panic!("nvcc failed for {src}");
+        }
+        objects.push(object);
+    }
+
+    let so = out_dir.join("libmistralrscuda_cuda.so");
+    if so.exists() {
+        std::fs::remove_file(&so).expect("remove stale libmistralrscuda_cuda.so");
+    }
+    let status = Command::new(&nvcc)
+        .arg("--shared")
+        .arg("--cudart")
+        .arg("shared")
+        .arg("-o")
+        .arg(&so)
+        .args(&objects)
+        .status()
+        .expect("failed to link the core companion");
+    if !status.success() {
+        panic!("nvcc failed to link libmistralrscuda_cuda.so");
+    }
+    println!(
+        "cargo:rustc-env=MISTRALRS_CORE_CUDA_PLUGIN={}",
+        so.display()
+    );
 }

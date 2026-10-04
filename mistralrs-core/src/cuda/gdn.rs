@@ -68,11 +68,15 @@ fn gdn_modern_arch(arch: GpuArch) -> bool {
     }
 }
 
-// The fused GDN kernels ride the same companion as every other fused op,
-// so the shared role predicate decides. The old is_cuda()-first body
-// claimed them for the NVIDIA role in dual builds, whose
-// as_role_storage().expect() sites would then panic instead of degrade.
+// Both roles have GDN companions in dual builds (hipcc for the AMD role,
+// nvcc for the NVIDIA); single-vendor keeps the compiled-vendor
+// predicate. The entry fns route to `gdn_cuda` by device.
 pub(crate) fn gdn_device_supported(device: &Device) -> bool {
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    {
+        return device.is_cuda() || device.is_hip();
+    }
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     mistralrs_quant::device_has_fused_ops(device)
 }
 pub(crate) const GDN_DECODE_K_DIM: usize = 128;
@@ -133,20 +137,20 @@ const FLASHINFER_GDN_MIN_SEQ_LEN: usize = 32;
 #[cfg(any(feature = "cuda", feature = "rocm", test))]
 #[derive(Clone, Debug)]
 pub(crate) struct GdnFp8OutputSpec {
-    source_shape: [usize; 3],
-    scheme: ActivationQuantizationScheme,
-    scale_layout: ActivationScaleLayout,
+    pub(crate) source_shape: [usize; 3],
+    pub(crate) scheme: ActivationQuantizationScheme,
+    pub(crate) scale_layout: ActivationScaleLayout,
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct GdnFp8OutputLayout {
-    rows: usize,
-    columns: usize,
-    groups: usize,
-    scale_stride_m: usize,
-    scale_elements: usize,
-    scale_layout_code: i32,
+pub(crate) struct GdnFp8OutputLayout {
+    pub(crate) rows: usize,
+    pub(crate) columns: usize,
+    pub(crate) groups: usize,
+    pub(crate) scale_stride_m: usize,
+    pub(crate) scale_elements: usize,
+    pub(crate) scale_layout_code: i32,
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm", test))]
@@ -167,7 +171,7 @@ impl GdnFp8OutputSpec {
         Some(spec)
     }
 
-    fn layout(&self, num_v_heads: usize, head_v_dim: usize) -> Option<GdnFp8OutputLayout> {
+    pub(crate) fn layout(&self, num_v_heads: usize, head_v_dim: usize) -> Option<GdnFp8OutputLayout> {
         if self.scheme.dtype != DType::F8E4M3
             || self.scheme.block_shape != [1, GDN_FP8_GROUP_SIZE]
             || head_v_dim != GDN_FP8_GROUP_SIZE
@@ -619,7 +623,26 @@ pub(crate) fn v_major_state_supported(
     if input_dtype != DType::BF16 || key_dim != GDN_DECODE_K_DIM || value_dim != GDN_DECODE_V_DIM {
         return Ok(false);
     }
-    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    {
+        if !gdn_device_supported(device) {
+            return Ok(false);
+        }
+        let arch = match device {
+            Device::Cuda(dev) => crate::cuda::gdn_cuda::gdn_cuda_device_properties(dev)?.arch,
+            _ => gdn_cuda_device_properties(device.as_role_device()?)?.arch,
+        };
+        Ok(gdn_vmajor_arch(arch))
+    }
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    {
+        if !gdn_device_supported(device) {
+            return Ok(false);
+        }
+        let properties = gdn_cuda_device_properties(device.as_role_device()?)?;
+        Ok(gdn_vmajor_arch(properties.arch))
+    }
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
     {
         if !gdn_device_supported(device) {
             return Ok(false);
@@ -961,6 +984,12 @@ fn validate_gdn_ragged_metadata(
 pub(crate) fn try_gdn_packed_to_padded_cuda(
     context: GdnPackedToPadded<'_>,
 ) -> Result<Option<Tensor>> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if context.source.device().is_cuda() {
+        return crate::cuda::gdn_cuda::try_gdn_packed_to_padded_cuda(context);
+    }
+
     use candle::role::backend::cudarc::driver::{DevicePtrMut, DeviceRepr};
     use candle_core as candle;
 
@@ -1082,6 +1111,12 @@ pub(crate) fn try_gdn_packed_to_padded_cuda(
 pub(crate) fn try_gdn_padded_to_packed_cuda(
     context: GdnPaddedToPacked<'_>,
 ) -> Result<Option<Tensor>> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if context.source.device().is_cuda() {
+        return crate::cuda::gdn_cuda::try_gdn_padded_to_packed_cuda(context);
+    }
+
     use candle::role::backend::cudarc::driver::{DevicePtrMut, DeviceRepr};
     use candle_core as candle;
 
@@ -1195,6 +1230,12 @@ pub(crate) fn try_gdn_padded_to_packed_cuda(
 pub(crate) fn try_gdn_extract_ragged_conv_state_cuda(
     context: GdnRaggedConvState<'_>,
 ) -> Result<Option<Tensor>> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if context.padded_input.device().is_cuda() {
+        return crate::cuda::gdn_cuda::try_gdn_extract_ragged_conv_state_cuda(context);
+    }
+
     use candle::role::backend::cudarc::driver::{DevicePtrMut, DeviceRepr};
     use candle_core as candle;
 
@@ -1599,6 +1640,12 @@ pub fn gated_delta_rule_recurrence_cuda(
     state: &mut Tensor,
     slots: GdnStateSlots<'_>,
 ) -> Result<Tensor> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if inputs.q.device().is_cuda() {
+        return crate::cuda::gdn_cuda::gated_delta_rule_recurrence_cuda(inputs, state, slots);
+    }
+
     launch_recurrence(RecurrenceKernel::Scalar, inputs, state, slots)
 }
 
@@ -1609,6 +1656,12 @@ pub fn chunked_gated_delta_rule_recurrence_cuda(
     state: &mut Tensor,
     slots: GdnStateSlots<'_>,
 ) -> Result<Tensor> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if inputs.q.device().is_cuda() {
+        return crate::cuda::gdn_cuda::chunked_gated_delta_rule_recurrence_cuda(inputs, state, slots);
+    }
+
     launch_recurrence(RecurrenceKernel::Chunked, inputs, state, slots)
 }
 
@@ -1619,6 +1672,12 @@ pub fn warp_gated_delta_rule_recurrence_cuda(
     state: &mut Tensor,
     slots: GdnStateSlots<'_>,
 ) -> Result<Tensor> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if inputs.q.device().is_cuda() {
+        return crate::cuda::gdn_cuda::warp_gated_delta_rule_recurrence_cuda(inputs, state, slots);
+    }
+
     launch_recurrence(RecurrenceKernel::Warp, inputs, state, slots)
 }
 
@@ -1679,6 +1738,12 @@ pub fn vmajor_prefill_gated_delta_rule_recurrence_cuda(
     slots: GdnStateSlots<'_>,
     activation_dtype: DType,
 ) -> Result<Tensor> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if inputs.q.device().is_cuda() {
+        return crate::cuda::gdn_cuda::vmajor_prefill_gated_delta_rule_recurrence_cuda(inputs, state, slots, activation_dtype);
+    }
+
     let requested =
         prefill_kernel_override()?.filter(|kernel| *kernel != GdnPrefillKernel::FlashInferSm90);
     vmajor_prefill_gated_delta_rule_recurrence_cuda_impl(
@@ -1777,6 +1842,12 @@ pub fn causal_conv1d_cuda(
     is_update: bool,
     slots: GdnStateSlots<'_>,
 ) -> Result<(Tensor, Tensor)> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if x.device().is_cuda() {
+        return crate::cuda::gdn_cuda::causal_conv1d_cuda(x, weight, conv_state, kernel_size, is_update, slots);
+    }
+
     use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
@@ -1973,6 +2044,12 @@ pub fn prepare_recurrence_inputs_cuda(
     head_v_dim: usize,
     tiled_v_heads: bool,
 ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if mixed_qkv.device().is_cuda() {
+        return crate::cuda::gdn_cuda::prepare_recurrence_inputs_cuda(mixed_qkv, b, a, a_log, dt_bias, batch_size, seq_len, num_k_heads, num_v_heads, head_k_dim, head_v_dim, tiled_v_heads);
+    }
+
     use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
@@ -2737,6 +2814,12 @@ fn flashinfer_sm90_prefill(launch: FusedPrefillRecurrence<'_>) -> Result<FusedPr
 pub fn try_fused_vmajor_prefill_recurrence_cuda(
     launch: FusedPrefillRecurrence<'_>,
 ) -> Result<Option<FusedPrefillOutput>> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if launch.mixed_qkv.device().is_cuda() {
+        return crate::cuda::gdn_cuda::try_fused_vmajor_prefill_recurrence_cuda(launch);
+    }
+
     let requested = prefill_kernel_override()?;
     let flashinfer_supported = flashinfer_sm90_prefill_supported(&launch)?;
     if requested == Some(GdnPrefillKernel::FlashInferSm90) {
@@ -2813,6 +2896,12 @@ pub struct FusedDecodeRecurrence<'a> {
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn fused_decode_recurrence_cuda(launch: FusedDecodeRecurrence<'_>) -> Result<Tensor> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if launch.mixed_qkv.device().is_cuda() {
+        return crate::cuda::gdn_cuda::fused_decode_recurrence_cuda(launch);
+    }
+
     fused_decode_recurrence_cuda_impl(GdnDecodeLaunch {
         mixed_qkv: launch.mixed_qkv,
         b: launch.b,
@@ -3031,6 +3120,12 @@ pub struct GdnSpeculativeStateCommit<'a> {
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn speculative_state_commit_cuda(commit: GdnSpeculativeStateCommit<'_>) -> Result<()> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if commit.mixed_qkv.device().is_cuda() {
+        return crate::cuda::gdn_cuda::speculative_state_commit_cuda(commit);
+    }
+
     use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
@@ -3238,6 +3333,12 @@ pub struct GdnSpeculativeConvCheckpoints<'a> {
 pub fn speculative_conv_checkpoints_cuda(
     context: GdnSpeculativeConvCheckpoints<'_>,
 ) -> Result<Tensor> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if context.x.device().is_cuda() {
+        return crate::cuda::gdn_cuda::speculative_conv_checkpoints_cuda(context);
+    }
+
     use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
@@ -3572,6 +3673,12 @@ pub struct GdnSpeculativeRecurrenceOutput {
 pub fn speculative_recurrence_checkpoints_cuda(
     context: GdnSpeculativeRecurrenceCheckpoints<'_>,
 ) -> Result<GdnSpeculativeRecurrenceOutput> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if context.mixed_qkv.device().is_cuda() {
+        return crate::cuda::gdn_cuda::speculative_recurrence_checkpoints_cuda(context);
+    }
+
     use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
@@ -4149,6 +4256,12 @@ pub struct GdnDeferredRecurrence<'a> {
 pub fn deferred_recurrence_rmsnorm_gate_cuda(
     context: GdnDeferredRecurrence<'_>,
 ) -> Result<GdnPostOpOutput> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if context.mixed_qkv.device().is_cuda() {
+        return crate::cuda::gdn_cuda::deferred_recurrence_rmsnorm_gate_cuda(context);
+    }
+
     use candle::role::backend::cudarc::driver::DevicePtrMut;
     use candle_core as candle;
     use core::ffi::c_void;
@@ -4709,6 +4822,12 @@ fn launch_deferred_state_cuda(
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn flush_deferred_state_cuda(context: GdnDeferredStateFlush<'_>) -> Result<()> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if context.state_pool.device().is_cuda() {
+        return crate::cuda::gdn_cuda::flush_deferred_state_cuda(context);
+    }
+
     let stream = context.state_pool.device().as_role_device()?.cuda_stream();
     launch_deferred_state_cuda(context, &stream)
 }
@@ -4749,6 +4868,12 @@ pub struct GdnSpeculativeTransitionCommit<'a> {
 pub fn speculative_transition_commit_batched_cuda(
     commit: GdnSpeculativeTransitionCommit<'_>,
 ) -> Result<()> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if commit.keep_rows.device().is_cuda() {
+        return crate::cuda::gdn_cuda::speculative_transition_commit_batched_cuda(commit);
+    }
+
     use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
 
@@ -5010,6 +5135,12 @@ pub struct GdnSpeculativeTransitionStage<'a> {
 pub fn speculative_transition_stage_batched_cuda(
     stage: GdnSpeculativeTransitionStage<'_>,
 ) -> Result<()> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if stage.keep_rows.device().is_cuda() {
+        return crate::cuda::gdn_cuda::speculative_transition_stage_batched_cuda(stage);
+    }
+
     use candle_core as candle;
 
     fn cuda_stage<
@@ -5278,6 +5409,12 @@ pub struct GdnPendingTransitionPublish<'a> {
 pub fn pending_transition_publish_batched_cuda(
     publish: GdnPendingTransitionPublish<'_>,
 ) -> Result<()> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if publish.keep_rows.device().is_cuda() {
+        return crate::cuda::gdn_cuda::pending_transition_publish_batched_cuda(publish);
+    }
+
     use candle_core as candle;
 
     let GdnPendingTransitionPublish {
@@ -5444,6 +5581,12 @@ pub struct GdnPendingTransitionApply<'a> {
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn pending_transition_apply_batched_cuda(apply: GdnPendingTransitionApply<'_>) -> Result<()> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if apply.active_slots.device().is_cuda() {
+        return crate::cuda::gdn_cuda::pending_transition_apply_batched_cuda(apply);
+    }
+
     use candle_core as candle;
 
     fn cuda_apply<
@@ -5727,6 +5870,12 @@ fn normalize_gdn_rmsnorm_layout(
 /// CUDA RMSNorm with a SiLU gate; packed final dimensions are split by the norm weight width.
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if x.device().is_cuda() {
+        return crate::cuda::gdn_cuda::rmsnorm_gated_cuda(x, gate, weight, eps);
+    }
+
     use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
@@ -5835,6 +5984,14 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
     num_v_heads: usize,
     head_v_dim: usize,
 ) -> Result<QuantizedActivation> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if x.device().is_cuda() {
+        return crate::cuda::gdn_cuda::rmsnorm_gated_quantized_cuda(
+            x, gate, weight, eps, spec, num_v_heads, head_v_dim,
+        );
+    }
+
     use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core::{self as candle, Shape, Storage};
     use core::ffi::c_void;
@@ -5985,6 +6142,12 @@ pub fn fused_gdn_gating_cuda(
     a_log: &Tensor,
     dt_bias: &Tensor,
 ) -> Result<(Tensor, Tensor)> {
+    // Dual NVIDIA role: the twin module serves this device.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if b.device().is_cuda() {
+        return crate::cuda::gdn_cuda::fused_gdn_gating_cuda(b, a, a_log, dt_bias);
+    }
+
     use candle::role::backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;

@@ -1353,7 +1353,38 @@ P3 = polish, Deferred = do not do on RDNA.
       at first-launch check the bmul node params against them to
       name exactly which buffer went wild; short of that, capture
       the real forward with a stripped config (no PA scheduler /
-      FA3 schedules) to bisect the engine machinery itself. The dual quant suite must be run with fp8/f8q8 filtered
+      FA3 schedules) to bisect the engine machinery itself.
+      NVIDIA-ROLE SLICE 8: GDN COMPANION (2026-10-04): the fourth
+      companion twin - and the first CORE-crate nvcc companion
+      (libmistralrscuda_cuda.so; gdn.cu's 6000-line portable TU
+      nvcc-compiled clean first try, all 25 externs). Pieces:
+      cuda_plugin.rs loader (MISTRALRS_CORE_CUDA_PLUGIN), ffi_cuda
+      with PLAIN names (so the launcher fn-pointer tables swap by
+      path alone), gdn_cuda.rs - a 10.9k-line twin of the GDN kernel
+      layer (the file turned out hip-only BY CONSTRUCTION:
+      as_role_device bails for CUDA tensors in dual - 29 sites -
+      so the established twin pattern applied). Twin surprises: the
+      28 layer-facing context types must be IMPORTED from
+      super::gdn (inherent impls removed - duplicates collide);
+      as_role_storage sites; GpuArch::resolve; two int-returning
+      kernels; private-field widenings (GdnFp8OutputSpec/Layout).
+      Dispatch: 23 role-keyed early-routes at gdn.rs's pub entries
+      (probe = the first in-scope tensor), v_major_state_supported
+      got role-aware device-properties (the FIRST smoke died at
+      hybrid-cache creation: 'expected a hip device, got cuda'),
+      and gdn_device_supported now claims both roles in dual.
+      RESULTS (27B, 3090, ISQ-Q4K): prefill 240.6 -> 901 T/s
+      (3.7x), decode 8.45 -> 27.8 T/s (3.3x) - the eager GDN
+      fallback (host copies) was the 27B's dominant NVIDIA-role
+      cost. Versus this arc's start: prefill 47-53 -> 901
+      (~17-19x), decode 5.3-5.5 -> 27.8 (~5x). Output grounded,
+      zero hard errors, 58 dual gdn tests green. CONSEQUENCE FOR
+      GRAPHS: the 27B's capture invalidation blocker is GONE - it
+      now reaches capture; the remaining role-wide graphs blocker
+      is the 16B's wild-read (the pointer-correlation
+      instrumentation remains the next diagnostic). The twin's
+      inherited duplicate test module was deleted (tests live in
+      gdn.rs where they run against the serving role). The dual quant suite must be run with fp8/f8q8 filtered
       until then.
       Also fixed here: rocm-only shape compiled with the same out-param
       bug class; the dual-nvcc test env needs TMPDIR on disk (tmpfs
