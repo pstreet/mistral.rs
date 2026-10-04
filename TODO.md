@@ -1234,7 +1234,45 @@ P3 = polish, Deferred = do not do on RDNA.
       dlsym'd via kernel_decl with no role gate; CUDA_CHECK exit()s the
       process). Not touched by this slice (diff disjoint); needs the
       same role-gating treatment as the MoE/MMQ paths or companion
-      twins. The dual quant suite must be run with fp8/f8q8 filtered
+      twins.
+      NVIDIA-ROLE SLICE 7: MMVQ COMPANION + GEMV LANDMINE FIX + FP8
+      ROLE-GATING (2026-10-04): (A) mmvq_gguf.cu joined the nvcc
+      companion (nvcc-clean first try); ffi_cuda grew the 93 MMVQ
+      entries (30 fused_glu + 30 fused_qkv pulled from the declare-
+      macro signatures + 33 plain); fast_mmvq_cuda.rs twin (1215
+      lines, same transform; the 6 QTensor::device_ptr_with_guard
+      sites needed the dual-aware device_ptr() like MMQ);
+      try_fast_forward_cuda_role now routes dense decode batches
+      1-8 through MMVQ. HONEST RESULT (A/B with MISTRALRS_NO_FAST_
+      MMVQ): decode 42.5 -> 43.8 T/s (+3%) single-stream - the
+      dense GEMVs were already memory-bound and the fused MoE + PA
+      dominate; the value is family parity (mmvq decode + mmq
+      prefill + fused MoE both phases now all present) and should
+      grow with batched decode. (B) LANDMINE: gemv::should_use_gemv
+      matched Device::Cuda (the NVIDIA role in dual) but gemv() is
+      a hard dual bail-stub - any unquantized F32/BF16 linear at
+      decode (the 27B GDN b/a gates class) would have crashed
+      instead of falling back; the gate is now dual-wide false
+      (matching the stub) and unquantized linear falls back to
+      plain GEMM everywhere in dual; a gemv companion twin is the
+      journaled follow-up. Found by the twin's inherited unquant
+      test, not by serving. (C) fp8 role-gating: the five fp8
+      cuda_fwd handlers (scalar_fp8 x2, vector_fp8, blockwise x2)
+      receive the NVIDIA storage in dual but launch hipcc-built
+      companion kernels with a CUDA stream - the invalid-argument
+      CUDA_CHECK exit()s the process. All five now early-bail
+      loudly via dual_cuda_role_bail! ("serve the AMD role..."),
+      fp8-family tests retarget to the working role through
+      fp8_family_test_device (hip in dual), and a contract test
+      pins the loud bail on the NVIDIA role. CONSEQUENCE: the fp8
+      abort had been killing the dual test binary at 'fp8::'
+      alphabetically - the ENTIRE rest of the suite never ran;
+      it now completes: 343 passed / 0 failed (one pre-existing
+      flake surfaced: grouped_large_scale absolute 1e-4 tolerance
+      vs Q8_1-activation-quantize accumulation noise at |v| ~ 76 -
+      made relative). fp8 NVIDIA-role parity stays a journaled
+      follow-up (portable-FMA TUs would likely nvcc-compile, but
+      no fp8 models in the serving set). The dual quant suite must be run with fp8/f8q8 filtered
       until then.
       Also fixed here: rocm-only shape compiled with the same out-param
       bug class; the dual-nvcc test env needs TMPDIR on disk (tmpfs

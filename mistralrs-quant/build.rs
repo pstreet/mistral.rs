@@ -564,6 +564,8 @@ fn build_cuda_moe_companion() -> Result<(), String> {
 
     const SOURCES: &[&str] = &[
         "kernels/indexed_moe/indexed_moe.cu",
+        // Dense decode (batch 1-8) MMVQ family.
+        "kernels/mmvq_gguf/mmvq_gguf.cu",
         // Grouped-prefill MoE + dense/grouped MMQ family: dispatch tables,
         // grouped GEMMs, weighted reduce, Q8_1 activation quantize, and the
         // MMQ dequant-MMA kernels (NVIDIA PTX paths under nvcc; the same

@@ -26,6 +26,8 @@ pub(crate) mod ffi_cuda;
 pub(crate) mod cuda_role;
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 pub mod fast_mmq_cuda;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub mod fast_mmvq_cuda;
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
 mod packed_affine;
 mod weight_source;
@@ -359,8 +361,9 @@ impl GgufMatMul {
         Ok(None)
     }
 
-    /// Dense MMQ for the NVIDIA role of a dual build, prefill batches
-    /// only. Mirrors `try_fast_forward`'s batch > MMVQ_MAX_BATCH branch.
+    /// Dense fast paths for the NVIDIA role of a dual build: MMVQ for
+    /// decode batches 1-8, MMQ for prefill batches - both through the nvcc
+    /// companion. Mirrors `try_fast_forward`'s branches.
     #[cfg(all(feature = "cuda", feature = "rocm"))]
     fn try_fast_forward_cuda_role(&self, a: &Tensor) -> Result<Option<Tensor>> {
         let QMatMul::QTensor(q) = &self.w else {
@@ -373,7 +376,12 @@ impl GgufMatMul {
             .iter()
             .product::<usize>();
         if flat_batch <= fast_mmvq::MMVQ_MAX_BATCH {
-            return Ok(None);
+            if std::env::var("MISTRALRS_NO_FAST_MMVQ").is_ok()
+                || !fast_mmvq_cuda::supports(q.dtype())
+            {
+                return Ok(None);
+            }
+            return Ok(Some(fast_mmvq_cuda::plain(q, a)?));
         }
         if std::env::var("MISTRALRS_NO_FAST_MMQ").is_ok() {
             return Ok(None);

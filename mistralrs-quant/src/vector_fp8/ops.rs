@@ -99,6 +99,7 @@ impl CustomOp2 for Fp8VectorDequantize {
         weight_s: &candle_core::CudaStorage,
         weight_l: &candle_core::Layout,
     ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
+        crate::dual_cuda_role_bail!("vector fp8 casts");
         use candle_core::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
 
@@ -609,7 +610,7 @@ mod tests {
     #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn test_fp8_vector_quant_dequant_roundtrip() -> Result<()> {
-        let dev = &Device::new_cuda(0)?;
+        let dev = &crate::utils::fp8_family_test_device()?;
 
         // Create test input with 256 elements (2 vectors)
         let input = Tensor::randn(0f32, 2f32, 256, dev)?;
@@ -648,7 +649,7 @@ mod tests {
     #[test]
     fn test_fp8_vector_cpu_cuda_equivalence() -> Result<()> {
         let cpu_dev = &Device::Cpu;
-        let cuda_dev = &Device::new_cuda(0)?;
+        let cuda_dev = &crate::utils::fp8_family_test_device()?;
 
         // Create the same input data on both devices
         let input_data: Vec<f32> = (0..256).map(|i| ((i as f32) - 128.0) / 10.0).collect();

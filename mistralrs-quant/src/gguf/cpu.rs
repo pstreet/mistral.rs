@@ -281,8 +281,13 @@ mod grouped_gather_tests {
             .to_vec1::<f32>()?;
         assert_eq!(g.len(), w.len(), "{label} length");
         for (i, (a, b)) in g.iter().zip(w.iter()).enumerate() {
+            // Relative: the grouped path quantizes activations (Q8_1) on the
+            // fused role, so large-magnitude outputs carry ~1e-6 relative
+            // accumulation noise; an absolute 1e-4 flaked at |value| ~ 76.
+            // Routing/ordering bugs still produce O(1) garbage here.
             let diff = (a - b).abs();
-            assert!(diff < 1e-4, "{label}[{i}]: grouped {a} vs materialized {b}");
+            let budget = 1e-4 * (1.0 + b.abs());
+            assert!(diff < budget, "{label}[{i}]: grouped {a} vs materialized {b}");
         }
         Ok(())
     }

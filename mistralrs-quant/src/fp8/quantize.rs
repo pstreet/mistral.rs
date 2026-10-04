@@ -76,7 +76,7 @@ mod tests {
     #[test]
     #[cfg(not(feature = "metal"))]
     fn test_roundtrip_f8e4m3() -> Result<()> {
-        let dev = Device::cuda_if_available(0)?;
+        let dev = crate::utils::fp8_family_test_device()?;
 
         let data = Tensor::rand(0f32, 1f32, (32, 32), &dev)?;
 
@@ -182,7 +182,7 @@ mod tests {
     #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn test_cublaslt_matmul() -> Result<()> {
         use crate::cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_CONTROLLER};
-        let dev = Device::new_cuda(0)?;
+        let dev = crate::utils::fp8_family_test_device()?;
 
         // Use 128x128 matrices for FP8 tensor core compatibility across GPU architectures
         let w = Tensor::rand(0., 1., (1, 128, 128), &dev)?

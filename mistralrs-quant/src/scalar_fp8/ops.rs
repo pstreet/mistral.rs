@@ -57,6 +57,7 @@ impl CustomOp1 for Fp8ToDtype {
         input_s: &candle_core::CudaStorage,
         input_l: &candle_core::Layout,
     ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
+        crate::dual_cuda_role_bail!("fp8 casts");
         use candle_core::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
 
@@ -295,6 +296,7 @@ impl CustomOp1 for DtypeToFp8 {
         input_s: &candle_core::CudaStorage,
         input_l: &candle_core::Layout,
     ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
+        crate::dual_cuda_role_bail!("fp8 casts");
         use candle_core::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
 
@@ -487,4 +489,24 @@ pub(crate) fn dtype_to_fp8(input: &Tensor) -> Result<Tensor> {
         );
     }
     input.apply_op1_no_bwd(&DtypeToFp8 { source_dtype })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Dual-build contract: the NVIDIA role must degrade LOUDLY on fp8
+    /// casts (hipcc-built kernels cannot take a CUDA stream) - never
+    /// launch mismatched kernels.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[test]
+    fn nvidia_role_fp8_casts_degrade_loudly() {
+        let dev = candle_core::Device::new_cuda(0).expect("cuda:0");
+        let x = candle_core::Tensor::zeros((4,), DType::F8E4M3, &dev).unwrap();
+        let err = fp8_to_dtype(&x, DType::F32).unwrap_err();
+        assert!(
+            err.to_string().contains("AMD role"),
+            "expected the loud dual bail, got: {err}"
+        );
+    }
 }

@@ -1179,3 +1179,1418 @@ cuda_ffi! {
     );
 
 }
+
+// ---- dense decode MMVQ entries (mmvq_gguf.cu) ----
+cuda_ffi! {
+
+    cuda_launch_mmvq_gguf_q2_k_bf16_fused_glu = "launch_mmvq_gguf_q2_k_bf16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q2_k_bf16_fused_qkv = "launch_mmvq_gguf_q2_k_bf16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q2_k_bf16_plain = "launch_mmvq_gguf_q2_k_bf16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q2_k_f16_fused_glu = "launch_mmvq_gguf_q2_k_f16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q2_k_f16_fused_qkv = "launch_mmvq_gguf_q2_k_f16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q2_k_f16_plain = "launch_mmvq_gguf_q2_k_f16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q2_k_f32_fused_glu = "launch_mmvq_gguf_q2_k_f32_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q2_k_f32_fused_qkv = "launch_mmvq_gguf_q2_k_f32_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q2_k_f32_plain = "launch_mmvq_gguf_q2_k_f32_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q3_k_bf16_fused_glu = "launch_mmvq_gguf_q3_k_bf16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q3_k_bf16_fused_qkv = "launch_mmvq_gguf_q3_k_bf16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q3_k_bf16_plain = "launch_mmvq_gguf_q3_k_bf16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q3_k_f16_fused_glu = "launch_mmvq_gguf_q3_k_f16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q3_k_f16_fused_qkv = "launch_mmvq_gguf_q3_k_f16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q3_k_f16_plain = "launch_mmvq_gguf_q3_k_f16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q3_k_f32_fused_glu = "launch_mmvq_gguf_q3_k_f32_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q3_k_f32_fused_qkv = "launch_mmvq_gguf_q3_k_f32_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q3_k_f32_plain = "launch_mmvq_gguf_q3_k_f32_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_0_bf16_fused_glu = "launch_mmvq_gguf_q4_0_bf16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_0_bf16_fused_qkv = "launch_mmvq_gguf_q4_0_bf16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_0_bf16_plain = "launch_mmvq_gguf_q4_0_bf16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_0_f16_fused_glu = "launch_mmvq_gguf_q4_0_f16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_0_f16_fused_qkv = "launch_mmvq_gguf_q4_0_f16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_0_f16_plain = "launch_mmvq_gguf_q4_0_f16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_0_f32_fused_glu = "launch_mmvq_gguf_q4_0_f32_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_0_f32_fused_qkv = "launch_mmvq_gguf_q4_0_f32_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_0_f32_plain = "launch_mmvq_gguf_q4_0_f32_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_1_bf16_fused_glu = "launch_mmvq_gguf_q4_1_bf16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_1_bf16_fused_qkv = "launch_mmvq_gguf_q4_1_bf16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_1_bf16_plain = "launch_mmvq_gguf_q4_1_bf16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_1_f16_fused_glu = "launch_mmvq_gguf_q4_1_f16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_1_f16_fused_qkv = "launch_mmvq_gguf_q4_1_f16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_1_f16_plain = "launch_mmvq_gguf_q4_1_f16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_1_f32_fused_glu = "launch_mmvq_gguf_q4_1_f32_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_1_f32_fused_qkv = "launch_mmvq_gguf_q4_1_f32_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_1_f32_plain = "launch_mmvq_gguf_q4_1_f32_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_k_bf16_fused_glu = "launch_mmvq_gguf_q4_k_bf16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_k_bf16_fused_qkv = "launch_mmvq_gguf_q4_k_bf16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_k_bf16_plain = "launch_mmvq_gguf_q4_k_bf16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_k_f16_fused_glu = "launch_mmvq_gguf_q4_k_f16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_k_f16_fused_qkv = "launch_mmvq_gguf_q4_k_f16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_k_f16_plain = "launch_mmvq_gguf_q4_k_f16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_k_f32_fused_glu = "launch_mmvq_gguf_q4_k_f32_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_k_f32_fused_qkv = "launch_mmvq_gguf_q4_k_f32_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q4_k_f32_plain = "launch_mmvq_gguf_q4_k_f32_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_0_bf16_fused_glu = "launch_mmvq_gguf_q5_0_bf16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_0_bf16_fused_qkv = "launch_mmvq_gguf_q5_0_bf16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_0_bf16_plain = "launch_mmvq_gguf_q5_0_bf16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_0_f16_fused_glu = "launch_mmvq_gguf_q5_0_f16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_0_f16_fused_qkv = "launch_mmvq_gguf_q5_0_f16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_0_f16_plain = "launch_mmvq_gguf_q5_0_f16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_0_f32_fused_glu = "launch_mmvq_gguf_q5_0_f32_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_0_f32_fused_qkv = "launch_mmvq_gguf_q5_0_f32_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_0_f32_plain = "launch_mmvq_gguf_q5_0_f32_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_1_bf16_fused_glu = "launch_mmvq_gguf_q5_1_bf16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_1_bf16_fused_qkv = "launch_mmvq_gguf_q5_1_bf16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_1_bf16_plain = "launch_mmvq_gguf_q5_1_bf16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_1_f16_fused_glu = "launch_mmvq_gguf_q5_1_f16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_1_f16_fused_qkv = "launch_mmvq_gguf_q5_1_f16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_1_f16_plain = "launch_mmvq_gguf_q5_1_f16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_1_f32_fused_glu = "launch_mmvq_gguf_q5_1_f32_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_1_f32_fused_qkv = "launch_mmvq_gguf_q5_1_f32_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_1_f32_plain = "launch_mmvq_gguf_q5_1_f32_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_k_bf16_fused_glu = "launch_mmvq_gguf_q5_k_bf16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_k_bf16_fused_qkv = "launch_mmvq_gguf_q5_k_bf16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_k_bf16_plain = "launch_mmvq_gguf_q5_k_bf16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_k_f16_fused_glu = "launch_mmvq_gguf_q5_k_f16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_k_f16_fused_qkv = "launch_mmvq_gguf_q5_k_f16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_k_f16_plain = "launch_mmvq_gguf_q5_k_f16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_k_f32_fused_glu = "launch_mmvq_gguf_q5_k_f32_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_k_f32_fused_qkv = "launch_mmvq_gguf_q5_k_f32_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q5_k_f32_plain = "launch_mmvq_gguf_q5_k_f32_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q6_k_bf16_fused_glu = "launch_mmvq_gguf_q6_k_bf16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q6_k_bf16_fused_qkv = "launch_mmvq_gguf_q6_k_bf16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q6_k_bf16_plain = "launch_mmvq_gguf_q6_k_bf16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q6_k_f16_fused_glu = "launch_mmvq_gguf_q6_k_f16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q6_k_f16_fused_qkv = "launch_mmvq_gguf_q6_k_f16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q6_k_f16_plain = "launch_mmvq_gguf_q6_k_f16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q6_k_f32_fused_glu = "launch_mmvq_gguf_q6_k_f32_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q6_k_f32_fused_qkv = "launch_mmvq_gguf_q6_k_f32_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q6_k_f32_plain = "launch_mmvq_gguf_q6_k_f32_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q8_0_bf16_fused_glu = "launch_mmvq_gguf_q8_0_bf16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q8_0_bf16_fused_qkv = "launch_mmvq_gguf_q8_0_bf16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q8_0_bf16_plain = "launch_mmvq_gguf_q8_0_bf16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q8_0_f16_fused_glu = "launch_mmvq_gguf_q8_0_f16_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q8_0_f16_fused_qkv = "launch_mmvq_gguf_q8_0_f16_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q8_0_f16_plain = "launch_mmvq_gguf_q8_0_f16_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q8_0_f32_fused_glu = "launch_mmvq_gguf_q8_0_f32_fused_glu"(
+
+        vx_gate: *const std::ffi::c_void,
+        vx_up: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        activation: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q8_0_f32_fused_qkv = "launch_mmvq_gguf_q8_0_f32_fused_qkv"(
+
+        vx_q: *const std::ffi::c_void,
+        vx_k: *const std::ffi::c_void,
+        vx_v: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        q_dst: *mut std::ffi::c_void,
+        k_dst: *mut std::ffi::c_void,
+        v_dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_q: i32,
+        nrows_k: i32,
+        nrows_v: i32,
+        stride_col_y: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_q8_0_f32_plain = "launch_mmvq_gguf_q8_0_f32_plain"(
+
+        vx: *const std::ffi::c_void,
+        vy: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_quantize_q8_1_bf16 = "launch_mmvq_gguf_quantize_q8_1_bf16"(
+
+        x: *const std::ffi::c_void,
+        vy: *mut std::ffi::c_void,
+        kx: i32,
+        kx_padded: i32,
+        num_rows: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_quantize_q8_1_f16 = "launch_mmvq_gguf_quantize_q8_1_f16"(
+
+        x: *const std::ffi::c_void,
+        vy: *mut std::ffi::c_void,
+        kx: i32,
+        kx_padded: i32,
+        num_rows: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+    cuda_launch_mmvq_gguf_quantize_q8_1_f32 = "launch_mmvq_gguf_quantize_q8_1_f32"(
+
+        x: *const std::ffi::c_void,
+        vy: *mut std::ffi::c_void,
+        kx: i32,
+        kx_padded: i32,
+        num_rows: i32,
+        stream: *mut std::ffi::c_void,
+    );
+
+}

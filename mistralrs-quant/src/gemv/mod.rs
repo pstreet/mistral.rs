@@ -133,6 +133,17 @@ pub static GEMV_CONTROLLER: LazyLock<GemvController> = LazyLock::new(|| GemvCont
 /// - K dimension is even (required for vectorized loads)
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
+    // Dual builds: the gemv kernels are hipcc-built and `gemv` is a hard
+    // bail (see below), so never route unquantized linear here - plain
+    // GEMM is the fallback on both roles. The `Device::Cuda` match below
+    // would otherwise claim the NVIDIA role and crash on the bail.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    {
+        let _ = (x, w);
+        return false;
+    }
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    {
     // Check if enabled
     if !GEMV_CONTROLLER.is_enabled() {
         return false;
@@ -183,6 +194,7 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
     }
 
     true
+    }
 }
 
 /// Fallback for non-CUDA builds

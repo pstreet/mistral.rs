@@ -161,6 +161,7 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
         weight_s: &candle_core::CudaStorage,
         weight_l: &candle_core::Layout,
     ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
+        crate::dual_cuda_role_bail!("blockwise fp8 ops");
         use candle_core::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
 
@@ -630,6 +631,7 @@ impl CustomOp1 for Fp8BlockwiseQuantize {
         input_s: &candle_core::CudaStorage,
         input_l: &candle_core::Layout,
     ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
+        crate::dual_cuda_role_bail!("blockwise fp8 ops");
         use candle_core::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
 
@@ -2265,7 +2267,7 @@ mod tests {
         const EPSILON: f32 = 1.0e-6;
         const FP8_MAX: f32 = 448.0;
 
-        let device = Device::new_cuda(0)?;
+        let device = crate::utils::fp8_family_test_device()?;
         let mut weight_values = Vec::with_capacity(COLUMNS + 1);
         weight_values.push(bf16::from_f32(7.0));
         weight_values.extend((0..COLUMNS).map(|column| {
@@ -2434,7 +2436,7 @@ mod tests {
         const EPSILON: f32 = 1.0e-6;
         const FP8_MAX: f32 = 448.0;
 
-        let device = Device::new_cuda(0)?;
+        let device = crate::utils::fp8_family_test_device()?;
         let weight_values = (0..COLUMNS)
             .map(|column| {
                 if column < GROUP_SIZE {
@@ -2656,7 +2658,7 @@ mod tests {
             dequant.to_vec2::<f32>()?
         };
         let test = {
-            let dev = &Device::new_cuda(0)?;
+            let dev = &crate::utils::fp8_family_test_device()?;
             // Create FP8 weight by first creating on CPU then moving to CUDA
             let weight_cpu = Tensor::ones((5, 7), DType::F8E4M3, &Device::Cpu)?;
             let weight = weight_cpu.to_device(dev)?;
@@ -2758,7 +2760,7 @@ mod tests {
             dequant.to_vec2::<bf16>()?
         };
         let test = {
-            let dev = &Device::new_cuda(0)?;
+            let dev = &crate::utils::fp8_family_test_device()?;
             // Create FP8 weight by first creating on CPU then moving to CUDA
             let weight_cpu = Tensor::ones((5, 5), DType::F8E4M3, &Device::Cpu)?;
             let weight = weight_cpu.to_device(dev)?;
@@ -2823,7 +2825,7 @@ mod tests {
     #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn test_fp8_blockwise_quant_dequant_roundtrip() -> Result<()> {
-        let dev = &Device::new_cuda(0)?;
+        let dev = &crate::utils::fp8_family_test_device()?;
 
         // Create test input
         let input = Tensor::randn(0f32, 2f32, (8, 8), dev)?;
@@ -2873,7 +2875,7 @@ mod tests {
         const K: usize = 256;
         const N: usize = 256;
 
-        let dev = Device::new_cuda(0)?;
+        let dev = crate::utils::fp8_family_test_device()?;
         let weight_values = (0..N * K)
             .map(|index| ((index * 7 + index / K * 13) % 23) as f32 * 0.03 - 0.33)
             .collect::<Vec<_>>();
@@ -2974,7 +2976,7 @@ mod tests {
             Ok(())
         }
 
-        let dev = Device::new_cuda(0)?;
+        let dev = crate::utils::fp8_family_test_device()?;
         let Device::Cuda(cuda_dev) = &dev else {
             unreachable!()
         };
@@ -3150,7 +3152,7 @@ mod tests {
         const N: usize = 256;
         const ROWS: usize = 8;
 
-        let dev = Device::new_cuda(0)?;
+        let dev = crate::utils::fp8_family_test_device()?;
         let Device::Cuda(cuda_dev) = &dev else {
             unreachable!()
         };
@@ -3423,7 +3425,7 @@ mod tests {
             "MISTRALRS_BLOCKWISE_FP8_BENCH_ITERATIONS",
             DEFAULT_ITERATIONS,
         )?;
-        let dev = Device::new_cuda(0)?;
+        let dev = crate::utils::fp8_family_test_device()?;
         println!("shape,m,n,k,quantize_gpu_us,gemm_gpu_us,max_abs_error,warmup,iterations");
 
         for shape in SHAPES {
@@ -3528,7 +3530,7 @@ mod tests {
             "MISTRALRS_BLOCKWISE_FP8_BENCH_ITERATIONS",
             DEFAULT_ITERATIONS,
         )?;
-        let dev = Device::new_cuda(0)?;
+        let dev = crate::utils::fp8_family_test_device()?;
         println!("shape,m,n,k,fused_gpu_us,max_abs_error,warmup,iterations");
 
         for shape in SHAPES {
@@ -3629,7 +3631,7 @@ mod tests {
             "MISTRALRS_BLOCKWISE_FP8_BENCH_ITERATIONS",
             DEFAULT_ITERATIONS,
         )?;
-        let dev = Device::new_cuda(0)?;
+        let dev = crate::utils::fp8_family_test_device()?;
         let Device::Cuda(cuda_dev) = &dev else {
             unreachable!()
         };
@@ -3776,7 +3778,7 @@ mod tests {
         const N: usize = 128;
         const ROWS: usize = 8;
 
-        let dev = Device::new_cuda(0)?;
+        let dev = crate::utils::fp8_family_test_device()?;
         let weight = Tensor::randn(0f32, 0.25, (N, K), &dev)?.to_dtype(DType::BF16)?;
         let input = Tensor::randn(0f32, 0.25, (ROWS, K), &dev)?.to_dtype(DType::BF16)?;
         let (weight_q, weight_scales) = ops::fp8_blockwise_quantize(&weight, vec![128, 128])?;

@@ -228,3 +228,33 @@ macro_rules! nv_u32_ptrs {
 }
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 pub(crate) use nv_u32_ptrs;
+
+/// Loud degradation for dual-build NVIDIA-role handlers whose kernels are
+/// hipcc-built companion entries: they cannot take a CUDA stream, so the
+/// handler bails with an explicit message instead of launching mismatched
+/// kernels (which abort the process inside the companion's CUDA_CHECK).
+/// Expands to nothing outside dual builds.
+#[macro_export]
+macro_rules! dual_cuda_role_bail {
+    ($what:literal) => {
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        if true {
+            return Err(candle_core::Error::msg(concat!(
+                $what,
+                " serve the AMD role in dual builds; NVIDIA-role kernels are a companion follow-up"
+            )));
+        }
+    };
+}
+
+/// Test-only: the device whose fp8-family kernels are wired in this build
+/// shape (the AMD role in dual builds, the compiled vendor otherwise).
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub fn fp8_family_test_device() -> candle_core::Result<candle_core::Device> {
+    candle_core::Device::new_hip(0)
+}
+
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+pub fn fp8_family_test_device() -> candle_core::Result<candle_core::Device> {
+    candle_core::Device::new_cuda(0)
+}
