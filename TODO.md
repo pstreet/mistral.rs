@@ -1382,7 +1382,40 @@ P3 = polish, Deferred = do not do on RDNA.
       GRAPHS: the 27B's capture invalidation blocker is GONE - it
       now reaches capture; the remaining role-wide graphs blocker
       is the 16B's wild-read (the pointer-correlation
-      instrumentation remains the next diagnostic). The twin's
+      instrumentation remains the next diagnostic).
+      GRAPHS POINTER-CORRELATION INSTRUMENTATION (2026-10-04): built the
+      full diagnostic stack, then chased the fault through eleven probes to
+      a driver-side prime suspect. Durable keepers (committed): the
+      engine-level census (MISTRALRS_GRAPH_PTR_CENSUS, zero-cost off) with
+      capture-time VA map + pre-first-launch sweep (moved VA bails loud
+      naming the buffer) + U32 content dumps + SIGSEGV auto-namer; seven
+      dual capture probes (rope eager chain, bmul/cublas/companion/htod
+      relaunch, 400-node, double-instantiate pinning the 801 single-use
+      rule). All green - every isolated mechanism replays bit-exact.
+      FINDINGS: sanitizer-precise wild read (bmul_bf16, dense, base VA
+      ~8.5GB from any live allocation, first launch, reads-only); complete
+      bake audit (720 capture bakes incl. all 192 k-rope-256, kernel sig
+      matches, arg lifetimes sound, no custom launchers, no graph edits);
+      sweep passes + staged content byte-identical; /proc/maps puts the
+      fault region outside all reservations incl. the pool's 95GB window
+      (garbage-from-birth, deterministic 0x1cd2 region across runs).
+      ELIMINATED along the way: trim (twice, incl. a no-trim sanitizer
+      fault), hit-state/prefix-cache (confounded by 1-token prefill-only
+      requests that never launch), relaunch-count, pool churn/pressure,
+      memfree nodes, double-ownership (reframed: nothing capture-malloc'd
+      drops post-capture). 27B graphs: separate earlier blocker (hybrid
+      checkpoint restore from_vec inside the capture window invalidates;
+      needs hoisting, model-side). DETOURS REVERTED: keepalive-drop
+      interposition (manual Drop on CudaStorage segfaults; derived clean),
+      temp graphs flip + lookahead neuter + candle bake log + rope VA log.
+      REMAINING SUSPECT: driver instantiate-patching of malloc nodes at
+      model scale (unprobed, unauditable on 610.57); arena port (no malloc
+      nodes) is the structural fix. POLICY CHANGE (user-ordered): all
+      shapes supported (cpu/rocm/cuda + comma combinations + future
+      vulkan, no compounds); AGENTS.md updated, three-shape rule retired.
+      cuda-alone is structurally broken (pre-existing candle-upstream-cudarc
+      API drift: CudaGraphExec et al.) - revival is its own queued slice,
+      current work closes first. The twin's
       inherited duplicate test module was deleted (tests live in
       gdn.rs where they run against the serving role). The dual quant suite must be run with fp8/f8q8 filtered
       until then.

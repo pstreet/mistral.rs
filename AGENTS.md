@@ -84,7 +84,7 @@ You should also look for a model.safetensors.index.json file for the model at ha
   cargo test --workspace
   ```
 
-You should *always* run `cargo check`/`cargo c` before returning to make sure code compiles. If code does not compile, only make edits. For GPU-facing changes, check all three shapes (no features, `--features rocm`, `--features cuda,rocm`): `cargo check` never links, so also build or test the binary shape you touched.
+You should *always* run `cargo check`/`cargo c` before returning to make sure code compiles. If code does not compile, only make edits. For GPU-facing changes, check every shape (no features, `--features rocm`, `--features cuda`, `--features cuda,rocm`): `cargo check` never links, so also build or test the binary shape you touched.
 
 Avoid returning TODOs.
 
@@ -141,11 +141,13 @@ The CI pipeline is defined in `.github/workflows/ci.yml` and includes:
 - GPU policy code (kernel selection, dispatch tables, capability gates) matches
   on `candle_core::GpuArch`, never raw compute-capability ints; the
   HIP-synthetic `cc` encoding (gfx1151 -> 1150) lives only at the kernel
-  bridge where the llama.cpp-derived C launchers consume it. Build shapes:
-  default (CPU-only), `rocm` (AMD, the prod shape), `cuda` (NVIDIA, not
-  maintained in this fork), and `cuda,rocm` (both features together: the AMD role serves - all C
-  kernels are hipcc-built - and NVIDIA access is gated on cudarc's
-  `is_culib_present()` probe). Every GPU build is portable: drivers
+  bridge where the llama.cpp-derived C launchers consume it. Supported
+  shapes: default (CPU-only), `rocm` (AMD, the prod shape), `cuda`
+  (NVIDIA), and any combination by plain comma separation (`cuda,rocm`
+  serves both roles, with NVIDIA access gated on cudarc's
+  `is_culib_present()` probe; a future `vulkan` backend adds
+  `--features rocm,cuda,vulkan` with no new compounds). No compound feature
+  names. Every GPU build is portable: drivers
   resolve via dlopen and kernel sets load from companion libraries, all
   probe-gated, so the binary starts with no GPU runtimes installed.
 - Update `/docs/src/content/docs/` and examples when adding features or breaking changes.

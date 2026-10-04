@@ -1918,6 +1918,162 @@ mod tensor_rope_tests {
 }
 
 #[cfg(test)]
+mod dual_cuda_capture_tests {
+    use super::*;
+
+    fn tensor_va(
+        t: &candle_core::Tensor,
+        stream: &candle_core::cuda_backend::cudarc::driver::CudaStream,
+    ) -> Result<(u64, usize)> {
+        use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+        let (storage, layout) = t.storage_and_layout();
+        let bytes = t.elem_count() * t.dtype().size_in_bytes();
+        let base: u64 = match &*storage {
+            candle_core::Storage::Cuda(s) => match t.dtype() {
+                candle_core::DType::U8 => {
+                    let (ptr, _guard) = s.as_cuda_slice::<u8>()?.device_ptr(stream);
+                    ptr
+                }
+                candle_core::DType::U32 => {
+                    let (ptr, _guard) = s.as_cuda_slice::<u32>()?.device_ptr(stream);
+                    ptr
+                }
+                candle_core::DType::F16 => {
+                    let (ptr, _guard) = s.as_cuda_slice::<half::f16>()?.device_ptr(stream);
+                    ptr
+                }
+                candle_core::DType::BF16 => {
+                    let (ptr, _guard) = s.as_cuda_slice::<half::bf16>()?.device_ptr(stream);
+                    ptr
+                }
+                candle_core::DType::F32 => {
+                    let (ptr, _guard) = s.as_cuda_slice::<f32>()?.device_ptr(stream);
+                    ptr
+                }
+                candle_core::DType::I64 => {
+                    let (ptr, _guard) = s.as_cuda_slice::<i64>()?.device_ptr(stream);
+                    ptr
+                }
+                dt => candle_core::bail!("probe census lacks dtype {dt:?}"),
+            },
+            _ => candle_core::bail!("probe tensor must be CUDA"),
+        };
+        Ok((base + layout.start_offset() as u64, bytes))
+    }
+
+    /// Capture probe for the NVIDIA-role rope path (eager index_select +
+    /// to_dtype + narrow + broadcast bmul + cat). Green exonerates the op
+    /// family; red would bisect within the chain.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[test]
+    #[ignore = "requires the dual CUDA role (3090)"]
+    fn rope_eager_chain_capture_launch_matches_eager() -> Result<()> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+        use candle_core::{DType, Device, Tensor};
+
+        let dev = Device::new_cuda(0)?;
+        // k-side decode shapes: (batch, kv_heads, seq, head_dim) with
+        // partial rotary (rot < head_dim), matching the 256-thread bmul
+        // (1 token x 4 KV heads x rot 64).
+        let (batch, kv_heads, seq, head_dim, rot) = (1usize, 4, 1, 128, 64);
+        let k_host: Vec<f32> = (0..batch * kv_heads * seq * head_dim)
+            .map(|i| ((i * 37) % 19) as f32 * 0.043 - 0.4)
+            .collect();
+        let k = Tensor::from_vec(k_host, (batch, kv_heads, seq, head_dim), &Device::Cpu)?
+            .to_dtype(DType::BF16)?
+            .to_device(&dev)?;
+        // cos/sin caches (f32, as built by the loader) over 512 positions.
+        let cache_len = 512usize;
+        let cos_host: Vec<f32> = (0..cache_len * rot)
+            .map(|i| ((i % cache_len) as f32 * 0.02).cos())
+            .collect();
+        let sin_host: Vec<f32> = (0..cache_len * rot)
+            .map(|i| ((i % cache_len) as f32 * 0.02).sin())
+            .collect();
+        let cos = Tensor::from_vec(cos_host, (cache_len, rot), &Device::Cpu)?.to_device(&dev)?;
+        let sin = Tensor::from_vec(sin_host, (cache_len, rot), &Device::Cpu)?.to_device(&dev)?;
+        let positions = Tensor::from_vec(vec![7u32], 1, &dev)?;
+
+        let cuda_dev = match &dev {
+            Device::Cuda(d) => d,
+            _ => candle_core::bail!("expected cuda device"),
+        };
+        let stream = cuda_dev.cuda_stream();
+        for (label, t) in [
+            ("k", &k),
+            ("cos", &cos),
+            ("sin", &sin),
+            ("positions", &positions),
+        ] {
+            let (ptr, bytes) = tensor_va(t, &stream)?;
+            eprintln!("[rope-probe] input {label}: ptr=0x{ptr:x} bytes={bytes}");
+        }
+
+        let run = |k: &Tensor| -> Result<Tensor> {
+            tensor_apply_rotary_q(k, &cos, &sin, Some(&positions), true)
+        };
+        // Warmup under the htod guard populates the param cache, matching
+        // the engine's warmup-then-capture order.
+        let _htod_guard = match &dev {
+            Device::Cuda(d) => Some(d.enable_cuda_graph_htod_cache()),
+            _ => None,
+        };
+        let eager = run(&k)?.flatten_all()?.to_dtype(DType::F32)?;
+        let eager_vals = eager.to_vec1::<f32>()?;
+        dev.synchronize()?;
+
+        stream
+            .context()
+            .bind_to_thread()
+            .map_err(candle_core::Error::wrap)?;
+        unsafe { stream.context().disable_event_tracking() };
+        stream
+            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .map_err(candle_core::Error::wrap)?;
+        let replayed = run(&k)?.flatten_all()?;
+        let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut exec: *mut core::ffi::c_void = std::ptr::null_mut();
+        unsafe {
+            let r =
+                sys::cuStreamEndCapture(stream.cu_stream(), core::ptr::from_mut(&mut graph).cast());
+            assert_eq!(r as i32, 0, "end capture");
+            let r = sys::cuGraphInstantiateWithFlags(
+                core::ptr::from_mut(&mut exec).cast(),
+                graph.cast(),
+                1,
+            );
+            assert_eq!(r as i32, 0, "instantiate");
+            let r = sys::cuGraphUpload(exec.cast(), stream.cu_stream());
+            assert_eq!(r as i32, 0, "upload");
+            let r = sys::cuGraphLaunch(exec.cast(), stream.cu_stream());
+            assert_eq!(r as i32, 0, "launch");
+            stream.context().enable_event_tracking();
+        }
+        dev.synchronize()?;
+
+        let (out_ptr, out_bytes) = tensor_va(&replayed, &stream)?;
+        eprintln!("[rope-probe] output: ptr=0x{out_ptr:x} bytes={out_bytes}");
+        let got = replayed.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+        let bad: Vec<(usize, f32, f32)> = eager_vals
+            .iter()
+            .zip(got.iter())
+            .enumerate()
+            .filter(|(_, (x, y))| (**x - **y).abs() > 1e-2)
+            .map(|(i, (x, y))| (i, *x, *y))
+            .collect();
+        eprintln!(
+            "[rope-probe] mismatching: {} of {}; largest: {:?}",
+            bad.len(),
+            eager_vals.len(),
+            bad.iter()
+                .max_by(|x, y| (x.1 - x.2).abs().partial_cmp(&(y.1 - y.2).abs()).unwrap())
+        );
+        assert!(bad.is_empty(), "rope-eager-chain replay corrupt");
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod dual_hip_tests {
     use super::*;
 

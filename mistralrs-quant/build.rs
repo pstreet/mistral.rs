@@ -524,7 +524,7 @@ fn main() -> Result<(), String> {
             );
         }
 
-        Ok(())
+        Ok::<(), String>(());
     }
 
     #[cfg(feature = "metal")]

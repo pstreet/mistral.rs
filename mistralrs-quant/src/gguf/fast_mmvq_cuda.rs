@@ -499,7 +499,9 @@ pub fn fused_glu(
         candle_core::bail!("fast_mmvq fused_glu: up weight must live on the CUDA role");
     };
     if dev.id() != up_dev.id() {
-        candle_core::bail!("fast_mmvq fused_glu: gate/up weights are on different CUDA-role devices");
+        candle_core::bail!(
+            "fast_mmvq fused_glu: gate/up weights are on different CUDA-role devices"
+        );
     }
     if !xs.device().same_device(&gate_w.device()) {
         candle_core::bail!("fast_mmvq fused_glu: input and weights are on different devices");
@@ -1065,7 +1067,10 @@ mod tests {
             _ => candle_core::bail!("expected cuda device"),
         };
         let stream = cuda_dev.cuda_stream();
-        stream.context().bind_to_thread().map_err(candle_core::Error::wrap)?;
+        stream
+            .context()
+            .bind_to_thread()
+            .map_err(candle_core::Error::wrap)?;
         unsafe { stream.context().disable_event_tracking() };
 
         let capture = |xs: &Tensor| -> Result<(Tensor, *mut core::ffi::c_void)> {
@@ -1102,7 +1107,11 @@ mod tests {
         let max_diff = |a: &Tensor, b: &Tensor| -> Result<f32> {
             let av = a.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
             let bv = b.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
-            Ok(av.iter().zip(&bv).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max))
+            Ok(av
+                .iter()
+                .zip(&bv)
+                .map(|(x, y)| (x - y).abs())
+                .fold(0f32, f32::max))
         };
 
         // Precapture order: bucket A (batch 1) then bucket B (batch 2),
@@ -1127,14 +1136,20 @@ mod tests {
         assert!(d_b < 1e-3, "B corrupted after its own launch: {d_b}");
         let d_a = max_diff(&out_a, &eager_a)?;
         eprintln!("[collision-probe] A after launch B: {d_a}");
-        assert!(d_a < 1e-3, "COLLISION: A's output stomped by B's launch: {d_a}");
+        assert!(
+            d_a < 1e-3,
+            "COLLISION: A's output stomped by B's launch: {d_a}"
+        );
 
         // And the reverse direction.
         launch(exec_a)?;
         dev.synchronize()?;
         let d_b2 = max_diff(&out_b, &eager_b)?;
         eprintln!("[collision-probe] B after launch A: {d_b2}");
-        assert!(d_b2 < 1e-3, "COLLISION: B's output stomped by A's launch: {d_b2}");
+        assert!(
+            d_b2 < 1e-3,
+            "COLLISION: B's output stomped by A's launch: {d_b2}"
+        );
         Ok(())
     }
 
@@ -1160,7 +1175,9 @@ mod tests {
             .to_device(&dev)?;
         let x_host: Vec<f32> = (0..NCOLS).map(|i| (i as f32 * 0.01).sin()).collect();
         let xs = Tensor::from_vec(x_host, (1, 1, NCOLS), &dev)?.to_dtype(DType::BF16)?;
-        let scale_host: Vec<f32> = (0..NROWS).map(|i| 1.0 + (i as f32 * 0.001).cos() * 0.1).collect();
+        let scale_host: Vec<f32> = (0..NROWS)
+            .map(|i| 1.0 + (i as f32 * 0.001).cos() * 0.1)
+            .collect();
         let scale = Tensor::from_vec(scale_host, (1, 1, NROWS), &dev)?.to_dtype(DType::BF16)?;
 
         let _htod_guard = match &dev {
@@ -1181,7 +1198,10 @@ mod tests {
             _ => candle_core::bail!("expected cuda device"),
         };
         let stream = cuda_dev.cuda_stream();
-        stream.context().bind_to_thread().map_err(candle_core::Error::wrap)?;
+        stream
+            .context()
+            .bind_to_thread()
+            .map_err(candle_core::Error::wrap)?;
         unsafe { stream.context().disable_event_tracking() };
         stream
             .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
@@ -1190,10 +1210,8 @@ mod tests {
         let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
         let mut exec: *mut core::ffi::c_void = std::ptr::null_mut();
         unsafe {
-            let r = sys::cuStreamEndCapture(
-                stream.cu_stream(),
-                core::ptr::from_mut(&mut graph).cast(),
-            );
+            let r =
+                sys::cuStreamEndCapture(stream.cu_stream(), core::ptr::from_mut(&mut graph).cast());
             assert_eq!(r as i32, 0, "end capture");
             let r = sys::cuGraphInstantiateWithFlags(
                 core::ptr::from_mut(&mut exec).cast(),
@@ -1226,6 +1244,639 @@ mod tests {
                 .max_by(|x, y| (x.1 - x.2).abs().partial_cmp(&(y.1 - y.2).abs()).unwrap())
         );
         assert!(bad.is_empty(), "cublas-in-capture replay corrupt");
+        Ok(())
+    }
+
+    /// Relaunch probe: temp-allocating chain (malloc + memfree nodes) under
+    /// capture with engine-exact flags, launched twice plus once more after
+    /// pool churn. Green means malloc-node relaunch is sound at small scale.
+    #[test]
+    #[ignore = "requires the dual CUDA role (3090)"]
+    fn bmul_malloc_relaunch_stability() -> Result<()> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+
+        const N: usize = 256;
+
+        let dev = Device::new_cuda(0)?;
+        let x_host: Vec<f32> = (0..N)
+            .map(|i| ((i as f32 * 0.7).sin() * 0.5).abs())
+            .collect();
+        let s_host: Vec<f32> = (0..N)
+            .map(|i| 1.0 + (i as f32 * 0.02).cos() * 0.1)
+            .collect();
+        let x = Tensor::from_vec(x_host, (1, 1, N), &dev)?.to_dtype(DType::BF16)?;
+        let scale = Tensor::from_vec(s_host, (1, 1, N), &dev)?.to_dtype(DType::BF16)?;
+
+        // Chain with capture-time temps (malloc nodes) AND a dropped temp
+        // (memfree node), mirroring the eager rope chain's allocation
+        // pattern inside the model capture.
+        let run = || -> Result<Tensor> {
+            let t1 = x.broadcast_mul(&scale)?;
+            let cvt = t1.to_dtype(DType::F32)?;
+            let t2 = cvt.to_dtype(DType::BF16)?;
+            drop(cvt);
+            t2.broadcast_mul(&scale)
+        };
+
+        let _htod_guard = match &dev {
+            Device::Cuda(d) => Some(d.enable_cuda_graph_htod_cache()),
+            _ => None,
+        };
+        let eager = run()?
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
+        dev.synchronize()?;
+
+        let cuda_dev = match &dev {
+            Device::Cuda(d) => d,
+            _ => candle_core::bail!("expected cuda device"),
+        };
+        let stream = cuda_dev.cuda_stream();
+        stream
+            .context()
+            .bind_to_thread()
+            .map_err(candle_core::Error::wrap)?;
+        unsafe { stream.context().disable_event_tracking() };
+        stream
+            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .map_err(candle_core::Error::wrap)?;
+        let replayed = run()?.flatten_all()?;
+        let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut exec: *mut core::ffi::c_void = std::ptr::null_mut();
+        unsafe {
+            let r =
+                sys::cuStreamEndCapture(stream.cu_stream(), core::ptr::from_mut(&mut graph).cast());
+            assert_eq!(r as i32, 0, "end capture");
+            let r = sys::cuGraphInstantiateWithFlags(
+                core::ptr::from_mut(&mut exec).cast(),
+                graph.cast(),
+                1,
+            );
+            assert_eq!(r as i32, 0, "instantiate");
+            let r = sys::cuGraphUpload(exec.cast(), stream.cu_stream());
+            assert_eq!(r as i32, 0, "upload");
+        }
+
+        let check = |tag: &str| -> Result<()> {
+            unsafe {
+                let r = sys::cuGraphLaunch(exec.cast(), stream.cu_stream());
+                assert_eq!(r as i32, 0, "launch {tag}");
+            }
+            dev.synchronize()?;
+            let got = replayed.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+            let max_diff = eager
+                .iter()
+                .zip(&got)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0f32, f32::max);
+            eprintln!("[relaunch-probe] {tag}: max_diff={max_diff}");
+            assert!(max_diff < 1e-2, "{tag} diverged: {max_diff}");
+            Ok(())
+        };
+
+        check("launch1")?;
+        check("launch2")?;
+
+        // Pool churn between launches: allocate + free several large blocks
+        // (the next request's prefill), then relaunch.
+        {
+            let mut churn = Vec::new();
+            for _ in 0..8 {
+                churn.push(Tensor::zeros((1 << 20,), DType::U8, &dev)?);
+            }
+            dev.synchronize()?;
+            drop(churn);
+            dev.synchronize()?;
+        }
+        check("launch3-after-churn")?;
+
+        // Placement-shift probe: hold GBs DURING the relaunch so the
+        // graph's malloc nodes cannot land on their launch-1 VAs. If a
+        // node baked a concrete VA at upload instead of re-resolving from
+        // its malloc dependency, this relaunch reads stale memory.
+        {
+            let mut hold = Vec::new();
+            for _ in 0..6 {
+                hold.push(Tensor::zeros((512 << 20,), DType::U8, &dev)?);
+            }
+            dev.synchronize()?;
+            check("launch4-under-pressure")?;
+            drop(hold);
+            dev.synchronize()?;
+        }
+        check("launch5-after-release")?;
+
+        unsafe {
+            stream.context().enable_event_tracking();
+        }
+        Ok(())
+    }
+
+    /// cuBLAS relaunch probe: GEMM + temp allocs under capture with
+    /// engine-exact flags, relaunched after GB-scale pool churn.
+    #[test]
+    #[ignore = "requires the dual CUDA role (3090)"]
+    fn cublas_malloc_relaunch_stability() -> Result<()> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+
+        const NROWS: usize = 2048;
+        const NCOLS: usize = 1024;
+
+        let dev = Device::new_cuda(0)?;
+        let w_host: Vec<f32> = (0..NROWS * NCOLS)
+            .map(|i| ((i as f32 * 1.7).sin() * 0.25).abs())
+            .collect();
+        let w = Tensor::from_vec(w_host, (NROWS, NCOLS), &Device::Cpu)?
+            .to_dtype(DType::BF16)?
+            .to_device(&dev)?;
+        let x_host: Vec<f32> = (0..NCOLS).map(|i| (i as f32 * 0.01).sin()).collect();
+        let xs = Tensor::from_vec(x_host, (1, NCOLS), &dev)?.to_dtype(DType::BF16)?;
+        let scale_host: Vec<f32> = (0..NROWS)
+            .map(|i| 1.0 + (i as f32 * 0.001).cos() * 0.1)
+            .collect();
+        let scale = Tensor::from_vec(scale_host, (1, NROWS), &dev)?.to_dtype(DType::BF16)?;
+
+        let run = || -> Result<Tensor> {
+            let mm = xs.matmul(&w.t()?)?;
+            let cvt = mm.to_dtype(DType::F32)?;
+            let back = cvt.to_dtype(DType::BF16)?;
+            drop(cvt);
+            back.broadcast_mul(&scale)
+        };
+
+        let _htod_guard = match &dev {
+            Device::Cuda(d) => Some(d.enable_cuda_graph_htod_cache()),
+            _ => None,
+        };
+        let eager = run()?
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
+        dev.synchronize()?;
+
+        let cuda_dev = match &dev {
+            Device::Cuda(d) => d,
+            _ => candle_core::bail!("expected cuda device"),
+        };
+        let stream = cuda_dev.cuda_stream();
+        stream
+            .context()
+            .bind_to_thread()
+            .map_err(candle_core::Error::wrap)?;
+        unsafe { stream.context().disable_event_tracking() };
+        stream
+            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .map_err(candle_core::Error::wrap)?;
+        let replayed = run()?.flatten_all()?;
+        let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut exec: *mut core::ffi::c_void = std::ptr::null_mut();
+        unsafe {
+            let r =
+                sys::cuStreamEndCapture(stream.cu_stream(), core::ptr::from_mut(&mut graph).cast());
+            assert_eq!(r as i32, 0, "end capture");
+            let r = sys::cuGraphInstantiateWithFlags(
+                core::ptr::from_mut(&mut exec).cast(),
+                graph.cast(),
+                1,
+            );
+            assert_eq!(r as i32, 0, "instantiate");
+            let r = sys::cuGraphUpload(exec.cast(), stream.cu_stream());
+            assert_eq!(r as i32, 0, "upload");
+        }
+
+        let check = |tag: &str| -> Result<()> {
+            unsafe {
+                let r = sys::cuGraphLaunch(exec.cast(), stream.cu_stream());
+                assert_eq!(r as i32, 0, "launch {tag}");
+            }
+            dev.synchronize()?;
+            let got = replayed.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+            let max_diff = eager
+                .iter()
+                .zip(&got)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0f32, f32::max);
+            eprintln!("[cublas-relaunch-probe] {tag}: max_diff={max_diff}");
+            assert!(max_diff < 1e-1, "{tag} diverged: {max_diff}");
+            Ok(())
+        };
+
+        check("launch1")?;
+        {
+            let mut churn = Vec::new();
+            for _ in 0..4 {
+                churn.push(Tensor::zeros((512 << 20,), DType::U8, &dev)?);
+            }
+            dev.synchronize()?;
+            drop(churn);
+            dev.synchronize()?;
+        }
+        check("launch2-after-gb-churn")?;
+
+        unsafe {
+            stream.context().enable_event_tracking();
+        }
+        Ok(())
+    }
+
+    /// Node-count relaunch probe: hundreds of temp-allocating chains in
+    /// one capture, then relaunch. Green means node count is innocent.
+    #[test]
+    #[ignore = "requires the dual CUDA role (3090)"]
+    fn many_node_relaunch_stability() -> Result<()> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+
+        const N: usize = 256;
+        const CHAINS: usize = 400;
+
+        let dev = Device::new_cuda(0)?;
+        let x_host: Vec<f32> = (0..N)
+            .map(|i| ((i as f32 * 0.7).sin() * 0.5).abs())
+            .collect();
+        let s_host: Vec<f32> = (0..N)
+            .map(|i| 1.0 + (i as f32 * 0.02).cos() * 0.1)
+            .collect();
+        let x = Tensor::from_vec(x_host, (1, 1, N), &dev)?.to_dtype(DType::BF16)?;
+        let scale = Tensor::from_vec(s_host, (1, 1, N), &dev)?.to_dtype(DType::BF16)?;
+
+        let run = || -> Result<Tensor> {
+            let mut acc = x.clone();
+            for _ in 0..CHAINS {
+                let t = acc.broadcast_mul(&scale)?;
+                let cvt = t.to_dtype(DType::F32)?;
+                let back = cvt.to_dtype(DType::BF16)?;
+                drop(cvt);
+                drop(t);
+                acc = back.broadcast_mul(&scale)?;
+            }
+            Ok(acc)
+        };
+
+        let _htod_guard = match &dev {
+            Device::Cuda(d) => Some(d.enable_cuda_graph_htod_cache()),
+            _ => None,
+        };
+        let eager = run()?
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
+        dev.synchronize()?;
+
+        let cuda_dev = match &dev {
+            Device::Cuda(d) => d,
+            _ => candle_core::bail!("expected cuda device"),
+        };
+        let stream = cuda_dev.cuda_stream();
+        stream
+            .context()
+            .bind_to_thread()
+            .map_err(candle_core::Error::wrap)?;
+        unsafe { stream.context().disable_event_tracking() };
+        stream
+            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .map_err(candle_core::Error::wrap)?;
+        let replayed = run()?.flatten_all()?;
+        let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut exec: *mut core::ffi::c_void = std::ptr::null_mut();
+        unsafe {
+            let r =
+                sys::cuStreamEndCapture(stream.cu_stream(), core::ptr::from_mut(&mut graph).cast());
+            assert_eq!(r as i32, 0, "end capture");
+            let r = sys::cuGraphInstantiateWithFlags(
+                core::ptr::from_mut(&mut exec).cast(),
+                graph.cast(),
+                1,
+            );
+            assert_eq!(r as i32, 0, "instantiate");
+            let r = sys::cuGraphUpload(exec.cast(), stream.cu_stream());
+            assert_eq!(r as i32, 0, "upload");
+            let r = sys::cuGraphLaunch(exec.cast(), stream.cu_stream());
+            assert_eq!(r as i32, 0, "launch1");
+            let r = sys::cuGraphLaunch(exec.cast(), stream.cu_stream());
+            assert_eq!(r as i32, 0, "launch2");
+            stream.context().enable_event_tracking();
+        }
+        dev.synchronize()?;
+
+        let got = replayed.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+        let max_diff = eager
+            .iter()
+            .zip(&got)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0f32, f32::max);
+        eprintln!("[many-node-probe] after 2 launches: max_diff={max_diff}");
+        assert!(max_diff < 1e-1, "many-node relaunch diverged: {max_diff}");
+        Ok(())
+    }
+
+    /// Double-instantiate probe: a malloc-node graph can only be
+    /// instantiated once on this driver (second instantiate returns
+    /// CUDA_ERROR_NOT_SUPPORTED). Pins that restriction so the engine
+    /// never depends on re-instantiation; exec A must stay healthy.
+    #[test]
+    #[ignore = "requires the dual CUDA role (3090)"]
+    fn double_instantiate_stability() -> Result<()> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+
+        const N: usize = 256;
+        const CHAINS: usize = 200;
+
+        let dev = Device::new_cuda(0)?;
+        let x_host: Vec<f32> = (0..N)
+            .map(|i| ((i as f32 * 0.7).sin() * 0.5).abs())
+            .collect();
+        let s_host: Vec<f32> = (0..N)
+            .map(|i| 1.0 + (i as f32 * 0.02).cos() * 0.1)
+            .collect();
+        let x = Tensor::from_vec(x_host, (1, 1, N), &dev)?.to_dtype(DType::BF16)?;
+        let scale = Tensor::from_vec(s_host, (1, 1, N), &dev)?.to_dtype(DType::BF16)?;
+
+        let run = || -> Result<Tensor> {
+            let mut acc = x.clone();
+            for _ in 0..CHAINS {
+                let t = acc.broadcast_mul(&scale)?;
+                let cvt = t.to_dtype(DType::F32)?;
+                let back = cvt.to_dtype(DType::BF16)?;
+                drop(cvt);
+                drop(t);
+                acc = back.broadcast_mul(&scale)?;
+            }
+            Ok(acc)
+        };
+
+        let _htod_guard = match &dev {
+            Device::Cuda(d) => Some(d.enable_cuda_graph_htod_cache()),
+            _ => None,
+        };
+        let eager = run()?
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
+        dev.synchronize()?;
+
+        let cuda_dev = match &dev {
+            Device::Cuda(d) => d,
+            _ => candle_core::bail!("expected cuda device"),
+        };
+        let stream = cuda_dev.cuda_stream();
+        stream
+            .context()
+            .bind_to_thread()
+            .map_err(candle_core::Error::wrap)?;
+        unsafe { stream.context().disable_event_tracking() };
+        stream
+            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .map_err(candle_core::Error::wrap)?;
+        let replayed = run()?.flatten_all()?;
+        let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut exec_a: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut exec_b: *mut core::ffi::c_void = std::ptr::null_mut();
+        unsafe {
+            let r =
+                sys::cuStreamEndCapture(stream.cu_stream(), core::ptr::from_mut(&mut graph).cast());
+            assert_eq!(r as i32, 0, "end capture");
+            let r = sys::cuGraphInstantiateWithFlags(
+                core::ptr::from_mut(&mut exec_a).cast(),
+                graph.cast(),
+                1,
+            );
+            assert_eq!(r as i32, 0, "instantiate A");
+            let r = sys::cuGraphInstantiateWithFlags(
+                core::ptr::from_mut(&mut exec_b).cast(),
+                graph.cast(),
+                1,
+            );
+            // Single-use instantiate: the second instantiate of a
+            // malloc-node graph is NOT_SUPPORTED on this driver.
+            assert_eq!(r as i32, 801, "instantiate B must fail with NOT_SUPPORTED");
+            let r = sys::cuGraphUpload(exec_a.cast(), stream.cu_stream());
+            assert_eq!(r as i32, 0, "upload A");
+        }
+
+        let check = |tag: &str, exec: *mut core::ffi::c_void| -> Result<()> {
+            unsafe {
+                let r = sys::cuGraphLaunch(exec.cast(), stream.cu_stream());
+                assert_eq!(r as i32, 0, "launch {tag}");
+            }
+            dev.synchronize()?;
+            let got = replayed.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+            let max_diff = eager
+                .iter()
+                .zip(&got)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0f32, f32::max);
+            eprintln!("[double-instantiate-probe] {tag}: max_diff={max_diff}");
+            assert!(max_diff < 1e-1, "{tag} diverged: {max_diff}");
+            Ok(())
+        };
+
+        check("exec-A", exec_a)?;
+
+        unsafe {
+            stream.context().enable_event_tracking();
+        }
+        Ok(())
+    }
+
+    /// Companion-relaunch probe: MMVQ companion + bmul chain under
+    /// capture with engine-exact flags, relaunched twice.
+    #[test]
+    #[ignore = "requires the dual CUDA role (3090)"]
+    fn companion_mmvq_relaunch_stability() -> Result<()> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+
+        const NROWS: usize = 256;
+        const NCOLS: usize = 512;
+
+        let dev = Device::new_cuda(0)?;
+        let host: Vec<f32> = (0..NROWS * NCOLS)
+            .map(|i| ((i as f32 * 0.7).sin() * 0.5).abs())
+            .collect();
+        let w_cpu = Tensor::from_vec(host, (NROWS, NCOLS), &Device::Cpu)?;
+        let w = QTensor::quantize_onto(&w_cpu, GgmlDType::Q4K, &dev)?;
+
+        let x_host: Vec<f32> = (0..NCOLS).map(|i| (i as f32 * 0.01).sin()).collect();
+        let xs = Tensor::from_vec(x_host, (1, 1, NCOLS), &dev)?.to_dtype(DType::BF16)?;
+        let cos_host: Vec<f32> = (0..NROWS).map(|i| (i as f32 * 0.02).cos() * 0.5).collect();
+        let cos = Tensor::from_vec(cos_host, (1, 4, 64), &dev)?.to_dtype(DType::BF16)?;
+
+        let run = || -> Result<Tensor> {
+            let k = plain(&w, &xs)?;
+            let k4 = k.reshape((1, 4, 64))?;
+            let m = (k4 * &cos)?;
+            let cvt = m.to_dtype(DType::F32)?;
+            let back = cvt.to_dtype(DType::BF16)?;
+            drop(cvt);
+            back.reshape((1, 1, NROWS))
+        };
+
+        let _htod_guard = match &dev {
+            Device::Cuda(d) => Some(d.enable_cuda_graph_htod_cache()),
+            _ => None,
+        };
+        let eager = run()?
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
+        dev.synchronize()?;
+
+        let cuda_dev = match &dev {
+            Device::Cuda(d) => d,
+            _ => candle_core::bail!("expected cuda device"),
+        };
+        let stream = cuda_dev.cuda_stream();
+        stream
+            .context()
+            .bind_to_thread()
+            .map_err(candle_core::Error::wrap)?;
+        unsafe { stream.context().disable_event_tracking() };
+        stream
+            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .map_err(candle_core::Error::wrap)?;
+        let replayed = run()?.flatten_all()?;
+        let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut exec: *mut core::ffi::c_void = std::ptr::null_mut();
+        unsafe {
+            let r =
+                sys::cuStreamEndCapture(stream.cu_stream(), core::ptr::from_mut(&mut graph).cast());
+            assert_eq!(r as i32, 0, "end capture");
+            let r = sys::cuGraphInstantiateWithFlags(
+                core::ptr::from_mut(&mut exec).cast(),
+                graph.cast(),
+                1,
+            );
+            assert_eq!(r as i32, 0, "instantiate");
+            let r = sys::cuGraphUpload(exec.cast(), stream.cu_stream());
+            assert_eq!(r as i32, 0, "upload");
+        }
+
+        let check = |tag: &str| -> Result<()> {
+            unsafe {
+                let r = sys::cuGraphLaunch(exec.cast(), stream.cu_stream());
+                assert_eq!(r as i32, 0, "launch {tag}");
+            }
+            dev.synchronize()?;
+            let got = replayed.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+            let max_diff = eager
+                .iter()
+                .zip(&got)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0f32, f32::max);
+            eprintln!("[companion-relaunch-probe] {tag}: max_diff={max_diff}");
+            assert!(max_diff < 1e-1, "{tag} diverged: {max_diff}");
+            Ok(())
+        };
+
+        check("launch1")?;
+        check("launch2")?;
+
+        unsafe {
+            stream.context().enable_event_tracking();
+        }
+        Ok(())
+    }
+
+    /// htod-memcpy probe: htod copy into a capture temp (memcpy dest =
+    /// malloc VA) under capture with engine-exact flags, relaunched with
+    /// rewritten staging. Green exonerates the memcpy patch class.
+    #[test]
+    #[ignore = "requires the dual CUDA role (3090)"]
+    fn htod_memcpy_relaunch_stability() -> Result<()> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+
+        const N: usize = 256;
+
+        let dev = Device::new_cuda(0)?;
+        let x_host: Vec<f32> = (0..N)
+            .map(|i| ((i as f32 * 0.7).sin() * 0.5).abs())
+            .collect();
+        let s_host: Vec<f32> = (0..N)
+            .map(|i| 1.0 + (i as f32 * 0.02).cos() * 0.1)
+            .collect();
+        let x = Tensor::from_vec(x_host, (1, 1, N), &dev)?.to_dtype(DType::BF16)?;
+
+        // Host staging buffer, mimicking the engine's pinned host staging:
+        // fresh host data per launch (replay uploads new values).
+        let mut staging = s_host.clone();
+
+        let run_once = |staging: &[f32]| -> Result<Tensor> {
+            let scale = Tensor::from_vec(staging.to_vec(), (1, 1, N), &Device::Cpu)?
+                .to_dtype(DType::BF16)?
+                .to_device(&dev)?;
+            let t = x.broadcast_mul(&scale)?;
+            drop(scale);
+            t.broadcast_mul(&x)
+        };
+
+        let _htod_guard = match &dev {
+            Device::Cuda(d) => Some(d.enable_cuda_graph_htod_cache()),
+            _ => None,
+        };
+        let eager = run_once(&staging)?
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
+        dev.synchronize()?;
+
+        let cuda_dev = match &dev {
+            Device::Cuda(d) => d,
+            _ => candle_core::bail!("expected cuda device"),
+        };
+        let stream = cuda_dev.cuda_stream();
+        stream
+            .context()
+            .bind_to_thread()
+            .map_err(candle_core::Error::wrap)?;
+        unsafe { stream.context().disable_event_tracking() };
+        stream
+            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .map_err(candle_core::Error::wrap)?;
+        let replayed = run_once(&staging)?.flatten_all()?;
+        let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut exec: *mut core::ffi::c_void = std::ptr::null_mut();
+        unsafe {
+            let r =
+                sys::cuStreamEndCapture(stream.cu_stream(), core::ptr::from_mut(&mut graph).cast());
+            assert_eq!(r as i32, 0, "end capture");
+            let r = sys::cuGraphInstantiateWithFlags(
+                core::ptr::from_mut(&mut exec).cast(),
+                graph.cast(),
+                1,
+            );
+            assert_eq!(r as i32, 0, "instantiate");
+            let r = sys::cuGraphUpload(exec.cast(), stream.cu_stream());
+            assert_eq!(r as i32, 0, "upload");
+        }
+
+        let check = |tag: &str| -> Result<()> {
+            unsafe {
+                let r = sys::cuGraphLaunch(exec.cast(), stream.cu_stream());
+                assert_eq!(r as i32, 0, "launch {tag}");
+            }
+            dev.synchronize()?;
+            let got = replayed.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+            let max_diff = eager
+                .iter()
+                .zip(&got)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0f32, f32::max);
+            eprintln!("[htod-relaunch-probe] {tag}: max_diff={max_diff}");
+            assert!(max_diff < 1e-1, "{tag} diverged: {max_diff}");
+            Ok(())
+        };
+
+        check("launch1")?;
+        // Rewrite the staging buffer (new replay values) and relaunch:
+        // the memcpy node must re-read the host pointer, not a stale VA.
+        for v in staging.iter_mut() {
+            *v = -*v;
+        }
+        check("launch2-new-staging")?;
+
+        unsafe {
+            stream.context().enable_event_tracking();
+        }
         Ok(())
     }
 
@@ -1276,7 +1927,10 @@ mod tests {
             _ => candle_core::bail!("expected cuda device"),
         };
         let stream = cuda_dev.cuda_stream();
-        stream.context().bind_to_thread().map_err(candle_core::Error::wrap)?;
+        stream
+            .context()
+            .bind_to_thread()
+            .map_err(candle_core::Error::wrap)?;
 
         // Mirror the engine's pool guard exactly: release threshold u64::MAX
         // plus the three reuse attributes on the device mempool, active for
@@ -1315,10 +1969,8 @@ mod tests {
         let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
         let mut exec: *mut core::ffi::c_void = std::ptr::null_mut();
         unsafe {
-            let r = sys::cuStreamEndCapture(
-                stream.cu_stream(),
-                core::ptr::from_mut(&mut graph).cast(),
-            );
+            let r =
+                sys::cuStreamEndCapture(stream.cu_stream(), core::ptr::from_mut(&mut graph).cast());
             assert_eq!(r as i32, 0, "end capture");
             let r = sys::cuGraphInstantiateWithFlags(
                 core::ptr::from_mut(&mut exec).cast(),
@@ -1351,7 +2003,11 @@ mod tests {
             a.len(),
             &sorted[..sorted.len().min(8)]
         );
-        let max_diff = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max);
+        let max_diff = a
+            .iter()
+            .zip(&b)
+            .map(|(x, y)| (x - y).abs())
+            .fold(0f32, f32::max);
         assert!(max_diff < 1e-3, "eager vs replay diff {max_diff}");
         Ok(())
     }
@@ -1404,9 +2060,21 @@ mod tests {
     #[test]
     fn hip_mmvq_fused_qkv_matches_plains() -> Result<()> {
         let device = Device::new_cuda(0)?;
-        let q = QTensor::quantize_onto(&patterned((384, HIDDEN), 11, 0.03)?, GgmlDType::Q4K, &device)?;
-        let k = QTensor::quantize_onto(&patterned((256, HIDDEN), 29, 0.03)?, GgmlDType::Q4K, &device)?;
-        let v = QTensor::quantize_onto(&patterned((128, HIDDEN), 47, 0.03)?, GgmlDType::Q4K, &device)?;
+        let q = QTensor::quantize_onto(
+            &patterned((384, HIDDEN), 11, 0.03)?,
+            GgmlDType::Q4K,
+            &device,
+        )?;
+        let k = QTensor::quantize_onto(
+            &patterned((256, HIDDEN), 29, 0.03)?,
+            GgmlDType::Q4K,
+            &device,
+        )?;
+        let v = QTensor::quantize_onto(
+            &patterned((128, HIDDEN), 47, 0.03)?,
+            GgmlDType::Q4K,
+            &device,
+        )?;
         let xs = patterned((1, 2, 2, HIDDEN), 3, 0.2)?
             .to_dtype(DType::BF16)?
             .to_device(&device)?;

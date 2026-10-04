@@ -880,6 +880,484 @@ fn copy_state_indices(
     Ok(())
 }
 
+// Pointer-correlation census for the NVIDIA-role graphs crash (all opt-in
+// via MISTRALRS_GRAPH_PTR_CENSUS, zero behavior change when unset): record
+// every graph-managed buffer at capture as (name, device, ptr, bytes), and
+// re-verify entry-held buffers before first launch (a moved VA bails loudly
+// naming the buffer instead of segfaulting). Driver node inventory segfaults
+// on this driver, so the correlation stays engine-level; the SIGSEGV handler
+// below names the census allocation containing any fault VA, then re-raises.
+
+/// One census row: the capture-time VA range of a graph-managed buffer.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GraphPtrRecord {
+    pub(crate) name: &'static str,
+    pub(crate) device: DeviceLocation,
+    pub(crate) ptr: u64,
+    pub(crate) bytes: u64,
+}
+
+pub(crate) fn graph_ptr_census_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("MISTRALRS_GRAPH_PTR_CENSUS").is_ok())
+}
+
+/// Best-effort device VA of a tensor's first byte (None for CPU, empty, or
+/// non-tracked dtypes). Dual-aware: the CUDA arm serves the NVIDIA role,
+/// the hip arm the AMD role. Read-only: only the VA is observed.
+pub(crate) fn graph_tensor_va(t: &Tensor) -> candle_core::Result<Option<(u64, u64)>> {
+    use candle_core::{DType, Device, Storage};
+    let bytes = t.elem_count() * t.dtype().size_in_bytes();
+    if bytes == 0 {
+        return Ok(None);
+    }
+    let (storage, layout) = t.storage_and_layout();
+    let start = layout.start_offset() as u64;
+    match (&*storage, t.device()) {
+        #[cfg(feature = "cuda")]
+        (Storage::Cuda(s), Device::Cuda(d)) => {
+            use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+            let stream = d.cuda_stream();
+            macro_rules! va_of {
+                ($ty:ty) => {{
+                    let (ptr, _guard) = s.as_cuda_slice::<$ty>()?.device_ptr(&stream);
+                    ptr + start
+                }};
+            }
+            let base = match t.dtype() {
+                DType::U8 => va_of!(u8),
+                DType::U32 => va_of!(u32),
+                DType::I64 => va_of!(i64),
+                DType::F16 => va_of!(half::f16),
+                DType::BF16 => va_of!(half::bf16),
+                DType::F32 => va_of!(f32),
+                _ => return Ok(None),
+            };
+            Ok(Some((base, bytes as u64)))
+        }
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        (Storage::Hip(s), Device::Hip(d)) => {
+            use candle_core::hip_backend::cudarc::driver::DevicePtr;
+            let stream = d.cuda_stream();
+            macro_rules! va_of {
+                ($ty:ty) => {{
+                    let (ptr, _guard) = s.as_cuda_slice::<$ty>()?.device_ptr(&stream);
+                    ptr + start
+                }};
+            }
+            let base = match t.dtype() {
+                DType::U8 => va_of!(u8),
+                DType::U32 => va_of!(u32),
+                DType::I64 => va_of!(i64),
+                DType::F16 => va_of!(half::f16),
+                DType::BF16 => va_of!(half::bf16),
+                DType::F32 => va_of!(f32),
+                _ => return Ok(None),
+            };
+            Ok(Some((base, bytes as u64)))
+        }
+        _ => Ok(None),
+    }
+}
+
+const GRAPH_PTR_CENSUS_CAP: usize = 4096;
+
+struct GraphPtrCensusSlot {
+    ptr: std::sync::atomic::AtomicU64,
+    bytes: std::sync::atomic::AtomicU64,
+    // (&'static str addr, len) as u64s: read-only static memory, safe to
+    // dereference in the signal handler. The ptr store lands last, so the
+    // handler skips half-written slots (ptr == 0).
+    name_ptr: std::sync::atomic::AtomicU64,
+    name_len: std::sync::atomic::AtomicU64,
+}
+
+impl GraphPtrCensusSlot {
+    const fn empty() -> Self {
+        Self {
+            ptr: std::sync::atomic::AtomicU64::new(0),
+            bytes: std::sync::atomic::AtomicU64::new(0),
+            name_ptr: std::sync::atomic::AtomicU64::new(0),
+            name_len: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+}
+
+static GRAPH_PTR_CENSUS: std::sync::OnceLock<[GraphPtrCensusSlot; GRAPH_PTR_CENSUS_CAP]> =
+    std::sync::OnceLock::new();
+static GRAPH_PTR_CENSUS_LEN: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Record one buffer in the process-wide census (env-gated; also installs
+/// the segfault auto-namer on first use).
+pub(crate) fn graph_ptr_census_record(
+    name: &'static str,
+    device: DeviceLocation,
+    ptr: u64,
+    bytes: u64,
+) {
+    use std::sync::atomic::Ordering;
+    if !graph_ptr_census_enabled() {
+        return;
+    }
+    install_graph_ptr_census_handler();
+    let slots =
+        GRAPH_PTR_CENSUS.get_or_init(|| std::array::from_fn(|_| GraphPtrCensusSlot::empty()));
+    let idx = GRAPH_PTR_CENSUS_LEN.fetch_add(1, Ordering::Relaxed);
+    if idx >= GRAPH_PTR_CENSUS_CAP {
+        return;
+    }
+    slots[idx]
+        .name_ptr
+        .store(name.as_ptr() as u64, Ordering::Relaxed);
+    slots[idx]
+        .name_len
+        .store(name.len() as u64, Ordering::Relaxed);
+    slots[idx].bytes.store(bytes, Ordering::Relaxed);
+    slots[idx].ptr.store(ptr, Ordering::Relaxed);
+    eprintln!("[graph-ptr-census] {name} {device:?}: ptr=0x{ptr:x} bytes={bytes}");
+}
+
+/// Record every tensor of a var map (`None` maps are skipped).
+pub(crate) fn graph_ptr_census_record_var_map(name: &'static str, map: Option<&CudaGraphVarMap>) {
+    let Some(map) = map else { return };
+    for (location, var) in map {
+        match graph_tensor_va(var.as_tensor()) {
+            Ok(Some((ptr, bytes))) => graph_ptr_census_record(name, *location, ptr, bytes),
+            Ok(None) => eprintln!("[graph-ptr-census] {name} {location:?}: untracked storage"),
+            Err(err) => eprintln!("[graph-ptr-census] {name} {location:?}: VA read failed: {err}"),
+        }
+    }
+}
+
+/// Record every tensor of a per-device tensor map.
+pub(crate) fn graph_ptr_census_record_tensor_map(
+    name: &'static str,
+    map: Option<&HashMap<DeviceLocation, Tensor>>,
+) {
+    let Some(map) = map else { return };
+    for (location, tensor) in map {
+        match graph_tensor_va(tensor) {
+            Ok(Some((ptr, bytes))) => graph_ptr_census_record(name, *location, ptr, bytes),
+            Ok(None) => eprintln!("[graph-ptr-census] {name} {location:?}: untracked storage"),
+            Err(err) => eprintln!("[graph-ptr-census] {name} {location:?}: VA read failed: {err}"),
+        }
+    }
+}
+
+/// Re-verify census rows against live tensors: the pre-first-launch sweep.
+/// A moved VA or a resized buffer is a loud bail naming the buffer (the
+/// segfault it would have caused), so the entry is dropped and the step
+/// falls back to eager.
+pub(crate) fn graph_ptr_census_verify(
+    records: &[GraphPtrRecord],
+    live: &[(&'static str, DeviceLocation, &Tensor)],
+) -> candle_core::Result<()> {
+    for (name, location, tensor) in live {
+        let current = graph_tensor_va(tensor)?;
+        let expected = records
+            .iter()
+            .find(|r| r.name == *name && r.device == *location);
+        match (expected, current) {
+            (Some(exp), Some((now, now_bytes))) if exp.ptr != now || exp.bytes != now_bytes => {
+                candle_core::bail!(
+                    "graph ptr census: {name} {location:?} changed since capture \
+                     (capture=0x{:x}+{} replay=0x{:x}+{}) - stale VA, skipping launch",
+                    exp.ptr,
+                    exp.bytes,
+                    now,
+                    now_bytes,
+                );
+            }
+            (Some(_), None) => {
+                candle_core::bail!(
+                    "graph ptr census: {name} {location:?} left device storage since capture - skipping launch"
+                );
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Content dump for the correlation: the U32 metadata actually staged for
+/// a capture vs a replay (block ids drive every pool-indexing kernel; a
+/// wild id here is the smoking gun). Diagnostic gate only; syncs.
+pub(crate) fn graph_ptr_census_dump_content(
+    tag: &'static str,
+    live: &[(&'static str, DeviceLocation, &Tensor)],
+) {
+    if !graph_ptr_census_enabled() {
+        return;
+    }
+    for (name, location, tensor) in live {
+        if tensor.dtype() != DType::U32 {
+            continue;
+        }
+        let content = tensor.flatten_all().and_then(|flat| flat.to_vec1::<u32>());
+        match content {
+            Ok(v) => {
+                let sum = v.iter().fold(0u64, |acc, x| acc.wrapping_add(*x as u64));
+                let head: Vec<u32> = v.iter().take(8).copied().collect();
+                eprintln!(
+                    "[graph-ptr-census] content {tag} {name} {location:?}: len={} sum={sum} head={head:?}",
+                    v.len()
+                );
+            }
+            Err(err) => {
+                eprintln!(
+                    "[graph-ptr-census] content {tag} {name} {location:?}: read failed: {err}"
+                )
+            }
+        }
+    }
+}
+
+/// Collect the sweepable (name, device, tensor) triples held by a decode
+/// entry. Single construction site shared by capture (record) and replay
+/// (verify) so the two can never drift apart.
+pub(crate) fn decode_entry_census_tensors<'a>(
+    input_ids: &'a Var,
+    metadata_buffers: &'a CudaDecodeGraphMetadataBuffers,
+    state_indices: &'a Option<CudaGraphVarMap>,
+    logits: &'a Tensor,
+) -> Vec<(&'static str, DeviceLocation, &'a Tensor)> {
+    fn push_var_map<'a>(
+        out: &mut Vec<(&'static str, DeviceLocation, &'a Tensor)>,
+        name: &'static str,
+        map: Option<&'a CudaGraphVarMap>,
+    ) {
+        if let Some(map) = map {
+            out.extend(
+                map.iter()
+                    .map(|(location, var)| (name, *location, var.as_tensor())),
+            );
+        }
+    }
+    let mut out = Vec::new();
+    out.push((
+        "input_ids",
+        input_ids.as_tensor().device().location(),
+        input_ids.as_tensor(),
+    ));
+    push_var_map(
+        &mut out,
+        "slot_mappings",
+        Some(&metadata_buffers.slot_mappings),
+    );
+    push_var_map(
+        &mut out,
+        "block_tables",
+        metadata_buffers.block_tables.as_ref(),
+    );
+    push_var_map(
+        &mut out,
+        "context_lens",
+        metadata_buffers.context_lens.as_ref(),
+    );
+    push_var_map(
+        &mut out,
+        "rope_positions",
+        Some(&metadata_buffers.rope_positions),
+    );
+    push_var_map(
+        &mut out,
+        "paged_kv_indptr",
+        metadata_buffers.paged_kv_indptr.as_ref(),
+    );
+    push_var_map(
+        &mut out,
+        "paged_kv_indices",
+        metadata_buffers.paged_kv_indices.as_ref(),
+    );
+    push_var_map(
+        &mut out,
+        "paged_kv_last_page_len",
+        metadata_buffers.paged_kv_last_page_len.as_ref(),
+    );
+    push_var_map(&mut out, "state_indices", state_indices.as_ref());
+    out.push(("logits", logits.device().location(), logits));
+    out
+}
+
+#[cfg(all(any(feature = "cuda", feature = "rocm"), target_family = "unix"))]
+static GRAPH_PTR_CENSUS_HANDLER_INSTALLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Install the segfault auto-namer (unix only; elsewhere the census and
+/// sweep still work, without the fault-VA report). Idempotent.
+pub(crate) fn install_graph_ptr_census_handler() {
+    #[cfg(all(any(feature = "cuda", feature = "rocm"), target_family = "unix"))]
+    {
+        use std::sync::atomic::Ordering;
+        if GRAPH_PTR_CENSUS_HANDLER_INSTALLED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // SAFETY: sigaction with SA_SIGINFO; the handler only reads the
+        // append-only census (atomics + static strings), formats into a
+        // stack buffer, write()s, and re-raises.
+        unsafe {
+            let mut act: libc::sigaction = std::mem::zeroed();
+            act.sa_sigaction = census_segfault_handler as usize;
+            act.sa_flags = libc::SA_SIGINFO | libc::SA_RESTART;
+            libc::sigemptyset(&mut act.sa_mask);
+            libc::sigaction(libc::SIGSEGV, &act, std::ptr::null_mut());
+        }
+    }
+}
+
+/// SIGSEGV handler: name the census allocation containing the fault VA
+/// (or the nearest one), then re-raise with the default disposition for
+/// the core dump. Async-signal-safe by construction: atomics, static
+/// strings, a stack buffer, and raw write() only.
+#[cfg(all(any(feature = "cuda", feature = "rocm"), target_family = "unix"))]
+extern "C" fn census_segfault_handler(
+    _sig: libc::c_int,
+    info: *mut libc::siginfo_t,
+    _ctx: *mut libc::c_void,
+) {
+    use std::sync::atomic::Ordering;
+    let fault = unsafe { (*info).si_addr() as u64 };
+
+    let mut contained_name: u64 = 0;
+    let mut contained_len: u64 = 0;
+    let mut contained_ptr: u64 = 0;
+    let mut contained_bytes: u64 = 0;
+    let mut best_below_name: u64 = 0;
+    let mut best_below_len: u64 = 0;
+    let mut best_below_gap: u64 = u64::MAX;
+    let mut best_above_name: u64 = 0;
+    let mut best_above_len: u64 = 0;
+    let mut best_above_gap: u64 = u64::MAX;
+    if let Some(slots) = GRAPH_PTR_CENSUS.get() {
+        let len = GRAPH_PTR_CENSUS_LEN
+            .load(Ordering::Relaxed)
+            .min(GRAPH_PTR_CENSUS_CAP);
+        let mut i = 0;
+        while i < len {
+            let ptr = slots[i].ptr.load(Ordering::Relaxed);
+            let bytes = slots[i].bytes.load(Ordering::Relaxed);
+            let name_ptr = slots[i].name_ptr.load(Ordering::Relaxed);
+            let name_len = slots[i].name_len.load(Ordering::Relaxed);
+            if ptr != 0 && bytes != 0 && name_ptr != 0 {
+                if fault >= ptr && fault < ptr + bytes {
+                    contained_name = name_ptr;
+                    contained_len = name_len;
+                    contained_ptr = ptr;
+                    contained_bytes = bytes;
+                    break;
+                } else if fault < ptr {
+                    let gap = ptr - fault;
+                    if gap < best_above_gap {
+                        best_above_gap = gap;
+                        best_above_name = name_ptr;
+                        best_above_len = name_len;
+                    }
+                } else {
+                    let end = ptr + bytes;
+                    if fault >= end {
+                        let gap = fault - end;
+                        if gap < best_below_gap {
+                            best_below_gap = gap;
+                            best_below_name = name_ptr;
+                            best_below_len = name_len;
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
+
+    // Stack buffer report: prefix + fault VA + verdict. No allocation,
+    // no formatting machinery.
+    let mut buf = [0u8; 512];
+    let mut n = 0usize;
+    let mut push = |bytes: &[u8]| {
+        let take = bytes.len().min(buf.len() - n);
+        buf[n..n + take].copy_from_slice(&bytes[..take]);
+        n += take;
+    };
+    push(b"[graph-ptr-census] SIGSEGV fault_va=0x");
+    let mut hex = [b'0'; 16];
+    let mut v = fault;
+    let mut k = 16;
+    while k > 0 {
+        k -= 1;
+        hex[k] = b"0123456789abcdef"[(v & 0xf) as usize];
+        v >>= 4;
+    }
+    push(&hex);
+    if contained_name != 0 {
+        push(b" INSIDE ");
+        push(unsafe {
+            core::slice::from_raw_parts(
+                contained_name as *const u8,
+                (contained_len as usize).min(64),
+            )
+        });
+        push(b" +0x");
+        let mut off = [b'0'; 16];
+        let mut w = fault - contained_ptr;
+        let mut k = 16;
+        while k > 0 {
+            k -= 1;
+            off[k] = b"0123456789abcdef"[(w & 0xf) as usize];
+            w >>= 4;
+        }
+        // Trim leading zeros to 1..8 digits for readability.
+        let mut start = 0;
+        while start < 12 && off[start] == b'0' {
+            start += 1;
+        }
+        push(&off[start..]);
+        push(b" (bytes=");
+        let mut dec = [b'0'; 20];
+        let mut w = contained_bytes;
+        let mut k = 20;
+        while k > 0 {
+            k -= 1;
+            dec[k] = b'0' + (w % 10) as u8;
+            w /= 10;
+            if w == 0 && k < 20 {
+                // keep one leading digit slot trimming below
+            }
+        }
+        let mut start = 0;
+        while start < 19 && dec[start] == b'0' {
+            start += 1;
+        }
+        push(&dec[start..]);
+        push(b")");
+    } else {
+        push(b" UNTRACKED");
+        if best_below_name != 0 {
+            push(b" below=");
+            push(unsafe {
+                core::slice::from_raw_parts(
+                    best_below_name as *const u8,
+                    (best_below_len as usize).min(64),
+                )
+            });
+        }
+        if best_above_name != 0 {
+            push(b" above=");
+            push(unsafe {
+                core::slice::from_raw_parts(
+                    best_above_name as *const u8,
+                    (best_above_len as usize).min(64),
+                )
+            });
+        }
+    }
+    push(b"\n");
+    unsafe {
+        libc::write(2, buf.as_ptr().cast(), n);
+        libc::signal(libc::SIGSEGV, libc::SIG_DFL);
+        libc::raise(libc::SIGSEGV);
+    }
+}
+
 pub(crate) struct CudaGraphHandle {
     graph: *mut core::ffi::c_void,
     exec: *mut core::ffi::c_void,
@@ -1723,6 +2201,10 @@ pub(crate) struct CudaDecodeGraphEntry {
     // Proposer-facing graph outputs refreshed by replay.
     spec_state: Option<Arc<dyn SpeculativeGraphState>>,
     spec_state_usage: CudaGraphSpecStateUsage,
+    // Pointer-correlation census (MISTRALRS_GRAPH_PTR_CENSUS only):
+    // capture-time VAs of entry-held buffers, consumed by the
+    // pre-first-launch sweep. None after the sweep runs.
+    ptr_census: Option<Vec<GraphPtrRecord>>,
     // Must stay last so graph-backed tensors enqueue their frees before the graph exec is destroyed.
     graph: CudaGraphHandle,
 }
@@ -1866,6 +2348,7 @@ impl CudaDecodeGraphEntry {
             logits,
             spec_state,
             spec_state_usage: _,
+            ptr_census: _,
             graph,
         } = self;
         let stream = graph.stream.clone();
@@ -2163,6 +2646,18 @@ impl CudaDecodeGraphState {
                     entry.generation, entry.replay_epoch, step.real_batch, entry.key
                 ))
             })?;
+            // Pointer-correlation content dump (diagnostic gate only,
+            // first launch only): the U32 metadata actually staged for
+            // this replay, beside the capture baseline.
+            if entry.ptr_census.is_some() {
+                let live = decode_entry_census_tensors(
+                    &entry.input_ids,
+                    &entry.metadata_buffers,
+                    &entry.state_indices,
+                    &entry.logits,
+                );
+                graph_ptr_census_dump_content("replay", &live);
+            }
             Ok(Some((replay_epoch, replay)))
         };
         // A panicking prelaunch must not lose the LRU entry or poison the graph lock; fall back to eager.
@@ -2186,6 +2681,25 @@ impl CudaDecodeGraphState {
         };
         let (_, timing_rows) = step.input_ids.dims2()?;
         let phase_timer = CudaPhaseTimer::start(entry.graph.stream())?;
+        // Pointer-correlation sweep (MISTRALRS_GRAPH_PTR_CENSUS only): on
+        // the first launch of a censused entry, re-verify entry-held VAs
+        // before the driver touches them. A moved VA becomes a loud bail
+        // naming the buffer (the entry is dropped, the step falls back to
+        // eager, the next step re-captures fresh) instead of a segfault.
+        if let Some(records) = entry.ptr_census.take() {
+            let live = decode_entry_census_tensors(
+                &entry.input_ids,
+                &entry.metadata_buffers,
+                &entry.state_indices,
+                &entry.logits,
+            );
+            if let Err(err) = graph_ptr_census_verify(&records, &live) {
+                return Err(err.context(format!(
+                    "CUDA graph ptr-census sweep failed for generation {}, replay epoch {}, {} live rows, key {:?}",
+                    entry.generation, entry.replay_epoch, step.real_batch, entry.key
+                )));
+            }
+        }
         if let Err(err) = entry.graph.launch().map_err(|err| {
             err.context(format!(
                 "CUDA graph replay launch failed for generation {}, replay epoch {}, {} live rows, key {:?}",
@@ -2548,7 +3062,6 @@ where
             candle_core::Error::msg(err.to_string()).context("CUDA graph begin capture failed")
         );
     }
-
     if let Err(err) = prepare_fa3_decode_schedules(&metadata) {
         end_cuda_capture_discard(&stream);
         restore_event_tracking_after_capture(&stream, restore_event_tracking);
@@ -2680,6 +3193,106 @@ where
         "Captured CUDA decode graph: batch bucket {batch} ({real_batch} live rows), {seq_len} query tokens"
     );
 
+    // Pointer-correlation census (MISTRALRS_GRAPH_PTR_CENSUS only):
+    // record the capture-time VAs of every graph-managed buffer AFTER
+    // finish_capture (these are the replay VAs), plus the flashinfer view
+    // pre-images the captured forward read.
+    let mut ptr_census: Option<Vec<GraphPtrRecord>> = None;
+    if graph_ptr_census_enabled() {
+        let live =
+            decode_entry_census_tensors(&input_ids, &metadata_buffers, &state_indices, &logits);
+        let mut records = Vec::with_capacity(live.len());
+        for (name, device, tensor) in &live {
+            match graph_tensor_va(tensor) {
+                Ok(Some((ptr, bytes))) => {
+                    graph_ptr_census_record(name, *device, ptr, bytes);
+                    records.push(GraphPtrRecord {
+                        name,
+                        device: *device,
+                        ptr,
+                        bytes,
+                    });
+                }
+                Ok(None) => {
+                    eprintln!("[graph-ptr-census] {name} {device:?}: untracked storage")
+                }
+                Err(err) => {
+                    eprintln!("[graph-ptr-census] {name} {device:?}: VA read failed: {err}")
+                }
+            }
+        }
+        // U32 content at capture time: the baseline the replay dumps compare.
+        graph_ptr_census_dump_content("capture", &live);
+        // Tier 2 (handler correlation only): the flashinfer view pre-images.
+        let paged = flashinfer_paged_view(&metadata);
+        let full = flashinfer_full_view(&metadata);
+        graph_ptr_census_record_tensor_map(
+            "view_paged_kv_indptr",
+            paged.map(|view| &view.paged_kv.indptr),
+        );
+        graph_ptr_census_record_tensor_map(
+            "view_paged_kv_indices",
+            paged.map(|view| &view.paged_kv.indices),
+        );
+        graph_ptr_census_record_tensor_map(
+            "view_paged_kv_last_page_len",
+            paged.map(|view| &view.paged_kv.last_page_len),
+        );
+        graph_ptr_census_record_tensor_map(
+            "view_full_paged_kv_indptr",
+            full.map(|view| &view.paged_kv.indptr),
+        );
+        graph_ptr_census_record_tensor_map(
+            "view_full_paged_kv_indices",
+            full.map(|view| &view.paged_kv.indices),
+        );
+        graph_ptr_census_record_tensor_map(
+            "view_full_paged_kv_last_page_len",
+            full.map(|view| &view.paged_kv.last_page_len),
+        );
+        graph_ptr_census_record_tensor_map(
+            "view_paged_kv_request_indices",
+            paged.map(|view| &view.tile_plan.request_indices),
+        );
+        graph_ptr_census_record_tensor_map(
+            "view_paged_kv_tile_indices",
+            paged.map(|view| &view.tile_plan.kv_tile_indices),
+        );
+        graph_ptr_census_record_tensor_map(
+            "view_paged_kv_o_indptr",
+            paged.map(|view| &view.tile_plan.o_indptr),
+        );
+        graph_ptr_census_record_tensor_map(
+            "view_paged_kv_chunk_size",
+            paged.map(|view| &view.tile_plan.kv_chunk_size),
+        );
+        graph_ptr_census_record_tensor_map(
+            "view_paged_kv_block_valid_mask",
+            paged.map(|view| &view.tile_plan.block_valid_mask),
+        );
+        graph_ptr_census_record_tensor_map(
+            "view_full_paged_kv_request_indices",
+            full.map(|view| &view.tile_plan.request_indices),
+        );
+        graph_ptr_census_record_tensor_map(
+            "view_full_paged_kv_tile_indices",
+            full.map(|view| &view.tile_plan.kv_tile_indices),
+        );
+        graph_ptr_census_record_tensor_map(
+            "view_full_paged_kv_o_indptr",
+            full.map(|view| &view.tile_plan.o_indptr),
+        );
+        graph_ptr_census_record_tensor_map(
+            "view_full_paged_kv_chunk_size",
+            full.map(|view| &view.tile_plan.kv_chunk_size),
+        );
+        graph_ptr_census_record_tensor_map(
+            "view_full_paged_kv_block_valid_mask",
+            full.map(|view| &view.tile_plan.block_valid_mask),
+        );
+        ptr_census = Some(records);
+    }
+
     Ok(CudaDecodeGraphEntry {
         generation: 0,
         replay_epoch: 0,
@@ -2692,6 +3305,7 @@ where
         logits,
         spec_state: None,
         spec_state_usage: CudaGraphSpecStateUsage::default(),
+        ptr_census,
         graph,
     })
 }
