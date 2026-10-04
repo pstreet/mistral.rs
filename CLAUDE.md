@@ -29,13 +29,14 @@ cargo install --path mistralrs-cli --features <features>
 
 ### Fork build shapes & device selection
 
-This fork carries three verified CLI build shapes; re-check all three for
+This fork carries four CLI build shapes; re-check all of them for
 GPU-facing changes (`cargo check` never links - build or test the touched
 shape too):
 
 ```bash
 cargo check -p mistralrs-cli                        # CPU-only (unconditional)
 cargo check -p mistralrs-cli --features rocm        # AMD - the prod shape
+cargo check -p mistralrs-cli --features cuda        # NVIDIA (revival queued)
 cargo check -p mistralrs-cli --features cuda,rocm   # dual-vendor
 ```
 
@@ -53,7 +54,8 @@ runtime-load in dual builds: drivers via dlopen, the hipcc kernel sets as
 companion libraries (`libmoe_hip.so`, `libmistralrsquant_hip.so`,
 `libmistralrscuda_hip.so`, `libmistralrspagedattention_hip.so`), so a dual
 binary starts and serves on machines with no GPU runtimes installed at
-all. A `cuda`-only build is not maintained in this fork.
+all. A `cuda`-only revival is queued (pre-existing candle/upstream-cudarc
+API drift, tracked in TODO).
 
 Dual-build env (GPU-less NVIDIA side needs the toolkit + pinned capability):
 

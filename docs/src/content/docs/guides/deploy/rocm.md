@@ -61,8 +61,8 @@ combinations are plain comma syntax; there is no compound feature.) The AMD
 role serves (every C kernel is hipcc-built); the NVIDIA side is compiled in
 for interop with each driver call gated on cudarc's `is_culib_present()`
 probe, and cudarc's dynamic-loading mode means the binary starts and serves
-with no NVIDIA runtime on the machine. A `cuda`-only build is not maintained
-in this fork.
+with no NVIDIA runtime on the machine. A `cuda`-only revival is queued
+(pre-existing candle/upstream-cudarc API drift).
 
 The NVIDIA half needs the CUDA toolkit even without an NVIDIA GPU: the
 default compute-capability detection needs a driver, so GPU-less build boxes

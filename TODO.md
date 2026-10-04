@@ -2169,13 +2169,14 @@ v1/v2, reshape_and_cache, gather_kv, copy/swap blocks, FP8 KV via `-DENABLE_FP8`
 decode/FA3/MLA/Sinks, GDN FlashInfer SM90 prefill, Cutlass/DeepGEMM/Marlin MoE,
 most `mistralrs-quant` FP8 kernels, speculative dflash/FA3 paths.
 
-## Appendix B. Build health (verified 2026-09-22)
+## Appendix B. Build health (re-verified 2026-10-04; policy: all shapes supported)
 
 | Configuration | Status |
 |---------------|--------|
-| CPU-only (`cargo check -p mistralrs --no-default-features`) | Pass |
-| ROCm (`cargo check -p mistralrs --features rocm`) | Pass |
-| ROCm binary (`cargo build -p mistralrs-cli --features rocm`) | Pass, bench runs on 8060S |
+| CPU-only (`cargo check -p mistralrs-core -p mistralrs-quant`) | Pass |
+| ROCm (`cargo check -p mistralrs-core -p mistralrs-quant --features rocm`) | Pass, prod serves on :1235 |
+| Dual (`cargo check/build --features cuda,rocm`) | Pass, serves 16B + 27B on 3090 |
+| CUDA-only (`--features cuda`) | Broken, pre-existing fork drift (candle expects cudarc APIs upstream 0.19.8 lacks: `CudaGraphExec` et al.); revival queued as its own slice |
 
 CPU fallback notes: `mistralrs-paged-attn` is a required dependency of
 `mistralrs-core` (types always available, GPU kernels still feature-gated),
