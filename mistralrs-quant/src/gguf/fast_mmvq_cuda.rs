@@ -1017,6 +1017,224 @@ mod tests {
     /// graph to dissect the wild pointer at small scale.
     #[test]
     #[ignore = "requires the dual CUDA role (3090)"]
+    /// Multi-bucket collision probe: the engine precaptures several graph
+    /// buckets whose memalloc placeholder VAs come from the SHARED capture
+    /// pool; with AUTO_FREE each launch re-materializes its own graph's
+    /// allocations over the same pool blocks. Captures two graphs
+    /// (batch-1 and batch-2 shaped) and interleaves launches - if one
+    /// exec's launch stomps the other's output VAs, the earlier tensor
+    /// reads back corrupt.
+    #[test]
+    #[ignore = "requires the dual CUDA role (3090)"]
+    fn mmvq_two_graph_capture_collision() -> Result<()> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+
+        const NROWS: usize = 256;
+        const NCOLS: usize = 512;
+
+        let dev = Device::new_cuda(0)?;
+        let host: Vec<f32> = (0..NROWS * NCOLS)
+            .map(|i| ((i as f32 * 0.7).sin() * 0.5).abs())
+            .collect();
+        let w_cpu = Tensor::from_vec(host, (NROWS, NCOLS), &Device::Cpu)?;
+        let w = QTensor::quantize_onto(&w_cpu, GgmlDType::Q4K, &dev)?;
+        let cos_host: Vec<f32> = (0..NROWS).map(|i| (i as f32 * 0.02).cos() * 0.5).collect();
+        let cos = Tensor::from_vec(cos_host, (1, 4, 64), &dev)?.to_dtype(DType::BF16)?;
+
+        let mk_xs = |batch: usize| -> Result<Tensor> {
+            let n = batch * NCOLS;
+            let v: Vec<f32> = (0..n).map(|i| (i as f32 * 0.01).sin()).collect();
+            Ok(Tensor::from_vec(v, (batch, 1, NCOLS), &dev)?.to_dtype(DType::BF16)?)
+        };
+        let run = |xs: &Tensor| -> Result<Tensor> {
+            let k = plain(&w, xs)?;
+            let kb = k.reshape((xs.dim(0)?, 4, 64))?;
+            Ok(kb.broadcast_mul(&cos)?.flatten_all()?)
+        };
+
+        let _htod_guard = match &dev {
+            Device::Cuda(d) => Some(d.enable_cuda_graph_htod_cache()),
+            _ => None,
+        };
+        let eager_a = run(&mk_xs(1)?)?;
+        let eager_b = run(&mk_xs(2)?)?;
+        dev.synchronize()?;
+
+        let cuda_dev = match &dev {
+            Device::Cuda(d) => d,
+            _ => candle_core::bail!("expected cuda device"),
+        };
+        let stream = cuda_dev.cuda_stream();
+        stream.context().bind_to_thread().map_err(candle_core::Error::wrap)?;
+        unsafe { stream.context().disable_event_tracking() };
+
+        let capture = |xs: &Tensor| -> Result<(Tensor, *mut core::ffi::c_void)> {
+            stream
+                .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+                .map_err(candle_core::Error::wrap)?;
+            let out = run(xs)?;
+            let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
+            let mut exec: *mut core::ffi::c_void = std::ptr::null_mut();
+            unsafe {
+                let r = sys::cuStreamEndCapture(
+                    stream.cu_stream(),
+                    core::ptr::from_mut(&mut graph).cast(),
+                );
+                assert_eq!(r as i32, 0, "end capture");
+                let r = sys::cuGraphInstantiateWithFlags(
+                    core::ptr::from_mut(&mut exec).cast(),
+                    graph.cast(),
+                    1, // AUTO_FREE_ON_LAUNCH, as the engine
+                );
+                assert_eq!(r as i32, 0, "instantiate");
+                let r = sys::cuGraphUpload(exec.cast(), stream.cu_stream());
+                assert_eq!(r as i32, 0, "upload");
+            }
+            Ok((out, exec))
+        };
+        let launch = |exec: *mut core::ffi::c_void| -> Result<()> {
+            unsafe {
+                let r = sys::cuGraphLaunch(exec.cast(), stream.cu_stream());
+                assert_eq!(r as i32, 0, "launch");
+            }
+            Ok(())
+        };
+        let max_diff = |a: &Tensor, b: &Tensor| -> Result<f32> {
+            let av = a.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+            let bv = b.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+            Ok(av.iter().zip(&bv).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max))
+        };
+
+        // Precapture order: bucket A (batch 1) then bucket B (batch 2),
+        // both from the shared pool.
+        let (out_a, exec_a) = capture(&mk_xs(1)?)?;
+        let (out_b, exec_b) = capture(&mk_xs(2)?)?;
+        unsafe { stream.context().enable_event_tracking() };
+
+        // Launch A fresh, check.
+        launch(exec_a)?;
+        dev.synchronize()?;
+        let d = max_diff(&out_a, &eager_a)?;
+        eprintln!("[collision-probe] A after launch A: {d}");
+        assert!(d < 1e-3, "A corrupted after its own launch: {d}");
+
+        // Launch B (re-materializes ITS VAs), then read A's tensor: if the
+        // execs overlap VAs, B's kernels just stomped A's output.
+        launch(exec_b)?;
+        dev.synchronize()?;
+        let d_b = max_diff(&out_b, &eager_b)?;
+        eprintln!("[collision-probe] B after launch B: {d_b}");
+        assert!(d_b < 1e-3, "B corrupted after its own launch: {d_b}");
+        let d_a = max_diff(&out_a, &eager_a)?;
+        eprintln!("[collision-probe] A after launch B: {d_a}");
+        assert!(d_a < 1e-3, "COLLISION: A's output stomped by B's launch: {d_a}");
+
+        // And the reverse direction.
+        launch(exec_a)?;
+        dev.synchronize()?;
+        let d_b2 = max_diff(&out_b, &eager_b)?;
+        eprintln!("[collision-probe] B after launch A: {d_b2}");
+        assert!(d_b2 < 1e-3, "COLLISION: B's output stomped by A's launch: {d_b2}");
+        Ok(())
+    }
+
+    /// cuBLAS-in-capture probe: the model's lm_head is BF16 (unquantized),
+    /// so the captured decode step still contains one cublas GEMM - the
+    /// last non-companion kernel family in the graph. Reproduces
+    /// matmul(cublas) + broadcast bmul under capture; if the replay
+    /// corrupts, the remaining model-scale fault is the cublas path.
+    #[test]
+    #[ignore = "requires the dual CUDA role (3090)"]
+    fn cublas_matmul_bmul_capture_launch_matches_eager() -> Result<()> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+
+        const NROWS: usize = 4096;
+        const NCOLS: usize = 2048;
+
+        let dev = Device::new_cuda(0)?;
+        let w_host: Vec<f32> = (0..NROWS * NCOLS)
+            .map(|i| ((i as f32 * 1.7).sin() * 0.25).abs())
+            .collect();
+        let w = Tensor::from_vec(w_host, (NROWS, NCOLS), &Device::Cpu)?
+            .to_dtype(DType::BF16)?
+            .to_device(&dev)?;
+        let x_host: Vec<f32> = (0..NCOLS).map(|i| (i as f32 * 0.01).sin()).collect();
+        let xs = Tensor::from_vec(x_host, (1, 1, NCOLS), &dev)?.to_dtype(DType::BF16)?;
+        let scale_host: Vec<f32> = (0..NROWS).map(|i| 1.0 + (i as f32 * 0.001).cos() * 0.1).collect();
+        let scale = Tensor::from_vec(scale_host, (1, 1, NROWS), &dev)?.to_dtype(DType::BF16)?;
+
+        let _htod_guard = match &dev {
+            Device::Cuda(d) => Some(d.enable_cuda_graph_htod_cache()),
+            _ => None,
+        };
+        let run = |x: &Tensor| -> Result<Tensor> {
+            let logits = x.broadcast_mul(&xs)?; // [1,1,NCOLS]
+            let out = logits.broadcast_mul(&xs)?;
+            let mm = out.reshape((1, NCOLS))?.matmul(&w.t()?)?;
+            mm.reshape((1, 1, NROWS))?.broadcast_mul(&scale)
+        };
+        let eager = run(&xs)?.flatten_all()?.to_dtype(DType::F32)?;
+        dev.synchronize()?;
+
+        let cuda_dev = match &dev {
+            Device::Cuda(d) => d,
+            _ => candle_core::bail!("expected cuda device"),
+        };
+        let stream = cuda_dev.cuda_stream();
+        stream.context().bind_to_thread().map_err(candle_core::Error::wrap)?;
+        unsafe { stream.context().disable_event_tracking() };
+        stream
+            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .map_err(candle_core::Error::wrap)?;
+        let replayed = run(&xs)?.flatten_all()?;
+        let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut exec: *mut core::ffi::c_void = std::ptr::null_mut();
+        unsafe {
+            let r = sys::cuStreamEndCapture(
+                stream.cu_stream(),
+                core::ptr::from_mut(&mut graph).cast(),
+            );
+            assert_eq!(r as i32, 0, "end capture");
+            let r = sys::cuGraphInstantiateWithFlags(
+                core::ptr::from_mut(&mut exec).cast(),
+                graph.cast(),
+                1,
+            );
+            assert_eq!(r as i32, 0, "instantiate");
+            let r = sys::cuGraphUpload(exec.cast(), stream.cu_stream());
+            assert_eq!(r as i32, 0, "upload");
+            let r = sys::cuGraphLaunch(exec.cast(), stream.cu_stream());
+            assert_eq!(r as i32, 0, "launch");
+            stream.context().enable_event_tracking();
+        }
+        dev.synchronize()?;
+
+        let b = replayed.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+        let a = eager.to_vec1::<f32>()?;
+        let bad: Vec<(usize, f32, f32)> = a
+            .iter()
+            .zip(b.iter())
+            .enumerate()
+            .filter(|(_, (x, y))| (**x - **y).abs() > 1e-2)
+            .map(|(i, (x, y))| (i, *x, *y))
+            .collect();
+        eprintln!(
+            "[cublas-probe] mismatching: {} of {}; largest: {:?}",
+            bad.len(),
+            a.len(),
+            bad.iter()
+                .max_by(|x, y| (x.1 - x.2).abs().partial_cmp(&(y.1 - y.2).abs()).unwrap())
+        );
+        assert!(bad.is_empty(), "cublas-in-capture replay corrupt");
+        Ok(())
+    }
+
+    /// Capture probe for the dense-decode route: the model-scale graph
+    /// faults replaying a 256-element bmul whose K operand came from the
+    /// MMVQ k-projection inside the capture. Reproduces plain()+bmul as a
+    /// graph to dissect the wild pointer at small scale.
+    #[test]
+    #[ignore = "requires the dual CUDA role (3090)"]
     fn mmvq_plain_bmul_capture_launch_matches_eager() -> Result<()> {
         use candle_core::cuda_backend::cudarc::driver::sys;
 
@@ -1059,6 +1277,36 @@ mod tests {
         };
         let stream = cuda_dev.cuda_stream();
         stream.context().bind_to_thread().map_err(candle_core::Error::wrap)?;
+
+        // Mirror the engine's pool guard exactly: release threshold u64::MAX
+        // plus the three reuse attributes on the device mempool, active for
+        // the capture (the engine arms it after warmup, before capture).
+        {
+            let mut pool: sys::CUmemoryPool = std::ptr::null_mut();
+            let r = unsafe { sys::cuDeviceGetMemPool(&mut pool, 0) };
+            assert_eq!(r as i32, 0, "get mempool");
+            let mut threshold = u64::MAX;
+            let r = unsafe {
+                sys::cuMemPoolSetAttribute(
+                    pool.cast(),
+                    sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
+                    (&mut threshold as *mut u64).cast(),
+                )
+            };
+            assert_eq!(r as i32, 0, "release threshold");
+            for attr in [
+                sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_REUSE_FOLLOW_EVENT_DEPENDENCIES,
+                sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_REUSE_ALLOW_OPPORTUNISTIC,
+                sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_REUSE_ALLOW_INTERNAL_DEPENDENCIES,
+            ] {
+                let mut enabled = 1i32;
+                let r = unsafe {
+                    sys::cuMemPoolSetAttribute(pool.cast(), attr, (&mut enabled as *mut i32).cast())
+                };
+                assert_eq!(r as i32, 0, "reuse attr");
+            }
+        }
+
         unsafe { stream.context().disable_event_tracking() };
         stream
             .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)

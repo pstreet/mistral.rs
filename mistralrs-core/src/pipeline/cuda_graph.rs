@@ -20,8 +20,6 @@ use crate::pipeline::graph_role::{
     graph_launch, graph_memcpy_htod_async, graph_stage_ptr, graph_upload, GraphEvent,
     GraphPinnedHost, GraphStream,
 };
-#[cfg(all(feature = "cuda", feature = "rocm"))]
-use crate::pipeline::graph_role::dump_cuda_graph_node_types;
 #[cfg(feature = "rocm")]
 use candle_core::role::backend::cudarc::driver::CudaSlice as ArenaSlice;
 use candle_core::{DType, Device, DeviceLocation, Storage, Tensor, Var};
@@ -939,11 +937,6 @@ impl CudaGraphHandle {
         {
             let _ = graph_destroy(stream, graph);
             return Err(err.context("CUDA graph instantiate failed"));
-        }
-
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
-        if std::env::var("MISTRALRS_DUMP_GRAPH_NODES").is_ok() && !stream.is_hip() {
-            dump_cuda_graph_node_types(graph);
         }
 
         Ok(Some(Self {
