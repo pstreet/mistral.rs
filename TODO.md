@@ -2200,6 +2200,38 @@ mistral.rs hot zones, then merge.
       `candle/cudarc-nvidia` (two commits: pristine 0.19.8 baseline, then
       the fork) matching the cudarc-hip precedent; patch paths updated in
       both workspaces.
+- [x] ~S 4B (Qwen3.5-4B-MTP Q8_0) bench across cpu / rocm / cuda
+      (2026-10-05, release dual build, single binary / three device arms,
+      same methodology as the journaled arms: essay-600tok temp0.3 decode
+      x3, 228-tok prefill x3, batch 1):
+      - CUDA (3090): decode 68.9 tok/s (68.76/68.91/69.50), warm prefill
+        ~10.5k tok/s (10441/10621; first-run 2819 = warmup). Settings: PA
+        Q8_0 KV 2048MB, graphs OFF, MTP off.
+      - ROCm (gfx1151 APU, prod paused via `systemctl --user`, graphs ON):
+        decode 32.5 tok/s (32.49/32.50; trial 1 errored while prod's 27B
+        was still draining - stop takes >5s), prefill ~1610 tok/s.
+      - CPU (32 threads, rayon defaults): decode 18.0 tok/s (18.00-18.17),
+        prefill ~228 tok/s. No PA/graphs/MTP.
+      Quality: cuda arm answers "1776" (256-tok budget, finish=stop;
+      64-tok sanity budgets are consumed by reasoning before content).
+      Findings:
+      (a) release + hybrid + cuda-role graphs ON aborts the process: fork
+          unwrap (cudarc-nvidia core.rs:957) on
+          CUDA_ERROR_STREAM_CAPTURE_INVALIDATED - the hybrid
+          restore-in-capture blocker now has abort-class severity in
+          release (the multimodal catch_unwind cannot cover fork-side
+          unwraps). Working best for hybrid models on the NVIDIA role:
+          MISTRALRS_CUDA_GRAPHS=0 until the restore is hoisted
+          post-end_capture (top graphs follow-up).
+      (b) the 4B refuses MTP ("This model does not support speculative
+          decoding") despite the -MTP GGUF name and dual-hip caps
+          mtp=true; prod's explicit `mtp = false` for it is the correct
+          setting (the 27B is the MTP-bearing model).
+      (c) ops: mistralrs-server.service is a systemd USER unit
+          (~/.config/systemd/user/); pause with `systemctl --user stop
+          mistralrs-server-healthcheck.timer mistralrs-server.service`
+          (sudo systemctl queries the wrong manager), and let it drain
+          >10s before benching the APU.
 
 ---
 
