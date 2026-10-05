@@ -2175,6 +2175,31 @@ mistral.rs hot zones, then merge.
       Next slice: instrument replay prelaunch/launch per stage, try
       per-request exec re-instantiation, or driver-level exec-node dump.
       cuda-alone still broken (pre-existing fork drift), revival queued.
+- [x] ~M NVIDIA-role decode graphs UNPARKED (fixed 2026-10-05, later).
+      Root cause of the cross-request failure: compute-sanitizer host
+      backtraces pinned it to `cuStreamWaitEvent` - "Event is not valid.
+      This can be related to a graph capture that is no longer running" -
+      called from the MoE twin's workspace write guard. cudarc's
+      `SyncOnDrop` event guards recorded slice events UNCONDITIONALLY on
+      drop, including inside the capture window (tracking disabled), which
+      bound the twin workspaces' eager-created events to the capture; the
+      next request's first eager touch of those slices waited on a dead
+      event. (The "Parameter ordinal" sanitizer line was startup device
+      enumeration noise.) Fix: gate the record in
+      `SyncOnDrop::record_event` on `is_event_tracking()` (cudarc-nvidia
+      fork) - one choke point for all six guard sites. Verified: 5/5
+      same-prompt requests, 0 faults, capture + replays all green; graphs
+      re-enabled for the NVIDIA role (`BackendCaps.graphs=true`,
+      `is_cuda_graph_device` hip-or-cuda).
+      Open perf note (harmless, journaled): the captured graph carries 48
+      MEMALLOC + 48 MEMSET + 48 MEMFREE nodes (3175 total: 2935 kernel,
+      96 memcpy) - the twin's per-layer `final_out` `alloc_zeros` bypasses
+      the capture arena (why candle temps carve but this alloc does not is
+      unresolved); with AUTO_FREE_ON_LAUNCH these re-allocate per launch
+      and serve correctly. Also: cudarc-nvidia vendored into
+      `candle/cudarc-nvidia` (two commits: pristine 0.19.8 baseline, then
+      the fork) matching the cudarc-hip precedent; patch paths updated in
+      both workspaces.
 
 ---
 

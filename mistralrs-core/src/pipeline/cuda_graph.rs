@@ -1447,6 +1447,8 @@ impl CudaGraphHandle {
             return Err(err.context("CUDA graph instantiate failed"));
         }
 
+
+
         Ok(Some(Self {
             graph,
             exec,
@@ -4349,9 +4351,12 @@ impl CudaGraphHostStaging {
 /// capture is fixed and replays cleanly in-request, but the exec's first
 /// cross-request launch fails with INVALID_VALUE (launches 1..N-1 clean);
 /// tracked as its own slice - see the journal.
+/// Devices whose decode graphs are capturable: the hip role through the
+/// fork's arena capture API, and the NVIDIA role through the cudarc-nvidia
+/// companion fork (arena plus capture-aware event guards; see journal).
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 pub(crate) fn is_cuda_graph_device(device: &candle_core::Device) -> bool {
-    device.is_hip()
+    device.is_hip() || device.is_cuda()
 }
 #[cfg(not(all(feature = "cuda", feature = "rocm")))]
 pub(crate) fn is_cuda_graph_device(device: &candle_core::Device) -> bool {

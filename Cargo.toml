@@ -234,9 +234,9 @@ incremental = true
 debug = true
 opt-level = 3
 
-# NVIDIA-role CUDA companion fork: upstream cudarc plus the graph-capture
-# arena ported from cudarc-hip (capture-time bump allocation, graph-owned
-# slices). Serves the dual NVIDIA role's arena capture; zero behavior
-# change when no arena is installed.
+# NVIDIA-role CUDA companion fork: vendored in the candle workspace
+# (candle/cudarc-nvidia, same pattern as cudarc-hip) - upstream cudarc
+# 0.19.8 plus the graph-capture arena and capture-aware event guards
+# ported from cudarc-hip. Serves the dual NVIDIA role's arena capture.
 [patch.crates-io]
-cudarc = { path = "../cudarc-nvidia" }
+cudarc = { path = "../candle/cudarc-nvidia" }

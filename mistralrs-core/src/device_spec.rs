@@ -309,14 +309,12 @@ pub fn backend_caps(device: &Device) -> BackendCaps {
                 // Dual builds: the NVIDIA role serves GGUF through the
                 // upstream CUDA path (QStorage::Cuda, PTX kernels from the
                 // candle-kernels-cuda twin, JIT-loaded) and paged attention
-                // through the nvcc companion. Decode graphs stay parked: the
-                // rope capture-thread bug is fixed (see journal), but the
-                // graph exec's Nth cross-request launch still fails with
-                // INVALID_VALUE while launches 1..N-1 replay clean - a
-                // replay-lifecycle issue tracked as its own slice.
+                // through the nvcc companion. Decode graphs replay cleanly
+                // across requests (capture-time event records are gated on
+                // the fork's event-tracking state - see the journal).
                 BackendCaps {
                     arch,
-                    graphs: false,
+                    graphs: true,
                     paged_attention: true,
                     quantized_gguf: true,
                     mtp: false,
