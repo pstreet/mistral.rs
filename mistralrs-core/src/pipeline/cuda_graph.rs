@@ -1091,17 +1091,36 @@ pub(crate) fn graph_ptr_census_dump_content(
         return;
     }
     for (name, location, tensor) in live {
-        if tensor.dtype() != DType::U32 {
-            continue;
-        }
-        let content = tensor.flatten_all().and_then(|flat| flat.to_vec1::<u32>());
+        let content = match tensor.dtype() {
+            DType::U32 => tensor
+                .flatten_all()
+                .and_then(|flat| flat.to_vec1::<u32>())
+                .map(|v| {
+                    let sum = v.iter().fold(0u64, |acc, x| acc.wrapping_add(*x as u64));
+                    (
+                        v.len(),
+                        sum,
+                        format!("{v:?}").chars().take(120).collect::<String>(),
+                    )
+                }),
+            DType::I64 => tensor
+                .flatten_all()
+                .and_then(|flat| flat.to_vec1::<i64>())
+                .map(|v| {
+                    let sum = v.iter().fold(0i64, |acc, x| acc.wrapping_add(*x));
+                    (
+                        v.len(),
+                        sum as u64,
+                        format!("{v:?}").chars().take(120).collect::<String>(),
+                    )
+                }),
+            _ => continue,
+        };
         match content {
-            Ok(v) => {
-                let sum = v.iter().fold(0u64, |acc, x| acc.wrapping_add(*x as u64));
-                let head: Vec<u32> = v.iter().take(8).copied().collect();
+            Ok((len, sum, head)) => {
                 eprintln!(
-                    "[graph-ptr-census] content {tag} {name} {location:?}: len={} sum={sum} head={head:?}",
-                    v.len()
+                    "[graph-ptr-census] content {tag} {name} {location:?} {:?}: len={len} sum={sum} head={head}",
+                    tensor.dtype(),
                 );
             }
             Err(err) => {
@@ -1366,6 +1385,9 @@ pub(crate) struct CudaGraphHandle {
     // outlive the exec.
     #[cfg(feature = "rocm")]
     arena_keepalive: Option<Arc<ArenaSlice<u8>>>,
+    // Dual NVIDIA role: same carve-out contract via the companion fork.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    cuda_arena_keepalive: Option<Arc<crate::pipeline::graph_role::CuStreamSlice>>,
 }
 
 #[cfg(feature = "rocm")]
@@ -1376,6 +1398,14 @@ impl CudaGraphHandle {
 
     pub(crate) fn arena_bytes(&self) -> usize {
         self.arena_keepalive.as_ref().map_or(0, |arena| arena.len())
+    }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    pub(crate) fn set_cuda_arena(
+        &mut self,
+        arena: Option<Arc<crate::pipeline::graph_role::CuStreamSlice>>,
+    ) {
+        self.cuda_arena_keepalive = arena;
     }
 }
 
@@ -1423,6 +1453,8 @@ impl CudaGraphHandle {
             stream: stream.clone(),
             #[cfg(feature = "rocm")]
             arena_keepalive: None,
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            cuda_arena_keepalive: None,
         }))
     }
 
@@ -2948,6 +2980,34 @@ fn clamp_decode_arena_to_device(
     Ok(clamped)
 }
 
+#[cfg(feature = "rocm")]
+fn begin_hip_arena_capture(
+    stream: &GraphStream,
+    device: &candle_core::Device,
+    bytes: usize,
+) -> candle_core::Result<std::sync::Arc<ArenaSlice<u8>>> {
+    graph_role::graph_arena_alloc(device, bytes).and_then(|arena| {
+        stream
+            .begin_capture_arena(arena.clone())
+            .map_err(candle_core::Error::wrap)
+            .map(|()| arena)
+    })
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+fn begin_cuda_arena_capture(
+    stream: &GraphStream,
+    device: &candle_core::Device,
+    bytes: usize,
+) -> candle_core::Result<std::sync::Arc<crate::pipeline::graph_role::CuStreamSlice>> {
+    graph_role::graph_arena_alloc_cuda(device, bytes).and_then(|arena| {
+        stream
+            .begin_capture_arena_cuda(arena.clone())
+            .map_err(candle_core::Error::wrap)
+            .map(|()| arena)
+    })
+}
+
 pub(crate) fn capture_cuda_decode_graph<F>(
     ctx: CudaDecodeGraphCaptureCtx<'_>,
     mut forward: F,
@@ -3027,31 +3087,38 @@ where
     );
     #[cfg(feature = "rocm")]
     let mut arena_keepalive: Option<Arc<ArenaSlice<u8>>> = None;
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    let mut cuda_arena_keepalive: Option<Arc<crate::pipeline::graph_role::CuStreamSlice>> = None;
 
-    // Capture allocation strategy per role: the hip role carves capture-time
-    // allocations from a plain pre-allocated arena (hip graphs with mempool
-    // nodes launch once); the NVIDIA role captures through driver mempools
-    // (upstream async allocs) and needs no arena.
+    // Capture allocation strategy per role: both roles carve capture-time
+    // allocations from a pre-allocated arena (graphs with mempool nodes
+    // launch once on either driver). Single-cuda keeps the mempool path.
     #[cfg(all(feature = "rocm", not(feature = "cuda")))]
     let use_arena = true;
     #[cfg(all(feature = "cuda", feature = "rocm"))]
-    let use_arena = stream.is_hip();
+    let use_arena = true;
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    let use_hip_arena = stream.is_hip();
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    let use_hip_arena = true;
     #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     let use_arena = false;
 
     let mut begin_err: Option<candle_core::Error> = None;
     if use_arena {
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        if !use_hip_arena {
+            match begin_cuda_arena_capture(&stream, &graph_input_ids.device(), arena_bytes) {
+                Ok(arena) => cuda_arena_keepalive = Some(arena),
+                Err(err) => begin_err = Some(err),
+            }
+        }
         #[cfg(feature = "rocm")]
-        match graph_role::graph_arena_alloc(&graph_input_ids.device(), arena_bytes).and_then(
-            |arena| {
-                stream
-                    .begin_capture_arena(arena.clone())
-                    .map_err(candle_core::Error::wrap)
-                    .map(|()| arena)
-            },
-        ) {
-            Ok(arena) => arena_keepalive = Some(arena),
-            Err(err) => begin_err = Some(err),
+        if use_hip_arena {
+            match begin_hip_arena_capture(&stream, &graph_input_ids.device(), arena_bytes) {
+                Ok(arena) => arena_keepalive = Some(arena),
+                Err(err) => begin_err = Some(err),
+            }
         }
     } else if let Err(err) = stream.begin_graph_capture(true) {
         begin_err = Some(err);
@@ -3127,11 +3194,17 @@ where
                 "CUDA decode graph arena grew {current_arena_bytes} -> {new_bytes} bytes (attempt {attempt}, consumed prefix {consumed})"
             );
             graph_input_ids.device().synchronize()?;
-            let arena = graph_role::graph_arena_alloc(&graph_input_ids.device(), new_bytes)?;
-            stream
-                .begin_capture_arena(arena.clone())
-                .map_err(candle_core::Error::wrap)?;
-            arena_keepalive = Some(arena);
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            if !use_hip_arena {
+                let arena =
+                    begin_cuda_arena_capture(&stream, &graph_input_ids.device(), new_bytes)?;
+                cuda_arena_keepalive = Some(arena);
+            }
+            #[cfg(feature = "rocm")]
+            if use_hip_arena {
+                let arena = begin_hip_arena_capture(&stream, &graph_input_ids.device(), new_bytes)?;
+                arena_keepalive = Some(arena);
+            }
             current_arena_bytes = new_bytes;
             continue;
         }
@@ -3185,6 +3258,10 @@ where
 
     #[cfg(feature = "rocm")]
     graph.set_arena(arena_keepalive.take());
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if !use_hip_arena {
+        graph.set_cuda_arena(cuda_arena_keepalive.take());
+    }
 
     graph.upload()?;
     metadata_buffers.finish_capture(&metadata);
@@ -4268,12 +4345,10 @@ impl CudaGraphHostStaging {
 }
 
 /// Devices whose decode graphs are capturable: the hip role through the
-/// fork's arena capture API. The NVIDIA role stays excluded: every
-/// isolated component captures+launches clean (trivial PTX graph, 600
-/// memalloc/memset/memcpy nodes, the PA companion pair, the fused MoE
-/// twin), but the model-scale graph segfaults inside cuGraphLaunch
-/// (gdb: NULL deref 4 frames deep in libcuda). Forensics in the journal;
-/// the flip returns when that interplay is understood.
+/// fork's arena capture API. The NVIDIA role stays parked in dual builds:
+/// capture is fixed and replays cleanly in-request, but the exec's first
+/// cross-request launch fails with INVALID_VALUE (launches 1..N-1 clean);
+/// tracked as its own slice - see the journal.
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 pub(crate) fn is_cuda_graph_device(device: &candle_core::Device) -> bool {
     device.is_hip()
@@ -4995,8 +5070,7 @@ mod tests {
         let location = device.location();
         let state_indices = Var::from_tensor(&Tensor::zeros((3,), DType::U32, &device)?)?;
         let mut state_indices_map = HashMap::from([(location, state_indices)]);
-        let mut host_staging =
-            CudaGraphHostStaging::new(GraphStream::from_graph_device(&device)?)?;
+        let mut host_staging = CudaGraphHostStaging::new(GraphStream::from_graph_device(&device)?)?;
         host_staging.update(|host_staging| {
             buffers.copy_from(&updated, &[256], 1, host_staging)?;
             copy_state_indices(&state_indices_map, &[3, 5, 7], host_staging)

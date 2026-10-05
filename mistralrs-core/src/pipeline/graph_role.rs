@@ -457,6 +457,7 @@ mod imp {
     type HipStream = hip_drv::CudaStream;
     #[cfg(feature = "rocm")]
     type HipStreamSlice = hip_drv::CudaSlice<u8>;
+    pub(crate) type CuStreamSlice = cu_drv::CudaSlice<u8>;
 
     #[derive(Clone)]
     pub(crate) enum GraphStream {
@@ -611,7 +612,8 @@ mod imp {
                     } else {
                         cu_drv::sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_GLOBAL
                     };
-                    s.begin_capture(mode).map_err(candle_core::Error::wrap)
+                    s.begin_capture_with_mode(mode)
+                        .map_err(candle_core::Error::wrap)
                 }
             }
         }
@@ -655,14 +657,13 @@ mod imp {
             }
         }
 
-        // Capture-arena bookkeeping: fork-only on the hip role; the NVIDIA
-        // role captures through driver mempools and has nothing to reset or
-        // poll. Neutral values keep the shared call sites uniform.
+        // Capture-arena bookkeeping, served per role by the cudarc forks
+        // (cudarc-hip for AMD, cudarc-nvidia companion fork for NVIDIA).
         #[cfg(feature = "rocm")]
         pub(crate) fn reset_capture_bookkeeping(&self) {
             match self {
                 Self::Hip(s) => s.reset_capture_bookkeeping(),
-                Self::Cuda(_) => {}
+                Self::Cuda(s) => s.reset_capture_bookkeeping(),
             }
         }
 
@@ -670,7 +671,7 @@ mod imp {
         pub(crate) fn is_capturing(&self) -> bool {
             match self {
                 Self::Hip(s) => s.is_capturing(),
-                Self::Cuda(_) => false,
+                Self::Cuda(s) => s.is_capturing(),
             }
         }
 
@@ -678,7 +679,7 @@ mod imp {
         pub(crate) fn capture_arena_active(&self) -> bool {
             match self {
                 Self::Hip(s) => s.capture_arena_active(),
-                Self::Cuda(_) => false,
+                Self::Cuda(s) => s.capture_arena_active(),
             }
         }
 
@@ -686,7 +687,7 @@ mod imp {
         pub(crate) fn capture_arena_consumed(&self) -> usize {
             match self {
                 Self::Hip(s) => s.capture_arena_consumed(),
-                Self::Cuda(_) => 0,
+                Self::Cuda(s) => s.capture_arena_consumed(),
             }
         }
 
@@ -694,7 +695,21 @@ mod imp {
         pub(crate) fn capture_arena_overflowed(&self) -> bool {
             match self {
                 Self::Hip(s) => s.capture_arena_overflowed(),
-                Self::Cuda(_) => false,
+                Self::Cuda(s) => s.capture_arena_overflowed(),
+            }
+        }
+
+        pub(crate) fn begin_capture_arena_cuda(
+            &self,
+            arena: std::sync::Arc<CuStreamSlice>,
+        ) -> candle_core::Result<()> {
+            match self {
+                Self::Cuda(s) => s
+                    .begin_capture_arena(arena)
+                    .map_err(candle_core::Error::wrap),
+                Self::Hip(_) => {
+                    candle_core::bail!("cuda-role arena on the AMD-role stream")
+                }
             }
         }
 
@@ -847,6 +862,19 @@ mod imp {
                 candle_core::bail!("capture arena allocation requires the hip role device")
             }
             other => candle_core::bail!("capture arena requires a GPU device, got {other:?}"),
+        }
+    }
+
+    pub(crate) fn graph_arena_alloc_cuda(
+        device: &candle_core::Device,
+        bytes: usize,
+    ) -> candle_core::Result<std::sync::Arc<CuStreamSlice>> {
+        use candle_core::backend::BackendDevice;
+        match device {
+            candle_core::Device::Cuda(d) => Ok(std::sync::Arc::new(
+                unsafe { d.alloc::<u8>(bytes) }.map_err(candle_core::Error::wrap)?,
+            )),
+            other => candle_core::bail!("cuda-role arena requires a CUDA device, got {other:?}"),
         }
     }
 

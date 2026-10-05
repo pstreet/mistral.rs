@@ -233,3 +233,10 @@ incremental = true
 [profile.dev]
 debug = true
 opt-level = 3
+
+# NVIDIA-role CUDA companion fork: upstream cudarc plus the graph-capture
+# arena ported from cudarc-hip (capture-time bump allocation, graph-owned
+# slices). Serves the dual NVIDIA role's arena capture; zero behavior
+# change when no arena is installed.
+[patch.crates-io]
+cudarc = { path = "../cudarc-nvidia" }

@@ -18,7 +18,7 @@ use candle_core::cuda_backend::cudarc::driver::{
 };
 use candle_core::cuda_backend::{CudaDevice, CudaStorage};
 use candle_core::quantized::{GgmlDType, QTensor};
-use candle_core::{Device, DType, Result, Shape, Storage, Tensor};
+use candle_core::{DType, Device, Result, Shape, Storage, Tensor};
 
 pub const MATRIX_ROW_PADDING: usize = 512;
 const CUDA_QUANTIZE_BLOCK_SIZE: usize = 256;
@@ -576,9 +576,9 @@ pub unsafe fn moe_weighted_reduce_flat_cuda(
     num_tokens: usize,
     topk: usize,
 ) -> Result<Tensor> {
-    let expected_assignments = num_tokens
-        .checked_mul(topk)
-        .ok_or_else(|| candle_core::Error::msg("moe_weighted_reduce_flat_cuda: route count overflow"))?;
+    let expected_assignments = num_tokens.checked_mul(topk).ok_or_else(|| {
+        candle_core::Error::msg("moe_weighted_reduce_flat_cuda: route count overflow")
+    })?;
     let (total_assignments, hidden) = inputs.dims2()?;
     if total_assignments != expected_assignments {
         candle_core::bail!(
@@ -620,8 +620,10 @@ pub unsafe fn moe_weighted_reduce_flat_cuda(
     let stream = cuda_stream.cu_stream() as *mut std::ffi::c_void;
 
     {
-        let (input_ptr, _ig) = slice_ptr_on_stream(input_slice, layout.start_offset(), &cuda_stream);
-        let (weights_ptr, _wg) = slice_ptr_on_stream(tw_slice, tw_layout.start_offset(), &cuda_stream);
+        let (input_ptr, _ig) =
+            slice_ptr_on_stream(input_slice, layout.start_offset(), &cuda_stream);
+        let (weights_ptr, _wg) =
+            slice_ptr_on_stream(tw_slice, tw_layout.start_offset(), &cuda_stream);
         let (out_ptr, _og) = slice_ptr(&out, 0);
         let status = ffi_cuda::cuda_launch_moe_weighted_reduce_flat(
             input_ptr as *const std::ffi::c_void,
@@ -666,7 +668,9 @@ pub unsafe fn moe_weighted_reduce_flat_bf16_cuda(
     }
     let dev = match inputs.device() {
         Device::Cuda(dev) => dev,
-        _ => candle_core::bail!("moe_weighted_reduce_flat_bf16_cuda: input must live on the CUDA role"),
+        _ => candle_core::bail!(
+            "moe_weighted_reduce_flat_bf16_cuda: input must live on the CUDA role"
+        ),
     };
 
     let inputs = inputs.contiguous()?;
@@ -681,7 +685,9 @@ pub unsafe fn moe_weighted_reduce_flat_bf16_cuda(
         .contiguous()?;
     let (tw_storage, tw_layout) = topk_weights.storage_and_layout();
     let Storage::Cuda(tw_nv) = &*tw_storage else {
-        candle_core::bail!("moe_weighted_reduce_flat_bf16_cuda: weights must live on the CUDA role");
+        candle_core::bail!(
+            "moe_weighted_reduce_flat_bf16_cuda: weights must live on the CUDA role"
+        );
     };
     let tw_slice = tw_nv.as_cuda_slice::<f32>()?;
 
@@ -690,8 +696,10 @@ pub unsafe fn moe_weighted_reduce_flat_bf16_cuda(
     let stream = cuda_stream.cu_stream() as *mut std::ffi::c_void;
 
     {
-        let (input_ptr, _ig) = slice_ptr_on_stream(input_slice, layout.start_offset(), &cuda_stream);
-        let (weights_ptr, _wg) = slice_ptr_on_stream(tw_slice, tw_layout.start_offset(), &cuda_stream);
+        let (input_ptr, _ig) =
+            slice_ptr_on_stream(input_slice, layout.start_offset(), &cuda_stream);
+        let (weights_ptr, _wg) =
+            slice_ptr_on_stream(tw_slice, tw_layout.start_offset(), &cuda_stream);
         let (out_ptr, _og) = slice_ptr(&out, 0);
         let status = ffi_cuda::cuda_launch_moe_weighted_reduce_flat_bf16(
             input_ptr as *const std::ffi::c_void,
@@ -783,7 +791,7 @@ mod tests {
             .map_err(candle_core::Error::wrap)?;
         unsafe { stream.context().disable_event_tracking() };
         stream
-            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .begin_capture_with_mode(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
             .map_err(candle_core::Error::wrap)?;
         let replayed = unsafe {
             indexed_moe_fused_decode_cuda(&gate, &up, &down, &xs, &ids, &weights, TOKENS, TOPK, 0)?

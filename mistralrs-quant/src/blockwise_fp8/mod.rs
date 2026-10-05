@@ -1505,7 +1505,7 @@ mod tests {
             drop((output, fused));
             Ok(())
         })();
-        let graph = stream.end_capture(
+        let graph = stream.end_capture_with_flags(
             sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
         );
         if restore_event_tracking {
@@ -1656,7 +1656,7 @@ mod tests {
                 drop(output);
                 Ok(())
             });
-        let graph = stream.end_capture(
+        let graph = stream.end_capture_with_flags(
             sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
         );
         if restore_event_tracking {

@@ -852,12 +852,8 @@ fn tensor_rope_rows(
             let rows = cos.dim(0)?;
             if rows == seq_len && batch > 1 {
                 let width = cos.dim(1)?;
-                cos = cos
-                    .broadcast_as((batch, seq_len, width))?
-                    .flatten(0, 1)?;
-                sin = sin
-                    .broadcast_as((batch, seq_len, width))?
-                    .flatten(0, 1)?;
+                cos = cos.broadcast_as((batch, seq_len, width))?.flatten(0, 1)?;
+                sin = sin.broadcast_as((batch, seq_len, width))?.flatten(0, 1)?;
             }
             (cos, sin)
         }
@@ -900,12 +896,17 @@ fn tensor_rope_one(
         let x1 = x.narrow(D::Minus1, 0, rot)?;
         let x2 = x.narrow(D::Minus1, rot, rot)?;
         let out = Tensor::cat(
-            &[&(x1.broadcast_mul(&cos)? - x2.broadcast_mul(&sin)?)?, &(x2.broadcast_mul(&cos)? + x1.broadcast_mul(&sin)?)?],
+            &[
+                &(x1.broadcast_mul(&cos)? - x2.broadcast_mul(&sin)?)?,
+                &(x2.broadcast_mul(&cos)? + x1.broadcast_mul(&sin)?)?,
+            ],
             D::Minus1,
         )?;
         (out, head_dim - rot * 2)
     } else {
-        let pairs = x.narrow(D::Minus1, 0, rot * 2)?.reshape((tokens, heads, rot, 2))?;
+        let pairs = x
+            .narrow(D::Minus1, 0, rot * 2)?
+            .reshape((tokens, heads, rot, 2))?;
         let cos = cos.unsqueeze(3)?;
         let sin = sin.unsqueeze(3)?;
         let even = pairs.narrow(D::Minus1, 0, 1)?;
@@ -945,7 +946,8 @@ fn tensor_apply_rotary_q(
     // (batch, heads, seq, dim) -> (batch * seq, heads, dim) for the op path.
     let x = q.transpose(1, 2)?.flatten(0, 1)?;
     let out = tensor_rope_one(&x, &cos_rows, &sin_rows, is_neox)?;
-    out.reshape((batch, seq_len, heads, head_dim))?.transpose(1, 2)
+    out.reshape((batch, seq_len, heads, head_dim))?
+        .transpose(1, 2)
 }
 
 fn tensor_apply_rotary_qk(
@@ -960,10 +962,10 @@ fn tensor_apply_rotary_qk(
         candle_core::bail!("q/k dtype mismatch {:?} {:?}", q.dtype(), k.dtype());
     }
     check_qk_shape(q, k)?;
-    let (q_out, k_out) = rayon::join(
-        || tensor_apply_rotary_q(q, cos, sin, positions, is_neox),
-        || tensor_apply_rotary_q(k, cos, sin, positions, is_neox),
-    );
+    // Graph capture is thread-bound: rayon workers launch kernels from threads
+    // the capture never saw, so replay silently drops a branch. Run in order.
+    let q_out = tensor_apply_rotary_q(q, cos, sin, positions, is_neox);
+    let k_out = tensor_apply_rotary_q(k, cos, sin, positions, is_neox);
     Ok((q_out?, k_out?))
 }
 
@@ -1873,8 +1875,7 @@ mod tensor_rope_tests {
         };
 
         let (q_cpu, k_cpu) = cpu_apply_rotary_qk(&q, &k, &cos, &sin, positions.as_ref(), is_neox)?;
-        let (q_t, k_t) =
-            tensor_apply_rotary_qk(&q, &k, &cos, &sin, positions.as_ref(), is_neox)?;
+        let (q_t, k_t) = tensor_apply_rotary_qk(&q, &k, &cos, &sin, positions.as_ref(), is_neox)?;
         for (label, host, tensor) in [("q", &q_cpu, &q_t), ("k", &k_cpu, &k_t)] {
             let host = host.flatten_all()?.to_vec1::<f32>()?;
             let tensor = tensor.flatten_all()?.to_vec1::<f32>()?;
@@ -1961,6 +1962,92 @@ mod dual_cuda_capture_tests {
         Ok((base + layout.start_offset() as u64, bytes))
     }
 
+    /// Capture+relaunch matches eager for the preselected q/k rope path.
+    /// Guards the capture-thread rule: both branches must launch on the
+    /// capturing thread (a rayon join once dropped a branch at replay).
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[test]
+    #[ignore = "requires the dual CUDA role (3090)"]
+    fn rope_qk_capture_launch_matches_eager() -> Result<()> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
+        use candle_core::{DType, Device, Tensor};
+
+        let dev = Device::new_cuda(0)?;
+        let k = Tensor::from_vec(
+            (0..512).map(|i| i as f32 * 0.01).collect::<Vec<_>>(),
+            (1, 4, 1, 128),
+            &Device::Cpu,
+        )?
+        .to_dtype(DType::F32)?
+        .to_device(&dev)?;
+        let cos_rows = Tensor::from_vec(
+            (0..64).map(|i| (i as f32 * 0.02).cos()).collect::<Vec<_>>(),
+            (1, 64),
+            &Device::Cpu,
+        )?
+        .to_device(&dev)?;
+        let sin_rows = Tensor::from_vec(
+            (0..64).map(|i| (i as f32 * 0.02).sin()).collect::<Vec<_>>(),
+            (1, 64),
+            &Device::Cpu,
+        )?
+        .to_device(&dev)?;
+        let run = || -> Result<Tensor> {
+            Ok(super::tensor_apply_rotary_qk(&k, &k, &cos_rows, &sin_rows, None, true)?.1)
+        };
+        let _htod_guard = match &dev {
+            Device::Cuda(d) => Some(d.enable_cuda_graph_htod_cache()),
+            _ => None,
+        };
+        let eager = run()?.flatten_all()?.to_dtype(DType::F32)?;
+        let eager_vals = eager.to_vec1::<f32>()?;
+        dev.synchronize()?;
+
+        let cuda_dev = match &dev {
+            Device::Cuda(d) => d,
+            _ => candle_core::bail!("expected cuda device"),
+        };
+        let stream = cuda_dev.cuda_stream();
+        stream
+            .context()
+            .bind_to_thread()
+            .map_err(candle_core::Error::wrap)?;
+        unsafe { stream.context().disable_event_tracking() };
+        stream
+            .begin_capture_with_mode(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .map_err(candle_core::Error::wrap)?;
+        let out = run()?;
+        let replayed = out.flatten_all()?;
+        let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut exec: *mut core::ffi::c_void = std::ptr::null_mut();
+        unsafe {
+            let r =
+                sys::cuStreamEndCapture(stream.cu_stream(), core::ptr::from_mut(&mut graph).cast());
+            assert_eq!(r as i32, 0, "end capture");
+            let r = sys::cuGraphInstantiateWithFlags(
+                core::ptr::from_mut(&mut exec).cast(),
+                graph.cast(),
+                1,
+            );
+            assert_eq!(r as i32, 0, "instantiate");
+            let r = sys::cuGraphUpload(exec.cast(), stream.cu_stream());
+            assert_eq!(r as i32, 0, "upload");
+            let r = sys::cuGraphLaunch(exec.cast(), stream.cu_stream());
+            assert_eq!(r as i32, 0, "launch");
+            stream.context().enable_event_tracking();
+        }
+        dev.synchronize()?;
+
+        let got = replayed.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+        let max_diff = eager_vals
+            .iter()
+            .zip(&got)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0f32, f32::max);
+        assert!(max_diff < 1e-6, "rope q/k replay diverged: {max_diff}");
+        Ok(())
+    }
+
     /// Capture probe for the NVIDIA-role rope path (eager index_select +
     /// to_dtype + narrow + broadcast bmul + cat). Green exonerates the op
     /// family; red would bisect within the chain.
@@ -2028,7 +2115,7 @@ mod dual_cuda_capture_tests {
             .map_err(candle_core::Error::wrap)?;
         unsafe { stream.context().disable_event_tracking() };
         stream
-            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .begin_capture_with_mode(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
             .map_err(candle_core::Error::wrap)?;
         let replayed = run(&k)?.flatten_all()?;
         let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();

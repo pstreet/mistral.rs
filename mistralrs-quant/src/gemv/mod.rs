@@ -643,7 +643,7 @@ mod tests {
             unsafe { stream.context().disable_event_tracking() };
         }
         if let Err(error) =
-            stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            stream.begin_capture_with_mode(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
         {
             if restore_event_tracking {
                 unsafe { stream.context().enable_event_tracking() };
@@ -651,7 +651,7 @@ mod tests {
             return Err(cuda_error("CUDA graph capture failed", error));
         }
         let captured = capture();
-        let graph = stream.end_capture(
+        let graph = stream.end_capture_with_flags(
             sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
         );
         if restore_event_tracking {

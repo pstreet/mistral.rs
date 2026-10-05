@@ -3114,7 +3114,7 @@ mod tests {
                     }
                     Ok(())
                 });
-            let graph = stream.end_capture(
+            let graph = stream.end_capture_with_flags(
                 sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
             );
             if restore_event_tracking {
@@ -3296,7 +3296,7 @@ mod tests {
             return Err(candle_core::Error::msg(error.to_string()));
         }
         let captured = capture();
-        let graph = stream.end_capture(
+        let graph = stream.end_capture_with_flags(
             sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
         );
         if restore_event_tracking {
@@ -3824,7 +3824,7 @@ mod tests {
                 Ok(())
             },
         );
-        let graph = stream.end_capture(
+        let graph = stream.end_capture_with_flags(
             sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
         );
         if restore_event_tracking {

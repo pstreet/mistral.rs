@@ -2144,6 +2144,37 @@ mistral.rs hot zones, then merge.
       The planned CK grouped-GEMM port is dead for this fleet: decode already uses
       custom quantized GEMV (`moe_gemv.cu`); CK grouped GEMM targets the BF16 path
       GGUF models never take at decode.
+- [x] ~M NVIDIA-role decode graphs (fixed 2026-10-05). Model-scale capture
+      replayed half the rope math: `tensor_apply_rotary_qk`
+      (`mistralrs-quant/src/rotary/mod.rs`) ran q/k branches via `rayon::join`,
+      and graph capture is thread-bound, so the worker-thread branch never
+      landed in the capture; replay silently returned first-element
+      replication (small-scale) / wild device read (model-scale, N>=4 layers).
+      Proved by bisection (single/double/sequential chains green, rayon qk
+      red). Fix: sequential launches on the GPU tensor path (CPU keeps its
+      join). Full 16B graphs green at full scale in-request, 0 faults,
+      coherent text. Companion changes: CUDA capture arena via the
+      cudarc-nvidia fork (`graph_role.rs`, `cuda_graph.rs`), hybrid-restore
+      `catch_unwind` hardening (`multimodal.rs`), lookahead bail -> warn +
+      host-sampling fallback for the non-serving role (`execution.rs`),
+      `SlicePtrOrNull::Null` static dims (`candle`). Regression:
+      `rope_qk_capture_launch_matches_eager`.
+      REMAINING (parked): first decode of the SECOND request on the same
+      server fails at its first graph replay with bare
+      `CUDA_ERROR_INVALID_VALUE` while the first request's ~9 replays and
+      all eager work are clean; same-prompt repro, not sticky (5/6 requests
+      pass with twin-workspace reset active; sticky without it), no memory
+      faults under compute-sanitizer (it caught a synchronous API error:
+      "Parameter ordinal must be between 0 and 1"), twin workspaces
+      exonerated (fresh-alloc probe still fails once), stuck
+      capture-flag/arena exonerated (per-step state probe false/false at
+      failure), upload-skip exonerated. Surface: replay-lifecycle of the
+      exec across requests (launch N vs 1..N-1). Parked with
+      `BackendCaps.graphs=false` + `is_cuda_graph_device` hip-only; serving
+      without graphs is excellent (16B decode 44.9 T/s cuda vs 39.2 hip).
+      Next slice: instrument replay prelaunch/launch per stage, try
+      per-request exec re-instantiation, or driver-level exec-node dump.
+      cuda-alone still broken (pre-existing fork drift), revival queued.
 
 ---
 

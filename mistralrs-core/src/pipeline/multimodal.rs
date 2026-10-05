@@ -1932,6 +1932,24 @@ impl MultimodalPipeline {
         &self,
         snapshots: Option<&[(usize, RecurrentCheckpointStateSnapshot)]>,
     ) -> candle_core::Result<()> {
+        // The rollback allocates/uploads (from_vec, clones) on the capture
+        // stream; if the capture already poisoned it, cudarc unwraps instead
+        // of erroring. Catch it so the forward's own error (or a clean
+        // rollback failure) surfaces instead of killing the worker.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.restore_hybrid_recurrent_checkpoints_inner(snapshots)
+        })) {
+            Ok(result) => result,
+            Err(_) => candle_core::bail!(
+                "recurrent checkpoint rollback panicked (capture stream poisoned?)"
+            ),
+        }
+    }
+
+    fn restore_hybrid_recurrent_checkpoints_inner(
+        &self,
+        snapshots: Option<&[(usize, RecurrentCheckpointStateSnapshot)]>,
+    ) -> candle_core::Result<()> {
         let Some(snapshots) = snapshots else {
             return Ok(());
         };

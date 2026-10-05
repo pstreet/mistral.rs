@@ -1075,7 +1075,7 @@ mod tests {
 
         let capture = |xs: &Tensor| -> Result<(Tensor, *mut core::ffi::c_void)> {
             stream
-                .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+                .begin_capture_with_mode(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
                 .map_err(candle_core::Error::wrap)?;
             let out = run(xs)?;
             let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
@@ -1204,7 +1204,7 @@ mod tests {
             .map_err(candle_core::Error::wrap)?;
         unsafe { stream.context().disable_event_tracking() };
         stream
-            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .begin_capture_with_mode(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
             .map_err(candle_core::Error::wrap)?;
         let replayed = run(&xs)?.flatten_all()?;
         let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
@@ -1299,7 +1299,7 @@ mod tests {
             .map_err(candle_core::Error::wrap)?;
         unsafe { stream.context().disable_event_tracking() };
         stream
-            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .begin_capture_with_mode(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
             .map_err(candle_core::Error::wrap)?;
         let replayed = run()?.flatten_all()?;
         let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
@@ -1318,6 +1318,20 @@ mod tests {
             assert_eq!(r as i32, 0, "upload");
         }
 
+
+        // Placement churn BETWEEN upload and first launch: pool reuse may
+        // re-place the exec's re-mallocs on relaunch; a missed driver patch
+        // then reads stale VAs. Model serving always churns here (prefill);
+        // prior probes only churned after launch1.
+        {
+            let mut churn = Vec::new();
+            for _ in 0..4 {
+                churn.push(Tensor::zeros((512 << 20,), DType::U8, &dev)?);
+            }
+            dev.synchronize()?;
+            drop(churn);
+            dev.synchronize()?;
+        }
         let check = |tag: &str| -> Result<()> {
             unsafe {
                 let r = sys::cuGraphLaunch(exec.cast(), stream.cu_stream());
@@ -1426,7 +1440,7 @@ mod tests {
             .map_err(candle_core::Error::wrap)?;
         unsafe { stream.context().disable_event_tracking() };
         stream
-            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .begin_capture_with_mode(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
             .map_err(candle_core::Error::wrap)?;
         let replayed = run()?.flatten_all()?;
         let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
@@ -1534,7 +1548,7 @@ mod tests {
             .map_err(candle_core::Error::wrap)?;
         unsafe { stream.context().disable_event_tracking() };
         stream
-            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .begin_capture_with_mode(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
             .map_err(candle_core::Error::wrap)?;
         let replayed = run()?.flatten_all()?;
         let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
@@ -1626,7 +1640,7 @@ mod tests {
             .map_err(candle_core::Error::wrap)?;
         unsafe { stream.context().disable_event_tracking() };
         stream
-            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .begin_capture_with_mode(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
             .map_err(candle_core::Error::wrap)?;
         let replayed = run()?.flatten_all()?;
         let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
@@ -1732,7 +1746,7 @@ mod tests {
             .map_err(candle_core::Error::wrap)?;
         unsafe { stream.context().disable_event_tracking() };
         stream
-            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .begin_capture_with_mode(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
             .map_err(candle_core::Error::wrap)?;
         let replayed = run()?.flatten_all()?;
         let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
@@ -1771,6 +1785,78 @@ mod tests {
         check("launch1")?;
         check("launch2")?;
 
+        unsafe {
+            stream.context().enable_event_tracking();
+        }
+        Ok(())
+    }
+
+    /// Arena-capture probe: exercises the cudarc-nvidia fork path directly
+    /// (slab, begin_capture_arena, carve, fork-exec relaunch). Green means
+    /// the fork machinery is sound; red gives a small repro to bisect.
+    #[test]
+    #[ignore = "requires the dual CUDA role (3090)"]
+    fn arena_capture_relaunch_stability() -> Result<()> {
+        const N: usize = 256;
+
+        let dev = Device::new_cuda(0)?;
+        let x_host: Vec<f32> = (0..N).map(|i| ((i as f32 * 0.7).sin() * 0.5).abs()).collect();
+        let s_host: Vec<f32> = (0..N).map(|i| 1.0 + (i as f32 * 0.02).cos() * 0.1).collect();
+        let x = Tensor::from_vec(x_host, (1, 1, N), &dev)?.to_dtype(DType::BF16)?;
+        let scale = Tensor::from_vec(s_host, (1, 1, N), &dev)?.to_dtype(DType::BF16)?;
+
+        let run = || -> Result<Tensor> {
+            let t1 = x.broadcast_mul(&scale)?;
+            let cvt = t1.to_dtype(DType::F32)?;
+            let t2 = cvt.to_dtype(DType::BF16)?;
+            drop(cvt);
+            t2.broadcast_mul(&scale)
+        };
+
+        let _htod_guard = match &dev {
+            Device::Cuda(d) => Some(d.enable_cuda_graph_htod_cache()),
+            _ => None,
+        };
+        let eager = run()?.flatten_all()?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+        dev.synchronize()?;
+
+        let cuda_dev = match &dev {
+            Device::Cuda(d) => d,
+            _ => candle_core::bail!("expected cuda device"),
+        };
+        let stream = cuda_dev.cuda_stream();
+        stream.context().bind_to_thread().map_err(candle_core::Error::wrap)?;
+        unsafe { stream.context().disable_event_tracking() };
+        let slab = unsafe { stream.alloc::<u8>(1 << 20) }.map_err(candle_core::Error::wrap)?;
+        let slab = std::sync::Arc::new(slab);
+        stream
+            .begin_capture_arena(slab.clone())
+            .map_err(candle_core::Error::wrap)?;
+        let replayed = run()?.flatten_all()?;
+        let exec = stream.end_capture().map_err(candle_core::Error::wrap)?;
+        assert!(
+            !stream.capture_arena_overflowed(),
+            "arena overflowed on a 1MB slab"
+        );
+        eprintln!(
+            "[arena-probe] consumed={} overflowed={}",
+            stream.capture_arena_consumed(),
+            stream.capture_arena_overflowed()
+        );
+        for tag in ["launch1", "launch2"] {
+            exec.launch().map_err(candle_core::Error::wrap)?;
+            dev.synchronize()?;
+            let got = replayed.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+            let max_diff = eager
+                .iter()
+                .zip(&got)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0f32, f32::max);
+            eprintln!("[arena-probe] {tag}: max_diff={max_diff}");
+            assert!(max_diff < 1e-1, "{tag} diverged: {max_diff}");
+        }
+        drop(exec);
+        drop(slab);
         unsafe {
             stream.context().enable_event_tracking();
         }
@@ -1830,7 +1916,7 @@ mod tests {
             .map_err(candle_core::Error::wrap)?;
         unsafe { stream.context().disable_event_tracking() };
         stream
-            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .begin_capture_with_mode(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
             .map_err(candle_core::Error::wrap)?;
         let replayed = run_once(&staging)?.flatten_all()?;
         let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
@@ -1963,7 +2049,7 @@ mod tests {
 
         unsafe { stream.context().disable_event_tracking() };
         stream
-            .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            .begin_capture_with_mode(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
             .map_err(candle_core::Error::wrap)?;
         let replayed = run()?.flatten_all()?;
         let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
