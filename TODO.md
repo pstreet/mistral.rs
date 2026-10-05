@@ -1413,6 +1413,15 @@ P3 = polish, Deferred = do not do on RDNA.
       nodes) is the structural fix. POLICY CHANGE (user-ordered): all
       shapes supported (cpu/rocm/cuda + comma combinations + future
       vulkan, no compounds); AGENTS.md updated, three-shape rule retired.
+      CUDA VS ROCM SERVING BENCH (2026-10-05, same dual binary, batch 1,
+      Q8_0 KV, 150 completion tokens): 16B Q4_K_M (1939-tok prompt):
+      prefill hip 740 vs cuda 2171 (2.9x), decode hip 39.2 (graphs on)
+      vs cuda 44.9 (graphs OFF); 27B ISQ-Q4K (1983-tok prompt): prefill
+      hip 337 vs cuda 907 (2.7x), decode hip 9.5 vs cuda 27.7 (2.9x).
+      Prefill gap is FLOPS (compute-bound, expected); 16B decode is
+      close (launch-overhead-bound at batch 1, and cuda leads DESPITE
+      missing graphs). 27B hip decode (9.5) is the outlier: AMD-role
+      GDN/hybrid decode is the next hip-side optimization target.
       cuda-alone is structurally broken (pre-existing candle-upstream-cudarc
       API drift: CudaGraphExec et al.) - revival is its own queued slice,
       current work closes first. The twin's
