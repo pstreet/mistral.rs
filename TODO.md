@@ -102,15 +102,32 @@ facade today, so the MTP port gates the cutover):
       were removed before landing; re-add as needed.
 
 - [ ] ~M 27B/4B cuda-only capture abort (correctness, open):
-      the 4B (multimodal pipeline, non-hybrid cache) aborts on its
-      first decode-graph capture in cuda-only (pool-restore warn +
-      poisoned-capture clone at cudarc 957), reproducible with
-      FlashInfer on and off; the dual 4B bench ran graphs env-off
-      so this path was never dual-validated for the 4B either.
-      Workaround: MISTRALRS_CUDA_GRAPHS=0 (matches dual posture).
-      The 27B serves eager via the widened hybrid gate (correct,
-      quiet). Debug queued - likely the same restore-hoist family
-      as the hybrid item, but on the multimodal non-hybrid path.
+      CORRECTION 2026-10-07: the 4B IS hybrid (NormalPipeline, text-only
+      GGUF path; "Recurrent state pool reserved" in the serve log) - the
+      earlier "non-hybrid" label was wrong. So this item and the hoist
+      below are one bug, and the aborting pipeline was normal.rs, which
+      (unlike multimodal.rs) had NO hybrid eager-skip gate.
+      REPRODUCED 2026-10-07, twice, cuda-only release (rev 0f61a5210,
+      graphs on, smoke4b-cuda.toml): first decode-graph capture attempt
+      logs "Failed to restore CUDA graph memory pool threshold ...
+      CUDA_ERROR_STREAM_CAPTURE_UNSUPPORTED" then aborts at
+      cudarc-nvidia safe/core.rs:957 (`Clone::clone` unwrap on
+      CUDA_ERROR_STREAM_CAPTURE_INVALIDATED; release panic=abort, core
+      dumped). Chain: an illegal op inside the capture window (restore
+      `from_vec` family) poisons the stream; the next slice clone
+      unwraps instead of erroring.
+      FIX (correctness, in-tree, pending verify): mirrored the multimodal
+      hybrid eager-skip gate into NormalPipeline::try_cuda_decode_graph_
+      forward + precapture impl (cfg(feature=cuda), warn-once, dispatch
+      Skipped/ModelUnsupported). Hybrid models on the NVIDIA role now
+      skip capture loudly in BOTH pipelines; true graphs-on needs the
+      hoist below. Workaround MISTRALRS_CUDA_GRAPHS=0 no longer needed
+      for correctness (kept as a perf posture knob).
+      VERIFIED 2026-10-07: fast cuda-only binary serves the 4B smoke with
+      graphs ON - the "hybrid models keep eager decode" warn fires from
+      pipeline::normal, clean serve, 0 panic/abort lines. (Empty short-
+      budget content is the known thinking-model quirk, not a
+      regression.)
 - [ ] ~M Hybrid restore hoist: move the recurrent checkpoint restore out
       of the capture window (post-`end_capture`) so hybrid models (27B/4B)
       can capture on the NVIDIA role; then drop the multimodal eager-skip
