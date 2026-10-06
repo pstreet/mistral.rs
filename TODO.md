@@ -26,6 +26,42 @@ P3 = polish, Deferred = do not do on RDNA.
 
 ## P0. Do first — highest impact per effort (days)
 
+### Graphs/MTP parity queue (opened 2026-10-06, from the 4B/27B benches)
+
+- [ ] ~M Hybrid restore hoist: move the recurrent checkpoint restore out
+      of the capture window (post-`end_capture`) so hybrid models (27B/4B)
+      can capture on the NVIDIA role; then drop the multimodal eager-skip
+      gates. Evidence chain in the 2026-10-06 bench entry: release
+      `panic=abort` + fork slice-clone unwrap on the invalidated capture
+      (restore `from_vec` poisons the stream). Until then hybrid models
+      serve eager on the NVIDIA role by loud skip.
+- [ ] ~M `speculative_rejection.rs` dual-role port (pinned staging, stream
+      events, 3 kernel-launch ops, dense row packing - all CudaStorage
+      typed): the last code gap for MTP on the dual hip role. The hybrid
+      MTP rollback is already unblocked (indexed_copy dual port,
+      2026-10-06); this file gates the MTP verify path.
+- [ ] ~M NVIDIA-role MTP: (a) memory - 27B Q4K + drafter = PA "0 GPU
+      blocks" at BOTH 2048MB and 1024MB KV (mtp-off fits at 21.4GB/24GB);
+      try smaller KV + `mtp_draft_lm_head_isq = "Q4K"` before anything
+      else; (b) speculative kernels are hip-side (role caps mtp=false).
+- [ ] ~S 16B graph perf note: the twin's per-layer `final_out`
+      `alloc_zeros` bypasses the capture arena (48 MEMALLOC + MEMSET +
+      MEMFREE nodes in the captured graph; harmless under
+      AUTO_FREE_ON_LAUNCH but re-allocates per launch). Find the bypass
+      or accept-and-document.
+- [ ] ~S gemv companion twin (the gemv landmine fix is gated dual-wide
+      false; the NVIDIA role takes the plain GEMM in dual builds -
+      journal entry at the 2026-10-05 MMVQ work).
+- [ ] ~S fp8 NVIDIA-role parity (currently a loud dual bail; port the
+      fp8 kernels to the nvcc companion).
+- [ ] ~M cuda-alone revival (pre-existing candle/upstream-cudarc drift:
+      `CudaGraphExec`, `stream.alloc`, `begin_capture(mode)` etc. in
+      candle's device.rs; the vendored cudarc-nvidia now carries most of
+      the fork API, so this is a port/patch-wiring job).
+- [ ] ~S optional prod knob: `mtp_draft_lm_head_isq = "Q4K"` in prod
+      mistralrs.toml (measured +2.6% decode on the 35B; harmless to
+      quality).
+
 - [x] ~M 35B trio quant A/B: Q4_K_XL vs Q5_K_XL vs Q8_0 (done 2026-09-25, was §4). Retargeted: no Q4_K_XL
       exists for the orcarouter 27B serving default, so ran the on-disk 35B trio
       (same base, isolates quant): essay 600tok temp0.3, MTP n=2 greedy, graphs on,
@@ -521,7 +557,12 @@ P3 = polish, Deferred = do not do on RDNA.
       now attached - the cuda role has real hardware for the first time,
       so dual-build two-vendor validation is unblocked (serving stays on
       the AMD role by doctrine; auto-selection confirms Hip as the serving
-      device with the 3090 present). Known refinement needed before the
+      device with the 3090 present). UPDATE 2026-10-06: dual two-vendor
+      serving proven end-to-end (4B across cpu/rocm/cuda and 27B
+      cuda/rocm ISQ-Q4K, journaled with benches); cudarc-nvidia vendored
+      in the candle repo like cudarc-hip; decode graphs live on both
+      roles. Remaining for this item: Intel/Vulkan roles and the
+      device-keyed FlashInfer gate below. Known refinement needed before the
       3090 can claim FlashInfer in a dual build: the supports_layer gate
       is BUILD-shape-keyed (all(cuda, not(rocm)), commit 94e1171c5) not
       device-keyed - correct for the hip serving role, suboptimal if a
@@ -2304,13 +2345,13 @@ v1/v2, reshape_and_cache, gather_kv, copy/swap blocks, FP8 KV via `-DENABLE_FP8`
 decode/FA3/MLA/Sinks, GDN FlashInfer SM90 prefill, Cutlass/DeepGEMM/Marlin MoE,
 most `mistralrs-quant` FP8 kernels, speculative dflash/FA3 paths.
 
-## Appendix B. Build health (re-verified 2026-10-04; policy: all shapes supported)
+## Appendix B. Build health (re-verified 2026-10-06; policy: all shapes supported)
 
 | Configuration | Status |
 |---------------|--------|
-| CPU-only (`cargo check -p mistralrs-core -p mistralrs-quant`) | Pass |
+| CPU-only (`cargo check -p mistralrs-core -p mistralrs-quant`) | Pass (4B serves on cpu, benched) |
 | ROCm (`cargo check -p mistralrs-core -p mistralrs-quant --features rocm`) | Pass, prod serves on :1235 |
-| Dual (`cargo check/build --features cuda,rocm`) | Pass, serves 16B + 27B on 3090 |
+| Dual (`cargo check/build --features cuda,rocm`) | Pass, serves 4B/16B/27B on the 3090 and the APU; decode graphs live on both roles (NVIDIA role: non-hybrid models; hybrid models gated eager pending the restore hoist) |
 | CUDA-only (`--features cuda`) | Broken, pre-existing fork drift (candle expects cudarc APIs upstream 0.19.8 lacks: `CudaGraphExec` et al.); revival queued as its own slice |
 
 CPU fallback notes: `mistralrs-paged-attn` is a required dependency of
