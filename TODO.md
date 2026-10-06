@@ -2229,9 +2229,47 @@ mistral.rs hot zones, then merge.
           setting (the 27B is the MTP-bearing model).
       (c) ops: mistralrs-server.service is a systemd USER unit
           (~/.config/systemd/user/); pause with `systemctl --user stop
-          mistralrs-server-healthcheck.timer mistralrs-server.service`
-          (sudo systemctl queries the wrong manager), and let it drain
-          >10s before benching the APU.
+          mistralrs-server-healthcheck.service;
+          systemctl --user stop mistralrs-server-healthcheck.timer
+          mistralrs-server.service` (sudo queries the wrong manager), poll
+          until :1235 is truly down (graceful drain of the 27B takes
+          seconds), and restore both after.
+- [x] ~M 27B (Qwen3.8-27B Q6_K + ISQ Q4K) bench, cuda vs rocm, best
+      working settings (2026-10-06, release dual build, same harness:
+      essay-600tok temp0.3 x3, 270-tok prefill x3):
+      - CUDA (3090, graphs on -> loud hybrid skip -> eager, MTP off):
+        decode 28.85 tok/s (28.48/28.85/28.98), prefill ~4.6k tok/s warm
+        (270-tok prompt; first-run 938). Resident 21.4GB / 24GB.
+      - ROCm (APU, graphs ON live - hybrid capture + replay clean,
+        MTP off): decode 11.40 tok/s (11.38/11.40/11.40), prefill
+        ~337 tok/s. Prod-paused window; sanity 1776 both arms.
+      Parity gaps found and recorded (both block MTP-on today):
+      (a) CUDA + MTP + 27B does not fit 24GB: PA reports "Num GPU
+          blocks is 0" at BOTH 2048MB and 1024MB KV (drafter + Q4K
+          weights); mtp-off fits at 21.4GB. NVIDIA-role MTP is also
+          caps-gated (speculative kernels are hip-side).
+      (b) NVIDIA-role graphs on hybrid models ABORT in release: the
+          multimodal-pipeline capture (not normal-pipeline - the 27B/4B
+          route through MultimodalPipeline) hits the poisoned-capture
+          slice-clone unwrap (cudarc core.rs:957, panic=abort in
+          release) - fixed with loud gates at both multimodal dispatch
+          sites (skip + warn, eager decode) until the recurrent
+          restore is hoisted post-capture.
+      (c) indexed_copy dual-role port (copy_rows + clamp_slot_table):
+          hip_fwd twins + role-aware gates; previously copy_rows bailed
+          "requires CUDA tensors" on the dual hip role (the 27B+MTP
+          rollback failure) and clamp silently no-op'd. Re-exported the
+          hip slice ptr helpers from mistralrs-quant. This unblocks the
+          hybrid MTP rollback on dual hip.
+      (d) REMAINING for MTP-on-dual-hip: speculative_rejection.rs port
+          (pinned staging, stream events, 3 kernel-launch ops, dense
+          row packing - all CudaStorage-typed; the MTP verify path).
+          That plus (a) is the next parity slice.
+      Notes: hip 27B hybrid graphs now capture+replay cleanly in the
+      dual build (previously the rollback poisoned them); hip decode
+      11.40 mtp-off/dual-graphs-on vs prod single-vendor 11.10
+      mtp-on/n=2 (methodologies differ: 600tok here, 1500tok prod
+      sweep - not directly comparable).
 
 ---
 

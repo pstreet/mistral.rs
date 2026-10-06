@@ -35,20 +35,96 @@ impl InplaceOp3 for IndexedRowCopy {
         use candle_core::backend::BackendStorage;
         use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
 
+        // In dual builds these symbols resolve to the hip companion; the
+        // NVIDIA role would launch hip kernels on a CUDA stream.
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        {
+            let _ = (dst, dst_layout, src, src_layout, rows, rows_layout);
+            candle_core::bail!("indexed row copy needs the serving (hip) role in dual builds")
+        }
+        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        {
+            let dev = dst.device();
+            let stream = dev.cuda_stream();
+            let rows_slice = rows.as_cuda_slice::<u32>()?;
+            let rows_view = rows_slice.slice(rows_layout.start_offset()..);
+            let (rows_ptr, rows_guard) = rows_view.device_ptr(&stream);
+
+            macro_rules! launch {
+                ($ty:ty, $ffi:ident) => {{
+                    let src_slice = src.as_cuda_slice::<$ty>()?;
+                    let dst_slice = dst.as_cuda_slice_mut::<$ty>()?;
+                    let src_view = src_slice.slice(src_layout.start_offset()..);
+                    let mut dst_view = dst_slice.slice_mut(dst_layout.start_offset()..);
+                    let (src_ptr, src_guard) = src_view.device_ptr(&stream);
+                    let (dst_ptr, dst_guard) = dst_view.device_ptr_mut(&stream);
+                    let status = unsafe {
+                        crate::cuda::ffi::$ffi(
+                            src_ptr as *const core::ffi::c_void,
+                            dst_ptr as *mut core::ffi::c_void,
+                            rows_ptr as *const u32,
+                            self.rows,
+                            self.row_elements,
+                            self.dst_row_capacity,
+                            stream.cu_stream() as i64,
+                        )
+                    };
+                    drop(dst_guard);
+                    drop(src_guard);
+                    if status != 0 {
+                        candle_core::bail!(
+                            concat!(stringify!($ffi), " failed with status {}"),
+                            status
+                        );
+                    }
+                }};
+            }
+
+            match dst.dtype() {
+                DType::BF16 => launch!(half::bf16, indexed_row_copy_bf16),
+                DType::F16 => launch!(half::f16, indexed_row_copy_f16),
+                DType::F32 => launch!(f32, indexed_row_copy_f32),
+                dtype => candle_core::bail!("indexed row copy does not support {dtype:?}"),
+            }
+            drop(rows_guard);
+            Ok(())
+        }
+    }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    fn hip_fwd(
+        &self,
+        dst: &mut candle_core::HipStorage,
+        dst_layout: &Layout,
+        src: &candle_core::HipStorage,
+        src_layout: &Layout,
+        rows: &candle_core::HipStorage,
+        rows_layout: &Layout,
+    ) -> Result<()> {
+        use candle_core::backend::BackendStorage;
+        use mistralrs_quant::{hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
+
         let dev = dst.device();
         let stream = dev.cuda_stream();
-        let rows_slice = rows.as_cuda_slice::<u32>()?;
-        let rows_view = rows_slice.slice(rows_layout.start_offset()..);
-        let (rows_ptr, rows_guard) = rows_view.device_ptr(&stream);
+        let rows_ptr = hip_slice_ptr_on_stream(
+            rows.as_cuda_slice::<u32>()?,
+            rows_layout.start_offset(),
+            &stream,
+        )
+        .0;
 
         macro_rules! launch {
             ($ty:ty, $ffi:ident) => {{
-                let src_slice = src.as_cuda_slice::<$ty>()?;
-                let dst_slice = dst.as_cuda_slice_mut::<$ty>()?;
-                let src_view = src_slice.slice(src_layout.start_offset()..);
-                let mut dst_view = dst_slice.slice_mut(dst_layout.start_offset()..);
-                let (src_ptr, src_guard) = src_view.device_ptr(&stream);
-                let (dst_ptr, dst_guard) = dst_view.device_ptr_mut(&stream);
+                let (src_ptr, _src_guard) = hip_slice_ptr_on_stream(
+                    src.as_cuda_slice::<$ty>()?,
+                    src_layout.start_offset(),
+                    &stream,
+                );
+                let (dst_ptr, _dst_guard) = hip_slice_ptr_mut_on_stream(
+                    dst.as_cuda_slice_mut::<$ty>()?,
+                    dst_layout.start_offset(),
+                    &stream,
+                );
                 let status = unsafe {
                     crate::cuda::ffi::$ffi(
                         src_ptr as *const core::ffi::c_void,
@@ -60,8 +136,6 @@ impl InplaceOp3 for IndexedRowCopy {
                         stream.cu_stream() as i64,
                     )
                 };
-                drop(dst_guard);
-                drop(src_guard);
                 if status != 0 {
                     candle_core::bail!(concat!(stringify!($ffi), " failed with status {}"), status);
                 }
@@ -74,13 +148,16 @@ impl InplaceOp3 for IndexedRowCopy {
             DType::F32 => launch!(f32, indexed_row_copy_f32),
             dtype => candle_core::bail!("indexed row copy does not support {dtype:?}"),
         }
-        drop(rows_guard);
         Ok(())
     }
 }
 
 pub(crate) fn copy_rows(src: &Tensor, dst: &Tensor, dst_rows: &Tensor) -> Result<()> {
-    if !src.device().is_cuda()
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    let is_gpu = src.device().is_cuda() || src.device().is_hip();
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    let is_gpu = src.device().is_cuda();
+    if !is_gpu
         || !src.device().same_device(dst.device())
         || !src.device().same_device(dst_rows.device())
     {
@@ -159,14 +236,54 @@ pub(crate) fn clamp_slot_table(slots: &Tensor, capacity: u32, replacement: u32) 
         fn cuda_fwd(&self, storage: &mut CudaStorage, layout: &Layout) -> Result<()> {
             use candle_core::backend::BackendStorage;
             use candle_core::cuda_backend::cudarc::driver::DevicePtrMut;
+            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            {
+                let _ = (storage, layout);
+                candle_core::bail!("clamp-u32-index-table needs the serving (hip) role in dual builds")
+            }
+            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            {
+                if !layout.is_contiguous() {
+                    candle_core::bail!("clamp-u32-index-table requires a contiguous table");
+                }
+                let dev = storage.device();
+                let stream = dev.cuda_stream();
+                let slice = storage.as_cuda_slice_mut::<u32>()?;
+                let mut sub = slice.slice_mut(layout.start_offset()..);
+                let (ptr, _guard) = sub.device_ptr_mut(&stream);
+                let status = unsafe {
+                    crate::cuda::ffi::clamp_u32_index_table(
+                        ptr as *mut u32,
+                        self.len,
+                        self.capacity,
+                        self.replacement,
+                        stream.cu_stream() as i64,
+                    )
+                };
+                if status != 0 {
+                    candle_core::bail!("clamp_u32_index_table failed with status {status}");
+                }
+                Ok(())
+            }
+        }
+
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        fn hip_fwd(
+            &self,
+            storage: &mut candle_core::HipStorage,
+            layout: &Layout,
+        ) -> Result<()> {
+            use candle_core::backend::BackendStorage;
+            use mistralrs_quant::hip_slice_ptr_mut_on_stream;
             if !layout.is_contiguous() {
                 candle_core::bail!("clamp-u32-index-table requires a contiguous table");
             }
-            let dev = storage.device();
-            let stream = dev.cuda_stream();
-            let slice = storage.as_cuda_slice_mut::<u32>()?;
-            let mut sub = slice.slice_mut(layout.start_offset()..);
-            let (ptr, _guard) = sub.device_ptr_mut(&stream);
+            let stream = storage.device().cuda_stream();
+            let (ptr, _guard) = hip_slice_ptr_mut_on_stream(
+                storage.as_cuda_slice_mut::<u32>()?,
+                layout.start_offset(),
+                &stream,
+            );
             let status = unsafe {
                 crate::cuda::ffi::clamp_u32_index_table(
                     ptr as *mut u32,
@@ -182,7 +299,11 @@ pub(crate) fn clamp_slot_table(slots: &Tensor, capacity: u32, replacement: u32) 
             Ok(())
         }
     }
-    if !slots.device().is_cuda() {
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    let is_gpu = slots.device().is_cuda() || slots.device().is_hip();
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    let is_gpu = slots.device().is_cuda();
+    if !is_gpu {
         return Ok(());
     }
     if slots.dtype() != DType::U32 {

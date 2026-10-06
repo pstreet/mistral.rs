@@ -1974,6 +1974,27 @@ impl MultimodalPipeline {
             model_specific_args,
             recurrent_batch_kind,
         } = input;
+        // Hybrid (recurrent + attention) models on the NVIDIA role keep
+        // eager decode: the recurrent checkpoint restore runs `from_vec`
+        // inside the capture window, invalidating the capture; in release
+        // (panic=abort) the poisoned stream then kills the process on the
+        // next slice clone. Skip until the restore is hoisted post-capture.
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        if input_ids.device().is_cuda() && self.model.cache().is_hybrid() {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                tracing::warn!(
+                    "hybrid models keep eager decode on the NVIDIA role: the recurrent \
+                     checkpoint restore runs inside the capture window (see journal)"
+                )
+            });
+            record_cuda_graph_dispatch(
+                CudaGraphComponent::Target,
+                CudaGraphDispatchMode::Skipped,
+                CudaGraphDispatchReason::ModelUnsupported,
+            );
+            return Ok(None);
+        }
         if !cuda_decode_graphs_enabled() {
             record_cuda_graph_dispatch(
                 CudaGraphComponent::Target,
@@ -2174,6 +2195,12 @@ impl MultimodalPipeline {
     ) -> candle_core::Result<()> {
         let device = self.device();
         let probe = Tensor::zeros((1, 1), DType::U32, &device)?;
+        // Same hybrid-on-NVIDIA-role skip as the decode forward (the
+        // precapture path would poison the stream identically).
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        if device.is_cuda() && self.model.cache().is_hybrid() {
+            return Ok(());
+        }
         if !cuda_decode_graphs_enabled()
             || !crate::pipeline::cuda_graph::is_cuda_graph_device(&device)
             || !self.model.supports_cuda_decode_graphs_for_args(

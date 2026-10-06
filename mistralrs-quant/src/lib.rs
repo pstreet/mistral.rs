@@ -253,6 +253,8 @@ pub use unquantized::UnquantLinear;
 pub use utils::device_has_fused_ops;
 pub use utils::flash_attn_sinks_metal;
 pub use utils::flash_attn_sinks_varlen_metal;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub use utils::{hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub use utils::gptoss_swiglu_fused;
 #[cfg(all(feature = "cuda", not(feature = "rocm")))]
