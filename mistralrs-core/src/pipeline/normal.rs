@@ -1799,8 +1799,12 @@ impl NormalPipeline {
         // window, invalidating the capture; in release (panic=abort) the
         // poisoned stream then kills the process on the next slice clone.
         // Skip until the restore is hoisted post-capture.
+        // MISTRALRS_DEBUG_HYBRID_GRAPHS=1 bypasses the skip to develop the hoist.
         #[cfg(feature = "cuda")]
-        if input_ids.device().is_cuda() && self.model.cache().is_hybrid() {
+        if input_ids.device().is_cuda()
+            && self.model.cache().is_hybrid()
+            && std::env::var("MISTRALRS_DEBUG_HYBRID_GRAPHS").is_err()
+        {
             static WARNED: std::sync::Once = std::sync::Once::new();
             WARNED.call_once(|| {
                 tracing::warn!(
@@ -1997,8 +2001,12 @@ impl NormalPipeline {
         let device = self.device();
         // Same hybrid-on-NVIDIA-role skip as the decode forward (the
         // precapture path would poison the stream identically).
+        // MISTRALRS_DEBUG_HYBRID_GRAPHS=1 bypasses the skip to develop the hoist.
         #[cfg(feature = "cuda")]
-        if device.is_cuda() && self.model.cache().is_hybrid() {
+        if device.is_cuda()
+            && self.model.cache().is_hybrid()
+            && std::env::var("MISTRALRS_DEBUG_HYBRID_GRAPHS").is_err()
+        {
             return Ok(());
         }
         if !cuda_decode_graphs_enabled()

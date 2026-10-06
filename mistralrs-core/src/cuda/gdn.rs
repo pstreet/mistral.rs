@@ -79,6 +79,14 @@ pub(crate) fn gdn_device_supported(device: &Device) -> bool {
     {
         return device.is_cuda() || device.is_hip();
     }
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    {
+        // NVIDIA role, solo shape: try the device GDN kernels in the nvcc
+        // companion (lands 2026-10-07: the hip-side fused-ops gate was
+        // forcing the CPU recurrence with its host round-trips, which also
+        // kills graph capture). Loud plugin error if a kernel is missing.
+        return device.is_cuda();
+    }
     #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     mistralrs_quant::device_has_fused_ops(device)
 }

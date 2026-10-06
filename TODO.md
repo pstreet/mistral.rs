@@ -85,21 +85,23 @@ facade today, so the MTP port gates the cutover):
 
 ### Graphs/MTP parity queue (opened 2026-10-06, from the 4B/27B benches)
 
-- [ ] ~M cuda-only 3x decode gap (deferred perf tune, 2026-10-07
-      decision: land Phase 1 on correctness + portability first).
-      Evidence: 4B release bench cuda-only 22.9 tok/s vs dual
-      control 69.7 tok/s same GPU same envs (27B: 8.78 vs 28.85);
-      prefill also ~2.5-3x off, so it is not decode-specific.
-      Ruled out: hardware (dual control), fused matmuls (MMVQ
-      43 vs 46 us/call host-launch identical; paged-attn decode
-      10 vs 12 us), companion kernels (swap experiment: cuda-only
-      binary + dual-built .so files = zero change, so the gap is
-      host-side). Wall accounting: MMVQ totals ~7s in both arms,
-      leaving ~19s unexplained in cuda-only outside matmuls and
-      attention. Next when resumed: call-count milestones (totals
-      never measured, only first-500 averages), MMQ prefill branch
-      timing, then GDN/sampling/sync suspects. Temporary probes
-      were removed before landing; re-add as needed.
+- [x] ~M cuda-only 3x decode gap (CLOSED 2026-10-07, root-caused, not tuned).
+      It was never host overhead: cuda-only ran the GDN recurrence on CPU
+      (`gdn_device_supported` hard-`false` in solo shapes, a stale hip-side
+      comment predating the nvcc twin port) while dual serves device GDN
+      on both roles (dual arm returns true for either role). Per-layer
+      6x DTOH + CPU compute + uploads = the ~3x. Flip (GDN-only,
+      solo-cuda, loud plugin error if kernels missing):
+      essay-600tok fast-binary 26.0s -> 8.0s (~75 tok/s, vs dual control
+      69.7), "1776" sanity correct, 0 errors. Dual/hip untouched.
+      Release-bench + parity formalities still queued (methodology).
+- [ ] ~M Hybrid graphs-on (was "restore hoist", theory superseded above).
+      Hardening landed: missing `end_cuda_capture_discard` on the
+      forward-Err arm (the pool-guard drop + checkpoint rollback then ran
+      on the still-open poisoned stream) + `try_clone` in
+      `cached_htod_slice` (was `Clone::unwrap`). Abort -> loud eager
+      verified. Debug aid kept: `MISTRALRS_DEBUG_HYBRID_GRAPHS=1`
+      bypasses the eager gates (default off). Re-entry as noted above.
 
 - [ ] ~M 27B/4B cuda-only capture abort (correctness, open):
       CORRECTION 2026-10-07: the 4B IS hybrid (NormalPipeline, text-only
@@ -131,10 +133,18 @@ facade today, so the MTP port gates the cutover):
 - [ ] ~M Hybrid restore hoist: move the recurrent checkpoint restore out
       of the capture window (post-`end_capture`) so hybrid models (27B/4B)
       can capture on the NVIDIA role; then drop the multimodal eager-skip
-      gates. Evidence chain in the 2026-10-06 bench entry: release
-      `panic=abort` + fork slice-clone unwrap on the invalidated capture
-      (restore `from_vec` poisons the stream). Until then hybrid models
-      serve eager on the NVIDIA role by loud skip.
+      gates. SUPERSEDED 2026-10-07 by backtrace evidence: the pipeline
+      restore already runs post-capture and is safe. The real in-window
+      DTOH offenders were (1) the CPU-fallback GDN recurrence
+      (`gated_delta_rule_recurrence` host round-trips - FIXED by the
+      device-GDN flip below, which also closed the 3x gap 26s -> 8s);
+      (2) the recurrent pool scatter `to_vec1` (FIXED by the solo
+      device-scatter flip). Remaining: with (1)+(2) fixed, lazy capture
+      on the 4B reaches replay but the following sampling DTOH fails
+      with a bare `CUDA_ERROR_INVALID_VALUE` (no capture error, no
+      disable-warn, stream presumably left capturing - leak path
+      unidentified; re-entry: info-level bypass run + replay-path
+      audit). Eager gates stay until capture demonstrably works.
 - [ ] ~M `speculative_rejection.rs` dual-role port (pinned staging, stream
       events, 3 kernel-launch ops, dense row packing - all CudaStorage
       typed): the last code gap for MTP on the dual hip role. The hybrid

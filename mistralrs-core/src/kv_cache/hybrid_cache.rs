@@ -762,6 +762,18 @@ impl RecurrentStatePool {
                 state_indices,
             );
         }
+        // Solo NVIDIA role: the indexed-copy kernel rides the nvcc companion;
+        // the fused-ops gate above is hip-side. Device scatter keeps this off
+        // the host round-trip (and inside graph capture). Dual builds keep
+        // their existing dispatch.
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+        if self.device.is_cuda() {
+            return crate::cuda::indexed_copy::copy_rows(
+                &values.contiguous()?,
+                &self.conv_state,
+                state_indices,
+            );
+        }
         let indices: Vec<u32> = state_indices.to_vec1()?;
         self.scatter_conv_state_for_indices(&indices, values)
     }
@@ -803,6 +815,15 @@ impl RecurrentStatePool {
     ) -> Result<()> {
         #[cfg(feature = "cuda")]
         if mistralrs_quant::device_has_fused_ops(&self.device) {
+            return crate::cuda::indexed_copy::copy_rows(
+                &values.contiguous()?,
+                &self.recurrent_state,
+                state_indices,
+            );
+        }
+        // Solo NVIDIA role: same device-scatter note as conv above.
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+        if self.device.is_cuda() {
             return crate::cuda::indexed_copy::copy_rows(
                 &values.contiguous()?,
                 &self.recurrent_state,

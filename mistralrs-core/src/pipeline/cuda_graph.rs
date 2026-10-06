@@ -3194,6 +3194,11 @@ where
                 break;
             }
             Err(err) => {
+                // Discard before unwinding: the pool-guard drop and the
+                // caller's checkpoint rollback both upload on this stream,
+                // which is illegal while a poisoned capture is still open
+                // (aborted the process via a slice-clone unwrap, 2026-10-07).
+                end_cuda_capture_discard(&stream);
                 restore_event_tracking_after_capture(&stream, restore_event_tracking);
                 return Err(err.context("CUDA graph captured forward failed"));
             }
