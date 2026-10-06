@@ -107,6 +107,17 @@ facade today, so the MTP port gates the cutover):
       (thinking-model quirk, same as 4B - reasoning trace present).
       27B prefill (270-tok prompt x3): 838 cold, 4791 / 4851 warm vs
       dual ~4.6k warm - parity.
+      EXTERNAL CHECK 2026-10-07 (published Qwen3.8-27B / RTX 3090
+      single-card, no-MTP decode): llama.cpp Q4_K_M ~36-41 tok/s
+      (llamaperf 36.4, openclaw 41.5, jonidimo ~39); vLLM no-spec
+      46 tok/s; bowmanslayer Q6_K tg128 32.3 (Vulkan). Ours: 30.0 at
+      Q6_K weights. Decode is bandwidth-bound and Q6_K streams ~33%
+      more bytes/token than Q4_K_M (20.5 vs 15.4GB): 41.4 scaled by
+      bytes predicts ~31 - we are on the line. The remaining lever
+      everywhere is MTP (+36-77% published: 66-69 tok/s llama.cpp
+      n=2, 114-124 vLLM) = our Phase 2. Prefill ours 4.8k @270tok;
+      published CUDA prefills are long-context (705 @128K, ~1k @28K)
+      so no short-prompt reference exists; nothing alarming.
       Phase 1 parity acceptance MET on both models.
 - [ ] ~M Hybrid graphs-on (was "restore hoist", theory superseded above).
       Hardening landed: missing `end_cuda_capture_discard` on the
