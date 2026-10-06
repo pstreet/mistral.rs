@@ -105,6 +105,8 @@ facade today, so the MTP port gates the cutover):
       30.0 tok/s vs dual 28.85 (+4%, within noise + config margin),
       0 errors, essay output fully coherent. Short-budget sanity empty
       (thinking-model quirk, same as 4B - reasoning trace present).
+      27B prefill (270-tok prompt x3): 838 cold, 4791 / 4851 warm vs
+      dual ~4.6k warm - parity.
       Phase 1 parity acceptance MET on both models.
 - [ ] ~M Hybrid graphs-on (was "restore hoist", theory superseded above).
       Hardening landed: missing `end_cuda_capture_discard` on the
