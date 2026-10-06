@@ -95,6 +95,17 @@ facade today, so the MTP port gates the cutover):
       essay-600tok fast-binary 26.0s -> 8.0s (~75 tok/s, vs dual control
       69.7), "1776" sanity correct, 0 errors. Dual/hip untouched.
       Release-bench + parity formalities still queued (methodology).
+      PARITY 2026-10-07 (release, graphs-off posture matching the dual
+      control): decode 77.9/77.6/77.8 tok/s (dual control 69.7 - ahead,
+      config KV-type differences likely), warm prefill ~11.8k tok/s
+      (dual ~10.5k).Gap closed and reversed; the CPU recurrence was all
+      of it.
+      27B PARITY 2026-10-07 (release, FI-decode off to match the dual
+      control which never claims FI; Q8 KV): decode 600 tok in 20.0s =
+      30.0 tok/s vs dual 28.85 (+4%, within noise + config margin),
+      0 errors, essay output fully coherent. Short-budget sanity empty
+      (thinking-model quirk, same as 4B - reasoning trace present).
+      Phase 1 parity acceptance MET on both models.
 - [ ] ~M Hybrid graphs-on (was "restore hoist", theory superseded above).
       Hardening landed: missing `end_cuda_capture_discard` on the
       forward-Err arm (the pool-guard drop + checkpoint rollback then ran
