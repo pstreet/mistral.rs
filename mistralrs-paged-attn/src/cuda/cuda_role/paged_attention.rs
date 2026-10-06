@@ -495,22 +495,7 @@ impl candle::CustomOp1 for PagedAttention {
         candle::bail!("no cpu support for paged-attention")
     }
 
-    // Single-vendor builds serve the compiled vendor here. In a dual
-    // build the NVIDIA role has no paged-attention kernels (all C sources
-    // are hipcc-built); serving goes through `hip_fwd` below.
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     fn cuda_fwd(&self, q: &CudaStorage, q_l: &Layout) -> Result<(CudaStorage, Shape)> {
-        match q.dtype() {
-            DType::F32 => self.cuda_fwd_t::<f32>(q, q_l),
-            DType::F16 => self.cuda_fwd_t::<f16>(q, q_l),
-            DType::BF16 => self.cuda_fwd_t::<bf16>(q, q_l),
-            dt => candle::bail!("paged-attention is only supported for f32/f16/bf16 ({dt:?})"),
-        }
-    }
-
-    fn cuda_fwd(&self, q: &CudaStorage, q_l: &Layout) -> Result<(CudaStorage, Shape)> {
-        // Same dispatch through the Hip twin of `cuda_fwd_t` (selected by
-        // the dual cfg-pair, same name, Hip types).
         match q.dtype() {
             DType::F32 => self.cuda_fwd_t::<f32>(q, q_l),
             DType::F16 => self.cuda_fwd_t::<f16>(q, q_l),
@@ -1637,20 +1622,39 @@ mod tests {
 
         // Warm eagerly: module load + one-time attr setup before capture.
         reshape_and_cache(
-            &key, &value, None, None, &key_cache, &value_cache, &slots, true, true,
+            &key,
+            &value,
+            None,
+            None,
+            &key_cache,
+            &value_cache,
+            &slots,
+            true,
+            true,
         )?;
         let eager = attn(&key_cache, &value_cache)?;
         device.synchronize()?;
 
         let cuda_device = device.as_cuda_device().expect("cuda role device");
         let stream = cuda_device.cuda_stream();
-        stream.context().bind_to_thread().map_err(candle::Error::wrap)?;
+        stream
+            .context()
+            .bind_to_thread()
+            .map_err(candle::Error::wrap)?;
         unsafe { stream.context().disable_event_tracking() };
         stream
             .begin_capture(candle_core::cuda_backend::cudarc::driver::sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
             .map_err(candle::Error::wrap)?;
         reshape_and_cache(
-            &key, &value, None, None, &key_cache, &value_cache, &slots, true, true,
+            &key,
+            &value,
+            None,
+            None,
+            &key_cache,
+            &value_cache,
+            &slots,
+            true,
+            true,
         )?;
         let replayed = attn(&key_cache, &value_cache)?;
         let mut graph: *mut core::ffi::c_void = std::ptr::null_mut();
@@ -1718,9 +1722,7 @@ mod tests {
         )?;
         device.synchronize()?;
 
-        let cuda_device = device
-            .as_cuda_device()
-            .expect("cuda role device");
+        let cuda_device = device.as_cuda_device().expect("cuda role device");
         let stream = cuda_device.cuda_stream();
         stream
             .context()

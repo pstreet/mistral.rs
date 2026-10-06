@@ -81,11 +81,20 @@ pub fn device_has_fused_ops(device: &Device) -> bool {
         // model step died with "weight must live on Hip".
         return device.is_hip();
     }
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
     {
-        // Single-vendor: the one compiled GPU backend has them (in a
-        // rocm-only build Device::Cuda IS the AMD device).
+        // The rocm-only alias: Device::Cuda IS the AMD device here.
         device.is_cuda()
+    }
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    {
+        // The NVIDIA role: the fused launchers are hip-side; quantized
+        // matmuls serve through the plain path (mirrors the dual gate).
+        false
+    }
+    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
+    {
+        false
     }
 }
 
@@ -180,7 +189,7 @@ pub(crate) use hip_u32_ptrs;
 
 /// NVIDIA-role mirrors of the slice helpers above, typed on the upstream
 /// cuda backend's driver types for `_cuda` twins.
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
 use candle_core::cuda_backend::cudarc::{
     self as nv_cudarc,
     driver::{
@@ -189,7 +198,7 @@ use candle_core::cuda_backend::cudarc::{
     },
 };
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
 pub fn nv_slice_ptr_on_stream<'a, T: NvDeviceRepr>(
     v: &'a NvCudaSlice<T>,
     lo: usize,
@@ -199,7 +208,7 @@ pub fn nv_slice_ptr_on_stream<'a, T: NvDeviceRepr>(
     (ptr + (lo * std::mem::size_of::<T>()) as u64, guard)
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
 pub fn nv_slice_ptr_mut_on_stream<'a, T: NvDeviceRepr>(
     v: &'a mut NvCudaSlice<T>,
     lo: usize,
@@ -211,7 +220,7 @@ pub fn nv_slice_ptr_mut_on_stream<'a, T: NvDeviceRepr>(
 
 /// Bind `($ptr, $guard)` for a u32 routing table tensor on a stream.
 /// Bare statements, so the storage borrows live in the caller scope.
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
 macro_rules! nv_u32_ptrs {
     ($table:expr, $stream:expr, $ptr:ident, $guard:ident) => {
         let (__tbl_storage, __tbl_layout) = $table.storage_and_layout();
@@ -226,7 +235,7 @@ macro_rules! nv_u32_ptrs {
         );
     };
 }
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
 pub(crate) use nv_u32_ptrs;
 
 /// Loud degradation for dual-build NVIDIA-role handlers whose kernels are

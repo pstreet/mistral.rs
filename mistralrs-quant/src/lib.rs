@@ -23,6 +23,8 @@ pub mod cublaslt;
 #[cfg(test)]
 #[path = "build_support/cuda_headers.rs"]
 mod cuda_headers;
+#[cfg(feature = "cuda")]
+mod cuda_plugin;
 #[cfg(all(feature = "cuda", feature = "cutile"))]
 pub mod cutile;
 pub mod distributed;
@@ -32,8 +34,6 @@ mod fp8;
 pub mod gemv;
 mod gguf;
 mod gptq;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
-mod cuda_plugin;
 #[cfg(feature = "rocm")]
 mod hip_plugin;
 pub mod host_alloc;
@@ -159,7 +159,7 @@ pub use distributed::{
 pub use dummy::{DummyLayer, DummyLayerInfo};
 pub use f8q8::F8Q8Linear;
 pub use fp8::FP8Linear;
-#[cfg(all(feature = "cuda", not(feature = "rocm")))]
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
 pub use gemv::gemv;
 pub use gemv::{should_use_gemv, GEMV_CONTROLLER};
 pub use gguf::archive::{
@@ -168,9 +168,7 @@ pub use gguf::archive::{
 pub use gguf::cpu::cpu_indexed_moe_forward;
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 pub use gguf::cuda::indexed_moe_fused_decode_hip;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
-pub use gguf::cuda_role::indexed_moe_fused_decode_cuda;
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 pub use gguf::cuda::{
     grouped_moe_gemm_prequantized, indexed_moe_fused_decode, moe_dispatch_build,
     moe_weighted_reduce_flat, moe_weighted_reduce_flat_bf16, moe_weighted_reduce_flat_same_dtype,
@@ -184,10 +182,18 @@ pub use gguf::cuda::{
 };
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 pub use gguf::cuda::{IndexedMoeLoraDecodeHip, IndexedMoeRoutingHip};
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
+pub use gguf::cuda_role::indexed_moe_fused_decode_cuda;
+#[cfg(feature = "cuda")]
+pub use gguf::cuda_role::{
+    moe_dispatch_build_cuda, moe_weighted_reduce_flat_bf16_cuda, moe_weighted_reduce_flat_cuda,
+};
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
+pub use gguf::cuda_role::{ACT_GELU_PYTORCH_TANH, ACT_SILU};
+#[cfg(feature = "rocm")]
 #[doc(hidden)]
 pub use gguf::fast_mmq::grouped_from_glu_sorted_pair as grouped_moe_mmq_from_glu_sorted_pair;
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 pub use gguf::fast_mmq::{
     grouped as grouped_moe_mmq, grouped_from_glu_packed as grouped_moe_mmq_from_glu_packed,
     grouped_from_glu_pair as grouped_moe_mmq_from_glu_pair, grouped_pair as grouped_moe_mmq_pair,
@@ -199,21 +205,17 @@ pub use gguf::fast_mmq::{
     grouped_hip, grouped_pair_hip, grouped_pair_packed_hip,
 };
 #[cfg(all(feature = "cuda", feature = "rocm"))]
-pub use gguf::fast_mmq_cuda::{
-    grouped_from_glu_packed_cuda, grouped_from_glu_pair_cuda, grouped_from_glu_sorted_pair_cuda,
-    grouped_cuda, grouped_pair_cuda, grouped_pair_packed_cuda,
-};
-#[cfg(all(feature = "cuda", feature = "rocm"))]
-pub use gguf::cuda_role::{
-    moe_dispatch_build_cuda, moe_weighted_reduce_flat_bf16_cuda, moe_weighted_reduce_flat_cuda,
-};
-#[cfg(all(feature = "cuda", feature = "rocm"))]
-pub use gguf::fast_mmq_cuda::supports as supports_mmq_cuda;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
 pub use gguf::fast_mmq::{
     grouped_from_glu_packed_hip as grouped_moe_mmq_from_glu_packed_hip,
     grouped_from_glu_sorted_pair_hip as grouped_moe_mmq_from_glu_sorted_pair_hip,
     grouped_hip as grouped_moe_mmq_hip, grouped_pair_packed_hip as grouped_moe_mmq_pair_packed_hip,
+};
+#[cfg(feature = "cuda")]
+pub use gguf::fast_mmq_cuda::supports as supports_mmq_cuda;
+#[cfg(feature = "cuda")]
+pub use gguf::fast_mmq_cuda::{
+    grouped_cuda, grouped_from_glu_packed_cuda, grouped_from_glu_pair_cuda,
+    grouped_from_glu_sorted_pair_cuda, grouped_pair_cuda, grouped_pair_packed_cuda,
 };
 pub use gguf::GgufMatMul;
 pub use gguf::{
@@ -253,8 +255,6 @@ pub use unquantized::UnquantLinear;
 pub use utils::device_has_fused_ops;
 pub use utils::flash_attn_sinks_metal;
 pub use utils::flash_attn_sinks_varlen_metal;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
-pub use utils::{hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub use utils::gptoss_swiglu_fused;
 #[cfg(all(feature = "cuda", not(feature = "rocm")))]
@@ -266,6 +266,8 @@ pub use utils::isq::{
 pub use utils::softcap;
 pub use utils::softmax_with_sinks;
 pub use utils::{fused_glu, fused_split_glu, GluActivationType};
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub use utils::{hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp};
 pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 
@@ -2063,30 +2065,37 @@ pub fn try_fused_quantized_ffn(
         }
     }
 
-    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
-        return Ok(None);
-    }
-    if !fast_mmq_allowed() {
-        return Ok(None);
-    }
-    if gate_q.dtype() != up_q.dtype()
-        || !gguf::fast_mmq::batch_supported(
-            gate_q.dtype(),
-            flat_batch,
-            gguf::fast_mmq::device_arch(&gate_q.device())?,
-        )
-        || !gguf::fast_mmq::batch_supported(
-            down_q.dtype(),
-            flat_batch,
-            gguf::fast_mmq::device_arch(&down_q.device())?,
-        )
+    #[cfg(not(feature = "rocm"))]
     {
         return Ok(None);
     }
+    #[cfg(feature = "rocm")]
+    {
+        if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
+            return Ok(None);
+        }
+        if !fast_mmq_allowed() {
+            return Ok(None);
+        }
+        if gate_q.dtype() != up_q.dtype()
+            || !gguf::fast_mmq::batch_supported(
+                gate_q.dtype(),
+                flat_batch,
+                gguf::fast_mmq::device_arch(&gate_q.device())?,
+            )
+            || !gguf::fast_mmq::batch_supported(
+                down_q.dtype(),
+                flat_batch,
+                gguf::fast_mmq::device_arch(&down_q.device())?,
+            )
+        {
+            return Ok(None);
+        }
 
-    Ok(Some(gguf::fast_mmq::fused_ffn(
-        &gate_q, &up_q, &down_q, xs, activation,
-    )?))
+        return Ok(Some(gguf::fast_mmq::fused_ffn(
+            &gate_q, &up_q, &down_q, xs, activation,
+        )?));
+    }
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -2159,27 +2168,34 @@ pub fn try_fused_quantized_gate_up(
     if gate_q.dtype() != up_q.dtype() {
         return Ok(None);
     }
-    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
-        if !gguf::fast_mmvq::supports_fused_glu(xs.dtype(), gate_q.dtype()) {
-            return Ok(None);
+    #[cfg(not(feature = "rocm"))]
+    {
+        return Ok(None);
+    }
+    #[cfg(feature = "rocm")]
+    {
+        if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
+            if !gguf::fast_mmvq::supports_fused_glu(xs.dtype(), gate_q.dtype()) {
+                return Ok(None);
+            }
+            return Ok(Some(gguf::fast_mmvq::fused_glu(
+                &gate_q, &up_q, xs, activation,
+            )?));
+        } else {
+            if !fast_mmq_allowed() {
+                return Ok(None);
+            }
+            if !gguf::fast_mmq::batch_supported(
+                gate_q.dtype(),
+                flat_batch,
+                gguf::fast_mmq::device_arch(&gate_q.device())?,
+            ) {
+                return Ok(None);
+            }
+            return Ok(Some(gguf::fast_mmq::fused_glu(
+                &gate_q, &up_q, xs, activation,
+            )?));
         }
-        Ok(Some(gguf::fast_mmvq::fused_glu(
-            &gate_q, &up_q, xs, activation,
-        )?))
-    } else {
-        if !fast_mmq_allowed() {
-            return Ok(None);
-        }
-        if !gguf::fast_mmq::batch_supported(
-            gate_q.dtype(),
-            flat_batch,
-            gguf::fast_mmq::device_arch(&gate_q.device())?,
-        ) {
-            return Ok(None);
-        }
-        Ok(Some(gguf::fast_mmq::fused_glu(
-            &gate_q, &up_q, xs, activation,
-        )?))
     }
 }
 
@@ -2284,23 +2300,30 @@ pub fn try_fused_quantized_qkv(
     if dtype != k_q.dtype() || dtype != v_q.dtype() {
         return Ok(None);
     }
-    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
-        if !gguf::fast_mmvq::supports(dtype) {
-            return Ok(None);
+    #[cfg(not(feature = "rocm"))]
+    {
+        return Ok(None);
+    }
+    #[cfg(feature = "rocm")]
+    {
+        if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
+            if !gguf::fast_mmvq::supports(dtype) {
+                return Ok(None);
+            }
+            return Ok(Some(gguf::fast_mmvq::fused_qkv(&q_q, &k_q, &v_q, xs)?));
+        } else {
+            if !fast_mmq_allowed() {
+                return Ok(None);
+            }
+            if !gguf::fast_mmq::batch_supported(
+                dtype,
+                flat_batch,
+                gguf::fast_mmq::device_arch(&q_q.device())?,
+            ) {
+                return Ok(None);
+            }
+            return Ok(Some(gguf::fast_mmq::fused_qkv(&q_q, &k_q, &v_q, xs)?));
         }
-        Ok(Some(gguf::fast_mmvq::fused_qkv(&q_q, &k_q, &v_q, xs)?))
-    } else {
-        if !fast_mmq_allowed() {
-            return Ok(None);
-        }
-        if !gguf::fast_mmq::batch_supported(
-            dtype,
-            flat_batch,
-            gguf::fast_mmq::device_arch(&q_q.device())?,
-        ) {
-            return Ok(None);
-        }
-        Ok(Some(gguf::fast_mmq::fused_qkv(&q_q, &k_q, &v_q, xs)?))
     }
 }
 

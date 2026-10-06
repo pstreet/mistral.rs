@@ -478,7 +478,11 @@ impl DenseMmqRun<'_> {
                     );
                 }
             }
-            outputs.push(wrap_cuda_output(out, self.dev, output_shape(self.xs, nrows)));
+            outputs.push(wrap_cuda_output(
+                out,
+                self.dev,
+                output_shape(self.xs, nrows),
+            ));
         }
         Ok(outputs)
     }
@@ -1236,7 +1240,9 @@ pub fn grouped_from_glu_pair_cuda(
     activation: i32,
 ) -> Result<Tensor> {
     let Device::Cuda(dev) = weight.device() else {
-        candle_core::bail!("fast_mmq grouped_from_glu_pair_cuda: weights must live on the CUDA role");
+        candle_core::bail!(
+            "fast_mmq grouped_from_glu_pair_cuda: weights must live on the CUDA role"
+        );
     };
     let gate = gate.contiguous()?;
     let up = up.contiguous()?;
@@ -1270,7 +1276,9 @@ pub fn grouped_from_glu_sorted_pair_cuda(
     activation: i32,
 ) -> Result<Tensor> {
     let Device::Cuda(dev) = weight.device() else {
-        candle_core::bail!("fast_mmq grouped_from_glu_sorted_pair_cuda: weights must live on the CUDA role");
+        candle_core::bail!(
+            "fast_mmq grouped_from_glu_sorted_pair_cuda: weights must live on the CUDA role"
+        );
     };
     let gate = gate.contiguous()?;
     let up = up.contiguous()?;
@@ -1304,7 +1312,9 @@ pub fn grouped_from_glu_packed_cuda(
     activation: i32,
 ) -> Result<Tensor> {
     let Device::Cuda(dev) = weight.device() else {
-        candle_core::bail!("fast_mmq grouped_from_glu_packed_cuda: weights must live on the CUDA role");
+        candle_core::bail!(
+            "fast_mmq grouped_from_glu_packed_cuda: weights must live on the CUDA role"
+        );
     };
     let gate_up = gate_up.contiguous()?;
     let (_, _, k) = weight.shape().dims3()?;
@@ -1665,15 +1675,14 @@ mod tests {
             .map(|i| (i.wrapping_mul(7) % EXPERTS) as u32)
             .collect();
         let ids = Tensor::from_vec(ids_host.clone(), (TOKENS, TOPK), &device)?;
-        let weights =
-            Tensor::from_vec(vec![1.0f32 / TOPK as f32; TOKENS * TOPK], (TOKENS, TOPK), &device)?;
-
-        let (expert_bounds, sorted_token_ids, sorted_source_ids) = moe_dispatch_build_cuda(
-            &ids,
-            TOKENS * TOPK,
-            EXPERTS,
-            TOPK,
+        let weights = Tensor::from_vec(
+            vec![1.0f32 / TOPK as f32; TOKENS * TOPK],
+            (TOKENS, TOPK),
+            &device,
         )?;
+
+        let (expert_bounds, sorted_token_ids, sorted_source_ids) =
+            moe_dispatch_build_cuda(&ids, TOKENS * TOPK, EXPERTS, TOPK)?;
         let gate_up = grouped_pair_packed_cuda(
             &gate,
             &up,
@@ -1696,14 +1705,8 @@ mod tests {
             EXPERTS,
             GluActivationType::Silu as i32,
         )?;
-        let out = unsafe {
-            moe_weighted_reduce_flat_cuda(
-                &down_assignments,
-                &weights,
-                TOKENS,
-                TOPK,
-            )?
-        };
+        let out =
+            unsafe { moe_weighted_reduce_flat_cuda(&down_assignments, &weights, TOKENS, TOPK)? };
 
         // Dequant reference with identical routing and reduce math.
         let mk_dense = |qt: &QTensor, rows: usize, cols: usize| -> Result<Tensor> {
@@ -1757,9 +1760,21 @@ mod tests {
     #[test]
     fn hip_mmq_fused_qkv_matches_plains() -> Result<()> {
         let device = Device::new_cuda(0)?;
-        let q = QTensor::quantize_onto(&patterned((384, HIDDEN), 11, 0.03)?, GgmlDType::Q4K, &device)?;
-        let k = QTensor::quantize_onto(&patterned((256, HIDDEN), 29, 0.03)?, GgmlDType::Q4K, &device)?;
-        let v = QTensor::quantize_onto(&patterned((128, HIDDEN), 47, 0.03)?, GgmlDType::Q4K, &device)?;
+        let q = QTensor::quantize_onto(
+            &patterned((384, HIDDEN), 11, 0.03)?,
+            GgmlDType::Q4K,
+            &device,
+        )?;
+        let k = QTensor::quantize_onto(
+            &patterned((256, HIDDEN), 29, 0.03)?,
+            GgmlDType::Q4K,
+            &device,
+        )?;
+        let v = QTensor::quantize_onto(
+            &patterned((128, HIDDEN), 47, 0.03)?,
+            GgmlDType::Q4K,
+            &device,
+        )?;
         let xs = patterned((64, HIDDEN), 3, 0.2)?
             .to_dtype(DType::BF16)?
             .to_device(&device)?;

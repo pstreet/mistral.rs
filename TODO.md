@@ -117,6 +117,8 @@ facade today, so the MTP port gates the cutover):
       crate lacks: stream arena alloc, managed htod clones, fork
       cublasLt - the five errors of the 2026-10-06 cuda-only
       check; the fix is role-keying the shell, not porting APIs).
+      STATUS 2026-10-07: all four shapes check green post-fix;
+      release build + serve sanity + 27B parity bench pending.
 - [ ] ~S optional prod knob: `mtp_draft_lm_head_isq = "Q4K"` in prod
       mistralrs.toml (measured +2.6% decode on the 35B; harmless to
       quality).
@@ -2207,6 +2209,42 @@ mistral.rs hot zones, then merge.
 
 ## Done (kept for context)
 
+- [x] ~L Role-identity Phase 1 (2026-10-06/07): cuda-only compiles
+      green for the first time; all four shapes check clean (cpu,
+      cuda, dual, rocm), post-fmt verified. Root-cause chain:
+      (a) the candle workspace's [patch.crates-io] cudarc entry was
+          silently inert - the resolver prefers the highest version
+          satisfying ^0.19.8, so registry 0.19.9 always displaced the
+          vendored 0.19.8 fork and the lock never re-resolved; every
+          candle-workspace check was compiling against upstream
+          cudarc (the true origin of the old "candle expects APIs
+          upstream lacks" note). Fixed with version = "=0.19.8".
+      (b) the NVIDIA shell's capability macros were shape-keyed
+          (not(dual) expands - written when single-vendor meant the
+          hip alias) instead of role-keyed; re-keyed the
+          cuda_backend and quantized/cuda shells: kernels = the PTX
+          twin, Lt/managed tiers dropped for the NVIDIA role, the
+          rocm alias preserved bit-for-bit until the phase 3 cutover.
+      (c) mistralrs re-keys: graph machinery (arena capture ON for
+          any cuda shape, no-mode begin_capture, bookkeeping gates
+          and warmup/clamp helpers un-gated), device_spec caps
+          (cuda-only mirrors the dual NVIDIA row, mtp=false), the
+          gemv/gguf/cublaslt/fp8 tiers in mistralrs-quant (alias
+          launchers rocm-solo, NVIDIA twins feature=cuda, the
+          never-compiled hip_fwd mangles and hip debug blocks
+          deleted), the MoE dispatch in backends.rs, and paged-attn:
+          the nvcc companion now builds for any cuda shape (the
+          upstream static-archive + dylib-cudart path retires,
+          kernel_decl dlopens cuda_plugin, has_fp8 emitted to match
+          the AMD side, the cuda_role twins widened, FlashInfer
+          kernels reachable through the companion).
+      Safety: dual and rocm stayed green throughout - every re-key
+      was a dead arm or additive for the working shapes.
+      Remaining for Phase 1 acceptance: release cuda-only build,
+      serve sanity + graphs on the 3090, 27B parity bench vs the
+      dual numbers (decode 28.85 / prefill ~4.6k), FlashInfer-on
+      observation in cuda-only. The dual FlashInfer claiming re-key
+      + A/B bench stays queued with Phase 2 (the MTP port).
 - [x] ~M CK sliding-window support (done 2026-09-22). CK's generic mask already
       honored `window_size_left/right`; only the args (`-1` hardcoded) and the
       dispatch gate (`sliding_window.is_none()`) blocked it. Threaded the window

@@ -10,7 +10,7 @@ pub use candle_core::hip_backend as role_backend;
 
 mod backend;
 mod ffi;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
 pub(crate) mod ffi_cuda;
 
 #[cfg(not(feature = "rocm"))]
@@ -29,11 +29,11 @@ pub use backend::{
 
 /// Dual-only NVIDIA-role twins (nvcc companion). Same entry shapes as
 /// above, bound to `cuda_backend` types. Core dispatches by role storage.
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub mod cuda_role;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 mod role_dispatch;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub use role_dispatch::{
     copy_blocks_auto, gather_kv_cache_auto, paged_attention_auto, reshape_and_cache_auto,
     reshape_and_cache_q4_auto, reshape_and_cache_q8_auto,

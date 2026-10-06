@@ -77,8 +77,7 @@ pub async fn run_server(
     let (cpu, device_layers, device_str) = extract_device_settings(&model_type);
     let device_spec = device_str
         .map(|s| {
-            mistralrs_core::device_spec::DeviceSpec::parse(&s)
-                .map_err(|e| anyhow::anyhow!("{e}"))
+            mistralrs_core::device_spec::DeviceSpec::parse(&s).map_err(|e| anyhow::anyhow!("{e}"))
         })
         .transpose()?;
 
@@ -875,7 +874,11 @@ pub(crate) fn extract_device_settings(
         ModelType::Embedding { device, .. } => device,
     };
 
-    (device.cpu, device.device_layers.clone(), device.device.clone())
+    (
+        device.cpu,
+        device.device_layers.clone(),
+        device.device.clone(),
+    )
 }
 
 pub(crate) fn extract_isq_setting(model_type: &ModelType) -> Option<String> {

@@ -2558,7 +2558,9 @@ pub trait Pipeline:
                             self.cache(),
                             EitherCache::Normal(_) | EitherCache::Hybrid(_)
                         )
-                        && input_seqs.first().is_some_and(|seq| seq.token_offset() == 0)
+                        && input_seqs
+                            .first()
+                            .is_some_and(|seq| seq.token_offset() == 0)
                     {
                         self.set_none_cache(input_seqs, false, false, true)?;
                     }

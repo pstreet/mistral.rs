@@ -239,7 +239,9 @@ pub(crate) fn clamp_slot_table(slots: &Tensor, capacity: u32, replacement: u32) 
             #[cfg(all(feature = "cuda", feature = "rocm"))]
             {
                 let _ = (storage, layout);
-                candle_core::bail!("clamp-u32-index-table needs the serving (hip) role in dual builds")
+                candle_core::bail!(
+                    "clamp-u32-index-table needs the serving (hip) role in dual builds"
+                )
             }
             #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             {
@@ -268,11 +270,7 @@ pub(crate) fn clamp_slot_table(slots: &Tensor, capacity: u32, replacement: u32) 
         }
 
         #[cfg(all(feature = "cuda", feature = "rocm"))]
-        fn hip_fwd(
-            &self,
-            storage: &mut candle_core::HipStorage,
-            layout: &Layout,
-        ) -> Result<()> {
+        fn hip_fwd(&self, storage: &mut candle_core::HipStorage, layout: &Layout) -> Result<()> {
             use candle_core::backend::BackendStorage;
             use mistralrs_quant::hip_slice_ptr_mut_on_stream;
             if !layout.is_contiguous() {

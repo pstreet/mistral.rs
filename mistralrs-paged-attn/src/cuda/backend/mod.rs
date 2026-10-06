@@ -6,7 +6,7 @@ mod fa3;
 #[cfg(not(feature = "rocm"))]
 mod flash_attn_sinks;
 #[cfg(not(feature = "rocm"))]
-mod flashinfer;
+pub(crate) mod flashinfer;
 mod gather_kv;
 #[cfg(not(feature = "rocm"))]
 mod mla;

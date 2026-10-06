@@ -34,10 +34,13 @@ use mistralrs_quant::QuantizedActivation;
 use mistralrs_quant::{ActivationQuantizationScheme, ActivationScaleLayout};
 
 use crate::kv_cache::RecurrentStateLayout;
-#[cfg(all(any(feature = "cuda", feature = "rocm"), not(all(feature = "cuda", feature = "rocm"))))]
-use crate::pipeline::graph_role::GraphStreamExt;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::kv_cache::GDN_PENDING_KEY_BANK_COUNT;
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use crate::pipeline::graph_role::GraphStreamExt;
 
 #[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 pub(crate) const GDN_PAD_SLOT: u32 = u32::MAX;
@@ -171,7 +174,11 @@ impl GdnFp8OutputSpec {
         Some(spec)
     }
 
-    pub(crate) fn layout(&self, num_v_heads: usize, head_v_dim: usize) -> Option<GdnFp8OutputLayout> {
+    pub(crate) fn layout(
+        &self,
+        num_v_heads: usize,
+        head_v_dim: usize,
+    ) -> Option<GdnFp8OutputLayout> {
         if self.scheme.dtype != DType::F8E4M3
             || self.scheme.block_shape != [1, GDN_FP8_GROUP_SIZE]
             || head_v_dim != GDN_FP8_GROUP_SIZE
@@ -1659,7 +1666,9 @@ pub fn chunked_gated_delta_rule_recurrence_cuda(
     // Dual NVIDIA role: the twin module serves this device.
     #[cfg(all(feature = "cuda", feature = "rocm"))]
     if inputs.q.device().is_cuda() {
-        return crate::cuda::gdn_cuda::chunked_gated_delta_rule_recurrence_cuda(inputs, state, slots);
+        return crate::cuda::gdn_cuda::chunked_gated_delta_rule_recurrence_cuda(
+            inputs, state, slots,
+        );
     }
 
     launch_recurrence(RecurrenceKernel::Chunked, inputs, state, slots)
@@ -1741,7 +1750,12 @@ pub fn vmajor_prefill_gated_delta_rule_recurrence_cuda(
     // Dual NVIDIA role: the twin module serves this device.
     #[cfg(all(feature = "cuda", feature = "rocm"))]
     if inputs.q.device().is_cuda() {
-        return crate::cuda::gdn_cuda::vmajor_prefill_gated_delta_rule_recurrence_cuda(inputs, state, slots, activation_dtype);
+        return crate::cuda::gdn_cuda::vmajor_prefill_gated_delta_rule_recurrence_cuda(
+            inputs,
+            state,
+            slots,
+            activation_dtype,
+        );
     }
 
     let requested =
@@ -1845,7 +1859,14 @@ pub fn causal_conv1d_cuda(
     // Dual NVIDIA role: the twin module serves this device.
     #[cfg(all(feature = "cuda", feature = "rocm"))]
     if x.device().is_cuda() {
-        return crate::cuda::gdn_cuda::causal_conv1d_cuda(x, weight, conv_state, kernel_size, is_update, slots);
+        return crate::cuda::gdn_cuda::causal_conv1d_cuda(
+            x,
+            weight,
+            conv_state,
+            kernel_size,
+            is_update,
+            slots,
+        );
     }
 
     use candle::role::backend::cudarc::driver::DevicePtr;
@@ -2047,7 +2068,20 @@ pub fn prepare_recurrence_inputs_cuda(
     // Dual NVIDIA role: the twin module serves this device.
     #[cfg(all(feature = "cuda", feature = "rocm"))]
     if mixed_qkv.device().is_cuda() {
-        return crate::cuda::gdn_cuda::prepare_recurrence_inputs_cuda(mixed_qkv, b, a, a_log, dt_bias, batch_size, seq_len, num_k_heads, num_v_heads, head_k_dim, head_v_dim, tiled_v_heads);
+        return crate::cuda::gdn_cuda::prepare_recurrence_inputs_cuda(
+            mixed_qkv,
+            b,
+            a,
+            a_log,
+            dt_bias,
+            batch_size,
+            seq_len,
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            tiled_v_heads,
+        );
     }
 
     use candle::role::backend::cudarc::driver::DevicePtr;
@@ -5988,7 +6022,13 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
     #[cfg(all(feature = "cuda", feature = "rocm"))]
     if x.device().is_cuda() {
         return crate::cuda::gdn_cuda::rmsnorm_gated_quantized_cuda(
-            x, gate, weight, eps, spec, num_v_heads, head_v_dim,
+            x,
+            gate,
+            weight,
+            eps,
+            spec,
+            num_v_heads,
+            head_v_dim,
         );
     }
 

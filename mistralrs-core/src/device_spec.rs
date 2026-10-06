@@ -295,13 +295,28 @@ pub fn backend_caps(device: &Device) -> BackendCaps {
             let arch = GpuArch::resolve(dev).ok();
             #[cfg(not(all(feature = "cuda", feature = "rocm")))]
             {
-                // Single-vendor builds: the fork's full serving stack.
-                BackendCaps {
-                    arch,
-                    graphs: true,
-                    paged_attention: true,
-                    quantized_gguf: true,
-                    mtp: true,
+                // Single-vendor builds: the fork's full serving stack. The
+                // NVIDIA role keeps mtp off (speculative kernels are
+                // hip-side; mirrors the dual NVIDIA row).
+                #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+                {
+                    BackendCaps {
+                        arch,
+                        graphs: true,
+                        paged_attention: true,
+                        quantized_gguf: true,
+                        mtp: true,
+                    }
+                }
+                #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+                {
+                    BackendCaps {
+                        arch,
+                        graphs: true,
+                        paged_attention: true,
+                        quantized_gguf: true,
+                        mtp: false,
+                    }
                 }
             }
             #[cfg(all(feature = "cuda", feature = "rocm"))]

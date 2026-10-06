@@ -78,6 +78,7 @@ fn cuda_header_hash(dir: &str, excluded_dirs: &[&str]) -> Result<u64> {
 }
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
+#[allow(dead_code)]
 fn build_cuda() -> Result<()> {
     use std::path::PathBuf;
 
@@ -247,7 +248,7 @@ fn build_cuda() -> Result<()> {
 // (ldmatrix/cp.async) and MLA kernels need tensor-core instructions RDNA
 // lacks and are excluded; FP8 KV cache is enabled via the AMD quantization
 // path (ENABLE_FP8) so the f8e4m3 cache_dtype branch compiles on RDNA.
-#[cfg(feature = "rocm")]
+#[cfg(any(feature = "rocm", all(feature = "cuda", target_family = "unix")))]
 const PAGED_ATTN_ROCM_KERNELS: &[&str] = &[
     "src/cuda/pagedattention_v1_f16.cu",
     "src/cuda/pagedattention_v1_bf16.cu",
@@ -376,11 +377,11 @@ fn build_rocm() -> Result<()> {
     Ok(())
 }
 
-/// NVIDIA-role companion for dual (`cuda+rocm`) builds: the same 9 dense
-/// kernels nvcc-built into a dlopened `.so` (never linked, so the exe
+/// NVIDIA-role companion: the same 9 dense kernels nvcc-built into a
+/// dlopened `.so` for any cuda build shape (never linked, so the exe
 /// keeps zero GPU DT_NEEDED). Same symbol names as the hip companion -
 /// separate dlopen handles (RTLD_LOCAL) keep them from colliding.
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn build_cuda_companion() -> Result<()> {
     use std::path::PathBuf;
     use std::process::Command;
@@ -437,6 +438,9 @@ fn build_cuda_companion() -> Result<()> {
         anyhow::ensure!(status.success(), "nvcc failed for {kernel}");
         objects.push(object);
     }
+    if cap >= 80 {
+        println!("cargo:rustc-cfg=has_fp8");
+    }
 
     let so = out_dir.join("libmistralrspagedattention_cuda.so");
     if so.exists() {
@@ -469,19 +473,14 @@ fn main() -> Result<()> {
     // Dual cuda+rocm: hipcc block builds the hip companion AND nvcc builds
     // the cuda companion (two dlopened .so files, nothing linked - no
     // archive collision). Single-vendor shapes keep their static archive.
-    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     {
-        build_cuda()?;
+        build_cuda_companion()?;
     }
 
     #[cfg(feature = "rocm")]
     {
         build_rocm()?;
-    }
-
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
-    {
-        build_cuda_companion()?;
     }
 
     #[cfg(feature = "metal")]

@@ -570,6 +570,10 @@ pub fn moe_dispatch_build_cuda(
 ///
 /// # Safety
 /// `topk_weights` must hold `num_tokens * topk` F32 values on the CUDA role.
+/// C-ABI activation tags (same values as the alias launcher file).
+pub const ACT_GELU_PYTORCH_TANH: i32 = 0;
+pub const ACT_SILU: i32 = 1;
+
 pub unsafe fn moe_weighted_reduce_flat_cuda(
     inputs: &Tensor,
     topk_weights: &Tensor,

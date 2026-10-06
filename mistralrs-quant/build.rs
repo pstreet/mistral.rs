@@ -535,19 +535,22 @@ fn main() -> Result<(), String> {
     #[cfg(feature = "rocm")]
     {
         build_rocm()?;
-        #[cfg(feature = "cuda")]
+    }
+
+    #[cfg(feature = "cuda")]
+    {
         build_cuda_moe_companion()?;
     }
 
     Ok(())
 }
 
-/// NVIDIA-role MoE companion for dual builds: nvcc-compiles the fused
-/// decode TU (indexed_moe.cu is self-contained: Q8_1 quantize + fused
-/// gate_up + down_aggregate launches for every GGUF dtype) into a
-/// dlopened .so, mirroring mistralrs-paged-attn's CUDA companion. Never
-/// linked, so the exe keeps zero GPU DT_NEEDED.
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+/// NVIDIA-role MoE companion: nvcc-compiles the fused decode TU
+/// (indexed_moe.cu is self-contained: Q8_1 quantize + fused gate_up +
+/// down_aggregate launches for every GGUF dtype) into a dlopened .so
+/// for any cuda build shape, mirroring mistralrs-paged-attn's CUDA
+/// companion. Never linked, so the exe keeps zero GPU DT_NEEDED.
+#[cfg(feature = "cuda")]
 fn build_cuda_moe_companion() -> Result<(), String> {
     use std::path::PathBuf;
     use std::process::Command;

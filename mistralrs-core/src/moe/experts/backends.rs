@@ -1927,12 +1927,24 @@ impl FastExpertsWeights {
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn grouped_lora_preserves_route_order(&self) -> bool {
-        self.fused_gate_proj
+        let Some((gate, up)) = self
+            .fused_gate_proj
             .get_qtensor()
             .zip(self.fused_up_proj.get_qtensor())
-            .is_some_and(|(gate, up)| {
-                gate.dtype() == up.dtype() && mistralrs_quant::supports_mmq(gate.dtype())
-            })
+        else {
+            return false;
+        };
+        if gate.dtype() != up.dtype() {
+            return false;
+        }
+        #[cfg(feature = "rocm")]
+        {
+            return mistralrs_quant::supports_mmq(gate.dtype());
+        }
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+        {
+            return mistralrs_quant::supports_mmq_cuda(gate.dtype());
+        }
     }
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -1940,7 +1952,7 @@ impl FastExpertsWeights {
         // Dual NVIDIA role: the nvcc companions cover fused decode and the
         // grouped MMQ prefill; non-MMQ dtypes fall back inside the grouped
         // arm (loud degradation per the BackendCaps contract).
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "cuda")]
         if forward.xs.device().is_cuda() {
             return if !forward.shape.phase.is_prefill()
                 || forward.shape.num_tokens < GROUPED_PREFILL_MIN_TOKENS
@@ -2128,73 +2140,82 @@ impl FastExpertsWeights {
         if forward.xs_flat.device().is_hip() {
             return self.forward_decode_lora_hip(forward, config);
         }
-        let Some(gate_qt) = self.fused_gate_proj.get_qtensor() else {
-            return Ok(None);
-        };
-        let Some(up_qt) = self.fused_up_proj.get_qtensor() else {
-            return Ok(None);
-        };
-        let Some(down_qt) = self.fused_down_proj.get_qtensor() else {
-            return Ok(None);
-        };
-        let dev = forward.xs_flat.device().as_cuda_device()?;
-        let topk_ids_flat = forward.topk_ids.flatten_all()?.contiguous()?;
-        let (ids_storage, ids_layout) = topk_ids_flat.storage_and_layout();
-        let candle_core::Storage::Cuda(ids_cuda) = &*ids_storage else {
-            return Ok(None);
-        };
-        if ids_layout.start_offset() != 0 {
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+        {
+            // The LoRA decode kernels ride the hip companion; gather_lora
+            // covers the NVIDIA role.
             return Ok(None);
         }
-        let ids = ids_cuda.as_cuda_slice::<u32>()?;
-        let weights = mistralrs_quant::IndexedMoeLoraWeights::new(&gate_qt, &up_qt, &down_qt);
-        let routing = mistralrs_quant::IndexedMoeRouting::new(
-            ids,
-            forward.shape.num_tokens,
-            config.num_experts_per_tok,
-            config.num_experts,
-            dev,
-        );
-        let Some(decode) = mistralrs_quant::IndexedMoeLoraDecode::new(weights, routing)? else {
-            return Ok(None);
-        };
-        let Some(gate_up) = decode.gate_up(forward.xs_flat)? else {
-            return Ok(None);
-        };
+        #[cfg(not(all(feature = "cuda", not(feature = "rocm"))))]
+        {
+            let Some(gate_qt) = self.fused_gate_proj.get_qtensor() else {
+                return Ok(None);
+            };
+            let Some(up_qt) = self.fused_up_proj.get_qtensor() else {
+                return Ok(None);
+            };
+            let Some(down_qt) = self.fused_down_proj.get_qtensor() else {
+                return Ok(None);
+            };
+            let dev = forward.xs_flat.device().as_cuda_device()?;
+            let topk_ids_flat = forward.topk_ids.flatten_all()?.contiguous()?;
+            let (ids_storage, ids_layout) = topk_ids_flat.storage_and_layout();
+            let candle_core::Storage::Cuda(ids_cuda) = &*ids_storage else {
+                return Ok(None);
+            };
+            if ids_layout.start_offset() != 0 {
+                return Ok(None);
+            }
+            let ids = ids_cuda.as_cuda_slice::<u32>()?;
+            let weights = mistralrs_quant::IndexedMoeLoraWeights::new(&gate_qt, &up_qt, &down_qt);
+            let routing = mistralrs_quant::IndexedMoeRouting::new(
+                ids,
+                forward.shape.num_tokens,
+                config.num_experts_per_tok,
+                config.num_experts,
+                dev,
+            );
+            let Some(decode) = mistralrs_quant::IndexedMoeLoraDecode::new(weights, routing)? else {
+                return Ok(None);
+            };
+            let Some(gate_up) = decode.gate_up(forward.xs_flat)? else {
+                return Ok(None);
+            };
 
-        let lora = forward.lora.as_ref().expect("LoRA path requires execution");
-        let gate_up =
-            lora.add_gate_up_delta_combined_owned(forward.xs_flat, gate_up, forward.topk_ids)?;
-        let intermediate = gate_up.dim(D::Minus1)? / 2;
-        let down_input = crate::ops::split_mul_and_act(&gate_up, intermediate, config.act)?;
-        let down_input_flat = down_input.reshape((
-            forward.shape.num_tokens * config.num_experts_per_tok,
-            intermediate,
-        ))?;
-        let Some(down_base) = decode.down(&down_input_flat)? else {
-            candle_core::bail!("indexed MoE LoRA down projection rejected a supported dtype");
-        };
-        let down = lora.add_delta_owned(
-            LoraExpertProjection::Down,
-            &down_input,
-            down_base,
-            forward.topk_ids,
-            None,
-            LoraExpertInputMode::RoutedRows,
-        )?;
+            let lora = forward.lora.as_ref().expect("LoRA path requires execution");
+            let gate_up =
+                lora.add_gate_up_delta_combined_owned(forward.xs_flat, gate_up, forward.topk_ids)?;
+            let intermediate = gate_up.dim(D::Minus1)? / 2;
+            let down_input = crate::ops::split_mul_and_act(&gate_up, intermediate, config.act)?;
+            let down_input_flat = down_input.reshape((
+                forward.shape.num_tokens * config.num_experts_per_tok,
+                intermediate,
+            ))?;
+            let Some(down_base) = decode.down(&down_input_flat)? else {
+                candle_core::bail!("indexed MoE LoRA down projection rejected a supported dtype");
+            };
+            let down = lora.add_delta_owned(
+                LoraExpertProjection::Down,
+                &down_input,
+                down_base,
+                forward.topk_ids,
+                None,
+                LoraExpertInputMode::RoutedRows,
+            )?;
 
-        let down = down.reshape((
-            forward.shape.num_tokens * config.num_experts_per_tok,
-            forward.shape.hidden_dim,
-        ))?;
-        let output = mistralrs_quant::moe_weighted_reduce_flat_same_dtype(
-            &down,
-            forward.topk_weights,
-            forward.shape.num_tokens,
-            config.num_experts_per_tok,
-            dev,
-        )?;
-        Ok(Some(output.to_dtype(forward.original_dtype)?))
+            let down = down.reshape((
+                forward.shape.num_tokens * config.num_experts_per_tok,
+                forward.shape.hidden_dim,
+            ))?;
+            let output = mistralrs_quant::moe_weighted_reduce_flat_same_dtype(
+                &down,
+                forward.topk_weights,
+                forward.shape.num_tokens,
+                config.num_experts_per_tok,
+                dev,
+            )?;
+            return Ok(Some(output.to_dtype(forward.original_dtype)?));
+        }
     }
 
     /// Indexed MoE LoRA decode on the hip role. Same contract as
@@ -2274,79 +2295,86 @@ impl FastExpertsWeights {
         if forward.xs_flat.device().is_hip() {
             return self.forward_decode_hip(forward, config);
         }
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "cuda")]
         if forward.xs_flat.device().is_cuda() {
             return self.forward_decode_cuda_role(forward, config);
         }
-        use candle_core::cuda::cudarc::driver::DevicePtr;
+        #[cfg(not(all(feature = "cuda", not(feature = "rocm"))))]
+        {
+            use candle_core::cuda::cudarc::driver::DevicePtr;
 
-        let dev = forward.xs_flat.device().as_cuda_device()?;
+            let dev = forward.xs_flat.device().as_cuda_device()?;
 
-        // Get QTensors - bail to fallback if not quantized
-        let gate_qt = match self.fused_gate_proj.get_qtensor() {
-            Some(qt) => qt,
-            None => return Ok(None),
-        };
-        let up_qt = match self.fused_up_proj.get_qtensor() {
-            Some(qt) => qt,
-            None => return Ok(None),
-        };
-        let down_qt = match self.fused_down_proj.get_qtensor() {
-            Some(qt) => qt,
-            None => return Ok(None),
-        };
+            // Get QTensors - bail to fallback if not quantized
+            let gate_qt = match self.fused_gate_proj.get_qtensor() {
+                Some(qt) => qt,
+                None => return Ok(None),
+            };
+            let up_qt = match self.fused_up_proj.get_qtensor() {
+                Some(qt) => qt,
+                None => return Ok(None),
+            };
+            let down_qt = match self.fused_down_proj.get_qtensor() {
+                Some(qt) => qt,
+                None => return Ok(None),
+            };
 
-        // Get topk_ids as contiguous u32 CudaSlice
-        let topk_ids_flat = forward.topk_ids.flatten_all()?.contiguous()?;
-        let (ti_storage, ti_layout) = topk_ids_flat.storage_and_layout();
-        let ti_cuda = match &*ti_storage {
-            candle_core::Storage::Cuda(c) => c,
-            _ => return Ok(None),
-        };
-        let ti_u32_slice = ti_cuda.as_cuda_slice::<u32>()?;
-        assert!(ti_layout.start_offset() == 0, "expected contiguous tensor");
+            // Get topk_ids as contiguous u32 CudaSlice
+            let topk_ids_flat = forward.topk_ids.flatten_all()?.contiguous()?;
+            let (ti_storage, ti_layout) = topk_ids_flat.storage_and_layout();
+            let ti_cuda = match &*ti_storage {
+                candle_core::Storage::Cuda(c) => c,
+                _ => return Ok(None),
+            };
+            let ti_u32_slice = ti_cuda.as_cuda_slice::<u32>()?;
+            assert!(ti_layout.start_offset() == 0, "expected contiguous tensor");
 
-        // Get topk_weights as contiguous f32 CudaSlice
-        let tw_f32 = forward
-            .topk_weights
-            .flatten_all()?
-            .to_dtype(DType::F32)?
-            .contiguous()?;
-        let (tw_storage, tw_layout) = tw_f32.storage_and_layout();
-        let tw_cuda = match &*tw_storage {
-            candle_core::Storage::Cuda(c) => c,
-            _ => return Ok(None),
-        };
-        let tw_slice = tw_cuda.as_cuda_slice::<f32>()?;
-        let tw_ptr = tw_slice
-            .slice(tw_layout.start_offset()..)
-            .device_ptr(tw_slice.stream())
-            .0 as *const f32;
+            // Get topk_weights as contiguous f32 CudaSlice
+            let tw_f32 = forward
+                .topk_weights
+                .flatten_all()?
+                .to_dtype(DType::F32)?
+                .contiguous()?;
+            let (tw_storage, tw_layout) = tw_f32.storage_and_layout();
+            let tw_cuda = match &*tw_storage {
+                candle_core::Storage::Cuda(c) => c,
+                _ => return Ok(None),
+            };
+            let tw_slice = tw_cuda.as_cuda_slice::<f32>()?;
+            let tw_ptr = tw_slice
+                .slice(tw_layout.start_offset()..)
+                .device_ptr(tw_slice.stream())
+                .0 as *const f32;
 
-        // Map activation to CUDA kernel act_type
-        let act_type = match config.act {
-            Activation::GeluPytorchTanh => mistralrs_quant::ACT_GELU_PYTORCH_TANH,
-            Activation::Silu | Activation::Swish => mistralrs_quant::ACT_SILU,
-            _ => return Ok(None),
-        };
+            // Map activation to CUDA kernel act_type
+            let act_type = match config.act {
+                Activation::GeluPytorchTanh => mistralrs_quant::ACT_GELU_PYTORCH_TANH,
+                Activation::Silu | Activation::Swish => mistralrs_quant::ACT_SILU,
+                _ => return Ok(None),
+            };
 
-        // SAFETY: tw_ptr is a valid device pointer obtained from the topk_weights tensor above.
-        let result = unsafe {
-            mistralrs_quant::indexed_moe_fused_decode(
-                &gate_qt,
-                &up_qt,
-                &down_qt,
-                forward.xs_flat,
-                ti_u32_slice,
-                tw_ptr,
-                forward.shape.num_tokens,
-                config.num_experts_per_tok,
-                act_type,
-                dev,
-            )?
-        };
+            // SAFETY: tw_ptr is a valid device pointer obtained from the topk_weights tensor above.
+            let result = unsafe {
+                mistralrs_quant::indexed_moe_fused_decode(
+                    &gate_qt,
+                    &up_qt,
+                    &down_qt,
+                    forward.xs_flat,
+                    ti_u32_slice,
+                    tw_ptr,
+                    forward.shape.num_tokens,
+                    config.num_experts_per_tok,
+                    act_type,
+                    dev,
+                )?
+            };
 
-        Ok(Some(result.to_dtype(forward.original_dtype)?))
+            return Ok(Some(result.to_dtype(forward.original_dtype)?));
+        }
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+        {
+            unreachable!("the cuda role dispatches through forward_decode_cuda_role")
+        }
     }
 
     /// Fused MoE decode on the hip role. Same contract as `forward_decode`.
@@ -2403,7 +2431,7 @@ impl FastExpertsWeights {
     /// Fused MoE decode through the nvcc companion for the NVIDIA role of a
     /// dual build. Mirrors `forward_decode_hip`; the kernels are the same
     /// sources compiled by nvcc instead of hipcc.
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "cuda")]
     pub(super) fn forward_decode_cuda_role(
         &self,
         forward: &MoEForward,
@@ -2468,313 +2496,323 @@ impl FastExpertsWeights {
         if forward.xs_flat.device().is_hip() {
             return self.forward_grouped_hip(forward, config);
         }
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "cuda")]
         if forward.xs_flat.device().is_cuda() {
             return self.forward_grouped_cuda_role(forward, config);
         }
+        #[cfg(not(all(feature = "cuda", not(feature = "rocm"))))]
+        {
+            let dev = forward.xs_flat.device().as_cuda_device()?;
 
-        let dev = forward.xs_flat.device().as_cuda_device()?;
-
-        // Get topk_ids as contiguous u32 CudaSlice
-        let topk_ids_flat = forward.topk_ids.flatten_all()?.contiguous()?;
-        let (ti_storage, ti_layout) = topk_ids_flat.storage_and_layout();
-        let ti_cuda = match &*ti_storage {
-            candle_core::Storage::Cuda(c) => c,
-            _ => return Ok(None),
-        };
-        let ti_u32_slice = ti_cuda.as_cuda_slice::<u32>()?;
-        assert!(ti_layout.start_offset() == 0, "expected contiguous tensor");
-
-        // Build dispatch tables on GPU (no CPU-GPU sync)
-        // moe_dispatch_build takes u32 and casts to i32 internally for the CUDA kernel
-        let (expert_bounds, sorted_token_ids, sorted_source_ids) =
-            mistralrs_quant::moe_dispatch_build(
-                ti_u32_slice,
-                total_assignments,
-                num_experts,
-                topk,
-                dev,
-            )?;
-
-        // Use the pre-quantized Q8_0 grouped kernel path
-        let gate_qt = match self.fused_gate_proj.get_qtensor() {
-            Some(qt) => qt,
-            None => return Ok(None),
-        };
-        let up_qt = match self.fused_up_proj.get_qtensor() {
-            Some(qt) => qt,
-            None => return Ok(None),
-        };
-        let down_qt = match self.fused_down_proj.get_qtensor() {
-            Some(qt) => qt,
-            None => return Ok(None),
-        };
-
-        let use_mmq_gate_up =
-            gate_qt.dtype() == up_qt.dtype() && mistralrs_quant::supports_mmq(gate_qt.dtype());
-        if forward.lora.is_some() && !use_mmq_gate_up {
-            return Ok(None);
-        }
-
-        let gate_up = if use_mmq_gate_up {
-            GroupedGateUp::Packed(mistralrs_quant::grouped_moe_mmq_pair_packed(
-                &gate_qt,
-                &up_qt,
-                forward.xs_flat,
-                &sorted_source_ids,
-                &sorted_token_ids,
-                &expert_bounds,
-                total_assignments,
-                topk,
-                num_experts,
-                dev,
-            )?)
-        } else {
-            // Quantize input to Q8_1 ONCE, shared between gate and up.
-            // quantize_input_q8_1 accepts BF16/F16/F32 directly (no conversion needed).
-            let (input_q8, k, k_padded) =
-                mistralrs_quant::quantize_input_q8_1(forward.xs_flat, dev)?;
-
-            // Gate projection using pre-quantized input
-            let gate = mistralrs_quant::grouped_moe_gemm_prequantized(
-                &gate_qt,
-                &input_q8,
-                k,
-                k_padded,
-                &expert_bounds,
-                &sorted_token_ids,
-                None,
-                total_assignments,
-                topk,
-                num_experts,
-                1,
-                dev,
-            )?;
-
-            // Up projection reusing same pre-quantized input
-            let up = mistralrs_quant::grouped_moe_gemm_prequantized(
-                &up_qt,
-                &input_q8,
-                k,
-                k_padded,
-                &expert_bounds,
-                &sorted_token_ids,
-                None,
-                total_assignments,
-                topk,
-                num_experts,
-                1,
-                dev,
-            )?;
-
-            drop(input_q8);
-            GroupedGateUp::SortedPair { gate, up }
-        };
-
-        let lora_activated = if let Some(lora) = forward.lora.as_ref() {
-            let GroupedGateUp::Packed(gate_up) = &gate_up else {
-                return Ok(None);
+            // Get topk_ids as contiguous u32 CudaSlice
+            let topk_ids_flat = forward.topk_ids.flatten_all()?.contiguous()?;
+            let (ti_storage, ti_layout) = topk_ids_flat.storage_and_layout();
+            let ti_cuda = match &*ti_storage {
+                candle_core::Storage::Cuda(c) => c,
+                _ => return Ok(None),
             };
-            let gate_up = lora.add_gate_up_delta_combined_owned(
-                forward.xs_flat,
-                gate_up.to_dtype(forward.original_dtype)?,
-                forward.topk_ids,
-            )?;
-            let intermediate = gate_up.dim(D::Minus1)? / 2;
-            Some(crate::ops::split_mul_and_act(
-                &gate_up,
-                intermediate,
-                config.act,
-            )?)
-        } else {
-            None
-        };
+            let ti_u32_slice = ti_cuda.as_cuda_slice::<u32>()?;
+            assert!(ti_layout.start_offset() == 0, "expected contiguous tensor");
 
-        // Get topk_weights pointer
-        use candle_core::cuda::cudarc::driver::DevicePtr;
-        let tw_f32 = forward
-            .topk_weights
-            .flatten_all()?
-            .to_dtype(DType::F32)?
-            .contiguous()?;
-        let (tw_storage, tw_layout) = tw_f32.storage_and_layout();
-        let tw_cuda = match &*tw_storage {
-            candle_core::Storage::Cuda(c) => c,
-            _ => return Ok(None),
-        };
-        let tw_slice = tw_cuda.as_cuda_slice::<f32>()?;
-        let tw_ptr = tw_slice
-            .slice(tw_layout.start_offset()..)
-            .device_ptr(tw_slice.stream())
-            .0 as *const f32;
+            // Build dispatch tables on GPU (no CPU-GPU sync)
+            // moe_dispatch_build takes u32 and casts to i32 internally for the CUDA kernel
+            let (expert_bounds, sorted_token_ids, sorted_source_ids) =
+                mistralrs_quant::moe_dispatch_build(
+                    ti_u32_slice,
+                    total_assignments,
+                    num_experts,
+                    topk,
+                    dev,
+                )?;
 
-        let glu_activation = match config.act {
-            Activation::Silu | Activation::Swish => Some(mistralrs_quant::GluActivationType::Silu),
-            Activation::NewGelu | Activation::GeluPytorchTanh => {
-                Some(mistralrs_quant::GluActivationType::Gelu)
+            // Use the pre-quantized Q8_0 grouped kernel path
+            let gate_qt = match self.fused_gate_proj.get_qtensor() {
+                Some(qt) => qt,
+                None => return Ok(None),
+            };
+            let up_qt = match self.fused_up_proj.get_qtensor() {
+                Some(qt) => qt,
+                None => return Ok(None),
+            };
+            let down_qt = match self.fused_down_proj.get_qtensor() {
+                Some(qt) => qt,
+                None => return Ok(None),
+            };
+
+            let use_mmq_gate_up =
+                gate_qt.dtype() == up_qt.dtype() && mistralrs_quant::supports_mmq(gate_qt.dtype());
+            if forward.lora.is_some() && !use_mmq_gate_up {
+                return Ok(None);
             }
-            Activation::Gelu => Some(mistralrs_quant::GluActivationType::GeluErf),
-            Activation::Relu => Some(mistralrs_quant::GluActivationType::Relu),
-            _ => None,
-        };
 
-        let down = if let (true, Some(glu_activation)) = (
-            mistralrs_quant::supports_mmq(down_qt.dtype()),
-            glu_activation,
-        ) {
-            if let (Some(lora), Some(activated)) = (forward.lora.as_ref(), lora_activated.as_ref())
-            {
-                let intermediate = activated.dim(D::Minus1)?;
-                let activated_flat = activated.reshape((total_assignments, intermediate))?;
-                let down_assignments = mistralrs_quant::grouped_moe_mmq(
-                    &down_qt,
-                    &activated_flat,
-                    &sorted_token_ids,
+            let gate_up = if use_mmq_gate_up {
+                GroupedGateUp::Packed(mistralrs_quant::grouped_moe_mmq_pair_packed(
+                    &gate_qt,
+                    &up_qt,
+                    forward.xs_flat,
+                    &sorted_source_ids,
                     &sorted_token_ids,
                     &expert_bounds,
                     total_assignments,
-                    forward.shape.num_tokens,
+                    topk,
                     num_experts,
                     dev,
-                )?
-                .to_dtype(activated.dtype())?
-                .reshape((
-                    forward.shape.num_tokens,
-                    topk,
-                    forward.shape.hidden_dim,
-                ))?;
-                let down = lora.add_delta_owned(
-                    LoraExpertProjection::Down,
-                    activated,
-                    down_assignments,
-                    forward.topk_ids,
-                    None,
-                    LoraExpertInputMode::RoutedRows,
-                )?;
-                mistralrs_quant::moe_weighted_reduce_flat_same_dtype(
-                    &down.reshape((total_assignments, forward.shape.hidden_dim))?,
-                    forward.topk_weights,
-                    forward.shape.num_tokens,
-                    topk,
-                    dev,
-                )?
+                )?)
             } else {
-                let down_assignments = match &gate_up {
-                    GroupedGateUp::Packed(gate_up) => {
-                        mistralrs_quant::grouped_moe_mmq_from_glu_packed(
-                            &down_qt,
-                            gate_up,
-                            &sorted_token_ids,
-                            &sorted_token_ids,
-                            &expert_bounds,
-                            total_assignments,
-                            forward.shape.num_tokens,
-                            num_experts,
-                            glu_activation as i32,
-                            dev,
-                        )?
-                    }
-                    GroupedGateUp::SortedPair { gate, up } => {
-                        mistralrs_quant::grouped_moe_mmq_from_glu_sorted_pair(
-                            &down_qt,
-                            gate,
-                            up,
-                            &sorted_token_ids,
-                            &expert_bounds,
-                            total_assignments,
-                            forward.shape.num_tokens,
-                            num_experts,
-                            glu_activation as i32,
-                            dev,
-                        )?
-                    }
-                };
-                if forward.original_dtype == DType::BF16 {
-                    unsafe {
-                        mistralrs_quant::moe_weighted_reduce_flat_bf16(
-                            &down_assignments,
-                            tw_ptr,
-                            forward.shape.num_tokens,
-                            topk,
-                            dev,
-                        )?
-                    }
-                } else {
-                    unsafe {
-                        mistralrs_quant::moe_weighted_reduce_flat(
-                            &down_assignments,
-                            tw_ptr,
-                            forward.shape.num_tokens,
-                            topk,
-                            dev,
-                        )?
-                    }
-                }
-            }
-        } else {
-            let (activated, down_input_dim1) = match &lora_activated {
-                Some(activated) => (
-                    activated.reshape((total_assignments, activated.dim(D::Minus1)?))?,
-                    2,
-                ),
-                None => match &gate_up {
-                    GroupedGateUp::Packed(gate_up) => (
-                        crate::ops::split_mul_and_act(
-                            gate_up,
-                            gate_up.dim(D::Minus1)? / 2,
-                            config.act,
-                        )?,
-                        2,
-                    ),
-                    GroupedGateUp::SortedPair { gate, up } => {
-                        (crate::ops::mul_and_act(gate, up, config.act)?, 0)
-                    }
-                },
+                // Quantize input to Q8_1 ONCE, shared between gate and up.
+                // quantize_input_q8_1 accepts BF16/F16/F32 directly (no conversion needed).
+                let (input_q8, k, k_padded) =
+                    mistralrs_quant::quantize_input_q8_1(forward.xs_flat, dev)?;
+
+                // Gate projection using pre-quantized input
+                let gate = mistralrs_quant::grouped_moe_gemm_prequantized(
+                    &gate_qt,
+                    &input_q8,
+                    k,
+                    k_padded,
+                    &expert_bounds,
+                    &sorted_token_ids,
+                    None,
+                    total_assignments,
+                    topk,
+                    num_experts,
+                    1,
+                    dev,
+                )?;
+
+                // Up projection reusing same pre-quantized input
+                let up = mistralrs_quant::grouped_moe_gemm_prequantized(
+                    &up_qt,
+                    &input_q8,
+                    k,
+                    k_padded,
+                    &expert_bounds,
+                    &sorted_token_ids,
+                    None,
+                    total_assignments,
+                    topk,
+                    num_experts,
+                    1,
+                    dev,
+                )?;
+
+                drop(input_q8);
+                GroupedGateUp::SortedPair { gate, up }
             };
 
-            let (down_input_q8, down_k, down_k_padded) =
-                mistralrs_quant::quantize_input_q8_1(&activated, dev)?;
-
-            let down = mistralrs_quant::grouped_moe_gemm_prequantized(
-                &down_qt,
-                &down_input_q8,
-                down_k,
-                down_k_padded,
-                &expert_bounds,
-                &sorted_token_ids,
-                Some((tw_ptr, 0)),
-                total_assignments,
-                topk,
-                num_experts,
-                down_input_dim1,
-                dev,
-            )?;
-
-            if let (Some(lora), Some(activated)) = (forward.lora.as_ref(), lora_activated.as_ref())
-            {
-                let delta_base = Tensor::zeros(
-                    (forward.shape.num_tokens, topk, forward.shape.hidden_dim),
-                    activated.dtype(),
-                    activated.device(),
-                )?;
-                let delta = lora.add_delta_owned(
-                    LoraExpertProjection::Down,
-                    activated,
-                    delta_base,
+            let lora_activated = if let Some(lora) = forward.lora.as_ref() {
+                let GroupedGateUp::Packed(gate_up) = &gate_up else {
+                    return Ok(None);
+                };
+                let gate_up = lora.add_gate_up_delta_combined_owned(
+                    forward.xs_flat,
+                    gate_up.to_dtype(forward.original_dtype)?,
                     forward.topk_ids,
-                    Some(forward.topk_weights),
-                    LoraExpertInputMode::RoutedRows,
                 )?;
-                (down.to_dtype(DType::F32)? + delta.to_dtype(DType::F32)?.sum(D::Minus2)?)?
+                let intermediate = gate_up.dim(D::Minus1)? / 2;
+                Some(crate::ops::split_mul_and_act(
+                    &gate_up,
+                    intermediate,
+                    config.act,
+                )?)
             } else {
-                down
-            }
-        };
+                None
+            };
 
-        if down.dtype() == forward.original_dtype {
-            Ok(Some(down))
-        } else {
-            Ok(Some(down.to_dtype(forward.original_dtype)?))
+            // Get topk_weights pointer
+            use candle_core::cuda::cudarc::driver::DevicePtr;
+            let tw_f32 = forward
+                .topk_weights
+                .flatten_all()?
+                .to_dtype(DType::F32)?
+                .contiguous()?;
+            let (tw_storage, tw_layout) = tw_f32.storage_and_layout();
+            let tw_cuda = match &*tw_storage {
+                candle_core::Storage::Cuda(c) => c,
+                _ => return Ok(None),
+            };
+            let tw_slice = tw_cuda.as_cuda_slice::<f32>()?;
+            let tw_ptr = tw_slice
+                .slice(tw_layout.start_offset()..)
+                .device_ptr(tw_slice.stream())
+                .0 as *const f32;
+
+            let glu_activation = match config.act {
+                Activation::Silu | Activation::Swish => {
+                    Some(mistralrs_quant::GluActivationType::Silu)
+                }
+                Activation::NewGelu | Activation::GeluPytorchTanh => {
+                    Some(mistralrs_quant::GluActivationType::Gelu)
+                }
+                Activation::Gelu => Some(mistralrs_quant::GluActivationType::GeluErf),
+                Activation::Relu => Some(mistralrs_quant::GluActivationType::Relu),
+                _ => None,
+            };
+
+            let down = if let (true, Some(glu_activation)) = (
+                mistralrs_quant::supports_mmq(down_qt.dtype()),
+                glu_activation,
+            ) {
+                if let (Some(lora), Some(activated)) =
+                    (forward.lora.as_ref(), lora_activated.as_ref())
+                {
+                    let intermediate = activated.dim(D::Minus1)?;
+                    let activated_flat = activated.reshape((total_assignments, intermediate))?;
+                    let down_assignments = mistralrs_quant::grouped_moe_mmq(
+                        &down_qt,
+                        &activated_flat,
+                        &sorted_token_ids,
+                        &sorted_token_ids,
+                        &expert_bounds,
+                        total_assignments,
+                        forward.shape.num_tokens,
+                        num_experts,
+                        dev,
+                    )?
+                    .to_dtype(activated.dtype())?
+                    .reshape((
+                        forward.shape.num_tokens,
+                        topk,
+                        forward.shape.hidden_dim,
+                    ))?;
+                    let down = lora.add_delta_owned(
+                        LoraExpertProjection::Down,
+                        activated,
+                        down_assignments,
+                        forward.topk_ids,
+                        None,
+                        LoraExpertInputMode::RoutedRows,
+                    )?;
+                    mistralrs_quant::moe_weighted_reduce_flat_same_dtype(
+                        &down.reshape((total_assignments, forward.shape.hidden_dim))?,
+                        forward.topk_weights,
+                        forward.shape.num_tokens,
+                        topk,
+                        dev,
+                    )?
+                } else {
+                    let down_assignments = match &gate_up {
+                        GroupedGateUp::Packed(gate_up) => {
+                            mistralrs_quant::grouped_moe_mmq_from_glu_packed(
+                                &down_qt,
+                                gate_up,
+                                &sorted_token_ids,
+                                &sorted_token_ids,
+                                &expert_bounds,
+                                total_assignments,
+                                forward.shape.num_tokens,
+                                num_experts,
+                                glu_activation as i32,
+                                dev,
+                            )?
+                        }
+                        GroupedGateUp::SortedPair { gate, up } => {
+                            mistralrs_quant::grouped_moe_mmq_from_glu_sorted_pair(
+                                &down_qt,
+                                gate,
+                                up,
+                                &sorted_token_ids,
+                                &expert_bounds,
+                                total_assignments,
+                                forward.shape.num_tokens,
+                                num_experts,
+                                glu_activation as i32,
+                                dev,
+                            )?
+                        }
+                    };
+                    if forward.original_dtype == DType::BF16 {
+                        unsafe {
+                            mistralrs_quant::moe_weighted_reduce_flat_bf16(
+                                &down_assignments,
+                                tw_ptr,
+                                forward.shape.num_tokens,
+                                topk,
+                                dev,
+                            )?
+                        }
+                    } else {
+                        unsafe {
+                            mistralrs_quant::moe_weighted_reduce_flat(
+                                &down_assignments,
+                                tw_ptr,
+                                forward.shape.num_tokens,
+                                topk,
+                                dev,
+                            )?
+                        }
+                    }
+                }
+            } else {
+                let (activated, down_input_dim1) = match &lora_activated {
+                    Some(activated) => (
+                        activated.reshape((total_assignments, activated.dim(D::Minus1)?))?,
+                        2,
+                    ),
+                    None => match &gate_up {
+                        GroupedGateUp::Packed(gate_up) => (
+                            crate::ops::split_mul_and_act(
+                                gate_up,
+                                gate_up.dim(D::Minus1)? / 2,
+                                config.act,
+                            )?,
+                            2,
+                        ),
+                        GroupedGateUp::SortedPair { gate, up } => {
+                            (crate::ops::mul_and_act(gate, up, config.act)?, 0)
+                        }
+                    },
+                };
+
+                let (down_input_q8, down_k, down_k_padded) =
+                    mistralrs_quant::quantize_input_q8_1(&activated, dev)?;
+
+                let down = mistralrs_quant::grouped_moe_gemm_prequantized(
+                    &down_qt,
+                    &down_input_q8,
+                    down_k,
+                    down_k_padded,
+                    &expert_bounds,
+                    &sorted_token_ids,
+                    Some((tw_ptr, 0)),
+                    total_assignments,
+                    topk,
+                    num_experts,
+                    down_input_dim1,
+                    dev,
+                )?;
+
+                if let (Some(lora), Some(activated)) =
+                    (forward.lora.as_ref(), lora_activated.as_ref())
+                {
+                    let delta_base = Tensor::zeros(
+                        (forward.shape.num_tokens, topk, forward.shape.hidden_dim),
+                        activated.dtype(),
+                        activated.device(),
+                    )?;
+                    let delta = lora.add_delta_owned(
+                        LoraExpertProjection::Down,
+                        activated,
+                        delta_base,
+                        forward.topk_ids,
+                        Some(forward.topk_weights),
+                        LoraExpertInputMode::RoutedRows,
+                    )?;
+                    (down.to_dtype(DType::F32)? + delta.to_dtype(DType::F32)?.sum(D::Minus2)?)?
+                } else {
+                    down
+                }
+            };
+
+            if down.dtype() == forward.original_dtype {
+                return Ok(Some(down));
+            } else {
+                return Ok(Some(down.to_dtype(forward.original_dtype)?));
+            }
+        }
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+        {
+            unreachable!("the cuda role dispatches through forward_grouped_cuda_role")
         }
     }
 
@@ -2782,7 +2820,7 @@ impl FastExpertsWeights {
     /// role of a dual build. Mirrors `forward_grouped_hip`'s MMQ route;
     /// grouped LoRA and non-MMQ dtypes return Ok(None) to fall back to the
     /// eager gather.
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "cuda")]
     pub(super) fn forward_grouped_cuda_role(
         &self,
         forward: &MoEForward,

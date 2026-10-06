@@ -59,6 +59,11 @@ pub(crate) mod graph_driver {
         unsafe fn enable_event_tracking(&self);
         fn graph_check_err(&self) -> std::result::Result<(), GraphCheckError>;
         fn begin_graph_capture(&self, relaxed: bool) -> candle_core::Result<()>;
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+        fn begin_capture_arena_cuda(
+            &self,
+            arena: std::sync::Arc<CuStreamSlice>,
+        ) -> candle_core::Result<()>;
         fn capture_status_none(&self) -> candle_core::Result<bool>;
         fn same_as(&self, other: &Self) -> bool;
         fn wait_on_event(&self, event: &GraphEvent) -> candle_core::Result<()>;
@@ -127,21 +132,17 @@ pub(crate) mod graph_driver {
         }
 
         fn begin_graph_capture(&self, relaxed: bool) -> candle_core::Result<()> {
-            #[cfg(feature = "rocm")]
-            {
-                // The hip fork's begin_capture takes no mode (relaxed implicit).
-                let _ = relaxed;
-                self.begin_capture().map_err(candle_core::Error::wrap)
-            }
-            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
-            {
-                let mode = if relaxed {
-                    candle_core::role::backend::cudarc::driver::sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED
-                } else {
-                    candle_core::role::backend::cudarc::driver::sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_GLOBAL
-                };
-                self.begin_capture(mode).map_err(candle_core::Error::wrap)
-            }
+            // Both single-vendor forks take no capture mode (relaxed implicit).
+            let _ = relaxed;
+            self.begin_capture().map_err(candle_core::Error::wrap)
+        }
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+        fn begin_capture_arena_cuda(
+            &self,
+            arena: std::sync::Arc<CuStreamSlice>,
+        ) -> candle_core::Result<()> {
+            self.begin_capture_arena(arena)
+                .map_err(candle_core::Error::wrap)
         }
 
         fn capture_status_none(&self) -> candle_core::Result<bool> {
@@ -173,7 +174,10 @@ pub(crate) mod graph_driver {
         Ok(dev.enable_cuda_graph_htod_cache())
     }
 
-    #[cfg(feature = "rocm")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    pub(crate) type CuStreamSlice = candle_core::cuda_backend::cudarc::driver::CudaSlice<u8>;
+
+    #[cfg(any(feature = "rocm", feature = "cuda"))]
     pub(crate) fn graph_arena_alloc(
         device: &candle_core::Device,
         bytes: usize,
@@ -187,6 +191,11 @@ pub(crate) mod graph_driver {
             unsafe { dev.alloc::<u8>(bytes) }.map_err(candle_core::Error::wrap)?,
         ))
     }
+
+    // The NVIDIA-role capture path calls the cuda-suffixed names; solo
+    // shapes resolve them to the shared fork arena API.
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    pub(crate) use graph_arena_alloc as graph_arena_alloc_cuda;
 
     pub(crate) fn graph_alloc_pinned<T>(
         stream: &GraphStream,
@@ -445,6 +454,9 @@ pub(crate) use graph_driver::{
     graph_mempool_release_threshold_set, graph_mempool_reuse_enable, graph_stage_ptr, graph_upload,
     GraphCheckError, GraphStreamExt,
 };
+
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
+pub(crate) use graph_driver::{graph_arena_alloc_cuda, CuStreamSlice};
 
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 mod imp {
@@ -941,16 +953,11 @@ mod imp {
     ) -> candle_core::Result<()> {
         let code: i32 = match stream {
             GraphStream::Hip(s) => unsafe {
-                hip_drv::sys::hipStreamEndCapture(
-                    s.cu_stream(),
-                    core::ptr::from_mut(graph).cast(),
-                )
+                hip_drv::sys::hipStreamEndCapture(s.cu_stream(), core::ptr::from_mut(graph).cast())
             },
             GraphStream::Cuda(s) => unsafe {
-                cu_drv::sys::cuStreamEndCapture(
-                    s.cu_stream(),
-                    core::ptr::from_mut(graph).cast(),
-                ) as i32
+                cu_drv::sys::cuStreamEndCapture(s.cu_stream(), core::ptr::from_mut(graph).cast())
+                    as i32
             },
         };
         if code != 0 {
@@ -1293,7 +1300,10 @@ mod dual_pool_tests {
         let stream = GraphStream::from_graph_device(&dev).expect("role stream");
         assert!(stream.has_async_alloc(), "the 3090 reports mempool support");
         let pool = graph_device_mempool(&stream).expect("mempool lookup");
-        assert!(!pool.is_null(), "pool handle must be written, not left null");
+        assert!(
+            !pool.is_null(),
+            "pool handle must be written, not left null"
+        );
     }
 
     /// Scale probe: the model-scale captured graph carries hundreds of
@@ -1323,12 +1333,14 @@ mod dual_pool_tests {
             // rope sincos upload class).
             let zeroed = unsafe {
                 use candle_core::backend::BackendDevice;
-                dev.as_cuda_device().unwrap().alloc_zeros::<f32>(64).unwrap()
+                dev.as_cuda_device()
+                    .unwrap()
+                    .alloc_zeros::<f32>(64)
+                    .unwrap()
             };
             drop(zeroed);
             let host: Vec<f32> = vec![0.5; 64];
-            let uploaded =
-                candle_core::Tensor::from_vec(host, (64,), &dev).unwrap();
+            let uploaded = candle_core::Tensor::from_vec(host, (64,), &dev).unwrap();
             drop(uploaded);
         }
         let output = acc;

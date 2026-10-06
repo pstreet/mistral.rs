@@ -6,11 +6,21 @@
 //! serves the NVIDIA role. Layer-facing types are shared (imported from
 //! `super::gdn`) so the dispatch passes them through unchanged.
 #![allow(clippy::cast_possible_truncation)]
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use super::gdn::{
+    FusedDecodeRecurrence, FusedPrefillOutput, FusedPrefillRecurrence, GdnDeferredRecurrence,
+    GdnDeferredStateFlush, GdnFp8OutputLayout, GdnFp8OutputSpec, GdnPackedToPadded,
+    GdnPaddedToPacked, GdnPendingSpeculativeConv, GdnPendingSpeculativeRecurrence,
+    GdnPendingTransitionApply, GdnPendingTransitionApplyLayer, GdnPendingTransitionPublish,
+    GdnPendingTransitionPublishLayer, GdnPostOpOutput, GdnRaggedConvState,
+    GdnSpeculativeConvCheckpoints, GdnSpeculativeRecurrenceCheckpoints,
+    GdnSpeculativeRecurrenceOutput, GdnSpeculativeRmsNormGate, GdnSpeculativeStateCommit,
+    GdnSpeculativeTransitionCommit, GdnSpeculativeTransitionLayer, GdnSpeculativeTransitionStage,
+    GdnSpeculativeTransitionStageLayer, GdnSpeculativeTransitions, GdnStateSlots, RecurrenceInputs,
+};
 #[cfg(any(feature = "cuda", feature = "rocm", test))]
 use candle_core::GpuArch;
 use candle_core::{DType, Device, Result, Tensor};
-#[cfg(all(feature = "cuda", feature = "rocm"))]
-use super::gdn::{GdnFp8OutputLayout, FusedDecodeRecurrence, FusedPrefillOutput, FusedPrefillRecurrence, GdnDeferredRecurrence, GdnDeferredStateFlush, GdnFp8OutputSpec, GdnPackedToPadded, GdnPaddedToPacked, GdnPendingSpeculativeConv, GdnPendingSpeculativeRecurrence, GdnPendingTransitionApply, GdnPendingTransitionApplyLayer, GdnPendingTransitionPublish, GdnPendingTransitionPublishLayer, GdnPostOpOutput, GdnRaggedConvState, GdnSpeculativeConvCheckpoints, GdnSpeculativeRecurrenceCheckpoints, GdnSpeculativeRecurrenceOutput, GdnSpeculativeRmsNormGate, GdnSpeculativeStateCommit, GdnSpeculativeTransitionCommit, GdnSpeculativeTransitionLayer, GdnSpeculativeTransitionStage, GdnSpeculativeTransitionStageLayer, GdnSpeculativeTransitions, GdnStateSlots, RecurrenceInputs};
 // Role wrapper types: the compiled vendor in single-vendor builds, the AMD
 // role in dual builds (the GDN C kernels are hipcc-built).
 #[cfg(all(feature = "cuda", feature = "rocm"))]
@@ -42,10 +52,13 @@ use mistralrs_quant::QuantizedActivation;
 use mistralrs_quant::{ActivationQuantizationScheme, ActivationScaleLayout};
 
 use crate::kv_cache::RecurrentStateLayout;
-#[cfg(all(any(feature = "cuda", feature = "rocm"), not(all(feature = "cuda", feature = "rocm"))))]
-use crate::pipeline::graph_role::GraphStreamExt;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::kv_cache::GDN_PENDING_KEY_BANK_COUNT;
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use crate::pipeline::graph_role::GraphStreamExt;
 
 #[cfg_attr(not(any(feature = "cuda", feature = "rocm")), allow(dead_code))]
 pub(crate) const GDN_PAD_SLOT: u32 = u32::MAX;
@@ -138,8 +151,6 @@ const GDN_STATE_DTYPE_BF16: i32 = 1;
 const GDN_STATE_DTYPE_F32: i32 = 2;
 #[cfg(all(feature = "cuda", has_flashinfer_gdn_sm90_kernel))]
 const FLASHINFER_GDN_MIN_SEQ_LEN: usize = 32;
-
-
 
 #[cfg(test)]
 mod fp8_output_contract_tests {
@@ -545,8 +556,8 @@ pub(crate) fn v_major_state_supported(
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 fn cuda_recurrent_state_ptr(tensor: &Tensor, name: &str) -> Result<(*mut core::ffi::c_void, i32)> {
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
 
     let (storage, layout) = tensor.storage_and_layout();
     let offset = layout.start_offset();
@@ -841,8 +852,8 @@ fn validate_gdn_ragged_metadata(
 pub(crate) fn try_gdn_packed_to_padded_cuda(
     context: GdnPackedToPadded<'_>,
 ) -> Result<Option<Tensor>> {
-    use candle_core::cuda_backend::cudarc::driver::{DevicePtrMut, DeviceRepr};
     use candle_core as candle;
+    use candle_core::cuda_backend::cudarc::driver::{DevicePtrMut, DeviceRepr};
 
     fn launch<T: candle_core::cuda_backend::CudaDType + DeviceRepr>(
         context: GdnPackedToPadded<'_>,
@@ -962,8 +973,8 @@ pub(crate) fn try_gdn_packed_to_padded_cuda(
 pub(crate) fn try_gdn_padded_to_packed_cuda(
     context: GdnPaddedToPacked<'_>,
 ) -> Result<Option<Tensor>> {
-    use candle_core::cuda_backend::cudarc::driver::{DevicePtrMut, DeviceRepr};
     use candle_core as candle;
+    use candle_core::cuda_backend::cudarc::driver::{DevicePtrMut, DeviceRepr};
 
     fn launch<T: candle_core::cuda_backend::CudaDType + DeviceRepr>(
         context: GdnPaddedToPacked<'_>,
@@ -1075,8 +1086,8 @@ pub(crate) fn try_gdn_padded_to_packed_cuda(
 pub(crate) fn try_gdn_extract_ragged_conv_state_cuda(
     context: GdnRaggedConvState<'_>,
 ) -> Result<Option<Tensor>> {
-    use candle_core::cuda_backend::cudarc::driver::{DevicePtrMut, DeviceRepr};
     use candle_core as candle;
+    use candle_core::cuda_backend::cudarc::driver::{DevicePtrMut, DeviceRepr};
 
     fn launch<T: candle_core::cuda_backend::CudaDType + DeviceRepr>(
         context: GdnRaggedConvState<'_>,
@@ -1289,8 +1300,8 @@ fn launch_recurrence(
     state: &mut Tensor,
     slots: GdnStateSlots<'_>,
 ) -> Result<Tensor> {
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
 
     let RecurrenceInputs { q, k, v, g, beta } = inputs;
     let (bh, seq_len, k_dim) = q.dims3()?;
@@ -1625,12 +1636,13 @@ pub fn causal_conv1d_cuda(
     is_update: bool,
     slots: GdnStateSlots<'_>,
 ) -> Result<(Tensor, Tensor)> {
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use core::ffi::c_void;
 
     fn cuda_fwd<
-        T: candle_core::cuda_backend::CudaDType + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle_core::cuda_backend::CudaDType
+            + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         x: &Tensor,
         weight: &Tensor,
@@ -1821,12 +1833,13 @@ pub fn prepare_recurrence_inputs_cuda(
     head_v_dim: usize,
     tiled_v_heads: bool,
 ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use core::ffi::c_void;
 
     fn cuda_fwd<
-        T: candle_core::cuda_backend::CudaDType + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle_core::cuda_backend::CudaDType
+            + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         mixed_qkv: &Tensor,
         b: &Tensor,
@@ -2048,8 +2061,7 @@ struct FlashInferGdnSm90Launch<'a> {
     output: std::cell::RefCell<
         Option<candle_core::cuda_backend::cudarc::driver::CudaSlice<half::bf16>>,
     >,
-    workspace:
-        std::cell::RefCell<Option<candle_core::cuda_backend::cudarc::driver::CudaSlice<u8>>>,
+    workspace: std::cell::RefCell<Option<candle_core::cuda_backend::cudarc::driver::CudaSlice<u8>>>,
     workspace_bytes: u64,
     batch_size: i32,
     seq_len: i32,
@@ -2643,12 +2655,13 @@ pub fn fused_decode_recurrence_cuda(launch: FusedDecodeRecurrence<'_>) -> Result
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tensor> {
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use core::ffi::c_void;
 
     fn cuda_fwd<
-        T: candle_core::cuda_backend::CudaDType + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle_core::cuda_backend::CudaDType
+            + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         launch: GdnDecodeLaunch<'_>,
         dtype_code: i32,
@@ -2818,12 +2831,13 @@ pub fn fused_decode_recurrence_cuda(_launch: FusedDecodeRecurrence<'_>) -> Resul
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn speculative_state_commit_cuda(commit: GdnSpeculativeStateCommit<'_>) -> Result<()> {
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use core::ffi::c_void;
 
     fn cuda_fwd<
-        T: candle_core::cuda_backend::CudaDType + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle_core::cuda_backend::CudaDType
+            + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         commit: GdnSpeculativeStateCommit<'_>,
         dtype_code: i32,
@@ -3006,12 +3020,13 @@ pub fn speculative_state_commit_cuda(_commit: GdnSpeculativeStateCommit<'_>) -> 
 pub fn speculative_conv_checkpoints_cuda(
     context: GdnSpeculativeConvCheckpoints<'_>,
 ) -> Result<Tensor> {
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use core::ffi::c_void;
 
     fn cuda_fwd<
-        T: candle_core::cuda_backend::CudaDType + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle_core::cuda_backend::CudaDType
+            + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         context: GdnSpeculativeConvCheckpoints<'_>,
         dtype_code: i32,
@@ -3282,13 +3297,14 @@ pub fn speculative_conv_checkpoints_cuda(
 pub fn speculative_recurrence_checkpoints_cuda(
     context: GdnSpeculativeRecurrenceCheckpoints<'_>,
 ) -> Result<GdnSpeculativeRecurrenceOutput> {
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use core::ffi::c_void;
     use float8::F8E4M3;
 
     fn cuda_fwd<
-        T: candle_core::cuda_backend::CudaDType + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle_core::cuda_backend::CudaDType
+            + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         context: GdnSpeculativeRecurrenceCheckpoints<'_>,
         dtype_code: i32,
@@ -3833,8 +3849,8 @@ pub fn speculative_recurrence_checkpoints_cuda(
 pub fn deferred_recurrence_rmsnorm_gate_cuda(
     context: GdnDeferredRecurrence<'_>,
 ) -> Result<GdnPostOpOutput> {
-    use candle_core::cuda_backend::cudarc::driver::DevicePtrMut;
     use candle_core as candle;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtrMut;
     use core::ffi::c_void;
 
     let GdnDeferredRecurrence {
@@ -4392,11 +4408,12 @@ pub fn flush_deferred_state_cuda(_context: GdnDeferredStateFlush<'_>) -> Result<
 pub fn speculative_transition_commit_batched_cuda(
     commit: GdnSpeculativeTransitionCommit<'_>,
 ) -> Result<()> {
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
 
     fn cuda_commit<
-        T: candle_core::cuda_backend::CudaDType + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle_core::cuda_backend::CudaDType
+            + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         commit: GdnSpeculativeTransitionCommit<'_>,
         activation_dtype: i32,
@@ -4630,7 +4647,8 @@ pub fn speculative_transition_stage_batched_cuda(
     use candle_core as candle;
 
     fn cuda_stage<
-        T: candle_core::cuda_backend::CudaDType + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle_core::cuda_backend::CudaDType
+            + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         stage: GdnSpeculativeTransitionStage<'_>,
         activation_dtype: i32,
@@ -5019,7 +5037,8 @@ pub fn pending_transition_apply_batched_cuda(apply: GdnPendingTransitionApply<'_
     use candle_core as candle;
 
     fn cuda_apply<
-        T: candle_core::cuda_backend::CudaDType + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle_core::cuda_backend::CudaDType
+            + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         apply: GdnPendingTransitionApply<'_>,
         activation_dtype: i32,
@@ -5299,12 +5318,13 @@ fn normalize_gdn_rmsnorm_layout(
 /// CUDA RMSNorm with a SiLU gate; packed final dimensions are split by the norm weight width.
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use core::ffi::c_void;
 
     fn cuda_fwd<
-        T: candle_core::cuda_backend::CudaDType + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle_core::cuda_backend::CudaDType
+            + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         x: &Tensor,
         gate: &Tensor,
@@ -5438,7 +5458,8 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
         unreachable!()
     };
     #[cfg(all(feature = "cuda", feature = "rocm"))]
-    let Storage::Cuda(x_storage) = &*x_storage else {
+    let Storage::Cuda(x_storage) = &*x_storage
+    else {
         candle_core::bail!("expected CUDA-role storage");
     };
     let x_storage = x_storage.as_cuda_slice::<half::bf16>()?;
@@ -5458,7 +5479,8 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
         unreachable!()
     };
     #[cfg(all(feature = "cuda", feature = "rocm"))]
-    let Storage::Cuda(gate_storage) = &*gate_storage else {
+    let Storage::Cuda(gate_storage) = &*gate_storage
+    else {
         candle_core::bail!("expected CUDA-role storage");
     };
     let gate_storage = gate_storage.as_cuda_slice::<half::bf16>()?;
@@ -5475,7 +5497,8 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
         unreachable!()
     };
     #[cfg(all(feature = "cuda", feature = "rocm"))]
-    let Storage::Cuda(weight_storage) = &*weight_storage else {
+    let Storage::Cuda(weight_storage) = &*weight_storage
+    else {
         candle_core::bail!("expected CUDA-role storage");
     };
     let weight_storage = weight_storage.as_cuda_slice::<half::bf16>()?;
@@ -5563,12 +5586,13 @@ pub fn fused_gdn_gating_cuda(
     a_log: &Tensor,
     dt_bias: &Tensor,
 ) -> Result<(Tensor, Tensor)> {
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use core::ffi::c_void;
 
     fn cuda_fwd<
-        T: candle_core::cuda_backend::CudaDType + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle_core::cuda_backend::CudaDType
+            + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         b: &Tensor,
         a: &Tensor,

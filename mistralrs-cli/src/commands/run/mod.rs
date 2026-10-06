@@ -69,8 +69,7 @@ pub async fn run_interactive(
     let (cpu, device_layers, device_str) = extract_device_settings(&model_type);
     let device_spec = device_str
         .map(|s| {
-            mistralrs_core::device_spec::DeviceSpec::parse(&s)
-                .map_err(|e| anyhow::anyhow!("{e}"))
+            mistralrs_core::device_spec::DeviceSpec::parse(&s).map_err(|e| anyhow::anyhow!("{e}"))
         })
         .transpose()?;
     let isq = extract_isq_setting(&model_type);

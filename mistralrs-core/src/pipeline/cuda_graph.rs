@@ -49,7 +49,6 @@ use crate::pipeline::{
 };
 use crate::speculative::SpeculativeGraphState;
 
-#[cfg(feature = "rocm")]
 fn dbg_nanos() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1431,10 +1430,8 @@ impl CudaGraphHandle {
         let mut graph = std::ptr::null_mut();
         graph_end_capture(stream, &mut graph)
             .map_err(|err| err.context("CUDA graph stream end capture failed"))?;
-        // Raw end-capture leaves the hip fork's capturing flag / arena
-        // pointer set, which would route later eager allocs into the stale
-        // arena and OOM. The NVIDIA role has no fork bookkeeping (no-op).
-        #[cfg(feature = "rocm")]
+        // Raw end-capture leaves the fork's capturing flag / arena pointer
+        // set, which would route later eager allocs into the stale arena.
         stream.reset_capture_bookkeeping();
         if graph.is_null() {
             return Ok(None);
@@ -1446,8 +1443,6 @@ impl CudaGraphHandle {
             let _ = graph_destroy(stream, graph);
             return Err(err.context("CUDA graph instantiate failed"));
         }
-
-
 
         Ok(Some(Self {
             graph,
@@ -2952,7 +2947,6 @@ pub(crate) fn graph_arena_device_free(device: &Device) -> candle_core::Result<us
 // Clamp a computed decode-graph arena to what the device can actually provide.
 // A pathological dry-run sum must not turn into an impossible allocation;
 // the overflow regrow path sizes back up if the clamp undershoots.
-#[cfg(feature = "rocm")]
 fn clamp_decode_arena_bytes(
     requested_bytes: usize,
     available_bytes: usize,
@@ -2964,7 +2958,6 @@ fn clamp_decode_arena_bytes(
     )
 }
 
-#[cfg(feature = "rocm")]
 fn clamp_decode_arena_to_device(
     device: &Device,
     requested_bytes: usize,
@@ -2996,7 +2989,7 @@ fn begin_hip_arena_capture(
     })
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
 fn begin_cuda_arena_capture(
     stream: &GraphStream,
     device: &candle_core::Device,
@@ -3064,13 +3057,11 @@ where
     // once; carve capture-time allocations from a plain pre-allocated arena so
     // the graph replays cleanly. Size it from the warmup's allocation sum.
     tracing::debug!("CUDA decode graph arena is {arena_bytes} bytes");
-    #[cfg(feature = "rocm")]
     // Capture records everything the dry run allocates plus the recorded buffer
     // copies kept live in the graph; the dry run reuses pool memory so it
     // under-measures, and the true need is found by re-capturing on overflow.
     let warmup_bytes = arena_bytes;
     let arena_bytes = state.estimated_arena_bytes(&key.arena_bucket(), warmup_bytes);
-    #[cfg(feature = "rocm")]
     let arena_bytes = match std::env::var("MISTRALRS_DECODE_ARENA_OVERRIDE")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -3089,41 +3080,31 @@ where
     );
     #[cfg(feature = "rocm")]
     let mut arena_keepalive: Option<Arc<ArenaSlice<u8>>> = None;
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "cuda")]
     let mut cuda_arena_keepalive: Option<Arc<crate::pipeline::graph_role::CuStreamSlice>> = None;
 
-    // Capture allocation strategy per role: both roles carve capture-time
-    // allocations from a pre-allocated arena (graphs with mempool nodes
-    // launch once on either driver). Single-cuda keeps the mempool path.
-    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
-    let use_arena = true;
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
-    let use_arena = true;
+    // Every role carves capture-time allocations from a pre-allocated
+    // arena (graphs with mempool nodes launch once on either driver).
+    // Solo shapes have exactly one role linked; dual picks per stream.
     #[cfg(all(feature = "cuda", feature = "rocm"))]
     let use_hip_arena = stream.is_hip();
-    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
-    let use_hip_arena = true;
-    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
-    let use_arena = false;
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    let use_hip_arena = cfg!(feature = "rocm");
 
     let mut begin_err: Option<candle_core::Error> = None;
-    if use_arena {
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
-        if !use_hip_arena {
-            match begin_cuda_arena_capture(&stream, &graph_input_ids.device(), arena_bytes) {
-                Ok(arena) => cuda_arena_keepalive = Some(arena),
-                Err(err) => begin_err = Some(err),
-            }
+    #[cfg(feature = "cuda")]
+    if !use_hip_arena {
+        match begin_cuda_arena_capture(&stream, &graph_input_ids.device(), arena_bytes) {
+            Ok(arena) => cuda_arena_keepalive = Some(arena),
+            Err(err) => begin_err = Some(err),
         }
-        #[cfg(feature = "rocm")]
-        if use_hip_arena {
-            match begin_hip_arena_capture(&stream, &graph_input_ids.device(), arena_bytes) {
-                Ok(arena) => arena_keepalive = Some(arena),
-                Err(err) => begin_err = Some(err),
-            }
+    }
+    #[cfg(feature = "rocm")]
+    if use_hip_arena {
+        match begin_hip_arena_capture(&stream, &graph_input_ids.device(), arena_bytes) {
+            Ok(arena) => arena_keepalive = Some(arena),
+            Err(err) => begin_err = Some(err),
         }
-    } else if let Err(err) = stream.begin_graph_capture(true) {
-        begin_err = Some(err);
     }
     if let Some(err) = begin_err {
         restore_event_tracking_after_capture(&stream, restore_event_tracking);
@@ -3165,10 +3146,7 @@ where
         // outlive the step plus graph-only copies). Overflowed arena allocs are
         // non-fatal to the forward, so a successful forward can still leave a
         // corrupted graph; check the arena after the fact, not just on error.
-        #[cfg(feature = "rocm")]
         let overflowed = stream.capture_arena_overflowed();
-        #[cfg(not(feature = "rocm"))]
-        let overflowed = false;
         tracing::debug!(
             target: "mistralrs",
             "[cudarc] CAPTURE forward done attempt={attempt} ok={} overflowed={} consumed={} t={}",
@@ -3196,7 +3174,7 @@ where
                 "CUDA decode graph arena grew {current_arena_bytes} -> {new_bytes} bytes (attempt {attempt}, consumed prefix {consumed})"
             );
             graph_input_ids.device().synchronize()?;
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "cuda")]
             if !use_hip_arena {
                 let arena =
                     begin_cuda_arena_capture(&stream, &graph_input_ids.device(), new_bytes)?;
@@ -3236,10 +3214,7 @@ where
 
     // Read consumption before end_capture resets the bookkeeping, and remember
     // it so the next capture of this bucket sizes from measurement.
-    #[cfg(feature = "rocm")]
     let captured_consumed_bytes = stream.capture_arena_consumed();
-    #[cfg(not(feature = "rocm"))]
-    let captured_consumed_bytes = 0;
     state.record_arena_observation(key.arena_bucket(), captured_consumed_bytes);
 
     #[cfg_attr(feature = "rocm", allow(unused_mut))]
@@ -3706,7 +3681,6 @@ pub(crate) fn end_cuda_capture_discard(stream: &GraphStream) {
         if !graph.is_null() {
             let _ = graph_destroy(stream, graph);
         }
-        #[cfg(feature = "rocm")]
         stream.reset_capture_bookkeeping();
     }
 }

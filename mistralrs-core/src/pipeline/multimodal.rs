@@ -153,8 +153,6 @@ use crate::paged_attention::{calculate_cache_config, AttentionImplementation, Ca
 use crate::pipeline::chat_template::{
     calculate_eos_tokens, BeginEndUnkPadTok, ChatTemplateValue, GenerationConfig,
 };
-#[cfg(all(any(feature = "cuda", feature = "rocm"), not(all(feature = "cuda", feature = "rocm"))))]
-use crate::pipeline::graph_role::GraphStreamExt;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::pipeline::cuda_graph::{
     capture_cuda_decode_graph, cuda_decode_graph_batch_kind_supported,
@@ -167,6 +165,11 @@ use crate::pipeline::cuda_graph::{
     CudaGraphDispatchMode, CudaGraphDispatchReason, CudaGraphEvent, CudaGraphEventGuard,
     CudaGraphPrecaptureInputs,
 };
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use crate::pipeline::graph_role::GraphStreamExt;
 use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::{AutoDeviceMapQuantization, QuantizationConfigShim};
@@ -685,8 +688,7 @@ impl Loader for MultimodalLoader {
         };
         #[cfg(any(feature = "cuda", feature = "rocm"))]
         for device in &available_devices {
-            if let Ok(stream) =
-                crate::pipeline::graph_role::GraphStream::from_graph_device(device)
+            if let Ok(stream) = crate::pipeline::graph_role::GraphStream::from_graph_device(device)
             {
                 unsafe { stream.disable_event_tracking() };
             }
@@ -2390,10 +2392,8 @@ impl MultimodalPipeline {
             state.prepare_spec_state_admission_for_key(&key);
         }
         let graph_device = step.input_ids.device();
-        let _htod_cache_guard =
-            crate::pipeline::graph_role::graph_enable_htod_cache(&graph_device).map_err(|_| {
-                candle_core::Error::msg("CUDA graph decode expected CUDA input ids")
-            })?;
+        let _htod_cache_guard = crate::pipeline::graph_role::graph_enable_htod_cache(&graph_device)
+            .map_err(|_| candle_core::Error::msg("CUDA graph decode expected CUDA input ids"))?;
         // Fork alloc counters live on the hip role's device API; the NVIDIA
         // role captures through driver mempools and needs no arena sizing.
         #[cfg(all(feature = "cuda", feature = "rocm"))]

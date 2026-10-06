@@ -9153,7 +9153,13 @@ mod tests {
         };
         let n = 151_936usize;
         let data: Vec<f32> = (0..n)
-            .map(|i| if i == 12345 { 12.9 } else { (i % 977) as f32 * 0.7 - 0.35 })
+            .map(|i| {
+                if i == 12345 {
+                    12.9
+                } else {
+                    (i % 977) as f32 * 0.7 - 0.35
+                }
+            })
             .collect();
         let t = Tensor::from_vec(data, (1, n), &Device::Cpu)?.to_dtype(DType::BF16)?;
         let gpu = t.to_device(&dev)?;

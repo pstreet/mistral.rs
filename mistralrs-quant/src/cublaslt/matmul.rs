@@ -83,24 +83,6 @@ impl CudaBlasLT {
             algo_cache: Mutex::new(HashMap::new()),
         })
     }
-
-    /// Return the cached algo for `key`, computing (and storing) it via `compute` on a miss.
-    fn cached_algo<F>(
-        &self,
-        key: AlgoKey,
-        compute: F,
-    ) -> Result<sys::cublasLtMatmulAlgo_t, CublasError>
-    where
-        F: FnOnce() -> Result<sys::cublasLtMatmulAlgo_t, CublasError>,
-    {
-        let mut cache = self.algo_cache.lock().unwrap();
-        if let Some(algo) = cache.get(&key) {
-            return Ok(*algo);
-        }
-        let algo = compute()?;
-        cache.insert(key, algo);
-        Ok(algo)
-    }
 }
 
 impl Drop for CudaBlasLT {
@@ -370,6 +352,15 @@ pub trait MatmulShared {
 
     /// Returns a reference to the underlying stream
     fn stream(&self) -> &Arc<CudaStream>;
+
+    /// Return the cached algo for `key`, computing (and storing) it via `compute` on a miss.
+    fn cached_algo<F>(
+        &self,
+        key: AlgoKey,
+        compute: F,
+    ) -> Result<sys::cublasLtMatmulAlgo_t, CublasError>
+    where
+        F: FnOnce() -> Result<sys::cublasLtMatmulAlgo_t, CublasError>;
 }
 
 /// Configuration for [Matmul]
@@ -669,20 +660,6 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
         let (c, _c_guard) = c.device_ptr_mut(self.stream());
         let workspace = &self.workspace().buffer;
         let (workspace, _workspace_guard) = workspace.device_ptr(self.stream());
-        // MRS_ZERO_WS=1: zero the persistent Lt workspace before each matmul to test
-        // whether stale scratch feeds split-K atomic accumulation in ROCm Tensile kernels.
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
-        if std::env::var("MISTRALRS_ZERO_WS").as_deref() == Ok("1") {
-            unsafe {
-                let rc = sys::hipMemsetAsync(
-                    workspace as *mut _,
-                    0,
-                    self.workspace().size,
-                    self.stream().cu_stream() as *mut _,
-                );
-                let _ = result::check(rc);
-            }
-        }
         // Launch matmul kernel
         result::matmul(
             handle,
@@ -708,6 +685,23 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
 impl MatmulShared for CudaBlasLT {
     fn handle(&self) -> &sys::cublasLtHandle_t {
         &self.handle
+    }
+
+    fn cached_algo<F>(
+        &self,
+        key: AlgoKey,
+        compute: F,
+    ) -> Result<sys::cublasLtMatmulAlgo_t, CublasError>
+    where
+        F: FnOnce() -> Result<sys::cublasLtMatmulAlgo_t, CublasError>,
+    {
+        let mut cache = self.algo_cache.lock().unwrap();
+        if let Some(algo) = cache.get(&key) {
+            return Ok(*algo);
+        }
+        let algo = compute()?;
+        cache.insert(key, algo);
+        Ok(algo)
     }
 
     fn workspace(&self) -> &Workspace {

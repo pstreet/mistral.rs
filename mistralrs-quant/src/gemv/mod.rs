@@ -131,7 +131,7 @@ pub static GEMV_CONTROLLER: LazyLock<GemvController> = LazyLock::new(|| GemvCont
 /// - The shape and device favor GEMV over a split-K GEMM
 /// - Data type is supported (BF16, F16, F32)
 /// - K dimension is even (required for vectorized loads)
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
     // Dual builds: the gemv kernels are hipcc-built and `gemv` is a hard
     // bail (see below), so never route unquantized linear here - plain
@@ -144,61 +144,61 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
     }
     #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     {
-    // Check if enabled
-    if !GEMV_CONTROLLER.is_enabled() {
-        return false;
-    }
+        // Check if enabled
+        if !GEMV_CONTROLLER.is_enabled() {
+            return false;
+        }
 
-    let candle_core::Device::Cuda(device) = x.device() else {
-        return false;
-    };
+        let candle_core::Device::Cuda(device) = x.device() else {
+            return false;
+        };
 
-    // Check batch size (1-8 supported)
-    let x_dims = x.dims();
-    let batch_size: usize = x_dims[..x_dims.len().saturating_sub(1)]
-        .iter()
-        .product::<usize>()
-        .max(1);
-    // Must be supported dtype
-    let supported = matches!(x.dtype(), DType::BF16 | DType::F16 | DType::F32);
-    if !supported {
-        return false;
-    }
+        // Check batch size (1-8 supported)
+        let x_dims = x.dims();
+        let batch_size: usize = x_dims[..x_dims.len().saturating_sub(1)]
+            .iter()
+            .product::<usize>()
+            .max(1);
+        // Must be supported dtype
+        let supported = matches!(x.dtype(), DType::BF16 | DType::F16 | DType::F32);
+        if !supported {
+            return false;
+        }
 
-    // Must match dtypes
-    if x.dtype() != w.dtype() {
-        return false;
-    }
+        // Must match dtypes
+        if x.dtype() != w.dtype() {
+            return false;
+        }
 
-    // K must be even for vectorized loads
-    let k = x.dim(x.rank() - 1).unwrap_or(0);
-    if !k.is_multiple_of(2) {
-        return false;
-    }
+        // K must be even for vectorized loads
+        let k = x.dim(x.rank() - 1).unwrap_or(0);
+        if !k.is_multiple_of(2) {
+            return false;
+        }
 
-    let output_dim = w.dims().first().copied().unwrap_or(usize::MAX);
-    if !should_use_gemv_shape(
-        batch_size,
-        output_dim,
-        k,
-        x.dtype() == DType::BF16,
-        gemv_device_info(device),
-    ) {
-        return false;
-    }
+        let output_dim = w.dims().first().copied().unwrap_or(usize::MAX);
+        if !should_use_gemv_shape(
+            batch_size,
+            output_dim,
+            k,
+            x.dtype() == DType::BF16,
+            gemv_device_info(device),
+        ) {
+            return false;
+        }
 
-    // Check that K dimensions match
-    let w_k = w.dim(w.rank() - 1).unwrap_or(0);
-    if k != w_k {
-        return false;
-    }
+        // Check that K dimensions match
+        let w_k = w.dim(w.rank() - 1).unwrap_or(0);
+        if k != w_k {
+            return false;
+        }
 
-    true
+        true
     }
 }
 
 /// Fallback for non-CUDA builds
-#[cfg(not(any(feature = "cuda", feature = "rocm")))]
+#[cfg(not(feature = "rocm"))]
 pub fn should_use_gemv(_x: &candle_core::Tensor, _w: &candle_core::Tensor) -> bool {
     false
 }
@@ -212,8 +212,7 @@ pub fn should_use_gemv(_x: &candle_core::Tensor, _w: &candle_core::Tensor) -> bo
 ///
 /// # Returns
 /// * Output tensor [B, M]
-#[cfg(any(feature = "cuda", feature = "rocm"))]
-#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
 pub fn gemv(x: &Tensor, w: &Tensor, bias: Option<&Tensor>) -> Result<Tensor> {
     let dev = get_cuda_device(x)?;
 
@@ -275,9 +274,8 @@ pub fn gemv(_x: &Tensor, _w: &Tensor, _bias: Option<&Tensor>) -> Result<Tensor> 
     )
 }
 
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
 #[allow(clippy::too_many_arguments)]
-#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 fn gemv_bf16(
     dev: &CudaDevice,
     x: &Tensor,
@@ -347,9 +345,8 @@ fn gemv_bf16(
     Ok(y)
 }
 
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
 #[allow(clippy::too_many_arguments)]
-#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 fn gemv_f16(
     dev: &CudaDevice,
     x: &Tensor,
@@ -416,9 +413,8 @@ fn gemv_f16(
     Ok(y)
 }
 
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
 #[allow(clippy::too_many_arguments)]
-#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 fn gemv_f32(
     dev: &CudaDevice,
     x: &Tensor,

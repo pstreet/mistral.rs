@@ -39,14 +39,10 @@ fn grouped_gather_mm(w: &Tensor, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
     let (tokens, x_t, k) = x.dims3()?;
     let (ids_tokens, t) = ids.dims2()?;
     if ids_tokens != tokens {
-        candle_core::bail!(
-            "grouped gather: {tokens} input tokens vs {ids_tokens} id rows"
-        );
+        candle_core::bail!("grouped gather: {tokens} input tokens vs {ids_tokens} id rows");
     }
     if x_t != 1 && x_t != t {
-        candle_core::bail!(
-            "grouped gather: {x_t} input rows per token must be 1 or the {t} slots"
-        );
+        candle_core::bail!("grouped gather: {x_t} input rows per token must be 1 or the {t} slots");
     }
     let (n_experts, out_f, in_f) = w.dims3()?;
     if in_f != k {
@@ -248,10 +244,8 @@ pub fn cpu_indexed_moe_forward(qmatmul: &QMatMul, x: &Tensor, ids: &Tensor) -> R
                 if let Some(out) = try_grouped_gather_mm(&w_f32, &x_f32, ids)? {
                     return out.to_dtype(input_dtype);
                 }
-                let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
-                    w_f32,
-                    None,
-                )))?;
+                let unquant =
+                    UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(w_f32, None)))?;
                 unquant.gather_forward(&x_f32, ids)?.to_dtype(input_dtype)
             }
         }
@@ -271,14 +265,8 @@ mod grouped_gather_tests {
     }
 
     fn compare(got: &Tensor, want: &Tensor, label: &str) -> Result<()> {
-        let g: Vec<f32> = got
-            .to_dtype(DType::F32)?
-            .flatten_all()?
-            .to_vec1::<f32>()?;
-        let w: Vec<f32> = want
-            .to_dtype(DType::F32)?
-            .flatten_all()?
-            .to_vec1::<f32>()?;
+        let g: Vec<f32> = got.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+        let w: Vec<f32> = want.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
         assert_eq!(g.len(), w.len(), "{label} length");
         for (i, (a, b)) in g.iter().zip(w.iter()).enumerate() {
             // Relative: the grouped path quantizes activations (Q8_1) on the
@@ -287,7 +275,10 @@ mod grouped_gather_tests {
             // Routing/ordering bugs still produce O(1) garbage here.
             let diff = (a - b).abs();
             let budget = 1e-4 * (1.0 + b.abs());
-            assert!(diff < budget, "{label}[{i}]: grouped {a} vs materialized {b}");
+            assert!(
+                diff < budget,
+                "{label}[{i}]: grouped {a} vs materialized {b}"
+            );
         }
         Ok(())
     }
@@ -303,7 +294,9 @@ mod grouped_gather_tests {
         ids_pattern: &[u32],
     ) -> Result<()> {
         let mk = |n: usize| -> Vec<f32> {
-            (0..n).map(|i| ((i % 13) as f32 * 0.37 - 0.7) * 0.3).collect()
+            (0..n)
+                .map(|i| ((i % 13) as f32 * 0.37 - 0.7) * 0.3)
+                .collect()
         };
         let w = Tensor::from_vec(
             (0..n_experts * out_f * in_f)
@@ -340,7 +333,9 @@ mod grouped_gather_tests {
     fn try_grouped_normalizes_4d_5d() -> Result<()> {
         let dev = Device::Cpu;
         let w = Tensor::from_vec(
-            (0..4 * 8 * 16).map(|i| (i % 7) as f32 * 0.2 - 0.6).collect(),
+            (0..4 * 8 * 16)
+                .map(|i| (i % 7) as f32 * 0.2 - 0.6)
+                .collect(),
             (4, 8, 16),
             &dev,
         )?;
@@ -385,7 +380,9 @@ mod grouped_gather_tests {
         };
         let w_data: Vec<f32> = mk(n_experts * out_f * in_f);
         let x_data: Vec<f32> = mk(tokens * in_f);
-        let ids_data: Vec<u32> = (0..tokens * t).map(|i| (i * 7 % n_experts) as u32).collect();
+        let ids_data: Vec<u32> = (0..tokens * t)
+            .map(|i| (i * 7 % n_experts) as u32)
+            .collect();
         let run = |d: &Device| -> Result<Tensor> {
             let w = Tensor::from_vec(w_data.clone(), (n_experts, out_f, in_f), d)?;
             let x = Tensor::from_vec(x_data.clone(), (tokens, 1, in_f), d)?;

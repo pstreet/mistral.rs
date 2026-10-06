@@ -1,33 +1,30 @@
 pub mod archive;
 pub mod cpu;
-#[cfg(not(all(feature = "cuda", feature = "rocm")))]
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
 pub(crate) mod cuda;
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 #[path = "cuda_hip.rs"]
 pub(crate) mod cuda;
-#[cfg(not(all(feature = "cuda", feature = "rocm")))]
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
+pub(crate) mod cuda_role;
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
 pub mod fast_mmq;
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 #[path = "fast_mmq_hip.rs"]
 pub mod fast_mmq;
-#[cfg(not(all(feature = "cuda", feature = "rocm")))]
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
+pub mod fast_mmq_cuda;
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
 pub mod fast_mmvq;
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 #[path = "fast_mmvq_hip.rs"]
 pub mod fast_mmvq;
-#[cfg(any(feature = "cuda", feature = "rocm"))]
-mod ffi;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
-pub(crate) mod ffi_cuda;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
-pub(crate) mod cuda_role;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
-pub mod fast_mmq_cuda;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
 pub mod fast_mmvq_cuda;
+#[cfg(feature = "rocm")]
+mod ffi;
+#[cfg(feature = "cuda")]
+pub(crate) mod ffi_cuda;
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
 mod packed_affine;
 mod weight_source;
@@ -310,8 +307,7 @@ impl GgufMatMul {
             Ok(x)
         }
     }
-    #[cfg(any(feature = "cuda", feature = "rocm"))]
-    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     fn uses_fast_mmvq(&self) -> bool {
         matches!(
             &self.w,
@@ -323,48 +319,60 @@ impl GgufMatMul {
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn try_fast_forward(&self, a: &Tensor) -> Result<Option<Tensor>> {
-        // Dual NVIDIA role: dense MMQ for prefill batches through the nvcc
-        // companion; decode batches stay on the dequant path until the MMVQ
-        // companion slice lands.
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
-        if a.device().is_cuda() && !crate::utils::device_has_fused_ops(a.device()) {
+        // NVIDIA role (any cuda shape): dense MMQ for prefill batches
+        // through the nvcc companion; decode batches stay on the dequant
+        // path until the MMVQ companion slice lands. device_has_fused_ops
+        // is false for this role, so the dispatch always fires there.
+        #[cfg(feature = "cuda")]
+        if !crate::utils::device_has_fused_ops(a.device()) {
             return self.try_fast_forward_cuda_role(a);
         }
+        #[cfg(not(all(feature = "cuda", not(feature = "rocm"))))]
+        {
+            if !self.uses_fast_mmvq() || !matches!(a.dtype(), DType::BF16 | DType::F16 | DType::F32)
+            {
+                return Ok(None);
+            }
 
-        if !self.uses_fast_mmvq() || !matches!(a.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+            let flat_batch = a.dims()[..a.dims().len().saturating_sub(1)]
+                .iter()
+                .product::<usize>();
+
+            let QMatMul::QTensor(q) = &self.w else {
+                unreachable!("uses_fast_mmvq() requires QTensor weights")
+            };
+
+            // Batch 1-8: use MMVQ (decode kernel)
+            if (1..=fast_mmvq::MMVQ_MAX_BATCH).contains(&flat_batch)
+                && std::env::var("MISTRALRS_NO_FAST_MMVQ").is_err()
+            {
+                return Ok(Some(fast_mmvq::plain(q, a)?));
+            }
+
+            // Batch > 8: use MMQ (prompt kernel)
+            if flat_batch > fast_mmvq::MMVQ_MAX_BATCH
+                && std::env::var("MISTRALRS_NO_FAST_MMQ").is_err()
+                && fast_mmq::batch_supported(
+                    q.dtype(),
+                    flat_batch,
+                    fast_mmq::device_arch(&q.device())?,
+                )
+            {
+                return Ok(Some(fast_mmq::plain(q, a)?));
+            }
+
             return Ok(None);
         }
-
-        let flat_batch = a.dims()[..a.dims().len().saturating_sub(1)]
-            .iter()
-            .product::<usize>();
-
-        let QMatMul::QTensor(q) = &self.w else {
-            unreachable!("uses_fast_mmvq() requires QTensor weights")
-        };
-
-        // Batch 1-8: use MMVQ (decode kernel)
-        if (1..=fast_mmvq::MMVQ_MAX_BATCH).contains(&flat_batch)
-            && std::env::var("MISTRALRS_NO_FAST_MMVQ").is_err()
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         {
-            return Ok(Some(fast_mmvq::plain(q, a)?));
+            unreachable!("the cuda role dispatches through try_fast_forward_cuda_role")
         }
-
-        // Batch > 8: use MMQ (prompt kernel)
-        if flat_batch > fast_mmvq::MMVQ_MAX_BATCH
-            && std::env::var("MISTRALRS_NO_FAST_MMQ").is_err()
-            && fast_mmq::batch_supported(q.dtype(), flat_batch, fast_mmq::device_arch(&q.device())?)
-        {
-            return Ok(Some(fast_mmq::plain(q, a)?));
-        }
-
-        Ok(None)
     }
 
     /// Dense fast paths for the NVIDIA role of a dual build: MMVQ for
     /// decode batches 1-8, MMQ for prefill batches - both through the nvcc
     /// companion. Mirrors `try_fast_forward`'s branches.
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "cuda")]
     fn try_fast_forward_cuda_role(&self, a: &Tensor) -> Result<Option<Tensor>> {
         let QMatMul::QTensor(q) = &self.w else {
             return Ok(None);
@@ -375,7 +383,7 @@ impl GgufMatMul {
         let flat_batch = a.dims()[..a.dims().len().saturating_sub(1)]
             .iter()
             .product::<usize>();
-        if flat_batch <= fast_mmvq::MMVQ_MAX_BATCH {
+        if flat_batch <= fast_mmvq_cuda::MMVQ_MAX_BATCH {
             if std::env::var("MISTRALRS_NO_FAST_MMVQ").is_ok()
                 || !fast_mmvq_cuda::supports(q.dtype())
             {
@@ -560,12 +568,17 @@ impl QuantMethod for GgufMatMul {
         // - x: (n_tokens, 1, hidden_dim) or (n_tokens, n_experts_per_tok, hidden_dim)
         // - indices: (n_tokens, n_experts_per_tok)
         // - weights (self): (n_experts, out_features, in_features)
-        #[cfg(any(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         let res = if crate::utils::device_has_fused_ops(x.device()) {
             cuda::qmatmul_indexed_moe_forward(&self.w, x, indices)?
         } else {
             cpu::cpu_indexed_moe_forward(&self.w, x, indices)?
         };
+
+        // The NVIDIA role serves indexed MoE through the core-side twin
+        // dispatch; this path mirrors the dual role's fallback here.
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+        let res = cpu::cpu_indexed_moe_forward(&self.w, x, indices)?;
 
         #[cfg(not(any(feature = "cuda", feature = "rocm")))]
         let res = cpu::cpu_indexed_moe_forward(&self.w, x, indices)?;
@@ -612,7 +625,7 @@ impl QuantMethod for GgufMatMul {
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
-        #[cfg(any(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         {
             if self.uses_fast_mmvq() {
                 return None;

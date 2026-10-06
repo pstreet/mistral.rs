@@ -55,8 +55,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         .device
         .clone()
         .map(|s| {
-            mistralrs_core::device_spec::DeviceSpec::parse(&s)
-                .map_err(|e| anyhow::anyhow!("{e}"))
+            mistralrs_core::device_spec::DeviceSpec::parse(&s).map_err(|e| anyhow::anyhow!("{e}"))
         })
         .transpose()?;
     apply_agent_mode(&mut runtime);
@@ -256,8 +255,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         .device
         .clone()
         .map(|s| {
-            mistralrs_core::device_spec::DeviceSpec::parse(&s)
-                .map_err(|e| anyhow::anyhow!("{e}"))
+            mistralrs_core::device_spec::DeviceSpec::parse(&s).map_err(|e| anyhow::anyhow!("{e}"))
         })
         .transpose()?;
     apply_agent_mode(&mut runtime);

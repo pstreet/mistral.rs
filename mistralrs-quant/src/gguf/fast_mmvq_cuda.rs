@@ -1318,7 +1318,6 @@ mod tests {
             assert_eq!(r as i32, 0, "upload");
         }
 
-
         // Placement churn BETWEEN upload and first launch: pool reuse may
         // re-place the exec's re-mallocs on relaunch; a missed driver patch
         // then reads stale VAs. Model serving always churns here (prefill);
@@ -1800,8 +1799,12 @@ mod tests {
         const N: usize = 256;
 
         let dev = Device::new_cuda(0)?;
-        let x_host: Vec<f32> = (0..N).map(|i| ((i as f32 * 0.7).sin() * 0.5).abs()).collect();
-        let s_host: Vec<f32> = (0..N).map(|i| 1.0 + (i as f32 * 0.02).cos() * 0.1).collect();
+        let x_host: Vec<f32> = (0..N)
+            .map(|i| ((i as f32 * 0.7).sin() * 0.5).abs())
+            .collect();
+        let s_host: Vec<f32> = (0..N)
+            .map(|i| 1.0 + (i as f32 * 0.02).cos() * 0.1)
+            .collect();
         let x = Tensor::from_vec(x_host, (1, 1, N), &dev)?.to_dtype(DType::BF16)?;
         let scale = Tensor::from_vec(s_host, (1, 1, N), &dev)?.to_dtype(DType::BF16)?;
 
@@ -1817,7 +1820,10 @@ mod tests {
             Device::Cuda(d) => Some(d.enable_cuda_graph_htod_cache()),
             _ => None,
         };
-        let eager = run()?.flatten_all()?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+        let eager = run()?
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
         dev.synchronize()?;
 
         let cuda_dev = match &dev {
@@ -1825,7 +1831,10 @@ mod tests {
             _ => candle_core::bail!("expected cuda device"),
         };
         let stream = cuda_dev.cuda_stream();
-        stream.context().bind_to_thread().map_err(candle_core::Error::wrap)?;
+        stream
+            .context()
+            .bind_to_thread()
+            .map_err(candle_core::Error::wrap)?;
         unsafe { stream.context().disable_event_tracking() };
         let slab = unsafe { stream.alloc::<u8>(1 << 20) }.map_err(candle_core::Error::wrap)?;
         let slab = std::sync::Arc::new(slab);
