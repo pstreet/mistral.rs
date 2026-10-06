@@ -1981,7 +1981,7 @@ impl MultimodalPipeline {
         // inside the capture window, invalidating the capture; in release
         // (panic=abort) the poisoned stream then kills the process on the
         // next slice clone. Skip until the restore is hoisted post-capture.
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "cuda")]
         if input_ids.device().is_cuda() && self.model.cache().is_hybrid() {
             static WARNED: std::sync::Once = std::sync::Once::new();
             WARNED.call_once(|| {
@@ -2199,7 +2199,7 @@ impl MultimodalPipeline {
         let probe = Tensor::zeros((1, 1), DType::U32, &device)?;
         // Same hybrid-on-NVIDIA-role skip as the decode forward (the
         // precapture path would poison the stream identically).
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "cuda")]
         if device.is_cuda() && self.model.cache().is_hybrid() {
             return Ok(());
         }

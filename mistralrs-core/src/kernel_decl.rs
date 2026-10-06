@@ -8,10 +8,30 @@
 macro_rules! declare_kernel {
     ($($( #[$attr:meta] )* $name:ident ( $($arg:ident : $ty:ty),* $(,)? ) $(-> $ret:ty)? ; )*) => {$(
         $( #[$attr] )*
-        #[cfg(not(feature = "rocm"))]
+        #[cfg(not(any(feature = "cuda", feature = "rocm")))]
         #[allow(dead_code)]
         extern "C" {
             pub(crate) fn $name($($arg : $ty),*) $(-> $ret)?;
+        }
+        $( #[$attr] )*
+        #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+        #[allow(dead_code)]
+        #[allow(non_snake_case)]
+        pub(crate) unsafe extern "C" fn $name($($arg : $ty),*) $(-> $ret)? {
+            type F = unsafe extern "C" fn($($ty),*) $(-> $ret)?;
+            static CACHED: std::sync::OnceLock<libloading::Symbol<'static, F>> =
+                std::sync::OnceLock::new();
+            let f = CACHED.get_or_init(|| {
+                let plugin = $crate::cuda_plugin::load().unwrap_or_else(|e| {
+                    panic!("cuda kernel {} called with no plugin loaded: {e}", stringify!($name))
+                });
+                // SAFETY: the companion is built from the same sources the
+                // retired static archive used, so each entry has the declared
+                // signature.
+                unsafe { plugin.lib.get(stringify!($name).as_bytes()) }
+                    .unwrap_or_else(|_| panic!("cuda kernel {} missing from plugin", stringify!($name)))
+            });
+            unsafe { f($($arg),*) }
         }
         $( #[$attr] )*
         #[cfg(feature = "rocm")]

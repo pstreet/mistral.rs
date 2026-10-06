@@ -1,8 +1,10 @@
 use candle_core::cuda::cudarc::driver::sys::CUstream;
 use half::{bf16, f16};
 
-extern "C" {
-    pub fn launch_dynamic_lora_f16(
+use crate::kernel_decl::declare_kernel;
+
+declare_kernel! {
+    launch_dynamic_lora_f16(
         input: *const f16,
         a: *const f16,
         b: *const f16,
@@ -16,8 +18,7 @@ extern "C" {
         scale: f32,
         stream: CUstream,
     ) -> i32;
-
-    pub fn launch_dynamic_lora_bf16(
+    launch_dynamic_lora_bf16(
         input: *const bf16,
         a: *const bf16,
         b: *const bf16,

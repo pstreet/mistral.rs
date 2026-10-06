@@ -324,209 +324,6 @@ fn main() -> Result<(), String> {
     println!("cargo::rustc-check-cfg=cfg(has_cutlass_moe_kernels)");
     println!("cargo::rustc-check-cfg=cfg(cuda_ge_13000)");
 
-    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
-    {
-        use std::{path::Path, path::PathBuf, vec};
-        const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
-
-        println!("cargo:rerun-if-changed=build.rs");
-        println!("cargo:rerun-if-env-changed=CUDA_NVCC_FLAGS");
-        println!("cargo:rerun-if-env-changed={CUTLASS_COMMIT_ENV}");
-        let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-        let (cuda_major, cuda_minor) = cuda_version_from_build_system();
-
-        let deepgemm_headers = cuda_headers::find(Path::new("third_party/deepgemm_sm90"))
-            .map_err(|e| e.to_string())?;
-        let deepgemm_generator_hash =
-            cuda_headers::hash(&deepgemm_headers).map_err(|e| e.to_string())?;
-        let header_files = cuda_headers::find(Path::new("kernels")).map_err(|e| e.to_string())?;
-        for header_file in &header_files {
-            println!("cargo:rerun-if-changed={}", header_file.display());
-        }
-        for header_file in &deepgemm_headers {
-            println!("cargo:rerun-if-changed={}", header_file.display());
-        }
-        let header_hash_arg = format!(
-            "-DMISTRALRS_QUANT_CUDA_HEADER_HASH=0x{:016x}",
-            cuda_headers::hash(&header_files).map_err(|e| e.to_string())?
-        );
-        let kernel_build_dir = cuda_build_dir(&out_dir, "kernels");
-        let mut builder = cuda_kernel_builder(&kernel_build_dir)
-            .source_glob("kernels/*/*.cu")
-            .watch(["kernels"])
-            .arg(&header_hash_arg);
-
-        let compute_cap = builder.get_compute_cap().unwrap_or(80);
-        // ======== Handle optional kernel compilation via rustc-cfg flags
-        let cc_over_80 = compute_cap >= 80;
-        let target = std::env::var("TARGET").unwrap();
-
-        // The CUTLASS 2.x grouped-GEMM MoE kernels include gemm_universal.hpp, which textually pulls in
-        // CUTLASS's Sm90 warp-specialized headers; cl (MSVC) fails to parse their dependent SharedStorage
-        // types. Skip them on MSVC and let the engine fall back to the Fused MoE backend.
-        let cutlass_moe = cc_over_80 && !target.contains("msvc");
-
-        if cc_over_80 {
-            println!("cargo:rustc-cfg=has_marlin_kernels");
-            println!("cargo:rustc-cfg=has_blockwise_fp8_kernels");
-            println!("cargo:rustc-cfg=has_scalar_fp8_kernels");
-            println!("cargo:rustc-cfg=has_vector_fp8_kernels");
-            // WMMA tensor core MXFP4 kernel (FP16/BF16 WMMA requires SM >= 80)
-            println!("cargo:rustc-cfg=has_mxfp4_wmma_kernels");
-        }
-        let cutlass_fp8_sm90 = compute_cap == 90 && cuda_major >= 12 && !target.contains("msvc");
-        if cutlass_fp8_sm90 {
-            println!("cargo:rustc-cfg=has_cutlass_fp8_sm90_kernels");
-        }
-        let deepgemm_fp8_sm90 = compute_cap == 90
-            && (cuda_major > 12 || (cuda_major == 12 && cuda_minor >= 8))
-            && target.contains("linux");
-        let mut deepgemm_source_hash = deepgemm_generator_hash;
-        if deepgemm_fp8_sm90 {
-            println!("cargo:rustc-cfg=has_deepgemm_fp8_sm90_provider");
-            let deepgemm_cutlass =
-                cudaforge::ExternalDependency::cutlass(Some(DEEPGEMM_CUTLASS_COMMIT))
-                    .fetch(&out_dir)
-                    .map_err(|error| error.to_string())?;
-            deepgemm_source_hash = deepgemm_jit_bundle::write(
-                &out_dir.join("deepgemm_jit_headers.rs"),
-                Path::new("third_party/deepgemm_sm90/include/official"),
-                Path::new("third_party/deepgemm_sm90/include/deep_gemm"),
-                &deepgemm_cutlass.join("include"),
-                deepgemm_generator_hash,
-            )
-            .map_err(|error| error.to_string())?;
-        }
-        println!("cargo:rustc-env=MISTRALRS_DEEPGEMM_SOURCE_HASH={deepgemm_source_hash:016x}");
-        // CUTLASS grouped-GEMM MoE fallback (Sm80 tensor-op, runs on sm_80+)
-        if cutlass_moe {
-            println!("cargo:rustc-cfg=has_cutlass_moe_kernels");
-        }
-        // MXFP4 is always enabled with CUDA (uses LUT-based dequantization)
-        println!("cargo:rustc-cfg=has_mxfp4_kernels");
-
-        let mut excluded_files = if cc_over_80 {
-            vec!["dummy_*.cu", "*_dummy.cu"]
-        } else {
-            vec![
-                "marlin_*.cu",
-                "*_fp8.cu",
-                "*_fp8_gemm.cu",
-                "*_wmma.cu",
-                "moe_data.cu",
-                "grouped_mm_*.cu",
-            ]
-        };
-        if cc_over_80 && !cutlass_moe {
-            excluded_files.push("moe_data.cu");
-            excluded_files.push("grouped_mm_*.cu");
-        }
-        if !cutlass_fp8_sm90 {
-            excluded_files.push("*_cutlass_sm90.cu");
-        }
-        builder = builder.exclude(&excluded_files);
-        let cutlass_commit =
-            std::env::var(CUTLASS_COMMIT_ENV).unwrap_or_else(|_| CUTLASS_COMMIT.to_string());
-        builder = builder.with_cutlass(Some(&cutlass_commit));
-
-        // https://github.com/EricLBuehler/mistral.rs/issues/286
-        if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
-            builder = builder.arg("--compiler-options");
-            builder = builder.arg(cuda_nvcc_flags_env);
-        }
-
-        // CUDA 13.x CCCL headers require MSVC's conforming preprocessor.
-        if target.contains("msvc") {
-            builder = builder.arg("--compiler-options").arg("/Zc:preprocessor");
-        }
-
-        // https://github.com/EricLBuehler/mistral.rs/issues/588
-        let out_file = if target.contains("msvc") {
-            // Windows case
-            out_dir.join("mistralrsquant.lib")
-        } else {
-            out_dir.join("libmistralrsquant.a")
-        };
-        builder
-            .build_lib(out_file)
-            .expect("Build mistral quant lib failed!");
-        if deepgemm_fp8_sm90 {
-            let deepgemm_source_hash_arg =
-                format!("-DMISTRALRS_DEEPGEMM_SOURCE_HASH=0x{deepgemm_source_hash:016x}");
-            let deepgemm_build_dir = cuda_build_dir(&out_dir, "deepgemm");
-            let mut deepgemm_builder = cuda_kernel_builder(&deepgemm_build_dir)
-                .source_files(["third_party/deepgemm_sm90/mistralrs_deepgemm_sm90.cu"])
-                .watch(["third_party/deepgemm_sm90"])
-                .compute_cap_arch("90a")
-                .arg(&deepgemm_source_hash_arg)
-                .with_cutlass(Some(&cutlass_commit))
-                .include_path("third_party/deepgemm_sm90")
-                .include_path("third_party/deepgemm_sm90/include");
-            if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
-                deepgemm_builder = deepgemm_builder
-                    .arg("--compiler-options")
-                    .arg(cuda_nvcc_flags_env);
-            }
-            deepgemm_builder
-                .build_lib(out_dir.join("libmistralrsdeepgemm.a"))
-                .expect("Build mistral DeepGEMM provider failed!");
-        }
-        println!("cargo:rustc-link-search={}", out_dir.display());
-        println!("cargo:rustc-link-lib=mistralrsquant");
-        println!("cargo:rustc-link-lib=dylib=cudart");
-        if deepgemm_fp8_sm90 {
-            println!("cargo:rustc-link-lib=mistralrsdeepgemm");
-            println!("cargo:rustc-link-lib=dylib=cuda");
-        }
-
-        if target.contains("msvc") {
-            // nothing to link to
-        } else if target.contains("apple")
-            || target.contains("freebsd")
-            || target.contains("openbsd")
-        {
-            println!("cargo:rustc-link-lib=dylib=c++");
-        } else if target.contains("android") {
-            println!("cargo:rustc-link-lib=dylib=c++_shared");
-        } else {
-            println!("cargo:rustc-link-lib=dylib=stdc++");
-        }
-
-        let (major, minor) = (cuda_major, cuda_minor);
-        println!("cargo:rustc-env=MISTRALRS_BUILD_CUDA_VERSION={major}.{minor}");
-        println!(
-            "cargo:rustc-env=MISTRALRS_BUILD_CUDA_VERSION_CODE={}",
-            major * 100 + minor
-        );
-        println!("cargo:rustc-cfg=feature=\"cuda-{major}0{minor}0\"");
-        if major >= 13 {
-            println!("cargo:rustc-cfg=cuda_ge_13000");
-        }
-
-        let cuda_ge_132 = major > 13 || (major == 13 && minor >= 2);
-        let cutile_supported = cutile_supported_for_build_cuda(major, minor, compute_cap);
-        if std::env::var("CARGO_FEATURE_CUTILE").is_ok() {
-            if !cuda_ge_132 {
-                panic!(
-                    "the `cutile` feature requires CUDA >= 13.2 to build (found {major}.{minor}); \
-                     build without `--features cutile`"
-                );
-            } else if !cutile_supported {
-                println!(
-                    "cargo:warning=the `cutile` feature is enabled, but CUDA {major}.{minor} does \
-                     not support cuTile for sm_{compute_cap}; runtime will use another MoE backend."
-                );
-            }
-        } else if cutile_supported {
-            println!(
-                "cargo:warning=CUDA {major}.{minor} detected: enable the `cutile` feature for \
-                 optimized kernels."
-            );
-        }
-
-        Ok::<(), String>(());
-    }
-
     #[cfg(feature = "metal")]
     {
         mistralrs_metal_compile::compile_metallibs(&QUANT_METAL_SOURCE_SET)
@@ -566,6 +363,22 @@ fn build_cuda_moe_companion() -> Result<(), String> {
         .unwrap_or(80);
 
     const SOURCES: &[&str] = &[
+        "kernels/hqq/hqq_bitpack.cu",
+        "kernels/lora/dynamic_lora.cu",
+        "kernels/lora/routed_moe_lora.cu",
+        "kernels/rotary/rotary.cu",
+        "kernels/ops/ops.cu",
+        "kernels/gemv/gemv.cu",
+        "kernels/hqq/hqq.cu",
+        "kernels/afq/afq.cu",
+        "kernels/afq/afq_gemm.cu",
+        "kernels/gptq/q_gemm.cu",
+        "kernels/moe/moe_align.cu",
+        "kernels/moe/gelu_tanh_and_mul.cu",
+        "kernels/scalar_fp8/scalar_fp8.cu",
+        "kernels/vector_fp8/vector_fp8.cu",
+        "kernels/blockwise_fp8/blockwise_fp8.cu",
+        "kernels/blockwise_fp8/blockwise_fp8_gemm.cu",
         "kernels/indexed_moe/indexed_moe.cu",
         // Dense decode (batch 1-8) MMVQ family.
         "kernels/mmvq_gguf/mmvq_gguf.cu",

@@ -85,6 +85,32 @@ facade today, so the MTP port gates the cutover):
 
 ### Graphs/MTP parity queue (opened 2026-10-06, from the 4B/27B benches)
 
+- [ ] ~M cuda-only 3x decode gap (deferred perf tune, 2026-10-07
+      decision: land Phase 1 on correctness + portability first).
+      Evidence: 4B release bench cuda-only 22.9 tok/s vs dual
+      control 69.7 tok/s same GPU same envs (27B: 8.78 vs 28.85);
+      prefill also ~2.5-3x off, so it is not decode-specific.
+      Ruled out: hardware (dual control), fused matmuls (MMVQ
+      43 vs 46 us/call host-launch identical; paged-attn decode
+      10 vs 12 us), companion kernels (swap experiment: cuda-only
+      binary + dual-built .so files = zero change, so the gap is
+      host-side). Wall accounting: MMVQ totals ~7s in both arms,
+      leaving ~19s unexplained in cuda-only outside matmuls and
+      attention. Next when resumed: call-count milestones (totals
+      never measured, only first-500 averages), MMQ prefill branch
+      timing, then GDN/sampling/sync suspects. Temporary probes
+      were removed before landing; re-add as needed.
+
+- [ ] ~M 27B/4B cuda-only capture abort (correctness, open):
+      the 4B (multimodal pipeline, non-hybrid cache) aborts on its
+      first decode-graph capture in cuda-only (pool-restore warn +
+      poisoned-capture clone at cudarc 957), reproducible with
+      FlashInfer on and off; the dual 4B bench ran graphs env-off
+      so this path was never dual-validated for the 4B either.
+      Workaround: MISTRALRS_CUDA_GRAPHS=0 (matches dual posture).
+      The 27B serves eager via the widened hybrid gate (correct,
+      quiet). Debug queued - likely the same restore-hoist family
+      as the hybrid item, but on the multimodal non-hybrid path.
 - [ ] ~M Hybrid restore hoist: move the recurrent checkpoint restore out
       of the capture window (post-`end_capture`) so hybrid models (27B/4B)
       can capture on the NVIDIA role; then drop the multimodal eager-skip
@@ -2209,6 +2235,48 @@ mistral.rs hot zones, then merge.
 
 ## Done (kept for context)
 
+- [x] ~L Role-identity Phase 1, acceptance battery (2026-10-06/07,
+      continued): the cuda-only release binary links clean and is
+      fully portable - ldd shows zero GPU DT_NEEDED (no libcudart,
+      no libcuda); drivers and every kernel set resolve via dlopen.
+      The last upstream linkage holdouts, retired or converted:
+      (a) three build scripts still emitted static kernel archives +
+          dylib=cudart (mistralrs-quant's 200-line inline static
+          section with the marlin/fp8/mxfp4 probes, mistralrs-core's
+          static block, candle-kernels' upstream archive) - retired;
+          the probes died with them, which is role-true: the dual
+          NVIDIA role runs without them. Capability-symmetric future
+          (cutlass-MoE, mxfp4-marlin, fp8-sm90 on the NVIDIA role in
+          both shapes) = benched follow-ups.
+      (b) kernel_decl in mistralrs-quant and mistralrs-core flipped:
+          the not-rocm arm now dlopens the cuda companion (the core
+          one keeps a plain-decl arm for cpu where its ffi module
+          still expands).
+      (c) companions completed to full coverage: quant mirrors the
+          old static TU set (30 TUs: ops/rotary/gemv/hqq/afq/gptq/
+          moe_align/gelu/mmq/mmvq/indexed_moe/moe_grouped/fp8s/lora
+          pair); core compiles the full src/cuda set minus the
+          AMD-side moe_gemm trio; paged-attn gets its own CUDA list
+          (the 9 dense + flashinfer pair + mla pair + kvscales +
+          sinks) - the AMD companion legitimately excludes the
+          flashinfer TUs (RDNA lacks the paths), so sharing its list
+          starved the NVIDIA role.
+      (d) the lora ffi files converted from raw extern "C" to the
+          dlopen macro (exact signatures preserved), and the dynamic
+          + routed MoE lora TUs joined the quant companion - the
+          NVIDIA role in cuda-only now HAS working lora kernels,
+          ahead of the dual NVIDIA role (widening there = follow-up).
+      (e) the hybrid-models graphs gate widened to any cuda shape
+          (was dual-only interim) - cuda-only hybrid models serve
+          eager like the dual role.
+      Serving observations: the 4B (multimodal pipeline, non-hybrid
+      cache) aborts on its first decode-graph capture in cuda-only
+      (pool-restore warn + poisoned-capture clone at cudarc 957) -
+      reproducible with FlashInfer on and off; the dual 4B bench ran
+      with graphs env-off so this path was never dual-validated for
+      the 4B either. Debug queued. The 27B (hybrid, gated to eager)
+      is the parity bench target: decode vs the dual 28.85 tok/s /
+      prefill ~4.6k within noise = the Phase 1 proof.
 - [x] ~L Role-identity Phase 1 (2026-10-06/07): cuda-only compiles
       green for the first time; all four shapes check clean (cpu,
       cuda, dual, rocm), post-fmt verified. Root-cause chain:
@@ -2449,7 +2517,7 @@ most `mistralrs-quant` FP8 kernels, speculative dflash/FA3 paths.
 | CPU-only (`cargo check -p mistralrs-core -p mistralrs-quant`) | Pass (4B serves on cpu, benched) |
 | ROCm (`cargo check -p mistralrs-core -p mistralrs-quant --features rocm`) | Pass, prod serves on :1235 |
 | Dual (`cargo check/build --features cuda,rocm`) | Pass, serves 4B/16B/27B on the 3090 and the APU; decode graphs live on both roles (NVIDIA role: non-hybrid models; hybrid models gated eager pending the restore hoist) |
-| CUDA-only (`--features cuda`) | Broken, pre-existing fork drift (candle expects cudarc APIs upstream 0.19.8 lacks: `CudaGraphExec` et al.); revival queued as its own slice |
+| CUDA-only (`--features cuda`) | Pass (revived 2026-10-07, role-identity Phase 1): checks clean, release binary links with zero GPU DT_NEEDED, serves 27B ISQ-Q4K correctly (quality verified, resident memory matches dual). Known gaps, all journaled: ~3x decode-vs-dual perf gap (open tune item, companions exonerated by swap test), 4B decode-graph capture aborts (workaround MISTRALRS_CUDA_GRAPHS=0, debug queued), MTP off (role caps, like dual-NVIDIA) |
 
 CPU fallback notes: `mistralrs-paged-attn` is a required dependency of
 `mistralrs-core` (types always available, GPU kernels still feature-gated),

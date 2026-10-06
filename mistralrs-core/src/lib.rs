@@ -138,7 +138,7 @@ pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_sele
 mod amoe;
 mod attention;
 mod block_diffusion;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
 mod cuda_plugin;
 mod diagnostics;
 mod diffusion_models;

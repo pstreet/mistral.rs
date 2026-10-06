@@ -248,6 +248,25 @@ fn build_cuda() -> Result<()> {
 // (ldmatrix/cp.async) and MLA kernels need tensor-core instructions RDNA
 // lacks and are excluded; FP8 KV cache is enabled via the AMD quantization
 // path (ENABLE_FP8) so the f8e4m3 cache_dtype branch compiles on RDNA.
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+const PAGED_ATTN_CUDA_KERNELS: &[&str] = &[
+    "src/cuda/pagedattention_v1_f16.cu",
+    "src/cuda/pagedattention_v1_bf16.cu",
+    "src/cuda/pagedattention_v1_f32.cu",
+    "src/cuda/pagedattention_v2_f16.cu",
+    "src/cuda/pagedattention_v2_bf16.cu",
+    "src/cuda/pagedattention_v2_f32.cu",
+    "src/cuda/reshape_and_cache_kernel.cu",
+    "src/cuda/copy_blocks_kernel.cu",
+    "src/cuda/gather_kv_cache_kernel.cu",
+    "src/cuda/flashinfer_decode.cu",
+    "src/cuda/flashinfer_mla_decode.cu",
+    "src/cuda/update_kvscales.cu",
+    "src/cuda/flash_attn_sinks.cu",
+    "src/cuda/concat_and_cache_mla_kernel.cu",
+    "src/cuda/gather_mla_cache_kernel.cu",
+];
+
 #[cfg(any(feature = "rocm", all(feature = "cuda", target_family = "unix")))]
 const PAGED_ATTN_ROCM_KERNELS: &[&str] = &[
     "src/cuda/pagedattention_v1_f16.cu",
@@ -399,14 +418,14 @@ fn build_cuda_companion() -> Result<()> {
     let gencode = format!("arch=compute_{cap},code=sm_{cap}");
     let ptx = format!("arch=compute_{cap},code=compute_{cap}");
 
-    for kernel in PAGED_ATTN_ROCM_KERNELS {
+    for kernel in PAGED_ATTN_CUDA_KERNELS {
         println!("cargo:rerun-if-changed={kernel}");
     }
 
     let build_dir = out_dir.join("cuda_companion");
     std::fs::create_dir_all(&build_dir)?;
     let mut objects = Vec::new();
-    for kernel in PAGED_ATTN_ROCM_KERNELS {
+    for kernel in PAGED_ATTN_CUDA_KERNELS {
         let object = build_dir
             .join(std::path::Path::new(kernel).file_stem().unwrap())
             .with_extension("o");

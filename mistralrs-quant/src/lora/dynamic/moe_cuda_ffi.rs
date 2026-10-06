@@ -2,11 +2,14 @@ use candle_core::cuda::cudarc::driver::sys::CUstream;
 use half::{bf16, f16};
 
 use super::moe_cuda::RoutedLoraAdapterWeight;
+use crate::kernel_decl::declare_kernel;
 
-extern "C" {
-    pub fn routed_lora_metadata_workspace_size(num_experts: i32, num_adapter_slots: i32) -> usize;
-
-    pub fn launch_routed_lora_build_metadata(
+declare_kernel! {
+    routed_lora_metadata_workspace_size(
+        num_experts: i32,
+        num_adapter_slots: i32,
+    ) -> usize;
+    launch_routed_lora_build_metadata(
         token_adapter_slots: *const u32,
         topk_expert_ids: *const u32,
         route_pair_ids: *mut u32,
@@ -28,8 +31,7 @@ extern "C" {
         scan_workspace_bytes: usize,
         stream: CUstream,
     ) -> i32;
-
-    pub fn launch_routed_lora_direct_f32(
+    launch_routed_lora_direct_f32(
         input: *const f32,
         output: *mut f32,
         weights: *const RoutedLoraAdapterWeight,
@@ -52,8 +54,7 @@ extern "C" {
         output_splits: i32,
         stream: CUstream,
     ) -> i32;
-
-    pub fn launch_routed_lora_direct_f16(
+    launch_routed_lora_direct_f16(
         input: *const f16,
         output: *mut f16,
         weights: *const RoutedLoraAdapterWeight,
@@ -76,8 +77,7 @@ extern "C" {
         output_splits: i32,
         stream: CUstream,
     ) -> i32;
-
-    pub fn launch_routed_lora_direct_bf16(
+    launch_routed_lora_direct_bf16(
         input: *const bf16,
         output: *mut bf16,
         weights: *const RoutedLoraAdapterWeight,
@@ -100,8 +100,7 @@ extern "C" {
         output_splits: i32,
         stream: CUstream,
     ) -> i32;
-
-    pub fn launch_routed_lora_grouped_shrink_f32(
+    launch_routed_lora_grouped_shrink_f32(
         input: *const f32,
         weights: *const RoutedLoraAdapterWeight,
         sorted_route_ids: *const u32,
@@ -120,8 +119,7 @@ extern "C" {
         input_mode: i32,
         stream: CUstream,
     ) -> i32;
-
-    pub fn launch_routed_lora_grouped_shrink_f16(
+    launch_routed_lora_grouped_shrink_f16(
         input: *const f16,
         weights: *const RoutedLoraAdapterWeight,
         sorted_route_ids: *const u32,
@@ -140,8 +138,7 @@ extern "C" {
         input_mode: i32,
         stream: CUstream,
     ) -> i32;
-
-    pub fn launch_routed_lora_grouped_shrink_bf16(
+    launch_routed_lora_grouped_shrink_bf16(
         input: *const bf16,
         weights: *const RoutedLoraAdapterWeight,
         sorted_route_ids: *const u32,
@@ -160,8 +157,7 @@ extern "C" {
         input_mode: i32,
         stream: CUstream,
     ) -> i32;
-
-    pub fn launch_routed_lora_grouped_expand_f32(
+    launch_routed_lora_grouped_expand_f32(
         hidden: *const f32,
         output: *mut f32,
         weights: *const RoutedLoraAdapterWeight,
@@ -181,8 +177,7 @@ extern "C" {
         max_rank: i32,
         stream: CUstream,
     ) -> i32;
-
-    pub fn launch_routed_lora_grouped_expand_f16(
+    launch_routed_lora_grouped_expand_f16(
         hidden: *const f32,
         output: *mut f16,
         weights: *const RoutedLoraAdapterWeight,
@@ -202,8 +197,7 @@ extern "C" {
         max_rank: i32,
         stream: CUstream,
     ) -> i32;
-
-    pub fn launch_routed_lora_grouped_expand_bf16(
+    launch_routed_lora_grouped_expand_bf16(
         hidden: *const f32,
         output: *mut bf16,
         weights: *const RoutedLoraAdapterWeight,
@@ -223,8 +217,7 @@ extern "C" {
         max_rank: i32,
         stream: CUstream,
     ) -> i32;
-
-    pub fn launch_routed_lora_grouped_wmma_f16(
+    launch_routed_lora_grouped_wmma_f16(
         input: *const f16,
         output: *mut f16,
         weights: *const RoutedLoraAdapterWeight,
@@ -247,8 +240,7 @@ extern "C" {
         output_splits: i32,
         stream: CUstream,
     ) -> i32;
-
-    pub fn launch_routed_lora_grouped_wmma_bf16(
+    launch_routed_lora_grouped_wmma_bf16(
         input: *const bf16,
         output: *mut bf16,
         weights: *const RoutedLoraAdapterWeight,
