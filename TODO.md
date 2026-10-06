@@ -108,16 +108,20 @@ facade today, so the MTP port gates the cutover):
       27B prefill (270-tok prompt x3): 838 cold, 4791 / 4851 warm vs
       dual ~4.6k warm - parity.
       EXTERNAL CHECK 2026-10-07 (published Qwen3.8-27B / RTX 3090
-      single-card, no-MTP decode): llama.cpp Q4_K_M ~36-41 tok/s
-      (llamaperf 36.4, openclaw 41.5, jonidimo ~39); vLLM no-spec
-      46 tok/s; bowmanslayer Q6_K tg128 32.3 (Vulkan). Ours: 30.0 at
-      Q6_K weights. Decode is bandwidth-bound and Q6_K streams ~33%
-      more bytes/token than Q4_K_M (20.5 vs 15.4GB): 41.4 scaled by
-      bytes predicts ~31 - we are on the line. The remaining lever
-      everywhere is MTP (+36-77% published: 66-69 tok/s llama.cpp
-      n=2, 114-124 vLLM) = our Phase 2. Prefill ours 4.8k @270tok;
-      published CUDA prefills are long-context (705 @128K, ~1k @28K)
-      so no short-prompt reference exists; nothing alarming.
+      single-card, no-MTP decode), CORRECTED: ISQ Q4K dequantizes and
+      requantizes every layer at load (`apply_isq`: only already-Q4K is
+      preserved), so runtime traffic is Q4-class, not Q6_K - the file
+      quant is irrelevant. Fair bar is llama.cpp Q4_K_M ~36-41 tok/s
+      and vLLM no-spec 46; we are at 30.0, ~20-30% under. Roof math:
+      ~16GB/token over 936GB/s = ~58 tok/s max; we run 52% of roof vs
+      their ~68%. Suspects for the remainder, all consistent with the
+      evidence: eager decode (no graphs - every published CUDA number
+      is graphed; per-token launch overhead across ~65 layers),
+      CPU-fallback sampling (full ~0.5MB bf16 logits DTOH + device
+      sync per token; the fused top-k gate is hip-side), Q8_0 KV
+      (~57KB/tok vs published q4_0 ~29KB/tok). MTP remains the big
+      lever (+36-77% published) = Phase 2; graphs-on + device
+      sampling are the efficiency follow-ups.
       Phase 1 parity acceptance MET on both models.
 - [ ] ~M Hybrid graphs-on (was "restore hoist", theory superseded above).
       Hardening landed: missing `end_cuda_capture_discard` on the
