@@ -113,6 +113,13 @@ facade today, so the MTP port gates the cutover):
       `cached_htod_slice` (was `Clone::unwrap`). Abort -> loud eager
       verified. Debug aid kept: `MISTRALRS_DEBUG_HYBRID_GRAPHS=1`
       bypasses the eager gates (default off). Re-entry as noted above.
+- [ ] ~S Q8-KV + FlashInfer-decode is unimplemented on the NVIDIA role
+      (found 2026-10-07 via the 27B parity bench): cuda-only genuinely
+      claims FI (`supports_layer` true) -> FlashInferHnd layout -> the
+      block-quant gate bails "requires the Standard layout". Dual never
+      reaches it (FI claim is cfg'd solo-only, so dual runs Standard).
+      Parities used FI-decode off to match the control. Queued: FI on/off
+      A/B on cuda-only + either Q8+FI support or a loud config error.
 
 - [ ] ~M 27B/4B cuda-only capture abort (correctness, open):
       CORRECTION 2026-10-07: the 4B IS hybrid (NormalPipeline, text-only
