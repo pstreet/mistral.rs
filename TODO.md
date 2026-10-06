@@ -26,6 +26,63 @@ P3 = polish, Deferred = do not do on RDNA.
 
 ## P0. Do first — highest impact per effort (days)
 
+### Role-identity architecture (agreed 2026-10-06)
+
+Target state: ONE shared backend body (`cuda_backend/body/`),
+textually included by two thin role shells. Feature = role
+linkage (`cuda` -> NVIDIA shell over vendored cudarc-nvidia,
+`rocm` -> AMD shell over cudarc-hip; `vulkan` someday = a third
+shell over the same body, the vendor-agnostic slot). Shell =
+plain capability constants, no shape-keyed macros. Device =
+runtime behavior (serving role, FlashInfer claimed on
+Device::Cuda only, caps). Loud absence bails for unlinked roles.
+Vendor features are never shape-hostage: the AMD role keeps the
+full fork API in every shape; the NVIDIA role keeps arena graphs
++ FlashInfer + the nvcc companion in every shape (FlashInfer
+wherever cuda is linked - standing directive). Capability
+symmetry is the obligation; internal fast-path tiers (hipBLASLt
+heuristics, managed uploads) are per-role optimization freedom,
+ported only when a bench justifies. Module names stay
+(`cuda_backend`/`hip_backend`) for merge health; shell doc
+headers get rewritten as role definitions.
+
+Three deviations from target (all identified, all understood):
+(a) solo-rocm instantiates the AMD role through the NVIDIA-named
+    shell (crate-root `cudarc` alias -> hip fork; AMD hardware
+    appears as Device::Cuda) - the "ROCm leverages CUDA when
+    built solo" issue;
+(b) the NVIDIA shell's capability macros are shape-keyed
+    (`not(dual)` expands) instead of role-keyed - the exact bug
+    that broke cuda-only (the "present" arm was written when
+    single-vendor meant hip-alias; it promises APIs the bound
+    crate lacks: stream arena alloc, managed htod clones, fork
+    cublasLt - the five errors of the 2026-10-06 check);
+(c) ~17 downstream arms keyed on build shape (caps rows,
+    FlashInfer claiming, serving-role resolution, graph arms).
+
+Phases (sequencing endorsed 2026-10-06; the prod constraint is
+that prod is MTP-locked and MTP only works through the alias
+facade today, so the MTP port gates the cutover):
+1. NVIDIA shell role-keying + cuda-only revival + FlashInfer
+   re-key (device-keyed claiming) + caps.mtp enforcement + shell
+   docs. No prod risk. Acceptance: 4-shape checks green (cpu,
+   rocm, cuda, dual), release cuda-only serves 4B/16B on the
+   3090, FlashInfer on/off A/B in dual (it activates a previously
+   inert default-on path there), parity bench cuda-only vs dual
+   NVIDIA role within noise; cuda-only joins the standing shape
+   matrix (it rotted because nothing compiled it).
+2. MTP role-awareness (speculative_rejection port; the
+   indexed_copy rollback port landed 2026-10-06). Completes
+   dual-AMD MTP and gates phase 3.
+3. Solo-rocm cutover: hip_backend serves every rocm shape
+   (Device::Hip in solo builds), the alias and its shape-keyed
+   arms retire, "cuda:N" in rocm-only builds loudly redirects
+   (prod auto-selects, config unaffected), full prod
+   re-validation with the locked config + parity bench vs the
+   current binary before cutover.
+4. Vulkan: future third shell; the include!-body pattern is the
+   extension point. No work yet.
+
 ### Graphs/MTP parity queue (opened 2026-10-06, from the 4B/27B benches)
 
 - [ ] ~M Hybrid restore hoist: move the recurrent checkpoint restore out
@@ -39,7 +96,8 @@ P3 = polish, Deferred = do not do on RDNA.
       events, 3 kernel-launch ops, dense row packing - all CudaStorage
       typed): the last code gap for MTP on the dual hip role. The hybrid
       MTP rollback is already unblocked (indexed_copy dual port,
-      2026-10-06); this file gates the MTP verify path.
+      2026-10-06); this file gates the MTP verify path. = role-identity
+      Phase 2; also gates the Phase 3 prod cutover (prod is MTP-locked).
 - [ ] ~M NVIDIA-role MTP: (a) memory - 27B Q4K + drafter = PA "0 GPU
       blocks" at BOTH 2048MB and 1024MB KV (mtp-off fits at 21.4GB/24GB);
       try smaller KV + `mtp_draft_lm_head_isq = "Q4K"` before anything
@@ -54,10 +112,11 @@ P3 = polish, Deferred = do not do on RDNA.
       journal entry at the 2026-10-05 MMVQ work).
 - [ ] ~S fp8 NVIDIA-role parity (currently a loud dual bail; port the
       fp8 kernels to the nvcc companion).
-- [ ] ~M cuda-alone revival (pre-existing candle/upstream-cudarc drift:
-      `CudaGraphExec`, `stream.alloc`, `begin_capture(mode)` etc. in
-      candle's device.rs; the vendored cudarc-nvidia now carries most of
-      the fork API, so this is a port/patch-wiring job).
+- [ ] ~M cuda-alone revival = role-identity Phase 1 (the NVIDIA
+      shell's shape-keyed "present" arms promise APIs the bound
+      crate lacks: stream arena alloc, managed htod clones, fork
+      cublasLt - the five errors of the 2026-10-06 cuda-only
+      check; the fix is role-keying the shell, not porting APIs).
 - [ ] ~S optional prod knob: `mtp_draft_lm_head_isq = "Q4K"` in prod
       mistralrs.toml (measured +2.6% decode on the 35B; harmless to
       quality).
