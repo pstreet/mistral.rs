@@ -112,6 +112,32 @@ facade today, so the MTP port gates the cutover):
    plan (d): solo-rocm fast/release build + smoke + MTP serve on the
    APU (hip hw), parity bench vs the pre-cutover binary, then the
    user-owned prod re-validation. Prod :1235 still untouched.
+   HARDWARE PROOF 2026-10-07 (solo-rocm fast binary, APU gfx1151,
+   prod paused and restored clean):
+   - 4B (Q8_0, mtp off): serves on Device::Hip; hybrid cache
+     reserved + 2048MB PA allocated + 1024 GPU blocks; coherent
+     reasoning trace, 400 tok, 0 errors.
+   - 27B (Q6_K+ISQ Q4K, MTP n=2 greedy, port 1242): "Speculative
+     decoding enabled" - the line the alias era NEVER produced
+     (old binary refused at model attach). Metrics: 250 drafts,
+     750 proposed, 362 accepted (48.3%; pos0/1/2 = 191/111/61),
+     sparse_gpu_verify_total 247, ZERO cpu fallbacks, 0 errors,
+     coherent essay.
+   - THE PHASE 2+3 GATE IS PROVEN: solo-rocm MTP verify runs on
+     hip GPU kernels (Phase 2's speculative_rejection hip twins
+     + Phase 3's re-gates). Essay 600tok 57.8s on the fast build
+     (never benched; release parity pending).
+   Four stale gates caught by the proof (probe-guided), fixed,
+   post-fmt 0/0/0/0 again: (1) candle-nn RmsNorm et al. hip_fwd
+     twins dual-gated -> rocm (rms-norm bail); (2) mistralrs-
+     server-core configure_paged_attn Hip arm dual-gated -> rocm
+     (PA silently dropped at builder entry - a crate the compile
+     survey never covered); (3) cache_engine is_hip_role dual-
+     gated -> rocm (quantized-KV refused on Hip); (4) quant
+     device_has_fused_ops solo-rocm arm still is_cuda() ->
+     is_hip() (the alias-era check). Lesson journaled: the
+     compiler matrix can't catch runtime-only gates in crates
+     whose SOLO arm compiles but behaves wrong.
 4. Vulkan: future third shell; the include!-body pattern is the
    extension point. No work yet.
 

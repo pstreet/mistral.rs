@@ -91,8 +91,9 @@ pub fn device_has_fused_ops(device: &Device) -> bool {
     }
     #[cfg(all(feature = "rocm", not(feature = "cuda")))]
     {
-        // The rocm-only alias: Device::Cuda IS the AMD device here.
-        device.is_cuda()
+        // The rocm-only build: hip_backend serves the AMD role as
+        // Device::Hip (Phase 3 cutover; the old alias check was is_cuda()).
+        device.is_hip()
     }
     #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     {

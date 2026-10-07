@@ -2015,11 +2015,12 @@ fn configure_paged_attn(device: &Device, paged_attn: Option<bool>) -> bool {
         }
         return defaults::PAGED_ATTN_CPU;
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     if device.is_hip() {
-        // Dual builds serve the AMD role as Device::Hip; without this arm
-        // the auto default falls through to `false` and every paged-attn
-        // dependent feature (prefix cache, MTP) silently disables.
+        // Every rocm build serves the AMD role as Device::Hip; without this
+        // arm the auto default falls through to `false` and every
+        // paged-attn dependent feature (prefix cache, MTP) silently
+        // disables.
         return paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA);
     }
     if device.is_cuda() {

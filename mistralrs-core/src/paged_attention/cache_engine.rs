@@ -11,11 +11,11 @@ use super::config::{KvCacheLayout, ModelConfigLike};
 #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
 use crate::flashinfer::{register_fa3_prefill_caches, Fa3PrefillWorkspaceRegistration};
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 pub(crate) fn is_hip_role(device: &Device) -> bool {
     device.is_hip()
 }
-#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+#[cfg(not(feature = "rocm"))]
 pub(crate) fn is_hip_role(_device: &Device) -> bool {
     false
 }
