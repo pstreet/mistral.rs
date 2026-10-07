@@ -120,8 +120,8 @@ facade today, so the MTP port gates the cutover):
       CPU-fallback sampling (full ~0.5MB bf16 logits DTOH + device
       sync per token; the fused top-k gate is hip-side), Q8_0 KV
       (~57KB/tok vs published q4_0 ~29KB/tok). MTP remains the big
-      lever (+36-77% published) = Phase 2; graphs-on + device
-      sampling are the efficiency follow-ups.
+      lever (+36-77% published) = Phase 2; graphs-on is the remaining
+      efficiency follow-up (device sampling done 2026-10-07, see below).
       Phase 1 parity acceptance MET on both models.
 - [ ] ~M Hybrid graphs-on (was "restore hoist", theory superseded above).
       Hardening landed: missing `end_cuda_capture_discard` on the
@@ -137,6 +137,17 @@ facade today, so the MTP port gates the cutover):
       reaches it (FI claim is cfg'd solo-only, so dual runs Standard).
       Parities used FI-decode off to match the control. Queued: FI on/off
       A/B on cuda-only + either Q8+FI support or a loud config error.
+- [x] ~S Device sampling on the solo NVIDIA role (done 2026-10-07,
+      third stale-gate flip): the top-1/top-k submit path was hip-gated
+      (`device_has_fused_ops`), so solo-cuda copied full logits to host
+      + synced per token. New `device_sampling_supported` helper
+      (fused-ops OR solo-cuda), used at the 3 sampling gates; MoE
+      router, norms etc. untouched, dual untouched. Verified fast
+      binary: no plugin errors (kernels present in nvcc companion),
+      temp-0 sanity byte-identical `1776` (device top-1 agrees with
+      CPU), essay-600tok 8.0s -> 6.85s (~14%, sync + 0.5MB DTOH per
+      token removed). Suspect list in the external check updated
+      accordingly; CPU sampling struck.
 
 - [ ] ~M 27B/4B cuda-only capture abort (correctness, open):
       CORRECTION 2026-10-07: the 4B IS hybrid (NormalPipeline, text-only

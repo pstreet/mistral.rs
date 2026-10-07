@@ -20,6 +20,22 @@ use crate::{
 
 use super::Pipeline;
 
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+fn device_sampling_supported(device: &candle_core::Device) -> bool {
+    if mistralrs_quant::device_has_fused_ops(device) {
+        return true;
+    }
+    // Solo NVIDIA role: the top-1/top-k submit kernels ride the nvcc
+    // companion; the fused-ops gate above is hip-side. Device sampling
+    // keeps full-logits host copies (and their sync) off the decode
+    // path. Dual builds keep their existing dispatch.
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    if device.is_cuda() {
+        return true;
+    }
+    false
+}
+
 macro_rules! fixup_sentencepiece {
     ($txt:expr) => {
         $txt.to_string().replace("▁", " ")
@@ -1012,9 +1028,7 @@ fn try_submit_cuda_token_batch_inner(
     resident_input: Option<&Tensor>,
     rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
 ) -> Result<Option<CudaTokenBatchSubmission>> {
-    if !can_submit_cuda_token_batch_seqs(seqs)
-        || !mistralrs_quant::device_has_fused_ops(logits.device())
-    {
+    if !can_submit_cuda_token_batch_seqs(seqs) || !device_sampling_supported(logits.device()) {
         return Ok(None);
     }
 
@@ -1243,16 +1257,14 @@ fn try_sample_batch_cuda(
                 || logits.len() != seqs.len()
                 || logits
                     .iter()
-                    .any(|logits| !mistralrs_quant::device_has_fused_ops(logits.device()))
+                    .any(|logits| !device_sampling_supported(logits.device()))
             {
                 return Ok(None);
             }
             stack_final_logits(logits)?
         }
         CausalLogitsBatch::Batched(logits) => {
-            if logits.dim(0)? != seqs.len()
-                || !mistralrs_quant::device_has_fused_ops(logits.device())
-            {
+            if logits.dim(0)? != seqs.len() || !device_sampling_supported(logits.device()) {
                 return Ok(None);
             }
             final_batched_logits(logits)?
