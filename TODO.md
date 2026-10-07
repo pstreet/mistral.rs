@@ -130,13 +130,19 @@ facade today, so the MTP port gates the cutover):
       `cached_htod_slice` (was `Clone::unwrap`). Abort -> loud eager
       verified. Debug aid kept: `MISTRALRS_DEBUG_HYBRID_GRAPHS=1`
       bypasses the eager gates (default off). Re-entry as noted above.
+- [x] ~S FlashInfer on/off A/B on cuda-only (done 2026-10-07, 4B
+      release, graphs-off): ON decode 77.7/77.4 tok/s, OFF 75.5/75.0
+      (~+3% for FI); warm prefill identical ~11.3k both arms; 0 errors
+      either way. FI decode path is live on the NVIDIA role (kernels
+      present, output correct) - the Phase 1 "previously inert" path
+      is now observed working. Default stays ON.
 - [ ] ~S Q8-KV + FlashInfer-decode is unimplemented on the NVIDIA role
       (found 2026-10-07 via the 27B parity bench): cuda-only genuinely
       claims FI (`supports_layer` true) -> FlashInferHnd layout -> the
       block-quant gate bails "requires the Standard layout". Dual never
       reaches it (FI claim is cfg'd solo-only, so dual runs Standard).
-      Parities used FI-decode off to match the control. Queued: FI on/off
-      A/B on cuda-only + either Q8+FI support or a loud config error.
+      Parities used FI-decode off to match the control. Queued: either
+      Q8+FI support or a loud config error (FI A/B done above).
 - [x] ~S Device sampling on the solo NVIDIA role (done 2026-10-07,
       third stale-gate flip): the top-1/top-k submit path was hip-gated
       (`device_has_fused_ops`), so solo-cuda copied full logits to host
