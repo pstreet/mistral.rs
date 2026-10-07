@@ -1,4 +1,7 @@
+#[cfg(feature = "cuda")]
 use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+use candle_core::role::backend::cudarc::driver::DevicePtr;
 use candle_core::{DType, Layout, Result, Storage, Tensor};
 
 fn launch(
@@ -117,19 +120,41 @@ pub fn copy_tensor(src: &Tensor, dst: &Tensor) -> Result<()> {
     {
         candle_core::bail!("CUDA graph copy expected matching tensors");
     }
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    if !src.device().is_hip() {
+        candle_core::bail!("CUDA graph copy expected GPU tensors");
+    }
+    #[cfg(not(all(feature = "rocm", not(feature = "cuda"))))]
     if !src.device().is_cuda() {
         candle_core::bail!("CUDA graph copy expected CUDA tensors");
     }
 
     let (src_storage, src_layout) = src.storage_and_layout();
     let (dst_storage, dst_layout) = dst.storage_and_layout();
-    let Storage::Cuda(src_storage) = &*src_storage else {
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    let Storage::Hip(src_storage) = &*src_storage
+    else {
+        candle_core::bail!("CUDA graph copy expected hip source storage");
+    };
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    let Storage::Hip(dst_storage) = &*dst_storage
+    else {
+        candle_core::bail!("CUDA graph copy expected hip destination storage");
+    };
+    #[cfg(not(all(feature = "rocm", not(feature = "cuda"))))]
+    let Storage::Cuda(src_storage) = &*src_storage
+    else {
         candle_core::bail!("CUDA graph copy expected CUDA source storage");
     };
-    let Storage::Cuda(dst_storage) = &*dst_storage else {
+    #[cfg(not(all(feature = "rocm", not(feature = "cuda"))))]
+    let Storage::Cuda(dst_storage) = &*dst_storage
+    else {
         candle_core::bail!("CUDA graph copy expected CUDA destination storage");
     };
 
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    let stream = src.device().as_hip_device()?.cuda_stream().cu_stream() as i64;
+    #[cfg(not(all(feature = "rocm", not(feature = "cuda"))))]
     let stream = src.device().as_cuda_device()?.cuda_stream().cu_stream() as i64;
     match src.dtype() {
         DType::U8 => copy_dtype!(src_storage, src_layout, dst_storage, dst_layout, u8, stream)?,

@@ -2,8 +2,16 @@
 
 use std::fmt::Debug;
 
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(all(feature = "cuda", feature = "rocm"))]
 use candle_core::cuda::{
+    cudarc::driver::{sys::CUstream, CudaSlice, DeviceRepr, ValidAsZeroBits},
+    CudaDevice,
+};
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::role::backend::{
     cudarc::driver::{sys::CUstream, CudaSlice, DeviceRepr, ValidAsZeroBits},
     CudaDevice,
 };
@@ -234,7 +242,7 @@ impl DequantizeOp {
         Ok(out)
     }
 
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     fn dispatch_hip_kernel<
         T: WithDType
             + candle_core::hip_backend::cudarc::driver::DeviceRepr
@@ -329,7 +337,7 @@ impl CustomOp3 for DequantizeOp {
         }
     }
 
-    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
         input_s: &candle_core::CudaStorage,
@@ -443,7 +451,7 @@ impl CustomOp3 for DequantizeOp {
 
         Ok((out, self.shape.clone()))
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     /// Dual-role twin of cuda_fwd: the same kernels through the hip
     /// role's bindings (companion-plugin FFI included).
     fn hip_fwd(

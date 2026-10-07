@@ -274,7 +274,7 @@ pub unsafe fn swap_blocks(
 ) -> Result<()> {
     let block_size_in_bytes = src.dtype().size_in_bytes() * src.dims()[0];
     match (src.device(), dst.device()) {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         (Device::Cuda(src_dev), Device::Cuda(dst_dev)) => {
             if src_dev.location() != dst_dev.location() {
                 candle_core::bail!("Tensors must be on the same device to copy, got locations {:?} (src) and {:?} (dst).", src_dev.location(), dst_dev.location());
@@ -396,7 +396,7 @@ pub unsafe fn swap_blocks(
                 src_dev.memcpy_dtod(&src_slice, &mut dst_slice)?;
             }
         }
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         (Device::Cpu, Device::Cuda(dst_dev)) => {
             let (src_storage, _src_layout) = src.storage_and_layout();
             let (dst_storage, dst_layout) = dst.storage_and_layout();
@@ -549,7 +549,7 @@ mod tests {
         let key_storage = candle_core::role::RoleStorage::wrap_cuda_slice(key_slice, dev.clone());
         #[cfg(not(all(feature = "cuda", feature = "rocm")))]
         let mut key = Tensor::from((Storage::Cuda(key_storage), (4, 4)));
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         let mut key = Tensor::from((Storage::Hip(key_storage), (4, 4)));
         let mut value = Tensor::zeros((4, 4), candle_core::DType::F32, &device)?;
         let mapping = HashMap::from([(0, vec![1])]);

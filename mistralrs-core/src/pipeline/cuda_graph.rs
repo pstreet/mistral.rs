@@ -2128,12 +2128,13 @@ impl CudaGraphSpecStateUsage {
                 usage.device_totals.entry(location)
             {
                 let (info, total) = match tensor.device() {
+                    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                     Device::Cuda(device) => device
                         .cuda_stream()
                         .context()
                         .mem_get_info()
                         .map_err(candle_core::Error::wrap)?,
-                    #[cfg(all(feature = "cuda", feature = "rocm"))]
+                    #[cfg(feature = "rocm")]
                     Device::Hip(device) => device
                         .cuda_stream()
                         .context()
@@ -2923,6 +2924,7 @@ fn release_cuda_graph_entries(entries: Vec<CudaDecodeGraphEntry>) {
 /// heap free for the hip role, the VRAM free for the cuda role.
 pub(crate) fn graph_arena_device_free(device: &Device) -> candle_core::Result<usize> {
     match device {
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         Device::Cuda(dev) => {
             let (free, _total) = dev
                 .cuda_stream()
@@ -2931,7 +2933,7 @@ pub(crate) fn graph_arena_device_free(device: &Device) -> candle_core::Result<us
                 .map_err(candle_core::Error::wrap)?;
             Ok(free)
         }
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         Device::Hip(dev) => {
             let (free, _total) = dev
                 .cuda_stream()
@@ -3695,7 +3697,7 @@ fn device_location_sort_key(location: &DeviceLocation) -> (u8, usize) {
         DeviceLocation::Cpu => (0, 0),
         DeviceLocation::Cuda { gpu_id } => (1, *gpu_id),
         DeviceLocation::Metal { gpu_id } => (2, *gpu_id),
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         DeviceLocation::Hip { gpu_id } => (1, *gpu_id),
     }
 }

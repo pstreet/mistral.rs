@@ -318,17 +318,14 @@ impl Sdpa {
             let sliding_ok = sdpa_params.sliding_window.is_none_or(|_| mask_type != 0);
             let dbg = debug_ck();
 
-            // CK kernels are hipcc-built AND the launcher is Storage::Cuda-
-            // shaped (written for the single-vendor rocm shape, where
-            // Device::Cuda IS the AMD device). In dual builds the AMD role
-            // is Device::Hip - the launcher cannot serve it
-            // (as_cuda_device bails) - and the NVIDIA role must never
-            // reach these AMD binaries. So CK fires in single-vendor rocm
-            // builds only, until a Storage::Hip twin lands; dual hip
-            // prefill keeps its existing eager/flash path (unchanged
-            // from before the role-keying work - no regression).
+            // CK kernels are hipcc-built; the launcher is Storage::Hip-
+            // shaped (the AMD role's storage in every rocm build). In
+            // dual builds the NVIDIA role must never reach these AMD
+            // binaries (is_hip() is false there), so CK fires in
+            // single-vendor rocm builds; dual hip prefill keeps its
+            // existing eager/flash path (unchanged - no regression).
             if !cfg!(all(feature = "cuda", feature = "rocm"))
-                && q.device().is_cuda()
+                && q.device().is_hip()
                 && q.dtype() == DType::BF16
                 && k.dtype() == DType::BF16
                 && v.dtype() == DType::BF16
@@ -356,7 +353,7 @@ impl Sdpa {
             } else if dbg {
                 eprintln!(
                     "[CK FA] dispatch: SKIP (device={}, dtype={}, hdim={}, seq_len={}, kv_len={}, softcap={}, sliding={}, gather_exact={})",
-                    q.device().is_cuda(), q.dtype() == DType::BF16, head_dim, seq_len,
+                    q.device().is_hip(), q.dtype() == DType::BF16, head_dim, seq_len,
                     kv_len, sdpa_params.softcap.is_some(),
                     sdpa_params.sliding_window.is_some(), gather_exact
                 );

@@ -80,6 +80,33 @@ facade today, so the MTP port gates the cutover):
    (prod auto-selects, config unaffected), full prod
    re-validation with the locked config + parity bench vs the
    current binary before cutover.
+   PLAN 2026-10-07 (surveyed both repos, subagent inventories in
+   session): (a) candle gates - lib.rs mod/use gates, role.rs arms,
+   cuda_backend alias branches retire; (b) compiler-guided rekey -
+   every Hip arm `all(cuda,rocm)` -> `rocm`, Cuda-is-AMD assumptions
+   -> Hip, incl. Phase-2 port gates which must widen the same way
+   (else solo-rocm MTP verify loses hip_fwd); (c) mistral.rs -
+   device_spec resolve/caps/redirect, tuning/device_map/
+   diagnostics enumeration, pipeline fan-outs, CK gate, gdn
+   role_storage, graph arms, tests; (d) verify - 4-shape checks,
+   solo-rocm smoke + MTP serve on hip hw, parity bench vs
+   pre-cutover binary, prod re-validation protocol with user-owned
+   prod restart. Prod :1235 untouched until (d).
+   STATUS 2026-10-07: (a) DONE (candle 071c650d, 4-shape green).
+   (b)+(c) DONE compile-side: mistral.rs-quant/-paged-attn/-core
+   all check green in solo-rocm (10 compiler-guided rounds; the
+   inventory: quant 17 files incl. hqq restructures + gptq cuda
+   gating + gemv stub; core 15+ files incl. gdn 7k-line re-key,
+   ops.rs ~180 gates, speculative_rejection full re-gate - hip
+   twins rocm, Cuda items cuda, dispatchers split 3-way, so
+   solo-rocm MTP verify NOW ROUTES TO HIP; moe/cuda role re-key;
+   graph_role/CK/moe.rs hip re-keys; memory_usage pool_backend
+   alias; diagnostics/device_map fan-outs; 5 pipeline fan-outs
+   role-typed). Known solo-rocm behavior deltas, all loud-fallback:
+   fused FP8 GLU quantize -> unfused path (mirrors dual hip role);
+   gemv -> plain GEMM (mirrors dual); hqq bitpack -> CPU pack at
+   load (dequant stays device-side). Full 4-shape matrix
+   verification in flight; then hardware proof on the APU.
 4. Vulkan: future third shell; the include!-body pattern is the
    extension point. No work yet.
 

@@ -33,10 +33,10 @@ pub(crate) fn managed_weights_enabled() -> bool {
 // Activations and intermediates keep using Tensor::from_slice/from_vec.
 fn tensor_from_host<T: WithDType>(data: &[T], shape: &[usize], device: &Device) -> Result<Tensor> {
     #[cfg(all(feature = "rocm", not(feature = "cuda")))]
-    if let Device::Cuda(dev) = device {
+    if let Device::Hip(dev) = device {
         if managed_weights_enabled() {
             let storage = dev.storage_from_slice_managed(data)?;
-            return Ok(Tensor::from((Storage::Cuda(storage), shape)));
+            return Ok(Tensor::from((Storage::Hip(storage), shape)));
         }
     }
     Tensor::from_slice(data, shape, device)
@@ -236,7 +236,7 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
             };
             Storage::Cuda(storage)
         }
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         Device::Hip(device) => {
             let mut slice = unsafe { device.alloc::<u8>(data.len())? };
             device.memcpy_htod(data, &mut slice)?;

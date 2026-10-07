@@ -1563,7 +1563,15 @@ impl<'a> IndexedMoeLoraDecodeHip<'a> {
     }
 }
 
+#[cfg(all(feature = "cuda", feature = "rocm"))]
 use candle_core::cuda::{cudarc::driver::CudaSlice as NvCudaSlice, CudaDevice as NvCudaDevice};
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::role::backend::{
+    cudarc::driver::CudaSlice as NvCudaSlice, CudaDevice as NvCudaDevice,
+};
 
 #[allow(dead_code)]
 pub struct IndexedMoeRouting<'a> {

@@ -56,15 +56,12 @@ pub(crate) fn cuda_topk_ranked_packed_max_k(vocab: usize) -> Option<usize> {
 
 /// Wrap the role storage into the `Storage` variant for this build shape:
 /// `Cuda` in single-vendor builds, `Hip` in dual builds.
-#[cfg(all(
-    any(feature = "cuda", feature = "rocm"),
-    not(all(feature = "cuda", feature = "rocm"))
-))]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 #[inline]
 fn role_storage(s: candle_core::CudaStorage) -> candle_core::Storage {
     candle_core::Storage::Cuda(s)
 }
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 #[inline]
 fn role_storage(s: candle_core::role::RoleStorage) -> candle_core::Storage {
     candle_core::Storage::Hip(s)
@@ -94,9 +91,9 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
 
     let (storage, _layout) = input.storage_and_layout();
     let storage = match &*storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => candle_core::bail!("cuda_topk requires CUDA tensor"),
     };
@@ -401,22 +398,22 @@ pub fn moe_router_gemv(xs: &Tensor, w: &Tensor) -> Result<Option<Tensor>> {
     let stream_raw = stream.cu_stream() as i64;
 
     let (xs_storage, xs_layout) = xs.storage_and_layout();
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     let candle_core::Storage::Cuda(xs_cuda) = &*xs_storage
     else {
         candle_core::bail!("moe_router_gemv requires CUDA xs");
     };
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     let xs_cuda = (&*xs_storage)
         .as_role_storage()
         .map_err(|_| candle_core::Error::msg("moe_router_gemv requires CUDA xs"))?;
     let (w_storage, w_layout) = w.storage_and_layout();
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     let candle_core::Storage::Cuda(w_cuda) = &*w_storage
     else {
         candle_core::bail!("moe_router_gemv requires CUDA weights");
     };
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     let w_cuda = (&*w_storage)
         .as_role_storage()
         .map_err(|_| candle_core::Error::msg("moe_router_gemv requires CUDA weights"))?;
@@ -551,9 +548,9 @@ pub fn cuda_moe_router_topk(
 
     let (logits_storage, _logits_layout) = logits.storage_and_layout();
     let logits_storage = match &*logits_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => candle_core::bail!("cuda_moe_router_topk requires CUDA logits"),
     };
@@ -583,9 +580,9 @@ pub fn cuda_moe_router_topk(
                 &selection_bias_storage_and_layout
             {
                 let storage = match &**storage {
-                    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                     candle_core::Storage::Cuda(s) => s,
-                    #[cfg(all(feature = "cuda", feature = "rocm"))]
+                    #[cfg(feature = "rocm")]
                     candle_core::Storage::Hip(s) => s,
                     _ => candle_core::bail!("cuda_moe_router_topk requires CUDA selection_bias"),
                 };
@@ -601,9 +598,9 @@ pub fn cuda_moe_router_topk(
             let (expert_scale_ptr, _expert_scale_guard) =
                 if let Some((storage, _layout)) = &expert_scale_storage_and_layout {
                     let storage = match &**storage {
-                        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                         candle_core::Storage::Cuda(s) => s,
-                        #[cfg(all(feature = "cuda", feature = "rocm"))]
+                        #[cfg(feature = "rocm")]
                         candle_core::Storage::Hip(s) => s,
                         _ => candle_core::bail!("cuda_moe_router_topk requires CUDA expert_scale"),
                     };
@@ -710,9 +707,9 @@ pub fn cuda_topk_logits_f32(
 
     let (storage, layout) = input.storage_and_layout();
     let storage = match &*storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => candle_core::bail!("cuda_topk_logits_f32 requires CUDA tensor"),
     };
@@ -866,9 +863,9 @@ pub fn cuda_topk_logits_f32_packed(
 
     let (storage, layout) = input.storage_and_layout();
     let storage = match &*storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => candle_core::bail!("cuda_topk_logits_f32_packed requires CUDA tensor"),
     };
@@ -1018,9 +1015,9 @@ impl CudaTopKLogitsPackedWorkspace {
         let packed_elems = capacity_rows
             .checked_mul(packed_width)
             .ok_or_else(|| candle_core::Error::msg("CUDA top-k packed workspace overflow"))?;
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         let device = candle_core::Device::Cuda(dev.clone());
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         let device = candle_core::Device::Hip(dev.clone());
         Ok(Self {
             location: dev.location(),
@@ -1106,9 +1103,9 @@ impl CudaRankedTopKPackedWorkspace {
             .checked_mul(capacity_k)
             .and_then(|elems| elems.checked_mul(2))
             .ok_or_else(|| candle_core::Error::msg("CUDA ranked top-k packed overflow"))?;
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         let device = candle_core::Device::Cuda(dev.clone());
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         let device = candle_core::Device::Hip(dev.clone());
         Ok(Self {
             location: dev.location(),
@@ -1244,17 +1241,17 @@ pub(crate) fn cuda_topk_logits_packed_batched_with_workspace(
 
     let (input_storage, input_layout) = input.storage_and_layout();
     let input_storage = match &*input_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA logits"),
     };
     let (temperature_storage, temperature_layout) = inverse_temperatures.storage_and_layout();
     let temperature_storage = match &*temperature_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA inverse temperatures"),
     };
@@ -1297,12 +1294,12 @@ pub(crate) fn cuda_topk_logits_packed_batched_with_workspace(
     };
     let (temperature_ptr, temperature_guard) = temperature_slice.device_ptr(&stream);
     let (block_values_storage_guard, block_values_layout) = block_values.storage_and_layout();
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     let candle_core::Storage::Cuda(block_values_storage) = &*block_values_storage_guard
     else {
         unreachable!("CUDA top-k workspace values are CUDA")
     };
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     let block_values_storage = (&*block_values_storage_guard)
         .as_role_storage()
         .expect("CUDA workspace storage");
@@ -1313,12 +1310,12 @@ pub(crate) fn cuda_topk_logits_packed_batched_with_workspace(
     let block_values_ptr =
         unsafe { (block_values_ptr as *mut f32).add(block_values_layout.start_offset()) };
     let (block_indices_storage_guard, block_indices_layout) = block_indices.storage_and_layout();
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     let candle_core::Storage::Cuda(block_indices_storage) = &*block_indices_storage_guard
     else {
         unreachable!("CUDA top-k workspace indices are CUDA")
     };
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     let block_indices_storage = (&*block_indices_storage_guard)
         .as_role_storage()
         .expect("CUDA workspace storage");
@@ -1329,12 +1326,12 @@ pub(crate) fn cuda_topk_logits_packed_batched_with_workspace(
     let block_indices_ptr =
         unsafe { (block_indices_ptr as *mut u32).add(block_indices_layout.start_offset()) };
     let (block_maxes_storage, block_maxes_layout) = block_maxes.storage_and_layout();
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     let candle_core::Storage::Cuda(block_maxes_storage) = &*block_maxes_storage
     else {
         unreachable!("CUDA top-k workspace maxima are CUDA")
     };
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     let block_maxes_storage = (&*block_maxes_storage)
         .as_role_storage()
         .expect("CUDA workspace storage");
@@ -1345,12 +1342,12 @@ pub(crate) fn cuda_topk_logits_packed_batched_with_workspace(
     let block_maxes_ptr =
         unsafe { (block_maxes_ptr as *mut f32).add(block_maxes_layout.start_offset()) };
     let (block_sums_storage, block_sums_layout) = block_sums.storage_and_layout();
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     let candle_core::Storage::Cuda(block_sums_storage) = &*block_sums_storage
     else {
         unreachable!("CUDA top-k workspace sums are CUDA")
     };
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     let block_sums_storage = (&*block_sums_storage)
         .as_role_storage()
         .expect("CUDA workspace storage");
@@ -1361,12 +1358,12 @@ pub(crate) fn cuda_topk_logits_packed_batched_with_workspace(
     let block_sums_ptr =
         unsafe { (block_sums_ptr as *mut f32).add(block_sums_layout.start_offset()) };
     let (packed_storage_guard, packed_layout) = packed_dst.storage_and_layout();
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     let candle_core::Storage::Cuda(packed_storage) = &*packed_storage_guard
     else {
         unreachable!("CUDA top-k packed workspace is CUDA")
     };
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     let packed_storage = (&*packed_storage_guard)
         .as_role_storage()
         .expect("CUDA workspace storage");
@@ -1509,9 +1506,9 @@ pub(crate) fn cuda_topk_ranked_packed_batched_with_workspace(
 
     let (input_storage, input_layout) = input.storage_and_layout();
     let input_storage = match &*input_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA logits"),
     };
@@ -1548,12 +1545,12 @@ pub(crate) fn cuda_topk_ranked_packed_batched_with_workspace(
         _ => candle_core::bail!("{OP} logits dtype mismatch"),
     };
     let (block_values_storage_guard, block_values_layout) = block_values.storage_and_layout();
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     let candle_core::Storage::Cuda(block_values_storage) = &*block_values_storage_guard
     else {
         unreachable!("CUDA ranked top-k workspace values are CUDA")
     };
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     let block_values_storage = (&*block_values_storage_guard)
         .as_role_storage()
         .expect("CUDA workspace storage");
@@ -1564,12 +1561,12 @@ pub(crate) fn cuda_topk_ranked_packed_batched_with_workspace(
     let block_values_ptr =
         unsafe { (block_values_ptr as *mut f32).add(block_values_layout.start_offset()) };
     let (block_indices_storage_guard, block_indices_layout) = block_indices.storage_and_layout();
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     let candle_core::Storage::Cuda(block_indices_storage) = &*block_indices_storage_guard
     else {
         unreachable!("CUDA ranked top-k workspace indices are CUDA")
     };
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     let block_indices_storage = (&*block_indices_storage_guard)
         .as_role_storage()
         .expect("CUDA workspace storage");
@@ -1580,12 +1577,12 @@ pub(crate) fn cuda_topk_ranked_packed_batched_with_workspace(
     let block_indices_ptr =
         unsafe { (block_indices_ptr as *mut u32).add(block_indices_layout.start_offset()) };
     let (packed_storage_guard, packed_layout) = packed_dst.storage_and_layout();
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     let candle_core::Storage::Cuda(packed_storage) = &*packed_storage_guard
     else {
         unreachable!("CUDA ranked top-k packed workspace is CUDA")
     };
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     let packed_storage = (&*packed_storage_guard)
         .as_role_storage()
         .expect("CUDA workspace storage");
@@ -1595,12 +1592,12 @@ pub(crate) fn cuda_topk_ranked_packed_batched_with_workspace(
     let (packed_ptr, packed_guard) = packed_slice.device_ptr(&stream);
     let packed_ptr = unsafe { (packed_ptr as *mut f32).add(packed_layout.start_offset()) };
     let (radix_storage_guard, radix_layout) = radix_state.storage_and_layout();
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     let candle_core::Storage::Cuda(radix_storage) = &*radix_storage_guard
     else {
         unreachable!("CUDA ranked top-k radix workspace is CUDA")
     };
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     let radix_storage = (&*radix_storage_guard)
         .as_role_storage()
         .expect("CUDA workspace storage");
@@ -1781,41 +1778,41 @@ pub(crate) fn cuda_dflash_greedy_select(
 
     let (packed_storage, packed_layout) = packed_topk.storage_and_layout();
     let packed_storage = match &*packed_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA tensors"),
     };
     let (hidden_storage, hidden_layout) = projected_hidden.storage_and_layout();
     let hidden_storage = match &*hidden_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA tensors"),
     };
     let (predecessor_storage, predecessor_layout) = predecessor_codebook.storage_and_layout();
     let predecessor_storage = match &*predecessor_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA tensors"),
     };
     let (successor_storage, successor_layout) = successor_codebook.storage_and_layout();
     let successor_storage = match &*successor_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA tensors"),
     };
     let (anchor_storage, anchor_layout) = anchors.storage_and_layout();
     let anchor_storage = match &*anchor_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA tensors"),
     };
@@ -2038,57 +2035,57 @@ pub(crate) fn cuda_dflash_sample_select(
 
     let (packed_storage, packed_layout) = packed_topk.storage_and_layout();
     let packed_storage = match &*packed_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA tensors"),
     };
     let (hidden_storage, hidden_layout) = projected_hidden.storage_and_layout();
     let hidden_storage = match &*hidden_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA tensors"),
     };
     let (predecessor_storage, predecessor_layout) = predecessor_codebook.storage_and_layout();
     let predecessor_storage = match &*predecessor_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA tensors"),
     };
     let (successor_storage, successor_layout) = successor_codebook.storage_and_layout();
     let successor_storage = match &*successor_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA tensors"),
     };
     let (anchor_storage, anchor_layout) = anchors.storage_and_layout();
     let anchor_storage = match &*anchor_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA tensors"),
     };
     let (temperature_storage, temperature_layout) = inverse_temperatures.storage_and_layout();
     let temperature_storage = match &*temperature_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA tensors"),
     };
     let (uniform_storage, uniform_layout) = uniforms.storage_and_layout();
     let uniform_storage = match &*uniform_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA tensors"),
     };
@@ -2266,9 +2263,9 @@ pub(crate) fn cuda_top1_logits_f32_packed_batched(
 
     let (input_storage, input_layout) = input.storage_and_layout();
     let input_storage = match &*input_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA logits"),
     };
@@ -2402,9 +2399,9 @@ pub(crate) fn cuda_categorical_logits_f32_packed_batched(
 
     let (input_storage, input_layout) = input.storage_and_layout();
     let input_storage = match &*input_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA logits"),
     };
@@ -2413,9 +2410,9 @@ pub(crate) fn cuda_categorical_logits_f32_packed_batched(
     };
     let (temperature_storage, temperature_layout) = inverse_temperatures.storage_and_layout();
     let temperature_storage = match &*temperature_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA inverse temperatures"),
     };
@@ -2424,9 +2421,9 @@ pub(crate) fn cuda_categorical_logits_f32_packed_batched(
     };
     let (uniform_storage, uniform_layout) = uniforms.storage_and_layout();
     let uniform_storage = match &*uniform_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA uniforms"),
     };
@@ -2851,12 +2848,12 @@ impl CudaAsyncTokenRing {
 
         let (token_ptr, token_end_ptr) = {
             let (token_storage, token_layout) = device_tokens.storage_and_layout();
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             let candle_core::Storage::Cuda(token_storage) = &*token_storage
             else {
                 unreachable!("token destination device was checked above")
             };
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             let token_storage = (&*token_storage)
                 .as_role_storage()
                 .expect("CUDA workspace storage");
@@ -2945,12 +2942,12 @@ impl CudaAsyncTokenRing {
                 .record(&stream)
                 .map_err(candle_core::Error::wrap)?;
             let (token_storage, token_layout) = reservation.device_tokens.storage_and_layout();
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             let candle_core::Storage::Cuda(token_storage) = &*token_storage
             else {
                 unreachable!("reserved token destination is CUDA")
             };
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             let token_storage = (&*token_storage)
                 .as_role_storage()
                 .expect("CUDA workspace storage");
@@ -3207,9 +3204,9 @@ fn cuda_top1_logits_submit_inner(
     let nblocks = ncols.div_ceil(CUDA_TOPK_CHUNK_SIZE);
     let (storage, layout) = input.storage_and_layout();
     let storage = match &*storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => candle_core::bail!("{op} requires CUDA logits"),
     };
@@ -3254,12 +3251,12 @@ fn cuda_top1_logits_submit_inner(
     let slot_index = reservation.slot;
     let device_tokens_storage = reservation.device_tokens.clone();
     let (token_storage, token_layout) = device_tokens_storage.storage_and_layout();
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     let candle_core::Storage::Cuda(token_storage) = &*token_storage
     else {
         unreachable!("reserved token destination is CUDA")
     };
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     let token_storage = (&*token_storage)
         .as_role_storage()
         .expect("CUDA workspace storage");
@@ -3736,9 +3733,9 @@ fn cuda_topk_sampling_submit_inner(
     let max_k = validate_cuda_topk_sampling_params(params, *rows, *vocab, op)?;
     let (storage, _) = input.storage_and_layout();
     let storage = match &*storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("{op} requires CUDA logits"),
     };
@@ -3774,12 +3771,12 @@ fn cuda_topk_sampling_submit_inner(
         copy_cuda_topk_sampling_params(dev, slot, params)?;
 
         let (packed_storage, packed_layout) = ranked.packed.storage_and_layout();
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         let candle_core::Storage::Cuda(packed_storage) = &*packed_storage
         else {
             unreachable!("ranked top-k output is CUDA")
         };
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         let packed_storage = (&*packed_storage)
             .as_role_storage()
             .expect("CUDA workspace storage");
@@ -3787,12 +3784,12 @@ fn cuda_topk_sampling_submit_inner(
             unreachable!("ranked top-k output is F32")
         };
         let (token_storage, token_layout) = reservation.device_tokens.storage_and_layout();
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         let candle_core::Storage::Cuda(token_storage) = &*token_storage
         else {
             unreachable!("reserved token destination is CUDA")
         };
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         let token_storage = (&*token_storage)
             .as_role_storage()
             .expect("CUDA workspace storage");
@@ -3939,7 +3936,7 @@ impl candle_core::CustomOp1 for ArgSort {
 
     #[allow(clippy::cast_possible_truncation)]
     #[cfg(any(feature = "cuda", feature = "rocm"))]
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn cuda_fwd(
         &self,
         storage: &candle_core::CudaStorage,
@@ -4031,7 +4028,7 @@ impl candle_core::CustomOp1 for ArgSort {
         };
         Ok((dst_ret, layout.shape().clone()))
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     fn hip_fwd(
         &self,
         storage: &candle_core::HipStorage,
@@ -4305,9 +4302,9 @@ pub fn cuda_apply_sparse_penalties_f32(
 
     let (input_storage, input_layout) = input.storage_and_layout();
     let input_storage = match &*input_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => candle_core::bail!("cuda_apply_sparse_penalties_f32 requires CUDA logits"),
     };
@@ -4317,9 +4314,9 @@ pub fn cuda_apply_sparse_penalties_f32(
 
     let (token_storage, token_layout) = token_ids.storage_and_layout();
     let token_storage = match &*token_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => candle_core::bail!("cuda_apply_sparse_penalties_f32 requires CUDA token ids"),
     };
@@ -4329,9 +4326,9 @@ pub fn cuda_apply_sparse_penalties_f32(
 
     let (count_storage, count_layout) = counts.storage_and_layout();
     let count_storage = match &*count_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => candle_core::bail!("cuda_apply_sparse_penalties_f32 requires CUDA counts"),
     };
@@ -4441,9 +4438,9 @@ pub fn cuda_apply_sparse_logits_bias_f32(
 
     let (input_storage, input_layout) = input.storage_and_layout();
     let input_storage = match &*input_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => candle_core::bail!("cuda_apply_sparse_logits_bias_f32 requires CUDA logits"),
     };
@@ -4453,9 +4450,9 @@ pub fn cuda_apply_sparse_logits_bias_f32(
 
     let (token_storage, token_layout) = token_ids.storage_and_layout();
     let token_storage = match &*token_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => candle_core::bail!("cuda_apply_sparse_logits_bias_f32 requires CUDA token ids"),
     };
@@ -4465,9 +4462,9 @@ pub fn cuda_apply_sparse_logits_bias_f32(
 
     let (bias_storage, bias_layout) = biases.storage_and_layout();
     let bias_storage = match &*bias_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => candle_core::bail!("cuda_apply_sparse_logits_bias_f32 requires CUDA biases"),
     };
@@ -4539,7 +4536,7 @@ pub(crate) fn cuda_apply_causal_mask_f32(
             candle_core::bail!("causal-mask-f32 requires CUDA storage")
         }
 
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         fn cuda_fwd(
             &self,
             storage: &mut candle_core::CudaStorage,
@@ -4581,7 +4578,7 @@ pub(crate) fn cuda_apply_causal_mask_f32(
             drop(scores_guard);
             Ok(())
         }
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         fn hip_fwd(
             &self,
             storage: &mut candle_core::HipStorage,
@@ -4758,18 +4755,18 @@ pub(crate) fn try_cuda_rms_norm_strided_4d(
         return Ok(None);
     }
     let input_storage = match &*input_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
     let weight = weight.contiguous()?;
     let (weight_storage, weight_layout) = weight.storage_and_layout();
     let weight_storage = match &*weight_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
@@ -4924,25 +4921,25 @@ pub fn cuda_rms_norm_residual(
 
     let (input_storage, input_layout) = input.storage_and_layout();
     let input_storage = match &*input_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => candle_core::bail!("cuda_rms_norm_residual requires CUDA input"),
     };
     let (residual_storage, residual_layout) = residual.storage_and_layout();
     let residual_storage = match &*residual_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => candle_core::bail!("cuda_rms_norm_residual requires CUDA residual"),
     };
     let (weight_storage, weight_layout) = weight.storage_and_layout();
     let weight_storage = match &*weight_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => candle_core::bail!("cuda_rms_norm_residual requires CUDA weight"),
     };
@@ -4967,9 +4964,9 @@ pub fn cuda_rms_norm_residual(
             let (scale_ptr, scale_guard) =
                 if let Some((scale_storage, scale_layout)) = &scale_storage_and_layout {
                     let scale_storage = match &**scale_storage {
-                        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                         candle_core::Storage::Cuda(s) => s,
-                        #[cfg(all(feature = "cuda", feature = "rocm"))]
+                        #[cfg(feature = "rocm")]
                         candle_core::Storage::Hip(s) => s,
                         _ => candle_core::bail!("cuda_rms_norm_residual requires CUDA scale"),
                     };
@@ -5097,25 +5094,25 @@ pub fn cuda_add_rms_norm(
 
     let (input_storage, input_layout) = input.storage_and_layout();
     let input_storage = match &*input_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("cuda_add_rms_norm requires CUDA input"),
     };
     let (residual_storage, residual_layout) = residual.storage_and_layout();
     let residual_storage = match &*residual_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("cuda_add_rms_norm requires CUDA residual"),
     };
     let (weight_storage, weight_layout) = weight.storage_and_layout();
     let weight_storage = match &*weight_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => candle_core::bail!("cuda_add_rms_norm requires CUDA weight"),
     };
@@ -5483,25 +5480,25 @@ pub fn cuda_rms_norm_residual_then_rms_norm(
 
     let (input_storage, input_layout) = input.storage_and_layout();
     let input_storage = match &*input_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => candle_core::bail!("cuda_rms_norm_residual_then_rms_norm requires CUDA input"),
     };
     let (residual_storage, residual_layout) = residual.storage_and_layout();
     let residual_storage = match &*residual_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => candle_core::bail!("cuda_rms_norm_residual_then_rms_norm requires CUDA residual"),
     };
     let (residual_weight_storage, residual_weight_layout) = residual_weight.storage_and_layout();
     let residual_weight_storage = match &*residual_weight_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => {
             candle_core::bail!("cuda_rms_norm_residual_then_rms_norm requires CUDA residual weight")
@@ -5509,9 +5506,9 @@ pub fn cuda_rms_norm_residual_then_rms_norm(
     };
     let (norm_weight_storage, norm_weight_layout) = norm_weight.storage_and_layout();
     let norm_weight_storage = match &*norm_weight_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => candle_core::bail!("cuda_rms_norm_residual_then_rms_norm requires CUDA norm weight"),
     };
@@ -5545,9 +5542,9 @@ pub fn cuda_rms_norm_residual_then_rms_norm(
                 &scale_storage_and_layout
             {
                 let scale_storage = match &**scale_storage {
-                    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                     candle_core::Storage::Cuda(s) => s,
-                    #[cfg(all(feature = "cuda", feature = "rocm"))]
+                    #[cfg(feature = "rocm")]
                     candle_core::Storage::Hip(s) => s,
                     _ => candle_core::bail!(
                         "cuda_rms_norm_residual_then_rms_norm requires CUDA scale"
@@ -5770,35 +5767,35 @@ pub(crate) fn try_cuda_qk_rms_norm_rope(
 
     let (q_storage, q_layout) = q.storage_and_layout();
     let q_storage = match &*q_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
     let k_storage_and_layout = k.map(Tensor::storage_and_layout);
     let (q_weight_storage, q_weight_layout) = q_weight.storage_and_layout();
     let q_weight_storage = match &*q_weight_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
     let k_weight_storage_and_layout = k_weight.as_ref().map(Tensor::storage_and_layout);
     let (cos_storage, cos_layout) = cos.storage_and_layout();
     let cos_storage = match &*cos_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
     let (sin_storage, sin_layout) = sin.storage_and_layout();
     let sin_storage = match &*sin_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
@@ -5857,9 +5854,9 @@ pub(crate) fn try_cuda_qk_rms_norm_rope(
             let mut k_guard = None;
             let k_ptr = if let Some((k_storage, k_layout)) = &k_storage_and_layout {
                 let k_storage = match &**k_storage {
-                    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                     candle_core::Storage::Cuda(s) => s,
-                    #[cfg(all(feature = "cuda", feature = "rocm"))]
+                    #[cfg(feature = "rocm")]
                     candle_core::Storage::Hip(s) => s,
                     _ => return Ok(None),
                 };
@@ -5877,9 +5874,9 @@ pub(crate) fn try_cuda_qk_rms_norm_rope(
             let k_weight_ptr =
                 if let Some((k_weight_storage, k_weight_layout)) = &k_weight_storage_and_layout {
                     let k_weight_storage = match &**k_weight_storage {
-                        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                         candle_core::Storage::Cuda(s) => s,
-                        #[cfg(all(feature = "cuda", feature = "rocm"))]
+                        #[cfg(feature = "rocm")]
                         candle_core::Storage::Hip(s) => s,
                         _ => return Ok(None),
                     };
@@ -6009,17 +6006,17 @@ pub(crate) fn try_cuda_rope_sincos_positions(
     let inv_freq = inv_freq.contiguous()?;
     let (positions_storage, positions_layout) = positions.storage_and_layout();
     let positions_storage = match &*positions_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => return Ok(None),
     };
     let (inv_freq_storage, inv_freq_layout) = inv_freq.storage_and_layout();
     let inv_freq_storage = match &*inv_freq_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage,
         _ => return Ok(None),
     };
@@ -6208,43 +6205,43 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
 
     let (q_storage, q_layout) = q.storage_and_layout();
     let q_storage = match &*q_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
     let k_storage_and_layout = k.map(Tensor::storage_and_layout);
     let (q_weight_storage, q_weight_layout) = q_weight.storage_and_layout();
     let q_weight_storage = match &*q_weight_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
     let k_weight_storage_and_layout = k_weight.as_ref().map(Tensor::storage_and_layout);
     let (cos_storage, cos_layout) = cos.storage_and_layout();
     let cos_storage = match &*cos_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
     let (sin_storage, sin_layout) = sin.storage_and_layout();
     let sin_storage = match &*sin_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
     let (positions_storage, positions_layout) = positions.storage_and_layout();
     let positions_storage = match &*positions_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
@@ -6303,9 +6300,9 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
             let mut k_guard = None;
             let k_ptr = if let Some((k_storage, k_layout)) = &k_storage_and_layout {
                 let k_storage = match &**k_storage {
-                    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                     candle_core::Storage::Cuda(s) => s,
-                    #[cfg(all(feature = "cuda", feature = "rocm"))]
+                    #[cfg(feature = "rocm")]
                     candle_core::Storage::Hip(s) => s,
                     _ => return Ok(None),
                 };
@@ -6323,9 +6320,9 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
             let k_weight_ptr =
                 if let Some((k_weight_storage, k_weight_layout)) = &k_weight_storage_and_layout {
                     let k_weight_storage = match &**k_weight_storage {
-                        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                         candle_core::Storage::Cuda(s) => s,
-                        #[cfg(all(feature = "cuda", feature = "rocm"))]
+                        #[cfg(feature = "rocm")]
                         candle_core::Storage::Hip(s) => s,
                         _ => return Ok(None),
                     };
@@ -6539,73 +6536,73 @@ pub(crate) fn try_cuda_qkv_rms_norm_rope_positions(
 
     let (q_storage, q_layout) = q.storage_and_layout();
     let q_storage = match &*q_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
     let (k_storage, k_layout) = k.storage_and_layout();
     let k_storage = match &*k_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
     let (v_storage, v_layout) = v.storage_and_layout();
     let v_storage = match &*v_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
     let (q_weight_storage, q_weight_layout) = q_weight.storage_and_layout();
     let q_weight_storage = match &*q_weight_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
     let (k_weight_storage, k_weight_layout) = k_weight.storage_and_layout();
     let k_weight_storage = match &*k_weight_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
     let (v_weight_storage, v_weight_layout) = v_weight.storage_and_layout();
     let v_weight_storage = match &*v_weight_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
     let (cos_storage, cos_layout) = cos.storage_and_layout();
     let cos_storage = match &*cos_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
     let (sin_storage, sin_layout) = sin.storage_and_layout();
     let sin_storage = match &*sin_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };
     let (positions_storage, positions_layout) = positions.storage_and_layout();
     let positions_storage = match &*positions_storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(s) => s,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(s) => s,
         _ => return Ok(None),
     };

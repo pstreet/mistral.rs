@@ -194,7 +194,7 @@ pub fn is_integrated_gpu(device: &Device) -> bool {
     match device {
         #[cfg(feature = "metal")]
         Device::Metal(_) => true,
-        #[cfg(any(feature = "cuda", feature = "rocm"))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         Device::Cuda(dev) => {
             use candle_core::cuda::cudarc::driver::{result, sys};
             let ordinal = dev.cuda_stream().context().ordinal();
@@ -211,6 +211,12 @@ pub fn is_integrated_gpu(device: &Device) -> bool {
                 .map(|v| v != 0)
                 .unwrap_or(false)
             }
+        }
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        Device::Hip(_) => {
+            // Host-visible APU memory is the norm on RDNA iGPUs; treat every
+            // hip device as integrated (conservative for memory accounting).
+            true
         }
         _ => false,
     }

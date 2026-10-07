@@ -5,25 +5,17 @@ use candle_core::GpuArch;
 use candle_core::{DType, Device, Result, Tensor};
 // Role wrapper types: the compiled vendor in single-vendor builds, the AMD
 // role in dual builds (the GDN C kernels are hipcc-built).
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 use candle_core::role::{RoleDevice as CudaDevice, RoleStorage as CudaStorage};
-#[cfg(all(
-    any(feature = "cuda", feature = "rocm"),
-    not(all(feature = "cuda", feature = "rocm"))
-))]
-use candle_core::{CudaDevice, CudaStorage};
 
 /// Wrap the role storage into the `Storage` enum variant for this build shape:
 /// `Cuda` in single-vendor builds, `Hip` in dual builds.
-#[cfg(all(
-    any(feature = "cuda", feature = "rocm"),
-    not(all(feature = "cuda", feature = "rocm"))
-))]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 #[inline]
 fn role_storage(s: CudaStorage) -> candle_core::Storage {
     candle_core::Storage::Cuda(s)
 }
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 #[inline]
 fn role_storage(s: CudaStorage) -> candle_core::Storage {
     candle_core::Storage::Hip(s)
@@ -87,8 +79,15 @@ pub(crate) fn gdn_device_supported(device: &Device) -> bool {
         // kills graph capture). Loud plugin error if a kernel is missing.
         return device.is_cuda();
     }
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
-    mistralrs_quant::device_has_fused_ops(device)
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    {
+        // AMD role, solo shape: the hipcc companion serves GDN.
+        return device.is_hip();
+    }
+    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
+    {
+        false
+    }
 }
 pub(crate) const GDN_DECODE_K_DIM: usize = 128;
 pub(crate) const GDN_DECODE_V_DIM: usize = 128;
@@ -614,11 +613,11 @@ fn gdn_cuda_device_properties(dev: &CudaDevice) -> Result<GdnCudaDevicePropertie
         .filter(|count| *count > 0)
         .ok_or_else(|| candle_core::Error::msg("CUDA device reported no multiprocessors"))?;
     let properties = GdnCudaDeviceProperties {
-        // Single-vendor builds resolve through the compiled vendor; dual
-        // builds resolve the AMD role directly.
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        // Single-vendor builds resolve through the compiled vendor; every
+        // rocm build resolves the hip role directly.
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         arch: GpuArch::resolve(dev)?,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         arch: GpuArch::resolve_hip(dev)?,
         multiprocessor_count,
     };
@@ -682,9 +681,9 @@ fn cuda_recurrent_state_ptr(tensor: &Tensor, name: &str) -> Result<(*mut core::f
     let (pointer, dtype) = match tensor.dtype() {
         DType::F16 => {
             let storage = match &*storage {
-                #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                 candle::Storage::Cuda(storage) => storage.as_cuda_slice::<half::f16>()?,
-                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                #[cfg(feature = "rocm")]
                 candle::Storage::Hip(storage) => storage.as_cuda_slice::<half::f16>()?,
                 _ => candle::bail!("{name} must be a CUDA tensor"),
             };
@@ -695,9 +694,9 @@ fn cuda_recurrent_state_ptr(tensor: &Tensor, name: &str) -> Result<(*mut core::f
         }
         DType::BF16 => {
             let storage = match &*storage {
-                #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                 candle::Storage::Cuda(storage) => storage.as_cuda_slice::<half::bf16>()?,
-                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                #[cfg(feature = "rocm")]
                 candle::Storage::Hip(storage) => storage.as_cuda_slice::<half::bf16>()?,
                 _ => candle::bail!("{name} must be a CUDA tensor"),
             };
@@ -708,9 +707,9 @@ fn cuda_recurrent_state_ptr(tensor: &Tensor, name: &str) -> Result<(*mut core::f
         }
         DType::F32 => {
             let storage = match &*storage {
-                #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                 candle::Storage::Cuda(storage) => storage.as_cuda_slice::<f32>()?,
-                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                #[cfg(feature = "rocm")]
                 candle::Storage::Hip(storage) => storage.as_cuda_slice::<f32>()?,
                 _ => candle::bail!("{name} must be a CUDA tensor"),
             };
@@ -737,9 +736,9 @@ fn cuda_read_ptr_with_guard<'a, T: candle_core::role::backend::CudaDType + 'a>(
     use candle_core::role::backend::cudarc::driver::DevicePtr;
 
     let slice = match storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<T>()?,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<T>()?,
         _ => candle_core::bail!("{name} must be CUDA"),
     };
@@ -774,7 +773,7 @@ where
         candle_core::bail!("{} must be CUDA", self.name)
     }
 
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn cuda_fwd(
         &self,
         storage: &mut candle_core::CudaStorage,
@@ -797,7 +796,7 @@ where
         drop(guard);
         result
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     fn hip_fwd(
         &self,
         storage: &mut candle_core::HipStorage,
@@ -852,9 +851,9 @@ fn cuda_inplace_ptr_with_guard<'a, T: candle_core::role::backend::CudaDType + 'a
     candle_core::role::backend::cudarc::driver::SyncOnDrop<'a>,
 )> {
     let slice = match storage {
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<T>()?,
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<T>()?,
         _ => candle_core::bail!("{name} must be CUDA"),
     };
@@ -1415,9 +1414,9 @@ fn with_slot_indices<T>(
             let batch = slots.dim(0)?;
             let (s, l) = slots.storage_and_layout();
             let s = match &*s {
-                #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                 candle_core::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
-                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                #[cfg(feature = "rocm")]
                 candle_core::Storage::Hip(c) => c.as_cuda_slice::<u32>()?,
                 _ => candle_core::bail!("slot indices must be a cuda tensor"),
             };
@@ -1521,9 +1520,9 @@ fn launch_recurrence(
             let (s, l) = $t.storage_and_layout();
             let offset = l.start_offset();
             let s = match &*s {
-                #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                 candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                #[cfg(feature = "rocm")]
                 candle::Storage::Hip(c) => c.as_cuda_slice::<f32>()?,
                 _ => candle::bail!(concat!($name, " must be a cuda tensor")),
             };
@@ -1898,9 +1897,9 @@ pub fn causal_conv1d_cuda(
 
         let (x_s, x_l) = x.storage_and_layout();
         let x_s = match &*x_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("x must be a cuda tensor"),
         };
@@ -1909,9 +1908,9 @@ pub fn causal_conv1d_cuda(
 
         let (w_s, w_l) = weight.storage_and_layout();
         let w_s = match &*w_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("weight must be a cuda tensor"),
         };
@@ -1929,9 +1928,9 @@ pub fn causal_conv1d_cuda(
             {
                 let (cs_s, cs_l) = conv_state_new.storage_and_layout();
                 let cs_s = match &*cs_s {
-                    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                     candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-                    #[cfg(all(feature = "cuda", feature = "rocm"))]
+                    #[cfg(feature = "rocm")]
                     candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
                     _ => candle::bail!("conv_state must be a cuda tensor"),
                 };
@@ -1974,9 +1973,9 @@ pub fn causal_conv1d_cuda(
             };
             let (cs_s, cs_l) = conv_state.storage_and_layout();
             let cs_s = match &*cs_s {
-                #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                 candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                #[cfg(feature = "rocm")]
                 candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
                 _ => candle::bail!("conv_state must be a cuda tensor"),
             };
@@ -2117,9 +2116,9 @@ pub fn prepare_recurrence_inputs_cuda(
 
         let (mixed_s, mixed_l) = mixed_qkv.storage_and_layout();
         let mixed_s = match &*mixed_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("mixed_qkv must be a cuda tensor"),
         };
@@ -2127,9 +2126,9 @@ pub fn prepare_recurrence_inputs_cuda(
 
         let (b_s, b_l) = b.storage_and_layout();
         let b_s = match &*b_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("b must be a cuda tensor"),
         };
@@ -2137,9 +2136,9 @@ pub fn prepare_recurrence_inputs_cuda(
 
         let (a_s, a_l) = a.storage_and_layout();
         let a_s = match &*a_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("a must be a cuda tensor"),
         };
@@ -2147,9 +2146,9 @@ pub fn prepare_recurrence_inputs_cuda(
 
         let (alog_s, alog_l) = a_log.storage_and_layout();
         let alog_s = match &*alog_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<f32>()?,
             _ => candle::bail!("a_log must be a cuda tensor"),
         };
@@ -2157,9 +2156,9 @@ pub fn prepare_recurrence_inputs_cuda(
 
         let (dtb_s, dtb_l) = dt_bias.storage_and_layout();
         let dtb_s = match &*dtb_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<f32>()?,
             _ => candle::bail!("dt_bias must be a cuda tensor"),
         };
@@ -2364,7 +2363,7 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
         candle_core::bail!("FlashInfer GDN SM90 prefill requires CUDA storage")
     }
 
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn cuda_fwd(
         &self,
         state_storage: &mut candle_core::CudaStorage,
@@ -2381,9 +2380,9 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
 
         let (mixed_storage, mixed_layout) = self.mixed_qkv.storage_and_layout();
         let mixed_slice = match &*mixed_storage {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<half::bf16>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<half::bf16>()?,
             _ => candle_core::bail!("mixed_qkv must be a CUDA tensor"),
         };
@@ -2395,9 +2394,9 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
 
         let (b_storage, b_layout) = self.b.storage_and_layout();
         let b_slice = match &*b_storage {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<half::bf16>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<half::bf16>()?,
             _ => candle_core::bail!("b must be a CUDA tensor"),
         };
@@ -2408,9 +2407,9 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
 
         let (a_storage, a_layout) = self.a.storage_and_layout();
         let a_slice = match &*a_storage {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<half::bf16>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<half::bf16>()?,
             _ => candle_core::bail!("a must be a CUDA tensor"),
         };
@@ -2421,9 +2420,9 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
 
         let (a_log_storage, a_log_layout) = self.a_log.storage_and_layout();
         let a_log_slice = match &*a_log_storage {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<f32>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<f32>()?,
             _ => candle_core::bail!("a_log must be a CUDA tensor"),
         };
@@ -2432,9 +2431,9 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
 
         let (dt_bias_storage, dt_bias_layout) = self.dt_bias.storage_and_layout();
         let dt_bias_slice = match &*dt_bias_storage {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<f32>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<f32>()?,
             _ => candle_core::bail!("dt_bias must be a CUDA tensor"),
         };
@@ -2446,9 +2445,9 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
         let mut slots_guard = None;
         let slots_ptr = if let Some((storage, layout)) = &slots_storage_layout {
             let slice = match &**storage {
-                #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                 candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<u32>()?,
-                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                #[cfg(feature = "rocm")]
                 candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<u32>()?,
                 _ => candle_core::bail!("slot indices must be a CUDA tensor"),
             };
@@ -2513,7 +2512,7 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
         }
         Ok(())
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     fn hip_fwd(
         &self,
         state_storage: &mut candle_core::HipStorage,
@@ -2530,9 +2529,9 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
 
         let (mixed_storage, mixed_layout) = self.mixed_qkv.storage_and_layout();
         let mixed_slice = match &*mixed_storage {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<half::bf16>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<half::bf16>()?,
             _ => candle_core::bail!("mixed_qkv must be a CUDA tensor"),
         };
@@ -2544,9 +2543,9 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
 
         let (b_storage, b_layout) = self.b.storage_and_layout();
         let b_slice = match &*b_storage {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<half::bf16>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<half::bf16>()?,
             _ => candle_core::bail!("b must be a CUDA tensor"),
         };
@@ -2557,9 +2556,9 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
 
         let (a_storage, a_layout) = self.a.storage_and_layout();
         let a_slice = match &*a_storage {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<half::bf16>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<half::bf16>()?,
             _ => candle_core::bail!("a must be a CUDA tensor"),
         };
@@ -2570,9 +2569,9 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
 
         let (a_log_storage, a_log_layout) = self.a_log.storage_and_layout();
         let a_log_slice = match &*a_log_storage {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<f32>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<f32>()?,
             _ => candle_core::bail!("a_log must be a CUDA tensor"),
         };
@@ -2581,9 +2580,9 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
 
         let (dt_bias_storage, dt_bias_layout) = self.dt_bias.storage_and_layout();
         let dt_bias_slice = match &*dt_bias_storage {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<f32>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<f32>()?,
             _ => candle_core::bail!("dt_bias must be a CUDA tensor"),
         };
@@ -2595,9 +2594,9 @@ impl candle_core::InplaceOp1 for FlashInferGdnSm90Launch<'_> {
         let mut slots_guard = None;
         let slots_ptr = if let Some((storage, layout)) = &slots_storage_layout {
             let slice = match &**storage {
-                #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                 candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<u32>()?,
-                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                #[cfg(feature = "rocm")]
                 candle_core::Storage::Hip(storage) => storage.as_cuda_slice::<u32>()?,
                 _ => candle_core::bail!("slot indices must be a CUDA tensor"),
             };
@@ -3002,9 +3001,9 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
 
         let (mixed_s, mixed_l) = mixed_qkv.storage_and_layout();
         let mixed_s = match &*mixed_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("mixed_qkv must be a cuda tensor"),
         };
@@ -3014,9 +3013,9 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
 
         let (b_s, b_l) = b.storage_and_layout();
         let b_s = match &*b_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("b must be a cuda tensor"),
         };
@@ -3027,9 +3026,9 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
 
         let (a_s, a_l) = a.storage_and_layout();
         let a_s = match &*a_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("a must be a cuda tensor"),
         };
@@ -3040,9 +3039,9 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
 
         let (alog_s, alog_l) = a_log.storage_and_layout();
         let alog_s = match &*alog_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<f32>()?,
             _ => candle::bail!("a_log must be a cuda tensor"),
         };
@@ -3050,9 +3049,9 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
 
         let (dtb_s, dtb_l) = dt_bias.storage_and_layout();
         let dtb_s = match &*dtb_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<f32>()?,
             _ => candle::bail!("dt_bias must be a cuda tensor"),
         };
@@ -3269,9 +3268,9 @@ pub fn speculative_state_commit_cuda(commit: GdnSpeculativeStateCommit<'_>) -> R
             ($tensor:expr, $ty:ty, $name:literal) => {{
                 let (storage, layout) = $tensor.storage_and_layout();
                 let storage = match &*storage {
-                    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                     candle::Storage::Cuda(storage) => storage.as_cuda_slice::<$ty>()?,
-                    #[cfg(all(feature = "cuda", feature = "rocm"))]
+                    #[cfg(feature = "rocm")]
                     candle::Storage::Hip(storage) => storage.as_cuda_slice::<$ty>()?,
                     _ => candle::bail!(concat!($name, " must be a CUDA tensor")),
                 };
@@ -3508,34 +3507,34 @@ pub fn speculative_conv_checkpoints_cuda(
         let dev = x.device().as_role_device()?;
         let (x_storage, x_layout) = x.storage_and_layout();
         let x_storage = match &*x_storage {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(storage) => storage.as_cuda_slice::<T>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(storage) => storage.as_cuda_slice::<T>()?,
             _ => candle::bail!("GDN speculative convolution input must be CUDA"),
         };
         let x_strides = x_layout.stride();
         let (weight_storage, weight_layout) = weight.storage_and_layout();
         let weight_storage = match &*weight_storage {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(storage) => storage.as_cuda_slice::<T>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(storage) => storage.as_cuda_slice::<T>()?,
             _ => candle::bail!("GDN speculative convolution weight must be CUDA"),
         };
         let (state_storage, state_layout) = state_pool.storage_and_layout();
         let state_storage = match &*state_storage {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(storage) => storage.as_cuda_slice::<T>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(storage) => storage.as_cuda_slice::<T>()?,
             _ => candle::bail!("GDN speculative convolution state must be CUDA"),
         };
         let (slots_storage, slots_layout) = active_slots.storage_and_layout();
         let slots_storage = match &*slots_storage {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(storage) => storage.as_cuda_slice::<u32>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(storage) => storage.as_cuda_slice::<u32>()?,
             _ => candle::bail!("GDN speculative convolution slots must be CUDA"),
         };
@@ -3546,9 +3545,9 @@ pub fn speculative_conv_checkpoints_cuda(
             ($tensor:expr, $ty:ty, $name:literal) => {{
                 let (storage, layout) = $tensor.storage_and_layout();
                 let storage = match &*storage {
-                    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                     candle::Storage::Cuda(storage) => storage.as_cuda_slice::<$ty>()?,
-                    #[cfg(all(feature = "cuda", feature = "rocm"))]
+                    #[cfg(feature = "rocm")]
                     candle::Storage::Hip(storage) => storage.as_cuda_slice::<$ty>()?,
                     _ => candle::bail!(concat!($name, " must be CUDA")),
                 };
@@ -4003,9 +4002,9 @@ pub fn speculative_recurrence_checkpoints_cuda(
             ($tensor:expr, $ty:ty, $name:literal) => {{
                 let (storage, layout) = $tensor.storage_and_layout();
                 let storage = match &*storage {
-                    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                     candle::Storage::Cuda(storage) => storage.as_cuda_slice::<$ty>()?,
-                    #[cfg(all(feature = "cuda", feature = "rocm"))]
+                    #[cfg(feature = "rocm")]
                     candle::Storage::Hip(storage) => storage.as_cuda_slice::<$ty>()?,
                     _ => candle::bail!(concat!($name, " must be CUDA")),
                 };
@@ -5045,9 +5044,9 @@ pub fn speculative_transition_commit_batched_cuda(
                 ($tensor:expr, $ty:ty, $name:literal) => {{
                     let (storage, layout) = $tensor.storage_and_layout();
                     let storage = match &*storage {
-                        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                         candle::Storage::Cuda(storage) => storage.as_cuda_slice::<$ty>()?,
-                        #[cfg(all(feature = "cuda", feature = "rocm"))]
+                        #[cfg(feature = "rocm")]
                         candle::Storage::Hip(storage) => storage.as_cuda_slice::<$ty>()?,
                         _ => candle::bail!(concat!($name, " must be CUDA")),
                     };
@@ -5084,9 +5083,9 @@ pub fn speculative_transition_commit_batched_cuda(
             ($tensor:expr, $ty:ty, $name:literal) => {{
                 let (storage, layout) = $tensor.storage_and_layout();
                 let storage = match &*storage {
-                    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+                    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                     candle::Storage::Cuda(storage) => storage.as_cuda_slice::<$ty>()?,
-                    #[cfg(all(feature = "cuda", feature = "rocm"))]
+                    #[cfg(feature = "rocm")]
                     candle::Storage::Hip(storage) => storage.as_cuda_slice::<$ty>()?,
                     _ => candle::bail!(concat!($name, " must be CUDA")),
                 };
@@ -5937,9 +5936,9 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
 
         let (x_s, x_l) = x.storage_and_layout();
         let x_s = match &*x_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("x must be a cuda tensor"),
         };
@@ -5948,9 +5947,9 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
 
         let (gate_s, gate_l) = gate.storage_and_layout();
         let gate_s = match &*gate_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("gate must be a cuda tensor"),
         };
@@ -5963,9 +5962,9 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
 
         let (weight_s, weight_l) = weight.storage_and_layout();
         let weight_s = match &*weight_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("weight must be a cuda tensor"),
         };
@@ -6065,12 +6064,12 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
     }
 
     let (x_storage, x_layout) = x.storage_and_layout();
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     let Storage::Cuda(x_storage) = &*x_storage
     else {
         unreachable!()
     };
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     let x_storage = x_storage.as_role_storage().expect("role storage");
     let x_storage = x_storage.as_cuda_slice::<half::bf16>()?;
     let (dims, x_stride) = normalize_gdn_rmsnorm_layout(x.dims(), x_layout.stride(), head_v_dim)?;
@@ -6083,12 +6082,12 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
     }
 
     let (gate_storage, gate_layout) = gate.storage_and_layout();
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     let Storage::Cuda(gate_storage) = &*gate_storage
     else {
         unreachable!()
     };
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     let gate_storage = gate_storage.as_role_storage().expect("role storage");
     let gate_storage = gate_storage.as_cuda_slice::<half::bf16>()?;
     let (gate_dims, gate_stride) =
@@ -6098,12 +6097,12 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
     }
 
     let (weight_storage, weight_layout) = weight.storage_and_layout();
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     let Storage::Cuda(weight_storage) = &*weight_storage
     else {
         unreachable!()
     };
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     let weight_storage = weight_storage.as_role_storage().expect("role storage");
     let weight_storage = weight_storage.as_cuda_slice::<half::bf16>()?;
     let dev = x.device().as_role_device()?;
@@ -6216,9 +6215,9 @@ pub fn fused_gdn_gating_cuda(
 
         let (b_s, b_l) = b.storage_and_layout();
         let b_s = match &*b_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("b must be a cuda tensor"),
         };
@@ -6226,9 +6225,9 @@ pub fn fused_gdn_gating_cuda(
 
         let (a_s, a_l) = a.storage_and_layout();
         let a_s = match &*a_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<T>()?,
             _ => candle::bail!("a must be a cuda tensor"),
         };
@@ -6236,9 +6235,9 @@ pub fn fused_gdn_gating_cuda(
 
         let (alog_s, alog_l) = a_log.storage_and_layout();
         let alog_s = match &*alog_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<f32>()?,
             _ => candle::bail!("a_log must be a cuda tensor"),
         };
@@ -6246,9 +6245,9 @@ pub fn fused_gdn_gating_cuda(
 
         let (dtb_s, dtb_l) = dt_bias.storage_and_layout();
         let dtb_s = match &*dtb_s {
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "rocm")]
             candle::Storage::Hip(c) => c.as_cuda_slice::<f32>()?,
             _ => candle::bail!("dt_bias must be a cuda tensor"),
         };
@@ -6746,7 +6745,11 @@ mod tests {
         {
             Device::new_hip(0)
         }
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        {
+            Device::new_hip(0)
+        }
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
         {
             Device::new_cuda(0)
         }

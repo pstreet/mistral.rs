@@ -9,6 +9,12 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::role::RoleStorage as CudaStorage;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
 use candle_core::{
     cuda::{
         cudarc::{
@@ -18,6 +24,20 @@ use candle_core::{
         CudaStorageSlice, WrapErr,
     },
     CudaStorage, DType, Device, Result, Shape, Storage, Tensor, D,
+};
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::{
+    role::backend::{
+        cudarc::{
+            cublas::{result::hgemm, sys::cublasOperation_t},
+            driver::{CudaSlice, DevicePtr},
+        },
+        CudaStorageSlice, WrapErr,
+    },
+    DType, Device, Result, Shape, Storage, Tensor, D,
 };
 use half::f16;
 
@@ -106,6 +126,8 @@ impl GptqLayer {
 
         let cublas_handle = match a.device() {
             Device::Cuda(dev) => dev.cublas_handle(),
+            #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+            Device::Hip(dev) => dev.cublas_handle(),
             _ => unreachable!(), // invariant enforced earlier
         };
 
@@ -113,6 +135,8 @@ impl GptqLayer {
         let (a, a_l) = a.storage_and_layout();
         let a = match &*a {
             candle_core::Storage::Cuda(s) => s,
+            #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+            candle_core::Storage::Hip(s) => s,
             _ => candle_core::bail!("a must be a cuda tensor"),
         };
         let (a, _a_guard) = crate::utils::slice_ptr(a.as_cuda_slice::<f16>()?, a_l.start_offset());
@@ -123,6 +147,8 @@ impl GptqLayer {
         let (q_weight, _) = self.q_weight.storage_and_layout();
         let q_weight = match &*q_weight {
             candle_core::Storage::Cuda(s) => s,
+            #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+            candle_core::Storage::Hip(s) => s,
             _ => candle_core::bail!("q_weight must be a cuda tensor"),
         };
         let (q_weight, _q_weight_guard) = crate::utils::slice_ptr(
@@ -136,6 +162,8 @@ impl GptqLayer {
         let (qzeros, qzeros_l) = qzeros.storage_and_layout();
         let qzeros = match &*qzeros {
             candle_core::Storage::Cuda(s) => s,
+            #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+            candle_core::Storage::Hip(s) => s,
             _ => candle_core::bail!("qzeros must be a cuda tensor"),
         };
         let (qzeros, _qzeros_guard) =
@@ -146,6 +174,8 @@ impl GptqLayer {
         let (scales, _) = self.scales.storage_and_layout();
         let scales = match &*scales {
             candle_core::Storage::Cuda(s) => s,
+            #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+            candle_core::Storage::Hip(s) => s,
             _ => candle_core::bail!("scales must be a cuda tensor"),
         };
         let (scales, _scales_guard) = crate::utils::slice_ptr(
@@ -158,6 +188,8 @@ impl GptqLayer {
         let (g_idx, g_idx_l) = g_idx.storage_and_layout();
         let g_idx = match &*g_idx {
             candle_core::Storage::Cuda(s) => s,
+            #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+            candle_core::Storage::Hip(s) => s,
             _ => candle_core::bail!("g_idx must be a cuda tensor"),
         };
         let (g_idx, _g_idx_guard) =
@@ -376,8 +408,13 @@ impl QuantMethod for GptqLayer {
             .concat(),
         );
         let reshaped_a = a.reshape(((), a.dim(D::Minus1)?))?;
+        #[cfg(not(feature = "rocm"))]
         if !reshaped_a.device().is_cuda() {
             candle_core::bail!("Expected CUDA input to GptqLayer");
+        }
+        #[cfg(feature = "rocm")]
+        if !reshaped_a.device().is_cuda() && !reshaped_a.device().is_hip() {
+            candle_core::bail!("Expected GPU input to GptqLayer");
         }
 
         let out = match (self.g_idx.as_ref(), self.qzeros.as_ref(), self.is_marlin) {

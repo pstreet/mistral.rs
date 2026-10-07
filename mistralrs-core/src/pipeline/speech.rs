@@ -264,7 +264,7 @@ impl Loader for SpeechLoader {
         let cfg: DiaConfig = serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;
 
         #[cfg(any(feature = "cuda", feature = "rocm"))]
-        if let Device::Cuda(dev) = &device {
+        if let Ok(dev) = device.as_role_device() {
             unsafe { dev.disable_event_tracking() };
         }
         let use_nccl = mistralrs_quant::distributed::use_nccl();

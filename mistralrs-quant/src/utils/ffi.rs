@@ -1,7 +1,13 @@
 use std::ffi::c_void;
 
 use crate::kernel_decl::declare_kernel;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
 use candle_core::cuda::cudarc::driver::sys::CUstream;
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::role::backend::cudarc::driver::sys::CUstream;
 
 declare_kernel! {
     count_nonzero_bf16(d_in: *const c_void, N: u32, stream: CUstream) -> u32;

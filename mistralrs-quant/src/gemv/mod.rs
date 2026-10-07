@@ -13,10 +13,29 @@
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 mod ffi;
 
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use candle_core::cuda::DeviceId as GemvDeviceId;
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::role::backend::DeviceId as GemvDeviceId;
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::role::{RoleDevice as CudaDevice, RoleStorage as CudaStorage};
+#[cfg(all(feature = "cuda", feature = "rocm"))]
 use candle_core::{
     cuda::cudarc::driver::DevicePtrMut, CudaDevice, CudaStorage, DType, Result, Shape, Storage,
     Tensor,
+};
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::{
+    role::backend::cudarc::driver::DevicePtrMut, DType, Result, Shape, Storage, Tensor,
 };
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -72,12 +91,15 @@ fn should_use_gemv_shape(
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-static GEMV_DEVICE_INFO: LazyLock<Mutex<HashMap<candle_core::cuda::DeviceId, GemvDeviceInfo>>> =
+static GEMV_DEVICE_INFO: LazyLock<Mutex<HashMap<GemvDeviceId, GemvDeviceInfo>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 fn gemv_device_info(device: &CudaDevice) -> Option<GemvDeviceInfo> {
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
     use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    use candle_core::role::backend::cudarc::driver::sys::CUdevice_attribute;
 
     if let Some(info) = GEMV_DEVICE_INFO.lock().unwrap().get(&device.id()).copied() {
         return Some(info);
@@ -142,7 +164,14 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
         let _ = (x, w);
         return false;
     }
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    // Hip has no gemv kernels (plain GEMM serves unquantized linear);
+    // never route here, mirroring the dual bail.
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    {
+        let _ = (x, w);
+        return false;
+    }
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     {
         // Check if enabled
         if !GEMV_CONTROLLER.is_enabled() {
@@ -213,59 +242,10 @@ pub fn should_use_gemv(_x: &candle_core::Tensor, _w: &candle_core::Tensor) -> bo
 /// # Returns
 /// * Output tensor [B, M]
 #[cfg(all(feature = "rocm", not(feature = "cuda")))]
-pub fn gemv(x: &Tensor, w: &Tensor, bias: Option<&Tensor>) -> Result<Tensor> {
-    let dev = get_cuda_device(x)?;
-
-    // Get dimensions
-    let (m, k) = w.dims2()?;
-
-    // Calculate batch size from input shape
-    let x_dims = x.dims();
-    let batch_size: usize = x_dims[..x_dims.len().saturating_sub(1)]
-        .iter()
-        .product::<usize>()
-        .max(1);
-
-    if batch_size > MAX_GEMV_BATCH_SIZE {
-        candle_core::bail!(
-            "GEMV batch size {} exceeds maximum {}",
-            batch_size,
-            MAX_GEMV_BATCH_SIZE
-        );
-    }
-
-    // Check K dimension
-    let x_k = x.dim(x.rank() - 1)?;
-    if x_k != k {
-        candle_core::bail!("GEMV dimension mismatch: x has K={} but W has K={}", x_k, k);
-    }
-
-    // Validate bias if present
-    if let Some(b) = bias {
-        let b_len = b.elem_count();
-        if b_len != m {
-            candle_core::bail!(
-                "GEMV bias dimension mismatch: bias has {} elements but M={}",
-                b_len,
-                m
-            );
-        }
-    }
-
-    // Output shape matches input batch dims with last dim = M
-    let output_shape = {
-        let mut shape = x.dims().to_vec();
-        *shape.last_mut().unwrap() = m;
-        shape
-    };
-
-    // Dispatch based on dtype
-    match x.dtype() {
-        DType::BF16 => gemv_bf16(dev, x, w, bias, batch_size, m, k, &output_shape),
-        DType::F16 => gemv_f16(dev, x, w, bias, batch_size, m, k, &output_shape),
-        DType::F32 => gemv_f32(dev, x, w, bias, batch_size, m, k, &output_shape),
-        dt => candle_core::bail!("GEMV unsupported dtype: {:?}", dt),
-    }
+pub fn gemv(_x: &Tensor, _w: &Tensor, _bias: Option<&Tensor>) -> Result<Tensor> {
+    candle_core::bail!(
+        "gemv on the Hip backend needs S2; unquantized linear falls back to plain GEMM"
+    )
 }
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 pub fn gemv(_x: &Tensor, _w: &Tensor, _bias: Option<&Tensor>) -> Result<Tensor> {
@@ -273,215 +253,6 @@ pub fn gemv(_x: &Tensor, _w: &Tensor, _bias: Option<&Tensor>) -> Result<Tensor> 
         "gemv on the Hip backend needs S2; unquantized linear falls back to plain GEMM"
     )
 }
-
-#[cfg(all(feature = "rocm", not(feature = "cuda")))]
-#[allow(clippy::too_many_arguments)]
-fn gemv_bf16(
-    dev: &CudaDevice,
-    x: &Tensor,
-    w: &Tensor,
-    bias: Option<&Tensor>,
-    batch_size: usize,
-    m: usize,
-    k: usize,
-    output_shape: &[usize],
-) -> Result<Tensor> {
-    // Allocate output: [B, M]
-    let mut y_buf = unsafe { dev.alloc::<bf16>(batch_size * m)? };
-
-    // Get weight pointer
-    let (w_s, w_l) = w.storage_and_layout();
-    let Storage::Cuda(w_s) = &*w_s else {
-        candle_core::bail!("Expected CUDA storage for weights");
-    };
-    let (w_ptr, _w_guard) = slice_ptr(w_s.as_cuda_slice::<bf16>()?, w_l.start_offset());
-
-    let x_contig;
-    let (x_s, x_l) = if batch_size == 1 && x.layout().stride()[x.rank() - 1] == 1 {
-        x.storage_and_layout()
-    } else {
-        x_contig = x.contiguous()?;
-        x_contig.storage_and_layout()
-    };
-    let Storage::Cuda(x_s) = &*x_s else {
-        candle_core::bail!("Expected CUDA storage for input");
-    };
-    let (x_ptr, _x_guard) = slice_ptr(x_s.as_cuda_slice::<bf16>()?, x_l.start_offset());
-
-    let stream = dev.cuda_stream();
-    let (y_ptr, y_guard) = y_buf.device_ptr_mut(&stream);
-
-    // Get bias storage
-    let bias_storage = bias.map(|b| b.storage_and_layout());
-    let (bias_ptr, has_bias, _bias_guard) = if let Some((ref b_arc, b_l)) = bias_storage {
-        let Storage::Cuda(b_s) = &**b_arc else {
-            candle_core::bail!("Expected CUDA storage for bias");
-        };
-        let (b_ptr, b_guard) = slice_ptr(b_s.as_cuda_slice::<bf16>()?, b_l.start_offset());
-        (b_ptr, true, Some(b_guard))
-    } else {
-        (0u64, false, None)
-    };
-
-    unsafe {
-        ffi::launch_gemv_bf16(
-            w_ptr as *const bf16,
-            x_ptr as *const bf16,
-            bias_ptr as *const bf16,
-            y_ptr as *mut bf16,
-            m as i32,
-            k as i32,
-            batch_size as i32,
-            has_bias,
-            stream.cu_stream(),
-        );
-    }
-
-    drop(y_guard);
-
-    let y_storage = CudaStorage::wrap_cuda_slice(y_buf, dev.clone());
-    let y = Tensor::from((Storage::Cuda(y_storage), Shape::from(output_shape)));
-
-    Ok(y)
-}
-
-#[cfg(all(feature = "rocm", not(feature = "cuda")))]
-#[allow(clippy::too_many_arguments)]
-fn gemv_f16(
-    dev: &CudaDevice,
-    x: &Tensor,
-    w: &Tensor,
-    bias: Option<&Tensor>,
-    batch_size: usize,
-    m: usize,
-    k: usize,
-    output_shape: &[usize],
-) -> Result<Tensor> {
-    let mut y_buf = unsafe { dev.alloc::<f16>(batch_size * m)? };
-
-    let (w_s, w_l) = w.storage_and_layout();
-    let Storage::Cuda(w_s) = &*w_s else {
-        candle_core::bail!("Expected CUDA storage for weights");
-    };
-    let (w_ptr, _w_guard) = slice_ptr(w_s.as_cuda_slice::<f16>()?, w_l.start_offset());
-
-    let x_contig;
-    let (x_s, x_l) = if batch_size == 1 && x.layout().stride()[x.rank() - 1] == 1 {
-        x.storage_and_layout()
-    } else {
-        x_contig = x.contiguous()?;
-        x_contig.storage_and_layout()
-    };
-    let Storage::Cuda(x_s) = &*x_s else {
-        candle_core::bail!("Expected CUDA storage for input");
-    };
-    let (x_ptr, _x_guard) = slice_ptr(x_s.as_cuda_slice::<f16>()?, x_l.start_offset());
-
-    let stream = dev.cuda_stream();
-    let (y_ptr, y_guard) = y_buf.device_ptr_mut(&stream);
-
-    let bias_storage = bias.map(|b| b.storage_and_layout());
-    let (bias_ptr, has_bias, _bias_guard) = if let Some((ref b_arc, b_l)) = bias_storage {
-        let Storage::Cuda(b_s) = &**b_arc else {
-            candle_core::bail!("Expected CUDA storage for bias");
-        };
-        let (b_ptr, b_guard) = slice_ptr(b_s.as_cuda_slice::<f16>()?, b_l.start_offset());
-        (b_ptr, true, Some(b_guard))
-    } else {
-        (0u64, false, None)
-    };
-
-    unsafe {
-        ffi::launch_gemv_f16(
-            w_ptr as *const f16,
-            x_ptr as *const f16,
-            bias_ptr as *const f16,
-            y_ptr as *mut f16,
-            m as i32,
-            k as i32,
-            batch_size as i32,
-            has_bias,
-            stream.cu_stream(),
-        );
-    }
-
-    drop(y_guard);
-
-    let y_storage = CudaStorage::wrap_cuda_slice(y_buf, dev.clone());
-    let y = Tensor::from((Storage::Cuda(y_storage), Shape::from(output_shape)));
-
-    Ok(y)
-}
-
-#[cfg(all(feature = "rocm", not(feature = "cuda")))]
-#[allow(clippy::too_many_arguments)]
-fn gemv_f32(
-    dev: &CudaDevice,
-    x: &Tensor,
-    w: &Tensor,
-    bias: Option<&Tensor>,
-    batch_size: usize,
-    m: usize,
-    k: usize,
-    output_shape: &[usize],
-) -> Result<Tensor> {
-    let mut y_buf = unsafe { dev.alloc::<f32>(batch_size * m)? };
-
-    let (w_s, w_l) = w.storage_and_layout();
-    let Storage::Cuda(w_s) = &*w_s else {
-        candle_core::bail!("Expected CUDA storage for weights");
-    };
-    let (w_ptr, _w_guard) = slice_ptr(w_s.as_cuda_slice::<f32>()?, w_l.start_offset());
-
-    let x_contig;
-    let (x_s, x_l) = if batch_size == 1 && x.layout().stride()[x.rank() - 1] == 1 {
-        x.storage_and_layout()
-    } else {
-        x_contig = x.contiguous()?;
-        x_contig.storage_and_layout()
-    };
-    let Storage::Cuda(x_s) = &*x_s else {
-        candle_core::bail!("Expected CUDA storage for input");
-    };
-    let (x_ptr, _x_guard) = slice_ptr(x_s.as_cuda_slice::<f32>()?, x_l.start_offset());
-
-    let stream = dev.cuda_stream();
-    let (y_ptr, y_guard) = y_buf.device_ptr_mut(&stream);
-
-    let bias_storage = bias.map(|b| b.storage_and_layout());
-    let (bias_ptr, has_bias, _bias_guard) = if let Some((ref b_arc, b_l)) = bias_storage {
-        let Storage::Cuda(b_s) = &**b_arc else {
-            candle_core::bail!("Expected CUDA storage for bias");
-        };
-        let (b_ptr, b_guard) = slice_ptr(b_s.as_cuda_slice::<f32>()?, b_l.start_offset());
-        (b_ptr, true, Some(b_guard))
-    } else {
-        (0u64, false, None)
-    };
-
-    unsafe {
-        ffi::launch_gemv_f32(
-            w_ptr as *const f32,
-            x_ptr as *const f32,
-            bias_ptr as *const f32,
-            y_ptr as *mut f32,
-            m as i32,
-            k as i32,
-            batch_size as i32,
-            has_bias,
-            stream.cu_stream(),
-        );
-    }
-
-    drop(y_guard);
-
-    let y_storage = CudaStorage::wrap_cuda_slice(y_buf, dev.clone());
-    let y = Tensor::from((Storage::Cuda(y_storage), Shape::from(output_shape)));
-
-    Ok(y)
-}
-
-/// Fallback for non-CUDA builds
 #[cfg(not(any(feature = "cuda", feature = "rocm")))]
 pub fn gemv(
     _x: &candle_core::Tensor,

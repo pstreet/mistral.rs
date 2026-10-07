@@ -1,5 +1,5 @@
-use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
-use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
+use candle_core::hip_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+use candle_core::hip_backend::{CudaStorage, CudaStorageSlice};
 use candle_core::{DType, Result, Shape, Storage, Tensor};
 
 use crate::cuda::ffi::ck_flash_attn_fwd;
@@ -44,7 +44,7 @@ pub(crate) fn ck_flash_attn(
             .map_err(|_| candle_core::Error::msg("sliding window does not fit i32"))?,
     };
 
-    let dev = q.device().as_cuda_device()?;
+    let dev = q.device().as_hip_device()?;
 
     let q = q.contiguous()?;
     let k = k.contiguous()?;
@@ -54,14 +54,14 @@ pub(crate) fn ck_flash_attn(
     let (k_storage, k_layout) = k.storage_and_layout();
     let (v_storage, v_layout) = v.storage_and_layout();
 
-    let Storage::Cuda(q_cuda) = &*q_storage else {
-        candle_core::bail!("q must be cuda storage");
+    let Storage::Hip(q_cuda) = &*q_storage else {
+        candle_core::bail!("q must be hip storage");
     };
-    let Storage::Cuda(k_cuda) = &*k_storage else {
-        candle_core::bail!("k must be cuda storage");
+    let Storage::Hip(k_cuda) = &*k_storage else {
+        candle_core::bail!("k must be hip storage");
     };
-    let Storage::Cuda(v_cuda) = &*v_storage else {
-        candle_core::bail!("v must be cuda storage");
+    let Storage::Hip(v_cuda) = &*v_storage else {
+        candle_core::bail!("v must be hip storage");
     };
 
     let q_slice = q_cuda.as_cuda_slice::<half::bf16>()?;
@@ -139,7 +139,7 @@ pub(crate) fn ck_flash_attn(
 
     let out_dims = [b_sz, n_attn_heads, seq_len, head_dim];
     let output_tensor = Tensor::from((
-        Storage::Cuda(CudaStorage {
+        Storage::Hip(CudaStorage {
             slice: CudaStorageSlice::BF16(output),
             device: dev.clone(),
         }),
@@ -225,7 +225,7 @@ mod tests {
 
     #[test]
     fn ck_flash_attn_matches_reference() -> candle_core::Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = Device::new_hip(0)?;
         let scale = 1.0f64 / (128f64.sqrt());
         // fresh prompt: kv_len == q_len, causal top-left
         check_case(&dev, 4, 4, 2, 128, scale, 1, None)?;

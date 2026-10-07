@@ -24,12 +24,11 @@ use candle_core::{Device, GpuArch, Result};
 pub enum DeviceSpec {
     /// `"cpu"` - no GPU.
     Cpu,
-    /// `"cuda:N"` - the CUDA API. The NVIDIA role in dual builds; the
-    /// compiled vendor (which may be HIP-bound) in single-vendor builds.
+    /// `"cuda:N"` - the CUDA API (NVIDIA role). Loudly redirected to
+    /// the hip role in rocm-only builds (which have no NVIDIA role).
     Cuda(usize),
-    /// `"hip:N"` (alias `"rocm:N"`) - the HIP API. The AMD role in dual
-    /// builds; an alias for the compiled vendor in single-vendor rocm
-    /// builds (configs stay portable across build shapes).
+    /// `"hip:N"` (alias `"rocm:N"`) - the HIP API (AMD role) in every
+    /// build with the rocm feature. Bails in cuda-only builds.
     Hip(usize),
 }
 
@@ -160,14 +159,20 @@ pub fn resolve(spec: &DeviceSpec) -> Result<Device> {
             }
             #[cfg(all(feature = "rocm", not(feature = "cuda")))]
             {
-                // Single-vendor rocm: "cuda:N" is the compiled (HIP) vendor -
-                // the upstream semantic, kept for config compatibility.
+                // Solo-rocm has no NVIDIA role: loudly redirect legacy
+                // `cuda:N` to the serving (hip) role so old configs keep
+                // working with notice. Candle's constructor redirects
+                // the same way; resolve here so the caps line reports
+                // the real serving device.
                 if !serving_role_present() {
                     candle_core::bail!(
                         "device \"cuda:{idx}\" was requested but no HIP runtime is present"
                     );
                 }
-                Device::new_cuda(*idx)
+                tracing::warn!(
+                    "device \"cuda:{idx}\" has no NVIDIA role in rocm-only builds; serving on the hip role"
+                );
+                Device::new_hip(*idx)
             }
             #[cfg(all(feature = "cuda", feature = "rocm"))]
             {
@@ -197,12 +202,10 @@ pub fn resolve(spec: &DeviceSpec) -> Result<Device> {
                         "device \"hip:{idx}\" was requested but no HIP runtime is present"
                     );
                 }
-                // Dual builds: the AMD role directly. Single-vendor rocm:
-                // "hip:N" aliases the compiled vendor (portable configs).
-                #[cfg(all(feature = "cuda", feature = "rocm"))]
+                // Dual builds: the AMD role directly. Solo-rocm: the AMD
+                // role directly (Phase 3 cutover; the alias is retired).
+                #[cfg(feature = "rocm")]
                 return Device::new_hip(*idx);
-                #[cfg(not(feature = "cuda"))]
-                return Device::new_cuda(*idx);
             }
             #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             {
@@ -257,10 +260,8 @@ pub fn auto_select() -> Result<Device> {
 /// Construct serving-role device 0 on a machine where the probe passed.
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 fn resolve_serving_role(idx: usize) -> Result<Device> {
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     return Device::new_hip(idx);
-    #[cfg(not(feature = "cuda"))]
-    return Device::new_cuda(idx);
     #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     return Device::new_cuda(idx);
 }
@@ -292,31 +293,18 @@ pub fn backend_caps(device: &Device) -> BackendCaps {
         },
         #[cfg(any(feature = "cuda", feature = "rocm"))]
         Device::Cuda(dev) => {
-            let arch = GpuArch::resolve(dev).ok();
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             {
-                // Single-vendor builds: the fork's full serving stack. The
+                // Single-vendor cuda: the fork's full serving stack. The
                 // NVIDIA role keeps mtp off (speculative kernels are
                 // hip-side; mirrors the dual NVIDIA row).
-                #[cfg(all(feature = "rocm", not(feature = "cuda")))]
-                {
-                    BackendCaps {
-                        arch,
-                        graphs: true,
-                        paged_attention: true,
-                        quantized_gguf: true,
-                        mtp: true,
-                    }
-                }
-                #[cfg(all(feature = "cuda", not(feature = "rocm")))]
-                {
-                    BackendCaps {
-                        arch,
-                        graphs: true,
-                        paged_attention: true,
-                        quantized_gguf: true,
-                        mtp: false,
-                    }
+                let arch = GpuArch::resolve(dev).ok();
+                BackendCaps {
+                    arch,
+                    graphs: true,
+                    paged_attention: true,
+                    quantized_gguf: true,
+                    mtp: false,
                 }
             }
             #[cfg(all(feature = "cuda", feature = "rocm"))]
@@ -327,6 +315,7 @@ pub fn backend_caps(device: &Device) -> BackendCaps {
                 // through the nvcc companion. Decode graphs replay cleanly
                 // across requests (capture-time event records are gated on
                 // the fork's event-tracking state - see the journal).
+                let arch = GpuArch::resolve(dev).ok();
                 BackendCaps {
                     arch,
                     graphs: true,
@@ -335,8 +324,21 @@ pub fn backend_caps(device: &Device) -> BackendCaps {
                     mtp: false,
                 }
             }
+            #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+            {
+                // Solo-rocm has no NVIDIA role: a Cuda device cannot serve
+                // here (nothing constructs one; constructors redirect).
+                let _ = dev;
+                BackendCaps {
+                    arch: None,
+                    graphs: false,
+                    paged_attention: false,
+                    quantized_gguf: false,
+                    mtp: false,
+                }
+            }
         }
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         Device::Hip(dev) => {
             let arch = GpuArch::resolve_hip(dev).ok();
             // The AMD role: the full stack serves. GGUF rides QStorage::Hip
@@ -463,18 +465,19 @@ mod tests {
         }
     }
 
-    /// Single-vendor rocm builds: `hip:N` aliases the compiled vendor, so
-    /// configs stay portable across build shapes, and the full serving
-    /// stack reports capable (including GGUF).
+    /// Solo-rocm builds: `hip:N` addresses the AMD role directly
+    /// (Phase 3 cutover; the alias is retired), so configs stay
+    /// portable across build shapes, and the full serving stack
+    /// reports capable (including GGUF and MTP).
     #[cfg(all(feature = "rocm", not(feature = "cuda")))]
     #[test]
-    fn rocm_alias_routing() {
+    fn rocm_hip_routing() {
         let device = resolve(&DeviceSpec::parse("hip:0").unwrap()).unwrap();
-        assert!(device.is_cuda(), "hip:N aliases the compiled vendor");
+        assert!(device.is_hip(), "hip:N addresses the AMD role");
         let caps = backend_caps(&device);
         assert!(caps.quantized_gguf, "single-vendor builds serve GGUF");
-        assert!(caps.graphs && caps.paged_attention);
+        assert!(caps.graphs && caps.paged_attention && caps.mtp);
         let auto = auto_select().unwrap();
-        assert!(auto.is_cuda());
+        assert!(auto.is_hip());
     }
 }

@@ -211,7 +211,8 @@ pub(crate) fn synchronize_cuda_contexts(primary: &Device, mapper: &dyn DeviceMap
         devices.push(primary.clone());
     }
     for device in devices {
-        if let Device::Cuda(cuda) = device {
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
+        if let Ok(cuda) = device.as_role_device() {
             cuda.cuda_stream().context().synchronize()?;
         }
     }

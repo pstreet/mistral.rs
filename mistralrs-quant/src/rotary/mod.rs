@@ -1038,17 +1038,27 @@ fn apply_rotary_qk_inner(
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 mod cuda {
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     use candle_core::HipStorage;
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
     use candle_core::{
         backend::{BackendDevice, BackendStorage},
         cuda_backend::{CudaDType, CudaStorage, CudaStorageSlice},
         CpuStorage, DType, InplaceOp3, Layout, MetalStorage, Result, Storage, Tensor,
     };
+    #[cfg(all(
+        any(feature = "cuda", feature = "rocm"),
+        not(all(feature = "cuda", feature = "rocm"))
+    ))]
+    use candle_core::{
+        backend::{BackendDevice, BackendStorage},
+        role::backend::{CudaDType, CudaStorageSlice},
+        CpuStorage, CudaStorage, DType, InplaceOp3, Layout, MetalStorage, Result, Storage, Tensor,
+    };
     use half::{bf16, f16};
     use std::ffi::{c_int, c_long};
 
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     use crate::utils::{hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
     use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
@@ -1072,7 +1082,7 @@ mod cuda {
         is_neox: bool,
     }
 
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     struct RotaryLaunchHip<'a> {
         query: &'a mut HipStorage,
         query_l: &'a Layout,
@@ -1084,6 +1094,7 @@ mod cuda {
         is_neox: bool,
     }
 
+    #[cfg(feature = "cuda")]
     fn launch_rotary<T>(args: RotaryLaunch<'_>) -> Result<()>
     where
         T: CudaDType + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
@@ -1219,7 +1230,7 @@ mod cuda {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     fn launch_rotary_hip<T>(args: RotaryLaunchHip<'_>) -> Result<()>
     where
         T: candle_core::hip_backend::CudaDType
@@ -1380,6 +1391,7 @@ mod cuda {
             candle_core::bail!("apply-rotary-inplace is only supported for cuda")
         }
 
+        #[cfg(feature = "cuda")]
         fn cuda_fwd(
             &self,
             query: &mut CudaStorage,
@@ -1428,7 +1440,7 @@ mod cuda {
             }
         }
 
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         fn hip_fwd(
             &self,
             query: &mut HipStorage,
@@ -1512,6 +1524,7 @@ mod cuda {
             candle_core::bail!("apply-rotary-positions-inplace is only supported for cuda")
         }
 
+        #[cfg(feature = "cuda")]
         fn cuda_fwd(
             &self,
             query: &mut CudaStorage,
@@ -1565,7 +1578,7 @@ mod cuda {
             }
         }
 
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         fn hip_fwd(
             &self,
             query: &mut HipStorage,

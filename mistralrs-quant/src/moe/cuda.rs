@@ -1,13 +1,22 @@
 //! Plain-CUDA MoE ops (kernels in `kernels/moe/*.cu`): token alignment, fused GeLU-tanh + multiply, and cross-expert sum.
 
+#[cfg(feature = "cuda")]
 use candle_core::cuda::cudarc::driver::CudaSlice;
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+use candle_core::role::backend::cudarc::driver::CudaSlice;
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+use candle_core::{role::backend::CudaDevice, DType, Result, Storage, Tensor};
+#[cfg(feature = "cuda")]
 use candle_core::{CudaDevice, DType, Result, Storage, Tensor};
 use half::bf16;
 
 use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
 mod ffi {
+    #[cfg(feature = "cuda")]
     use candle_core::cuda::cudarc::driver::sys::CUstream;
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    use candle_core::role::backend::cudarc::driver::sys::CUstream;
     use core::ffi::c_void;
 
     use crate::kernel_decl::declare_kernel;
@@ -66,6 +75,7 @@ mod ffi {
 }
 
 /// Applies HunYuan's official per-expert capacity rule to top-k routing weights.
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn hunyuan_moe_apply_capacity_mask(
     topk_ids: &Tensor,
     topk_weights: &Tensor,
@@ -106,16 +116,25 @@ pub fn hunyuan_moe_apply_capacity_mask(
 
     let (ids_storage, ids_layout) = ids.storage_and_layout();
     let ids_slice = match &*ids_storage {
+        #[cfg(feature = "cuda")]
         Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        Storage::Hip(c) => c.as_cuda_slice::<u32>()?,
         _ => candle_core::bail!("hunyuan_moe_apply_capacity_mask requires CUDA ids"),
     };
     let (weights_storage, weights_layout) = weights.storage_and_layout();
     let weights_slice = match &*weights_storage {
+        #[cfg(feature = "cuda")]
         Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        Storage::Hip(c) => c.as_cuda_slice::<f32>()?,
         _ => candle_core::bail!("hunyuan_moe_apply_capacity_mask requires CUDA weights"),
     };
 
+    #[cfg(feature = "cuda")]
     let dev = topk_weights.device().as_cuda_device()?;
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    let dev = topk_weights.device().as_hip_device()?;
     let mut out = unsafe { dev.alloc::<f32>(topk_weights.elem_count()) }?;
     let stream = dev.cuda_stream();
     let cu_stream = stream.cu_stream();
@@ -138,9 +157,15 @@ pub fn hunyuan_moe_apply_capacity_mask(
     }
     drop(out_guard);
 
+    #[cfg(feature = "cuda")]
     let storage = candle_core::CudaStorage::wrap_cuda_slice(out, dev.clone());
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    let storage = candle_core::HipStorage::wrap_cuda_slice(out, dev.clone());
     Ok(Tensor::from((
+        #[cfg(feature = "cuda")]
         Storage::Cuda(storage),
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        Storage::Hip(storage),
         candle_core::Shape::from_dims(topk_weights.dims()),
     )))
 }
@@ -163,6 +188,7 @@ pub fn moe_align_em(
 
 /// Aligns tokens into per-expert blocks. Returns (sorted_token_ids[EM], expert_ids[nblocks], num_tokens_post_pad[1], EM); topk_ids is a contiguous u32 slice of [num_tokens*topk] expert ids (< 2^31).
 #[allow(clippy::type_complexity)]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn moe_align(
     topk_ids_u32: &CudaSlice<u32>,
     num_tokens: usize,
@@ -214,6 +240,7 @@ pub enum GatedAct {
 }
 
 /// Fused act(gate) * up: input [num_tokens, 2*d] -> [num_tokens, d] bf16.
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn act_and_mul(input: &Tensor, d: usize, act: GatedAct, dev: &CudaDevice) -> Result<Tensor> {
     match act {
         GatedAct::GeluTanh => gelu_tanh_and_mul(input, d, dev),
@@ -222,6 +249,7 @@ pub fn act_and_mul(input: &Tensor, d: usize, act: GatedAct, dev: &CudaDevice) ->
 }
 
 /// Fused SiLU(gate) * up: input [num_tokens, 2*d] -> [num_tokens, d] bf16.
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn silu_and_mul(input: &Tensor, d: usize, dev: &CudaDevice) -> Result<Tensor> {
     let (num_tokens, two_d) = input.dims2()?;
     if two_d != 2 * d {
@@ -237,7 +265,10 @@ pub fn silu_and_mul(input: &Tensor, d: usize, dev: &CudaDevice) -> Result<Tensor
 
     let (in_storage, in_layout) = input.storage_and_layout();
     let in_slice = match &*in_storage {
+        #[cfg(feature = "cuda")]
         Storage::Cuda(c) => c.as_cuda_slice::<bf16>()?,
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        Storage::Hip(c) => c.as_cuda_slice::<bf16>()?,
         _ => candle_core::bail!("input must be cuda"),
     };
     let (in_ptr, _in_guard) = slice_ptr_on_stream(in_slice, in_layout.start_offset(), &stream);
@@ -253,11 +284,21 @@ pub fn silu_and_mul(input: &Tensor, d: usize, dev: &CudaDevice) -> Result<Tensor
     }
     drop(out_guard);
 
+    #[cfg(feature = "cuda")]
     let storage = candle_core::CudaStorage::wrap_cuda_slice(out, dev.clone());
-    Ok(Tensor::from((Storage::Cuda(storage), (num_tokens, d))))
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    let storage = candle_core::HipStorage::wrap_cuda_slice(out, dev.clone());
+    Ok(Tensor::from((
+        #[cfg(feature = "cuda")]
+        Storage::Cuda(storage),
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        Storage::Hip(storage),
+        (num_tokens, d),
+    )))
 }
 
 /// Fused GeLU-tanh(gate) * up: input [num_tokens, 2*d] -> [num_tokens, d] bf16.
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn gelu_tanh_and_mul(input: &Tensor, d: usize, dev: &CudaDevice) -> Result<Tensor> {
     let (num_tokens, two_d) = input.dims2()?;
     if two_d != 2 * d {
@@ -273,7 +314,10 @@ pub fn gelu_tanh_and_mul(input: &Tensor, d: usize, dev: &CudaDevice) -> Result<T
 
     let (in_storage, in_layout) = input.storage_and_layout();
     let in_slice = match &*in_storage {
+        #[cfg(feature = "cuda")]
         Storage::Cuda(c) => c.as_cuda_slice::<bf16>()?,
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        Storage::Hip(c) => c.as_cuda_slice::<bf16>()?,
         _ => candle_core::bail!("input must be cuda"),
     };
     let (in_ptr, _in_guard) = slice_ptr_on_stream(in_slice, in_layout.start_offset(), &stream);
@@ -289,10 +333,20 @@ pub fn gelu_tanh_and_mul(input: &Tensor, d: usize, dev: &CudaDevice) -> Result<T
     }
     drop(out_guard);
 
+    #[cfg(feature = "cuda")]
     let storage = candle_core::CudaStorage::wrap_cuda_slice(out, dev.clone());
-    Ok(Tensor::from((Storage::Cuda(storage), (num_tokens, d))))
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    let storage = candle_core::HipStorage::wrap_cuda_slice(out, dev.clone());
+    Ok(Tensor::from((
+        #[cfg(feature = "cuda")]
+        Storage::Cuda(storage),
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        Storage::Hip(storage),
+        (num_tokens, d),
+    )))
 }
 
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn moe_sum_bf16(
     input: &Tensor,
     num_tokens: usize,
@@ -313,7 +367,10 @@ pub fn moe_sum_bf16(
 
     let (in_storage, in_layout) = input.storage_and_layout();
     let in_slice = match &*in_storage {
+        #[cfg(feature = "cuda")]
         Storage::Cuda(c) => c.as_cuda_slice::<bf16>()?,
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        Storage::Hip(c) => c.as_cuda_slice::<bf16>()?,
         _ => candle_core::bail!("input must be cuda"),
     };
     let (in_ptr, _in_guard) = slice_ptr_on_stream(in_slice, in_layout.start_offset(), &stream);
@@ -330,8 +387,17 @@ pub fn moe_sum_bf16(
     }
     drop(out_guard);
 
+    #[cfg(feature = "cuda")]
     let storage = candle_core::CudaStorage::wrap_cuda_slice(out, dev.clone());
-    Ok(Tensor::from((Storage::Cuda(storage), (num_tokens, hidden))))
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    let storage = candle_core::HipStorage::wrap_cuda_slice(out, dev.clone());
+    Ok(Tensor::from((
+        #[cfg(feature = "cuda")]
+        Storage::Cuda(storage),
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        Storage::Hip(storage),
+        (num_tokens, hidden),
+    )))
 }
 
 #[cfg(test)]

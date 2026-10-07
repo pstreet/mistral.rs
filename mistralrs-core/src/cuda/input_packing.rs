@@ -1,4 +1,4 @@
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 use candle_core::HipStorage;
 use candle_core::{
     backend::BackendStorage, CpuStorage, CudaStorage, CustomOp1, DType, Layout, Result, Shape,
@@ -21,6 +21,7 @@ impl CustomOp1 for CompletionInputPackOp {
         candle_core::bail!("completion input packing requires CUDA storage")
     }
 
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, host: &CudaStorage, host_layout: &Layout) -> Result<(CudaStorage, Shape)> {
         use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
 
@@ -101,11 +102,11 @@ impl CustomOp1 for CompletionInputPackOp {
             (self.batch, row_width).into(),
         ))
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     /// Dual-role twin of cuda_fwd: the same kernels through the hip
     /// role's bindings (companion-plugin FFI included).
     fn hip_fwd(&self, host: &HipStorage, host_layout: &Layout) -> Result<(HipStorage, Shape)> {
-        use candle_core::cuda::cudarc::driver::sys::CUstream;
+        use candle_core::hip_backend::cudarc::driver::sys::CUstream;
         use candle_core::hip_backend::cudarc::driver::DevicePtr as _;
         use candle_core::hip_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
 
@@ -203,6 +204,7 @@ impl CustomOp1 for DecodeInputPadOp {
         candle_core::bail!("decode input padding requires CUDA storage")
     }
 
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, input: &CudaStorage, input_layout: &Layout) -> Result<(CudaStorage, Shape)> {
         use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
 
@@ -247,11 +249,11 @@ impl CustomOp1 for DecodeInputPadOp {
             (self.output_rows, self.width).into(),
         ))
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     /// Dual-role twin of cuda_fwd: the same kernels through the hip
     /// role's bindings (companion-plugin FFI included).
     fn hip_fwd(&self, input: &HipStorage, input_layout: &Layout) -> Result<(HipStorage, Shape)> {
-        use candle_core::cuda::cudarc::driver::sys::CUstream;
+        use candle_core::hip_backend::cudarc::driver::sys::CUstream;
         use candle_core::hip_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
 
         if input.dtype() != DType::U32

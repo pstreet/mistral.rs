@@ -265,7 +265,7 @@ impl Loader for EmbeddingLoader {
         };
         #[cfg(any(feature = "cuda", feature = "rocm"))]
         for device in &available_devices {
-            if let Device::Cuda(dev) = device {
+            if let Ok(dev) = device.as_role_device() {
                 unsafe { dev.disable_event_tracking() };
             }
         }

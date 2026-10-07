@@ -9,12 +9,12 @@ use crate::cuda::role_backend::cudarc::driver::DeviceSlice;
 use crate::cuda::role_backend::cudarc::driver::{CudaSlice, DevicePtr};
 use crate::BlockQuantKind;
 use candle::backend::BackendStorage;
-#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 use candle::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Tensor};
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 use candle::{CpuStorage, DType, Layout, Result, Shape, Storage, Tensor};
 use candle_core as candle;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 use candle_core::hip_backend::CudaStorage as HipStorage;
 use float8::F8E4M3;
 use half::{bf16, f16};
@@ -160,7 +160,7 @@ struct PagedAttention {
 }
 
 impl PagedAttention {
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn cuda_fwd_t<
         T: crate::cuda::role_backend::CudaDType
             + crate::cuda::role_backend::cudarc::driver::DeviceRepr,
@@ -514,7 +514,7 @@ impl PagedAttention {
         let out = CudaStorage::wrap_cuda_slice(out, dev.clone());
         Ok((out, out_shape))
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     fn cuda_fwd_t<
         T: crate::cuda::role_backend::CudaDType
             + crate::cuda::role_backend::cudarc::driver::DeviceRepr,
@@ -912,7 +912,7 @@ impl candle::CustomOp1 for PagedAttention {
     // Single-vendor builds serve the compiled vendor here. In a dual
     // build the NVIDIA role has no paged-attention kernels (all C sources
     // are hipcc-built); serving goes through `hip_fwd` below.
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     fn cuda_fwd(&self, q: &CudaStorage, q_l: &Layout) -> Result<(CudaStorage, Shape)> {
         match q.dtype() {
             DType::F32 => self.cuda_fwd_t::<f32>(q, q_l),
@@ -922,7 +922,7 @@ impl candle::CustomOp1 for PagedAttention {
         }
     }
 
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     fn hip_fwd(&self, q: &HipStorage, q_l: &Layout) -> Result<(HipStorage, Shape)> {
         // Same dispatch through the Hip twin of `cuda_fwd_t` (selected by
         // the dual cfg-pair, same name, Hip types).

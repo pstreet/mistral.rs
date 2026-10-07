@@ -8,12 +8,39 @@ use std::sync::{Mutex, OnceLock};
 
 use super::ffi;
 use crate::utils::{slice_ptr, slice_ptr_mut_on_stream, slice_ptr_on_stream};
-use candle_core::cuda::cudarc::driver::DeviceRepr;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use candle_core::cuda_backend::cudarc::driver::DeviceRepr;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
 use candle_core::cuda_backend::CudaDType;
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::role::backend::cudarc::driver::DeviceRepr;
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::role::backend::CudaDType;
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::role::{RoleDevice as CudaDevice, RoleStorage as CudaStorage};
+#[cfg(all(feature = "cuda", feature = "rocm"))]
 use candle_core::{
     cuda::cudarc::driver::{CudaSlice, DevicePtr},
     quantized::{GgmlDType, QMatMul, QTensor},
     CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
+};
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::{
+    quantized::{GgmlDType, QMatMul, QTensor},
+    role::backend::cudarc::driver::{CudaSlice, DevicePtr},
+    DType, Device, Result, Shape, Storage, Tensor,
 };
 use half::{bf16, f16};
 
@@ -33,6 +60,12 @@ struct DispatchWorkspaceSlot {
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 struct WorkspaceKey {
+    #[cfg(all(
+        any(feature = "cuda", feature = "rocm"),
+        not(all(feature = "cuda", feature = "rocm"))
+    ))]
+    device: candle_core::role::backend::DeviceId,
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
     device: candle_core::cuda::DeviceId,
     stream: usize,
 }

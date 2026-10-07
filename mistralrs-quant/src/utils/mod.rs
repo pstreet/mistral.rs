@@ -25,8 +25,16 @@ pub use ops::{fused_glu, fused_split_glu, GluActivationType};
 pub use ops::{BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp};
 pub(crate) use uqff::{data_to_bytes, dtype_to_uqff_code, uqff_code_to_dtype};
 
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(all(feature = "cuda", feature = "rocm"))]
 use candle_core::cuda::cudarc::{
+    self,
+    driver::{CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr},
+};
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::role::backend::cudarc::{
     self,
     driver::{CudaSlice, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr},
 };
@@ -128,7 +136,7 @@ pub fn slice_ptr_mut_on_stream<'a, T: DeviceRepr>(
 
 /// Dual-role mirrors of the slice helpers above, typed on the hip
 /// backend's driver types for `hip_fwd` twins.
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 use candle_core::hip_backend::cudarc::{
     self as hip_cudarc,
     driver::{
@@ -137,7 +145,7 @@ use candle_core::hip_backend::cudarc::{
     },
 };
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 pub fn hip_slice_ptr<T: HipDeviceRepr>(
     v: &HipCudaSlice<T>,
     lo: usize,
@@ -145,7 +153,7 @@ pub fn hip_slice_ptr<T: HipDeviceRepr>(
     hip_slice_ptr_on_stream(v, lo, v.stream())
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 pub fn hip_slice_ptr_on_stream<'a, T: HipDeviceRepr>(
     v: &'a HipCudaSlice<T>,
     lo: usize,
@@ -155,7 +163,7 @@ pub fn hip_slice_ptr_on_stream<'a, T: HipDeviceRepr>(
     (ptr + (lo * std::mem::size_of::<T>()) as u64, guard)
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 pub fn hip_slice_ptr_mut_on_stream<'a, T: HipDeviceRepr>(
     v: &'a mut HipCudaSlice<T>,
     lo: usize,

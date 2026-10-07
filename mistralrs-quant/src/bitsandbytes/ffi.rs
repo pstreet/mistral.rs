@@ -1,5 +1,11 @@
 use crate::kernel_decl::declare_kernel;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
 use candle_core::cuda::cudarc::driver::sys::CUstream;
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::role::backend::cudarc::driver::sys::CUstream;
 use half::{bf16, f16};
 
 declare_kernel! {

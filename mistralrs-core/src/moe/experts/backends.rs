@@ -2146,7 +2146,7 @@ impl FastExpertsWeights {
             // covers the NVIDIA role.
             return Ok(None);
         }
-        #[cfg(not(all(feature = "cuda", not(feature = "rocm"))))]
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
         {
             let Some(gate_qt) = self.fused_gate_proj.get_qtensor() else {
                 return Ok(None);
@@ -2157,10 +2157,10 @@ impl FastExpertsWeights {
             let Some(down_qt) = self.fused_down_proj.get_qtensor() else {
                 return Ok(None);
             };
-            let dev = forward.xs_flat.device().as_cuda_device()?;
+            let dev = forward.xs_flat.device().as_hip_device()?;
             let topk_ids_flat = forward.topk_ids.flatten_all()?.contiguous()?;
             let (ids_storage, ids_layout) = topk_ids_flat.storage_and_layout();
-            let candle_core::Storage::Cuda(ids_cuda) = &*ids_storage else {
+            let candle_core::Storage::Hip(ids_cuda) = &*ids_storage else {
                 return Ok(None);
             };
             if ids_layout.start_offset() != 0 {
@@ -2216,6 +2216,8 @@ impl FastExpertsWeights {
             )?;
             return Ok(Some(output.to_dtype(forward.original_dtype)?));
         }
+        // Dual builds fall through: both roles dispatched above.
+        Ok(None)
     }
 
     /// Indexed MoE LoRA decode on the hip role. Same contract as
@@ -2299,11 +2301,11 @@ impl FastExpertsWeights {
         if forward.xs_flat.device().is_cuda() {
             return self.forward_decode_cuda_role(forward, config);
         }
-        #[cfg(not(all(feature = "cuda", not(feature = "rocm"))))]
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
         {
-            use candle_core::cuda::cudarc::driver::DevicePtr;
+            use candle_core::hip_backend::cudarc::driver::DevicePtr;
 
-            let dev = forward.xs_flat.device().as_cuda_device()?;
+            let dev = forward.xs_flat.device().as_hip_device()?;
 
             // Get QTensors - bail to fallback if not quantized
             let gate_qt = match self.fused_gate_proj.get_qtensor() {
@@ -2323,7 +2325,7 @@ impl FastExpertsWeights {
             let topk_ids_flat = forward.topk_ids.flatten_all()?.contiguous()?;
             let (ti_storage, ti_layout) = topk_ids_flat.storage_and_layout();
             let ti_cuda = match &*ti_storage {
-                candle_core::Storage::Cuda(c) => c,
+                candle_core::Storage::Hip(c) => c,
                 _ => return Ok(None),
             };
             let ti_u32_slice = ti_cuda.as_cuda_slice::<u32>()?;
@@ -2337,7 +2339,7 @@ impl FastExpertsWeights {
                 .contiguous()?;
             let (tw_storage, tw_layout) = tw_f32.storage_and_layout();
             let tw_cuda = match &*tw_storage {
-                candle_core::Storage::Cuda(c) => c,
+                candle_core::Storage::Hip(c) => c,
                 _ => return Ok(None),
             };
             let tw_slice = tw_cuda.as_cuda_slice::<f32>()?;
@@ -2375,6 +2377,8 @@ impl FastExpertsWeights {
         {
             unreachable!("the cuda role dispatches through forward_decode_cuda_role")
         }
+        // Dual builds fall through: both roles dispatched above.
+        Ok(None)
     }
 
     /// Fused MoE decode on the hip role. Same contract as `forward_decode`.
@@ -2500,15 +2504,15 @@ impl FastExpertsWeights {
         if forward.xs_flat.device().is_cuda() {
             return self.forward_grouped_cuda_role(forward, config);
         }
-        #[cfg(not(all(feature = "cuda", not(feature = "rocm"))))]
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
         {
-            let dev = forward.xs_flat.device().as_cuda_device()?;
+            let dev = forward.xs_flat.device().as_hip_device()?;
 
             // Get topk_ids as contiguous u32 CudaSlice
             let topk_ids_flat = forward.topk_ids.flatten_all()?.contiguous()?;
             let (ti_storage, ti_layout) = topk_ids_flat.storage_and_layout();
             let ti_cuda = match &*ti_storage {
-                candle_core::Storage::Cuda(c) => c,
+                candle_core::Storage::Hip(c) => c,
                 _ => return Ok(None),
             };
             let ti_u32_slice = ti_cuda.as_cuda_slice::<u32>()?;
@@ -2620,7 +2624,7 @@ impl FastExpertsWeights {
             };
 
             // Get topk_weights pointer
-            use candle_core::cuda::cudarc::driver::DevicePtr;
+            use candle_core::hip_backend::cudarc::driver::DevicePtr;
             let tw_f32 = forward
                 .topk_weights
                 .flatten_all()?
@@ -2628,7 +2632,7 @@ impl FastExpertsWeights {
                 .contiguous()?;
             let (tw_storage, tw_layout) = tw_f32.storage_and_layout();
             let tw_cuda = match &*tw_storage {
-                candle_core::Storage::Cuda(c) => c,
+                candle_core::Storage::Hip(c) => c,
                 _ => return Ok(None),
             };
             let tw_slice = tw_cuda.as_cuda_slice::<f32>()?;
@@ -2814,6 +2818,8 @@ impl FastExpertsWeights {
         {
             unreachable!("the cuda role dispatches through forward_grouped_cuda_role")
         }
+        // Dual builds fall through: both roles dispatched above.
+        Ok(None)
     }
 
     /// Grouped MoE prefill through the nvcc MMQ companion for the NVIDIA

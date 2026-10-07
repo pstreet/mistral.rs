@@ -1,9 +1,22 @@
 use candle_core::{DType, Device, Result, Shape, Tensor};
 
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::role::RoleStorage as CudaStorage;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
 use candle_core::{
     cuda::{cudarc::driver::DevicePtr, CudaStorageSlice},
     CudaStorage, Storage,
+};
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::{
+    role::backend::{cudarc::driver::DevicePtr, CudaStorageSlice},
+    Storage,
 };
 
 #[cfg(feature = "metal")]
@@ -108,7 +121,7 @@ macro_rules! dequant_for_dtype {
     }};
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 macro_rules! dequant_for_dtype_hip {
     ($this:expr, w=$wq_t:ty, sz=$scale_t:ty, $dtype:ident, pack=$pack:expr, $dev:expr, $bit_thing:ident, $postfix:tt) => {{
         paste::paste! {
@@ -210,7 +223,7 @@ impl HqqBits {
                 #[allow(unused_variables)]
                 let device = wq.device();
 
-                #[cfg(any(feature = "cuda", feature = "rocm"))]
+                #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                 if device.is_cuda() {
                     // Use CUDA kernel for 8-bit (which is essentially a copy)
                     let dev = get_cuda_device(&wq)?;
@@ -293,7 +306,7 @@ impl HqqBits {
                 #[allow(unused_variables)]
                 let device = wq_in.device();
 
-                #[cfg(any(feature = "cuda", feature = "rocm"))]
+                #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                 if device.is_cuda() {
                     // Use CUDA kernel for 4-bit packing
                     let dev = get_cuda_device(&wq_in)?;
@@ -387,7 +400,7 @@ impl HqqBits {
                 #[allow(unused_variables)]
                 let device = wq_in.device();
 
-                #[cfg(any(feature = "cuda", feature = "rocm"))]
+                #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                 if device.is_cuda() {
                     // Use CUDA kernel for 2-bit packing
                     let dev = get_cuda_device(&wq_in)?;
@@ -421,23 +434,10 @@ impl HqqBits {
 
                     let storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
                     let storage = Storage::Cuda(storage);
-                    Ok(Tensor::from((storage, output_shape)))
-                } else {
-                    // CPU fallback
-                    let wq = wq_in.to_dtype(DType::U8)?;
-                    let step = (wq.dims()[0] as f64 / 4.) as usize;
-
-                    let a = wq.narrow(0, 0, step)?;
-                    let b = wq.narrow(0, step, step)?;
-                    let c = wq.narrow(0, step * 2, step)?;
-                    let d = wq.narrow(0, step * 3, step)?;
-
-                    a.leftshift(6)?
-                        .bitwise_or(&b.leftshift(4)?)?
-                        .bitwise_or(&c.leftshift(2)?)?
-                        .bitwise_or(&d)
+                    return Ok(Tensor::from((storage, output_shape)));
                 }
-                #[cfg(not(any(feature = "cuda", feature = "rocm")))]
+                // CPU fallback (also serves hip and cpu: the kernel block
+                // above is cuda-only).
                 {
                     let wq = wq_in.to_dtype(DType::U8)?;
                     let step = (wq.dims()[0] as f64 / 4.) as usize;
@@ -464,7 +464,7 @@ impl HqqBits {
                     &wq_in.to_dtype(DType::U32)?,
                 )?;
 
-                #[cfg(any(feature = "cuda", feature = "rocm"))]
+                #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                 if device.is_cuda() {
                     // Use CUDA kernel for efficient 3-bit packing
                     let dev = get_cuda_device(&wq)?;
@@ -536,7 +536,7 @@ impl HqqBits {
                 #[allow(unused_variables)]
                 let device = wq_in.device();
 
-                #[cfg(any(feature = "cuda", feature = "rocm"))]
+                #[cfg(all(feature = "cuda", not(feature = "rocm")))]
                 if device.is_cuda() {
                     // Use CUDA kernel for 1-bit packing
                     let dev = get_cuda_device(&wq_in)?;
@@ -570,31 +570,10 @@ impl HqqBits {
 
                     let storage = CudaStorage::wrap_cuda_slice(output, dev.clone());
                     let storage = Storage::Cuda(storage);
-                    Ok(Tensor::from((storage, output_shape)))
-                } else {
-                    // CPU fallback
-                    let wq = wq_in.to_dtype(DType::U8)?;
-                    let step = (wq.dims()[0] as f64 / 8.) as usize;
-
-                    let a = wq.narrow(0, 0, step)?;
-                    let b = wq.narrow(0, step, step)?;
-                    let c = wq.narrow(0, step * 2, step)?;
-                    let d = wq.narrow(0, step * 3, step)?;
-                    let e = wq.narrow(0, step * 4, step)?;
-                    let f = wq.narrow(0, step * 5, step)?;
-                    let g = wq.narrow(0, step * 6, step)?;
-                    let h = wq.narrow(0, step * 7, step)?;
-
-                    a.leftshift(7)?
-                        .bitwise_or(&b.leftshift(6)?)?
-                        .bitwise_or(&c.leftshift(5)?)?
-                        .bitwise_or(&d.leftshift(4)?)?
-                        .bitwise_or(&e.leftshift(3)?)?
-                        .bitwise_or(&f.leftshift(2)?)?
-                        .bitwise_or(&g.leftshift(1)?)?
-                        .bitwise_or(&h)
+                    return Ok(Tensor::from((storage, output_shape)));
                 }
-                #[cfg(not(any(feature = "cuda", feature = "rocm")))]
+                // CPU fallback (also serves hip and cpu: the kernel block
+                // above is cuda-only).
                 {
                     let wq = wq_in.to_dtype(DType::U8)?;
                     let step = (wq.dims()[0] as f64 / 8.) as usize;
@@ -927,228 +906,241 @@ impl HqqLayer {
     /// Dequantize `self` into a tensor of shape `scales` or `zeros`.
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn dequantize(&self) -> Result<Tensor> {
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         if self.w_q.device().is_hip() {
             return self.dequantize_hip();
         }
-        match (self.scales.dtype(), self.zeros.dtype()) {
-            (DType::F16, DType::F16) | (DType::BF16, DType::BF16) | (DType::F32, DType::F32) => (),
-            (a, b) => {
-                candle_core::bail!("Expected all dtypes to be the same, got ({a:?}, {b:?}).")
-            }
-        }
-        if !(self.w_q.is_contiguous() && self.scales.is_contiguous() && self.zeros.is_contiguous())
+        #[cfg(feature = "cuda")]
         {
-            candle_core::bail!("All tensors must be contiguous!");
+            match (self.scales.dtype(), self.zeros.dtype()) {
+                (DType::F16, DType::F16)
+                | (DType::BF16, DType::BF16)
+                | (DType::F32, DType::F32) => (),
+                (a, b) => {
+                    candle_core::bail!("Expected all dtypes to be the same, got ({a:?}, {b:?}).")
+                }
+            }
+            if !(self.w_q.is_contiguous()
+                && self.scales.is_contiguous()
+                && self.zeros.is_contiguous())
+            {
+                candle_core::bail!("All tensors must be contiguous!");
+            }
+            if self.cfg.axis as usize != 0 {
+                candle_core::bail!(
+                    "CUDA HQQ dequantization requires axis == 0, got {}.",
+                    self.cfg.axis as usize
+                );
+            }
+            let dev = get_cuda_device(&self.w_q)?;
+
+            let inner = match (self.cfg.bits as usize, self.scales.dtype()) {
+                // 8 bits
+                (8, DType::F32) => {
+                    dequant_for_dtype!(
+                        self,
+                        w = u8,
+                        sz = f32,
+                        F32,
+                        pack = 1,
+                        dev,
+                        eight_bit,
+                        8bit_u8_kernel_f32
+                    )
+                }
+                (8, DType::F16) => {
+                    dequant_for_dtype!(
+                        self,
+                        w = u8,
+                        sz = f16,
+                        F16,
+                        pack = 1,
+                        dev,
+                        eight_bit,
+                        8bit_u8_kernel_f16
+                    )
+                }
+                (8, DType::BF16) => {
+                    dequant_for_dtype!(
+                        self,
+                        w = u8,
+                        sz = bf16,
+                        BF16,
+                        pack = 1,
+                        dev,
+                        eight_bit,
+                        8bit_u8_kernel_bf16
+                    )
+                }
+
+                // 4 bits
+                (4, DType::F32) => {
+                    dequant_for_dtype!(
+                        self,
+                        w = u8,
+                        sz = f32,
+                        F32,
+                        pack = 2,
+                        dev,
+                        four_bit,
+                        4bit_u8_kernel_f32
+                    )
+                }
+                (4, DType::F16) => {
+                    dequant_for_dtype!(
+                        self,
+                        w = u8,
+                        sz = f16,
+                        F16,
+                        pack = 2,
+                        dev,
+                        four_bit,
+                        4bit_u8_kernel_f16
+                    )
+                }
+                (4, DType::BF16) => {
+                    dequant_for_dtype!(
+                        self,
+                        w = u8,
+                        sz = bf16,
+                        BF16,
+                        pack = 2,
+                        dev,
+                        four_bit,
+                        4bit_u8_kernel_bf16
+                    )
+                }
+
+                // 3 bits
+                // https://github.com/mobiusml/hqq/blob/306e30d9400629523c8e0af70101d8d7073cb3d5/hqq/kernels/hqq_aten_cuda.cpp#L42-L45
+                (3, DType::F32) => {
+                    let res = dequant_for_dtype!(
+                        self,
+                        w = i32,
+                        sz = f32,
+                        F32,
+                        pack = 10,
+                        dev,
+                        three_bit,
+                        3bit_32_kernel_f32
+                    );
+                    res.narrow(self.cfg.axis as usize, 0, self.cfg.group_size.into())?
+                }
+                (3, DType::F16) => {
+                    let res = dequant_for_dtype!(
+                        self,
+                        w = i32,
+                        sz = f16,
+                        F16,
+                        pack = 10,
+                        dev,
+                        three_bit,
+                        3bit_32_kernel_f16
+                    );
+                    res.narrow(self.cfg.axis as usize, 0, self.cfg.group_size.into())?
+                }
+                (3, DType::BF16) => {
+                    let res = dequant_for_dtype!(
+                        self,
+                        w = i32,
+                        sz = bf16,
+                        BF16,
+                        pack = 10,
+                        dev,
+                        three_bit,
+                        3bit_32_kernel_bf16
+                    );
+                    res.narrow(self.cfg.axis as usize, 0, self.cfg.group_size.into())?
+                }
+
+                // 2 bits
+                (2, DType::F32) => {
+                    dequant_for_dtype!(
+                        self,
+                        w = u8,
+                        sz = f32,
+                        F32,
+                        pack = 4,
+                        dev,
+                        two_bit,
+                        2bit_u8_kernel_f32
+                    )
+                }
+                (2, DType::F16) => {
+                    dequant_for_dtype!(
+                        self,
+                        w = u8,
+                        sz = f16,
+                        F16,
+                        pack = 4,
+                        dev,
+                        two_bit,
+                        2bit_u8_kernel_f16
+                    )
+                }
+                (2, DType::BF16) => {
+                    dequant_for_dtype!(
+                        self,
+                        w = u8,
+                        sz = bf16,
+                        BF16,
+                        pack = 4,
+                        dev,
+                        two_bit,
+                        2bit_u8_kernel_bf16
+                    )
+                }
+
+                // 1 bit
+                (1, DType::F32) => {
+                    dequant_for_dtype!(
+                        self,
+                        w = u8,
+                        sz = f32,
+                        F32,
+                        pack = 8,
+                        dev,
+                        one_bit,
+                        1bit_u8_kernel_f32
+                    )
+                }
+                (1, DType::F16) => {
+                    dequant_for_dtype!(
+                        self,
+                        w = u8,
+                        sz = f16,
+                        F16,
+                        pack = 8,
+                        dev,
+                        one_bit,
+                        1bit_u8_kernel_f16
+                    )
+                }
+                (1, DType::BF16) => {
+                    dequant_for_dtype!(
+                        self,
+                        w = u8,
+                        sz = bf16,
+                        BF16,
+                        pack = 8,
+                        dev,
+                        one_bit,
+                        1bit_u8_kernel_bf16
+                    )
+                }
+                (bits, dtype) => {
+                    candle_core::bail!("Unsupported bit width {bits} and dtype {dtype:?}")
+                }
+            };
+            inner.reshape(&self.w_shape)
         }
-        if self.cfg.axis as usize != 0 {
-            candle_core::bail!(
-                "CUDA HQQ dequantization requires axis == 0, got {}.",
-                self.cfg.axis as usize
-            );
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        {
+            candle_core::bail!("HQQ dequantize: unreachable on hip (handled above)")
         }
-        let dev = get_cuda_device(&self.w_q)?;
-
-        let inner = match (self.cfg.bits as usize, self.scales.dtype()) {
-            // 8 bits
-            (8, DType::F32) => {
-                dequant_for_dtype!(
-                    self,
-                    w = u8,
-                    sz = f32,
-                    F32,
-                    pack = 1,
-                    dev,
-                    eight_bit,
-                    8bit_u8_kernel_f32
-                )
-            }
-            (8, DType::F16) => {
-                dequant_for_dtype!(
-                    self,
-                    w = u8,
-                    sz = f16,
-                    F16,
-                    pack = 1,
-                    dev,
-                    eight_bit,
-                    8bit_u8_kernel_f16
-                )
-            }
-            (8, DType::BF16) => {
-                dequant_for_dtype!(
-                    self,
-                    w = u8,
-                    sz = bf16,
-                    BF16,
-                    pack = 1,
-                    dev,
-                    eight_bit,
-                    8bit_u8_kernel_bf16
-                )
-            }
-
-            // 4 bits
-            (4, DType::F32) => {
-                dequant_for_dtype!(
-                    self,
-                    w = u8,
-                    sz = f32,
-                    F32,
-                    pack = 2,
-                    dev,
-                    four_bit,
-                    4bit_u8_kernel_f32
-                )
-            }
-            (4, DType::F16) => {
-                dequant_for_dtype!(
-                    self,
-                    w = u8,
-                    sz = f16,
-                    F16,
-                    pack = 2,
-                    dev,
-                    four_bit,
-                    4bit_u8_kernel_f16
-                )
-            }
-            (4, DType::BF16) => {
-                dequant_for_dtype!(
-                    self,
-                    w = u8,
-                    sz = bf16,
-                    BF16,
-                    pack = 2,
-                    dev,
-                    four_bit,
-                    4bit_u8_kernel_bf16
-                )
-            }
-
-            // 3 bits
-            // https://github.com/mobiusml/hqq/blob/306e30d9400629523c8e0af70101d8d7073cb3d5/hqq/kernels/hqq_aten_cuda.cpp#L42-L45
-            (3, DType::F32) => {
-                let res = dequant_for_dtype!(
-                    self,
-                    w = i32,
-                    sz = f32,
-                    F32,
-                    pack = 10,
-                    dev,
-                    three_bit,
-                    3bit_32_kernel_f32
-                );
-                res.narrow(self.cfg.axis as usize, 0, self.cfg.group_size.into())?
-            }
-            (3, DType::F16) => {
-                let res = dequant_for_dtype!(
-                    self,
-                    w = i32,
-                    sz = f16,
-                    F16,
-                    pack = 10,
-                    dev,
-                    three_bit,
-                    3bit_32_kernel_f16
-                );
-                res.narrow(self.cfg.axis as usize, 0, self.cfg.group_size.into())?
-            }
-            (3, DType::BF16) => {
-                let res = dequant_for_dtype!(
-                    self,
-                    w = i32,
-                    sz = bf16,
-                    BF16,
-                    pack = 10,
-                    dev,
-                    three_bit,
-                    3bit_32_kernel_bf16
-                );
-                res.narrow(self.cfg.axis as usize, 0, self.cfg.group_size.into())?
-            }
-
-            // 2 bits
-            (2, DType::F32) => {
-                dequant_for_dtype!(
-                    self,
-                    w = u8,
-                    sz = f32,
-                    F32,
-                    pack = 4,
-                    dev,
-                    two_bit,
-                    2bit_u8_kernel_f32
-                )
-            }
-            (2, DType::F16) => {
-                dequant_for_dtype!(
-                    self,
-                    w = u8,
-                    sz = f16,
-                    F16,
-                    pack = 4,
-                    dev,
-                    two_bit,
-                    2bit_u8_kernel_f16
-                )
-            }
-            (2, DType::BF16) => {
-                dequant_for_dtype!(
-                    self,
-                    w = u8,
-                    sz = bf16,
-                    BF16,
-                    pack = 4,
-                    dev,
-                    two_bit,
-                    2bit_u8_kernel_bf16
-                )
-            }
-
-            // 1 bit
-            (1, DType::F32) => {
-                dequant_for_dtype!(
-                    self,
-                    w = u8,
-                    sz = f32,
-                    F32,
-                    pack = 8,
-                    dev,
-                    one_bit,
-                    1bit_u8_kernel_f32
-                )
-            }
-            (1, DType::F16) => {
-                dequant_for_dtype!(
-                    self,
-                    w = u8,
-                    sz = f16,
-                    F16,
-                    pack = 8,
-                    dev,
-                    one_bit,
-                    1bit_u8_kernel_f16
-                )
-            }
-            (1, DType::BF16) => {
-                dequant_for_dtype!(
-                    self,
-                    w = u8,
-                    sz = bf16,
-                    BF16,
-                    pack = 8,
-                    dev,
-                    one_bit,
-                    1bit_u8_kernel_bf16
-                )
-            }
-            (bits, dtype) => candle_core::bail!("Unsupported bit width {bits} and dtype {dtype:?}"),
-        };
-        inner.reshape(&self.w_shape)
     }
 
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     fn dequantize_hip(&self) -> Result<Tensor> {
         match (self.scales.dtype(), self.zeros.dtype()) {
             (DType::F16, DType::F16) | (DType::BF16, DType::BF16) | (DType::F32, DType::F32) => (),

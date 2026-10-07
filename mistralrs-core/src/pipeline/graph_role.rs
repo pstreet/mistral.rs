@@ -14,12 +14,18 @@
 
 use std::sync::Arc;
 
-#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub(crate) use candle_core::cuda_backend::cudarc::driver::CudaEvent as GraphEvent;
-#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub(crate) use candle_core::cuda_backend::cudarc::driver::PinnedHostSlice as GraphPinnedHost;
-#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub(crate) type GraphStream = Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>;
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+pub(crate) use candle_core::hip_backend::cudarc::driver::CudaEvent as GraphEvent;
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+pub(crate) use candle_core::hip_backend::cudarc::driver::PinnedHostSlice as GraphPinnedHost;
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+pub(crate) type GraphStream = Arc<candle_core::hip_backend::cudarc::driver::CudaStream>;
 
 // The single-vendor alias shape must expose the same helper names the dual
 // enum provides; an extension trait carries them since `GraphStream` is an
@@ -75,7 +81,7 @@ pub(crate) mod graph_driver {
         fn from_graph_device(device: &candle_core::Device) -> candle_core::Result<Self> {
             use candle_core::backend::BackendDevice;
             Ok(device
-                .as_cuda_device()
+                .as_role_device()
                 .map_err(|_| candle_core::Error::msg("graph stack requires a CUDA (role) device"))?
                 .cuda_stream())
         }
@@ -169,7 +175,7 @@ pub(crate) mod graph_driver {
         device: &candle_core::Device,
     ) -> candle_core::Result<candle_core::role::backend::CudaGraphHtodCacheGuard> {
         let dev = device
-            .as_cuda_device()
+            .as_role_device()
             .map_err(|_| candle_core::Error::msg("htod cache requires the role CUDA device"))?;
         Ok(dev.enable_cuda_graph_htod_cache())
     }
@@ -185,7 +191,7 @@ pub(crate) mod graph_driver {
         std::sync::Arc<candle_core::role::backend::cudarc::driver::CudaSlice<u8>>,
     > {
         let dev = device
-            .as_cuda_device()
+            .as_role_device()
             .map_err(|_| candle_core::Error::msg("capture arena requires the role device"))?;
         Ok(std::sync::Arc::new(
             unsafe { dev.alloc::<u8>(bytes) }.map_err(candle_core::Error::wrap)?,
@@ -213,7 +219,7 @@ pub(crate) mod graph_driver {
         }
     }
 
-    pub(crate) type StageGuard<'a> = candle_core::cuda_backend::cudarc::driver::SyncOnDrop<'a>;
+    pub(crate) type StageGuard<'a> = candle_core::role::backend::cudarc::driver::SyncOnDrop<'a>;
 
     pub(crate) fn graph_stage_ptr<'a, T>(
         storage: &'a candle_core::Storage,
@@ -235,7 +241,10 @@ pub(crate) mod graph_driver {
         Ok((ptr + (offset * std::mem::size_of::<T>()) as u64, guard))
     }
 
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     use candle_core::cuda_backend::cudarc::driver::sys;
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    use candle_core::hip_backend::cudarc::driver::sys;
 
     pub(crate) fn graph_end_capture(
         stream: &GraphStream,

@@ -14,20 +14,35 @@ use std::{
 use crate::utils::slice_ptr;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::utils::{ffi, slice_ptr_mut_on_stream, slice_ptr_on_stream};
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 use crate::utils::{hip_slice_ptr, hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(all(feature = "cuda", feature = "rocm"))]
 use candle_core::cuda::cudarc::driver::DevicePtr;
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(all(feature = "cuda", feature = "rocm"))]
 use candle_core::cuda::CudaStorage;
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 use candle_core::hip_backend::cudarc::driver::DevicePtr as _;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::role::backend::cudarc::driver::DevicePtr;
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::CudaStorage;
+#[cfg(feature = "rocm")]
 use candle_core::HipStorage;
 // Opaque stream handles are just bits across the driver boundary: hip_fwd
 // twins pass the Hip stream where the shared FFI decl names NVIDIA CUstream.
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 use candle_core::cuda::cudarc::driver::sys::CUstream;
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::role::backend::cudarc::driver::sys::CUstream;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use float8::F8E4M3;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -106,7 +121,7 @@ impl CustomOp1 for Leftshift {
         }
     }
 
-    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, s1: &CudaStorage, l1: &Layout) -> Result<(CudaStorage, Shape)> {
         if !l1.is_contiguous() {
             candle_core::bail!("Input tensor s1 must be contiguous");
@@ -162,7 +177,7 @@ impl CustomOp1 for Leftshift {
         };
         Ok((dst, l1.shape().clone()))
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     /// Dual-role twin of cuda_fwd: the same kernels through the hip
     /// role's bindings (companion-plugin FFI included).
     fn hip_fwd(&self, s1: &HipStorage, l1: &Layout) -> Result<(HipStorage, Shape)> {
@@ -438,7 +453,7 @@ impl CustomOp2 for BitWise {
         }
     }
 
-    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
         s1: &CudaStorage,
@@ -662,7 +677,7 @@ impl CustomOp2 for BitWise {
         };
         Ok((dst, l1.shape().clone()))
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     /// Dual-role twin of cuda_fwd: identical kernels through the
     /// companion plugin, addressed via the Hip role types.
     fn hip_fwd(
@@ -1067,11 +1082,11 @@ impl CustomOp1 for BitWiseUnary {
         }
     }
 
-    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
         candle_core::bail!("bitwise unary operations are not supported on CUDA")
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     /// Dual-role twin of cuda_fwd: the same kernels through the hip
     /// role's bindings (companion-plugin FFI included).
     fn hip_fwd(&self, _s1: &HipStorage, _l1: &Layout) -> Result<(HipStorage, Shape)> {
@@ -1172,11 +1187,11 @@ impl CustomOp1 for ArgSort {
     }
 
     // -------- CUDA -----------------------------------------------------------
-    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
         candle_core::bail!("ArgSort is not implemented for the CUDA backend");
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     /// Dual-role twin of cuda_fwd: the same kernels through the hip
     /// role's bindings (companion-plugin FFI included).
     fn hip_fwd(&self, _s1: &HipStorage, _l1: &Layout) -> Result<(HipStorage, Shape)> {
@@ -1285,11 +1300,11 @@ impl CustomOp1 for Sort {
     }
 
     // -------- CUDA -----------------------------------------------------------
-    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
         candle_core::bail!("Sort is not implemented for the CUDA backend");
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     /// Dual-role twin of cuda_fwd: the same kernels through the hip
     /// role's bindings (companion-plugin FFI included).
     fn hip_fwd(&self, _s1: &HipStorage, _l1: &Layout) -> Result<(HipStorage, Shape)> {
@@ -1442,7 +1457,7 @@ mod cuda_ops_cccl2 {
         dtype: candle_core::DType,
         d_in: *const c_void,
         n: u32,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: CUstream,
     ) -> u32 {
         unsafe {
             match dtype {
@@ -1469,7 +1484,7 @@ mod cuda_ops_cccl2 {
         dims: *const c_void,
         num_dims: u32,
         d_out: *mut c_void,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: CUstream,
     ) {
         unsafe {
             match dtype {
@@ -1514,7 +1529,7 @@ mod cuda_ops_cccl3 {
         dtype: candle_core::DType,
         d_in: *const c_void,
         n: u32,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: CUstream,
     ) -> u32 {
         unsafe {
             match dtype {
@@ -1541,7 +1556,7 @@ mod cuda_ops_cccl3 {
         dims: *const c_void,
         num_dims: u32,
         d_out: *mut c_void,
-        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+        stream: CUstream,
     ) {
         unsafe {
             match dtype {
@@ -1611,7 +1626,7 @@ impl CustomOp1 for NonZero {
         Ok((result, shape))
     }
 
-    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
         storage: &candle_core::CudaStorage,
@@ -1704,7 +1719,7 @@ impl CustomOp1 for NonZero {
         let dst = candle_core::CudaStorage::wrap_cuda_slice(d_out, dev);
         Ok((dst, shape))
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     /// Dual-role twin of cuda_fwd: identical kernels through the
     /// companion plugin, addressed via the Hip role types.
     fn hip_fwd(
@@ -1945,11 +1960,11 @@ impl CustomOp1 for CumSum {
         }
     }
 
-    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
         candle_core::bail!("cumulative sum is not supported on CUDA")
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     /// Dual-role twin of cuda_fwd: the same kernels through the hip
     /// role's bindings (companion-plugin FFI included).
     fn hip_fwd(&self, _s1: &HipStorage, _l1: &Layout) -> Result<(HipStorage, Shape)> {
@@ -2031,7 +2046,7 @@ impl CumSumOp for Tensor {
 /// Fused GPT-OSS SwiGLU activation
 /// Formula: output = (clamp(up, -limit, limit) + 1) * gate_clamped * sigmoid(gate_clamped * alpha)
 /// where gate_clamped = min(gate, limit)
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
 pub fn gptoss_swiglu_fused(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -> Result<Tensor> {
     use half::{bf16, f16};
 
@@ -2168,7 +2183,7 @@ pub fn gptoss_swiglu_fused(gate: &Tensor, up: &Tensor, alpha: f32, limit: f32) -
 ///   limit: SwiGLU limit parameter
 ///
 /// Returns: [N, intermediate_size] - activated output
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
 pub fn gptoss_swiglu_interleaved(
     gate_up: &Tensor,
     intermediate_size: usize,
@@ -2441,7 +2456,7 @@ impl CustomOp1 for SoftmaxWithSinks {
         }
     }
 
-    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, storage: &CudaStorage, layout: &Layout) -> Result<(CudaStorage, Shape)> {
         use half::{bf16, f16};
 
@@ -2553,12 +2568,15 @@ impl CustomOp1 for SoftmaxWithSinks {
             _ => candle_core::bail!("softmax_with_sinks: unsupported dtype {:?}", dtype),
         }
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     /// Dual-role twin of cuda_fwd: the same kernels through the hip
     /// role's bindings (companion-plugin FFI included).
     fn hip_fwd(&self, storage: &HipStorage, layout: &Layout) -> Result<(HipStorage, Shape)> {
         use crate::utils::{hip_slice_ptr, hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
         use candle_core::cuda::cudarc::driver::sys::CUstream;
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        use candle_core::role::backend::cudarc::driver::sys::CUstream;
         use half::{bf16, f16};
 
         let device = storage.device();
@@ -3350,7 +3368,7 @@ impl CustomOp2 for FusedGlu {
         Ok((result_storage, out_shape))
     }
 
-    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
         s1: &CudaStorage,
@@ -3469,7 +3487,7 @@ impl CustomOp2 for FusedGlu {
             _ => candle_core::bail!("fused_glu: unsupported dtype {:?}", dtype),
         }
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     /// Dual-role twin of cuda_fwd: identical kernels through the
     /// companion plugin, addressed via the Hip role types.
     fn hip_fwd(
@@ -3737,54 +3755,63 @@ pub(crate) fn fused_glu_quantized_bf16(
     let gate_row_stride_u32 = u32::try_from(gate_layout.row_stride)?;
     let value_row_stride_u32 = u32::try_from(value_layout.row_stride)?;
     let scale_stride_u32 = u32::try_from(scale_stride_m)?;
-    let candle_core::Device::Cuda(device) = gate.device() else {
-        unreachable!()
-    };
-    let stream = device.cuda_stream();
-    let mut output = unsafe { device.alloc::<F8E4M3>(output_elements)? };
-    let mut scales = unsafe { device.alloc::<f32>(scale_elements)? };
-    let (gate_storage, gate_tensor_layout) = gate.storage_and_layout();
-    let Cuda(gate_storage) = &*gate_storage else {
-        unreachable!()
-    };
-    let (value_storage, value_tensor_layout) = value.storage_and_layout();
-    let Cuda(value_storage) = &*value_storage else {
-        unreachable!()
-    };
-    let gate_slice = gate_storage.as_cuda_slice::<bf16>()?;
-    let value_slice = value_storage.as_cuda_slice::<bf16>()?;
-    let (gate_ptr, gate_guard) =
-        slice_ptr_on_stream(gate_slice, gate_tensor_layout.start_offset(), &stream);
-    let (value_ptr, value_guard) =
-        slice_ptr_on_stream(value_slice, value_tensor_layout.start_offset(), &stream);
-    let (output_ptr, output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
-    let (scales_ptr, scales_guard) = slice_ptr_mut_on_stream(&mut scales, 0, &stream);
-    unsafe {
-        ffi::fused_glu_quantize_bf16(
-            gate_ptr as *const c_void,
-            value_ptr as *const c_void,
-            output_ptr as *mut c_void,
-            scales_ptr as *mut f32,
-            rows_u32,
-            columns_u32,
-            gate_row_stride_u32,
-            value_row_stride_u32,
-            scale_stride_u32,
-            activation as i32,
-            stream.cu_stream(),
-        );
-    }
-    drop((gate_guard, value_guard, output_guard, scales_guard));
+    #[cfg(feature = "cuda")]
+    {
+        let candle_core::Device::Cuda(device) = gate.device() else {
+            unreachable!()
+        };
+        let stream = device.cuda_stream();
+        let mut output = unsafe { device.alloc::<F8E4M3>(output_elements)? };
+        let mut scales = unsafe { device.alloc::<f32>(scale_elements)? };
+        let (gate_storage, gate_tensor_layout) = gate.storage_and_layout();
+        let Cuda(gate_storage) = &*gate_storage else {
+            unreachable!()
+        };
+        let (value_storage, value_tensor_layout) = value.storage_and_layout();
+        let Cuda(value_storage) = &*value_storage else {
+            unreachable!()
+        };
+        let gate_slice = gate_storage.as_cuda_slice::<bf16>()?;
+        let value_slice = value_storage.as_cuda_slice::<bf16>()?;
+        let (gate_ptr, gate_guard) =
+            slice_ptr_on_stream(gate_slice, gate_tensor_layout.start_offset(), &stream);
+        let (value_ptr, value_guard) =
+            slice_ptr_on_stream(value_slice, value_tensor_layout.start_offset(), &stream);
+        let (output_ptr, output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
+        let (scales_ptr, scales_guard) = slice_ptr_mut_on_stream(&mut scales, 0, &stream);
+        unsafe {
+            ffi::fused_glu_quantize_bf16(
+                gate_ptr as *const c_void,
+                value_ptr as *const c_void,
+                output_ptr as *mut c_void,
+                scales_ptr as *mut f32,
+                rows_u32,
+                columns_u32,
+                gate_row_stride_u32,
+                value_row_stride_u32,
+                scale_stride_u32,
+                activation as i32,
+                stream.cu_stream(),
+            );
+        }
+        drop((gate_guard, value_guard, output_guard, scales_guard));
 
-    let output = Tensor::from((
-        Storage::Cuda(CudaStorage::wrap_cuda_slice(output, device.clone())),
-        Shape::from_dims(&[rows, columns]),
-    ));
-    let scales = Tensor::from((
-        Storage::Cuda(CudaStorage::wrap_cuda_slice(scales, device.clone())),
-        Shape::from_dims(&[scale_groups, scale_stride_m]),
-    ));
-    Ok(Some((output, scales)))
+        let output = Tensor::from((
+            Storage::Cuda(CudaStorage::wrap_cuda_slice(output, device.clone())),
+            Shape::from_dims(&[rows, columns]),
+        ));
+        let scales = Tensor::from((
+            Storage::Cuda(CudaStorage::wrap_cuda_slice(scales, device.clone())),
+            Shape::from_dims(&[scale_groups, scale_stride_m]),
+        ));
+        Ok(Some((output, scales)))
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        // No NVIDIA role in this build; the is_cuda() guard above
+        // already returned None for every constructible device.
+        return Ok(None);
+    }
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -3803,6 +3830,7 @@ impl CustomOp1 for FusedSplitGlu {
         candle_core::bail!("fused split GLU CUDA op received CPU storage")
     }
 
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, storage: &CudaStorage, layout: &Layout) -> Result<(CudaStorage, Shape)> {
         use half::{bf16, f16};
 
@@ -3885,7 +3913,7 @@ impl CustomOp1 for FusedSplitGlu {
         };
         Ok((output, output_shape))
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     /// Dual-role twin of cuda_fwd: identical kernels through the
     /// companion plugin, addressed via the Hip role types.
     fn hip_fwd(&self, storage: &HipStorage, layout: &Layout) -> Result<(HipStorage, Shape)> {
@@ -4063,46 +4091,55 @@ pub(crate) fn fused_split_glu_quantized_bf16(
     let rows_u32 = u32::try_from(rows)?;
     let split_size_u32 = u32::try_from(split_size)?;
     let scale_stride_u32 = u32::try_from(scale_stride_m)?;
-    let candle_core::Device::Cuda(device) = input.device() else {
-        unreachable!()
-    };
-    let stream = device.cuda_stream();
-    let mut output = unsafe { device.alloc::<F8E4M3>(output_elements)? };
-    let mut scales = unsafe { device.alloc::<f32>(scale_elements)? };
-    let (input_storage, input_layout) = input.storage_and_layout();
-    let Cuda(input_storage) = &*input_storage else {
-        unreachable!()
-    };
-    let input_slice = input_storage.as_cuda_slice::<bf16>()?;
-    let (input_ptr, input_guard) =
-        slice_ptr_on_stream(input_slice, input_layout.start_offset(), &stream);
-    let (output_ptr, output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
-    let (scales_ptr, scales_guard) = slice_ptr_mut_on_stream(&mut scales, 0, &stream);
-    unsafe {
-        ffi::fused_split_glu_quantize_bf16(
-            input_ptr as *const c_void,
-            output_ptr as *mut c_void,
-            scales_ptr as *mut f32,
-            rows_u32,
-            split_size_u32,
-            scale_stride_u32,
-            activation as i32,
-            stream.cu_stream(),
-        );
-    }
-    drop((input_guard, output_guard, scales_guard));
+    #[cfg(feature = "cuda")]
+    {
+        let candle_core::Device::Cuda(device) = input.device() else {
+            unreachable!()
+        };
+        let stream = device.cuda_stream();
+        let mut output = unsafe { device.alloc::<F8E4M3>(output_elements)? };
+        let mut scales = unsafe { device.alloc::<f32>(scale_elements)? };
+        let (input_storage, input_layout) = input.storage_and_layout();
+        let Cuda(input_storage) = &*input_storage else {
+            unreachable!()
+        };
+        let input_slice = input_storage.as_cuda_slice::<bf16>()?;
+        let (input_ptr, input_guard) =
+            slice_ptr_on_stream(input_slice, input_layout.start_offset(), &stream);
+        let (output_ptr, output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
+        let (scales_ptr, scales_guard) = slice_ptr_mut_on_stream(&mut scales, 0, &stream);
+        unsafe {
+            ffi::fused_split_glu_quantize_bf16(
+                input_ptr as *const c_void,
+                output_ptr as *mut c_void,
+                scales_ptr as *mut f32,
+                rows_u32,
+                split_size_u32,
+                scale_stride_u32,
+                activation as i32,
+                stream.cu_stream(),
+            );
+        }
+        drop((input_guard, output_guard, scales_guard));
 
-    let mut output_shape = input.dims()[..input.rank() - 1].to_vec();
-    output_shape.push(split_size);
-    let output = Tensor::from((
-        Storage::Cuda(CudaStorage::wrap_cuda_slice(output, device.clone())),
-        Shape::from_dims(&output_shape),
-    ));
-    let scales = Tensor::from((
-        Storage::Cuda(CudaStorage::wrap_cuda_slice(scales, device.clone())),
-        Shape::from_dims(&[scale_groups, scale_stride_m]),
-    ));
-    Ok((output, scales))
+        let mut output_shape = input.dims()[..input.rank() - 1].to_vec();
+        output_shape.push(split_size);
+        let output = Tensor::from((
+            Storage::Cuda(CudaStorage::wrap_cuda_slice(output, device.clone())),
+            Shape::from_dims(&output_shape),
+        ));
+        let scales = Tensor::from((
+            Storage::Cuda(CudaStorage::wrap_cuda_slice(scales, device.clone())),
+            Shape::from_dims(&[scale_groups, scale_stride_m]),
+        ));
+        Ok((output, scales))
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        // No NVIDIA role in this build; the is_cuda() guard above
+        // already bailed for every constructible device.
+        candle_core::bail!("fused split GLU FP8 quantization requires the NVIDIA role")
+    }
 }
 
 struct Softcap(f32);
@@ -4130,7 +4167,7 @@ impl CustomOp1 for Softcap {
         Ok((CpuStorage::F32(result), out_shape))
     }
 
-    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, s1: &CudaStorage, l1: &Layout) -> Result<(CudaStorage, Shape)> {
         let device = s1.device();
         let n_elements = l1.shape().elem_count();
@@ -4170,7 +4207,7 @@ impl CustomOp1 for Softcap {
             out_shape,
         ))
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     /// Dual-role twin of cuda_fwd: identical kernels through the
     /// companion plugin, addressed via the Hip role types.
     fn hip_fwd(&self, s1: &HipStorage, l1: &Layout) -> Result<(HipStorage, Shape)> {
@@ -5693,4 +5730,28 @@ mod tests {
             "CUDA BF16 Gelu fused vs candle fallback max_diff {max_diff} exceeds 1 BF16 ULP"
         );
     }
+}
+
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+pub fn gptoss_swiglu_fused(
+    _gate: &Tensor,
+    _up: &Tensor,
+    _alpha: f32,
+    _limit: f32,
+) -> Result<Tensor> {
+    candle_core::bail!(
+        "gptoss_swiglu_fused needs the NVIDIA role (callers fall back to elementwise)"
+    )
+}
+
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+pub fn gptoss_swiglu_interleaved(
+    _gate_up: &Tensor,
+    _intermediate_size: usize,
+    _alpha: f32,
+    _limit: f32,
+) -> Result<Tensor> {
+    candle_core::bail!(
+        "gptoss_swiglu_interleaved needs the NVIDIA role (callers fall back to elementwise)"
+    )
 }

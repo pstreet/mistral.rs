@@ -5,9 +5,17 @@ use candle_core::{backend::BackendStorage, DType, Result, Shape, Storage, Tensor
 #[cfg(feature = "metal")]
 use candle_core::MetalStorage;
 
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(all(feature = "cuda", feature = "rocm"))]
 use candle_core::{
     cuda::{cudarc::driver::DevicePtr, CudaStorageSlice},
+    CudaStorage,
+};
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+use candle_core::{
+    role::backend::{cudarc::driver::DevicePtr, CudaStorageSlice},
     CudaStorage,
 };
 
@@ -117,7 +125,10 @@ pub(crate) fn afq_quantize_op(
     }
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     if w.device().is_cuda() {
+        #[cfg(feature = "cuda")]
         return cuda_backend::afq_quantize_op(w, group_size, bits);
+        #[cfg(not(feature = "cuda"))]
+        unreachable!("is_cuda() is false without the cuda feature");
     }
 
     // CPU fallback for non-accelerated devices
@@ -212,6 +223,7 @@ pub(crate) fn afq_dequantize_op(
     }
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     if w_q.device().is_cuda() {
+        #[cfg(feature = "cuda")]
         return cuda_backend::afq_dequantize_op(w_q, scales, biases, group_size, bits);
     }
 
@@ -310,6 +322,7 @@ pub(crate) fn afq_embedding_op(
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     if w_q.device().is_cuda() {
+        #[cfg(feature = "cuda")]
         return cuda_backend::afq_embedding_op(ids, w_q, scales, biases, group_size, bits);
     }
 
@@ -602,6 +615,7 @@ pub(crate) fn afq_mm_op(
     }
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     if x.device().is_cuda() {
+        #[cfg(feature = "cuda")]
         return cuda_backend::afq_mm_op(
             x,
             w,
@@ -613,6 +627,8 @@ pub(crate) fn afq_mm_op(
             bits,
             transpose,
         );
+        #[cfg(not(feature = "cuda"))]
+        unreachable!("is_cuda() is false without the cuda feature");
     }
 
     // CPU fallback for non-accelerated devices
@@ -1769,7 +1785,7 @@ mod cpu_backend {
 // ============================================================
 //                    CUDA backend
 // ============================================================
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
 mod cuda_backend {
     use super::*;
     use crate::afq::ffi;

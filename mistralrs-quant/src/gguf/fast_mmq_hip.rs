@@ -76,7 +76,12 @@ pub fn dequant_handoff_rows(dtype: GgmlDType, arch: GpuArch) -> Option<usize> {
     if matches!(arch, GpuArch::Rocm { gfx: (11, _, _) })
         && matches!(dtype, GgmlDType::Q2K | GgmlDType::Q6K)
     {
-        Some(candle_core::quantized::cuda::dequant_f16_min_rows())
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        return Some(candle_core::quantized::cuda::dequant_f16_min_rows());
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        return Some(candle_core::quantized::hip::dequant_f16_min_rows());
+        #[cfg(not(feature = "rocm"))]
+        return None;
     } else {
         None
     }
@@ -95,7 +100,9 @@ pub fn batch_supported(dtype: GgmlDType, flat_batch: usize, arch: GpuArch) -> bo
 
 pub fn device_arch(device: &Device) -> Result<GpuArch> {
     match device {
+        #[cfg(feature = "cuda")]
         Device::Cuda(dev) => Ok(GpuArch::resolve(dev)?),
+        #[cfg(feature = "rocm")]
         Device::Hip(dev) => Ok(GpuArch::resolve_hip(dev)?),
         _ => candle_core::bail!("fast_mmq device_arch requires a GPU device"),
     }
@@ -871,13 +878,13 @@ macro_rules! hip_bail_moe {
 pub fn grouped(
     _weight: &QTensor,
     _xs: &Tensor,
-    _ids_src: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
-    _ids_dst: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
-    _expert_bounds: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
+    _ids_src: &candle_core::role::backend::cudarc::driver::CudaSlice<u32>,
+    _ids_dst: &candle_core::role::backend::cudarc::driver::CudaSlice<u32>,
+    _expert_bounds: &candle_core::role::backend::cudarc::driver::CudaSlice<u32>,
     _total_assignments: usize,
     _ncols_max: usize,
     _num_experts: usize,
-    _dev: &candle_core::cuda::CudaDevice,
+    _dev: &candle_core::role::backend::CudaDevice,
 ) -> Result<Tensor> {
     hip_bail_moe!("fast_mmq::grouped")
 }
@@ -886,14 +893,14 @@ pub fn grouped_from_glu_pair(
     _weight: &QTensor,
     _gate: &Tensor,
     _up: &Tensor,
-    _ids_src: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
-    _ids_dst: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
-    _expert_bounds: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
+    _ids_src: &candle_core::role::backend::cudarc::driver::CudaSlice<u32>,
+    _ids_dst: &candle_core::role::backend::cudarc::driver::CudaSlice<u32>,
+    _expert_bounds: &candle_core::role::backend::cudarc::driver::CudaSlice<u32>,
     _total_assignments: usize,
     _ncols_max: usize,
     _num_experts: usize,
     _activation: i32,
-    _dev: &candle_core::cuda::CudaDevice,
+    _dev: &candle_core::role::backend::CudaDevice,
 ) -> Result<Tensor> {
     hip_bail_moe!("fast_mmq::grouped_from_glu_pair")
 }
@@ -902,13 +909,13 @@ pub fn grouped_from_glu_sorted_pair(
     _weight: &QTensor,
     _gate: &Tensor,
     _up: &Tensor,
-    _ids_dst: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
-    _expert_bounds: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
+    _ids_dst: &candle_core::role::backend::cudarc::driver::CudaSlice<u32>,
+    _expert_bounds: &candle_core::role::backend::cudarc::driver::CudaSlice<u32>,
     _total_assignments: usize,
     _ncols_max: usize,
     _num_experts: usize,
     _activation: i32,
-    _dev: &candle_core::cuda::CudaDevice,
+    _dev: &candle_core::role::backend::CudaDevice,
 ) -> Result<Tensor> {
     hip_bail_moe!("fast_mmq::grouped_from_glu_sorted_pair")
 }
@@ -916,14 +923,14 @@ pub fn grouped_from_glu_sorted_pair(
 pub fn grouped_from_glu_packed(
     _weight: &QTensor,
     _gate_up: &Tensor,
-    _ids_src: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
-    _ids_dst: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
-    _expert_bounds: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
+    _ids_src: &candle_core::role::backend::cudarc::driver::CudaSlice<u32>,
+    _ids_dst: &candle_core::role::backend::cudarc::driver::CudaSlice<u32>,
+    _expert_bounds: &candle_core::role::backend::cudarc::driver::CudaSlice<u32>,
     _total_assignments: usize,
     _ncols_max: usize,
     _num_experts: usize,
     _activation: i32,
-    _dev: &candle_core::cuda::CudaDevice,
+    _dev: &candle_core::role::backend::CudaDevice,
 ) -> Result<Tensor> {
     hip_bail_moe!("fast_mmq::grouped_from_glu_packed")
 }
@@ -932,13 +939,13 @@ pub fn grouped_pair_packed(
     _gate: &QTensor,
     _up: &QTensor,
     _xs: &Tensor,
-    _ids_src: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
-    _ids_dst: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
-    _expert_bounds: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
+    _ids_src: &candle_core::role::backend::cudarc::driver::CudaSlice<u32>,
+    _ids_dst: &candle_core::role::backend::cudarc::driver::CudaSlice<u32>,
+    _expert_bounds: &candle_core::role::backend::cudarc::driver::CudaSlice<u32>,
     _total_assignments: usize,
     _topk: usize,
     _num_experts: usize,
-    _dev: &candle_core::cuda::CudaDevice,
+    _dev: &candle_core::role::backend::CudaDevice,
 ) -> Result<Tensor> {
     hip_bail_moe!("fast_mmq::grouped_pair_packed")
 }
@@ -947,13 +954,13 @@ pub fn grouped_pair(
     _gate: &QTensor,
     _up: &QTensor,
     _xs: &Tensor,
-    _ids_src: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
-    _ids_dst: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
-    _expert_bounds: &candle_core::cuda::cudarc::driver::CudaSlice<u32>,
+    _ids_src: &candle_core::role::backend::cudarc::driver::CudaSlice<u32>,
+    _ids_dst: &candle_core::role::backend::cudarc::driver::CudaSlice<u32>,
+    _expert_bounds: &candle_core::role::backend::cudarc::driver::CudaSlice<u32>,
     _total_assignments: usize,
     _topk: usize,
     _num_experts: usize,
-    _dev: &candle_core::cuda::CudaDevice,
+    _dev: &candle_core::role::backend::CudaDevice,
 ) -> Result<(Tensor, Tensor)> {
     hip_bail_moe!("fast_mmq::grouped_pair")
 }

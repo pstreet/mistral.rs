@@ -152,7 +152,7 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
         unified_memory: None,
     });
 
-    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     {
         let mut ord = 0;
         while let Ok(dev) = Device::new_cuda(ord) {
@@ -180,6 +180,77 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
                 compute_capability: compute_cap,
                 flash_attn_compatible: flash_attn_v2_ok,
                 flash_attn_v3_compatible: flash_attn_v3_ok,
+                unified_memory: Some(crate::utils::normal::is_integrated_gpu(&dev)),
+            });
+            ord += 1;
+        }
+    }
+
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    {
+        let mut ord = 0;
+        while let Ok(dev) = Device::new_hip(ord) {
+            let mem = MemoryUsage.query(&dev).ok();
+            let total = mem.map(|m| m.total() as u64);
+            let avail = mem.map(|m| m.available() as u64);
+
+            devices.push(DeviceInfo {
+                kind: "hip".to_string(),
+                ordinal: Some(ord),
+                name: None,
+                total_memory_bytes: total,
+                available_memory_bytes: avail,
+                compute_capability: None,
+                flash_attn_compatible: None,
+                flash_attn_v3_compatible: None,
+                unified_memory: Some(crate::utils::normal::is_integrated_gpu(&dev)),
+            });
+            ord += 1;
+        }
+    }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    {
+        let mut ord = 0;
+        while let Ok(dev) = Device::new_cuda(ord) {
+            let mem = MemoryUsage.query(&dev).ok();
+            let total = mem.map(|m| m.total() as u64);
+            let avail = mem.map(|m| m.available() as u64);
+
+            // Get compute capability
+            let compute_cap = get_cuda_compute_capability(ord);
+            let flash_attn_v2_ok = compute_cap.map(|(major, _minor)| major >= 8);
+            let flash_attn_v3_ok = compute_cap.map(|(major, minor)| major == 9 && minor == 0);
+
+            devices.push(DeviceInfo {
+                kind: "cuda".to_string(),
+                ordinal: Some(ord),
+                name: None,
+                total_memory_bytes: total,
+                available_memory_bytes: avail,
+                compute_capability: compute_cap,
+                flash_attn_compatible: flash_attn_v2_ok,
+                flash_attn_v3_compatible: flash_attn_v3_ok,
+                unified_memory: Some(crate::utils::normal::is_integrated_gpu(&dev)),
+            });
+            ord += 1;
+        }
+
+        let mut ord = 0;
+        while let Ok(dev) = Device::new_hip(ord) {
+            let mem = MemoryUsage.query(&dev).ok();
+            let total = mem.map(|m| m.total() as u64);
+            let avail = mem.map(|m| m.available() as u64);
+
+            devices.push(DeviceInfo {
+                kind: "hip".to_string(),
+                ordinal: Some(ord),
+                name: None,
+                total_memory_bytes: total,
+                available_memory_bytes: avail,
+                compute_capability: None,
+                flash_attn_compatible: None,
+                flash_attn_v3_compatible: None,
                 unified_memory: Some(crate::utils::normal::is_integrated_gpu(&dev)),
             });
             ord += 1;

@@ -3,25 +3,27 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use candle_core::backend::{BackendDevice, BackendStorage};
+#[cfg(feature = "cuda")]
 use candle_core::cuda_backend::cudarc::driver::{
     sys, CudaEvent, CudaStream, DevicePtr, DevicePtrMut, DeviceRepr, PinnedHostSlice,
     ValidAsZeroBits,
 };
+#[cfg(feature = "cuda")]
 use candle_core::cuda_backend::CudaStorageSlice;
 use candle_core::{
     CpuStorage, CudaStorage, DType, DeviceLocation, InplaceOp1, Layout, Result, Shape, Storage,
     Tensor,
 };
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 use candle_core::hip_backend::cudarc::driver::{
     CudaEvent as HipEvent, CudaStream as HipStream, DevicePtr as HipDevicePtr,
     DevicePtrMut as HipDevicePtrMut, DeviceRepr as HipDeviceRepr,
     PinnedHostSlice as HipPinnedHostSlice, ValidAsZeroBits as HipValidAsZeroBits,
 };
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 use candle_core::hip_backend::{CudaDevice as HipDevice, CudaStorageSlice as HipStorageSlice};
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 use candle_core::HipStorage;
 
 use crate::ops::{
@@ -115,6 +117,7 @@ impl SparseRejectionDeviceTensor {
         Self::Tensor(tensor.clone())
     }
 
+    #[cfg(feature = "cuda")]
     fn from_rows(
         rows: &[Tensor],
         dtype: DType,
@@ -194,6 +197,7 @@ impl SparseRejectionDeviceTensor {
     }
 }
 
+#[cfg(feature = "cuda")]
 fn dense_cuda_rows(
     rows: &[Tensor],
     dtype: DType,
@@ -257,13 +261,16 @@ struct SparseRejectionDeviceInput<'a> {
     mode: SparseRejectionMode,
 }
 
+#[cfg(feature = "cuda")]
 struct SparseRejectionPinned<T> {
     allocation: PinnedHostSlice<T>,
     ptr: NonNull<T>,
 }
 
+#[cfg(feature = "cuda")]
 unsafe impl<T: Send> Send for SparseRejectionPinned<T> {}
 
+#[cfg(feature = "cuda")]
 impl<T: DeviceRepr + ValidAsZeroBits> SparseRejectionPinned<T> {
     fn new(stream: &Arc<CudaStream>, len: usize) -> Result<Self> {
         let mut allocation =
@@ -290,6 +297,7 @@ impl<T: DeviceRepr + ValidAsZeroBits> SparseRejectionPinned<T> {
     }
 }
 
+#[cfg(feature = "cuda")]
 struct CudaSparseRejectionPending {
     generation: u64,
     batch: usize,
@@ -297,6 +305,7 @@ struct CudaSparseRejectionPending {
     _output: SparseRejectionOutput,
 }
 
+#[cfg(feature = "cuda")]
 pub struct CudaSparseRejectionWorkspace {
     location: DeviceLocation,
     stream: Arc<CudaStream>,
@@ -328,6 +337,7 @@ pub struct CudaSparseRejectionWorkspace {
     pending: Option<CudaSparseRejectionPending>,
 }
 
+#[cfg(feature = "cuda")]
 impl Drop for CudaSparseRejectionWorkspace {
     fn drop(&mut self) {
         if self.pending.is_some() {
@@ -336,6 +346,7 @@ impl Drop for CudaSparseRejectionWorkspace {
     }
 }
 
+#[cfg(feature = "cuda")]
 pub(crate) struct CudaSparseRejectionSubmission {
     workspace_id: u64,
     generation: u64,
@@ -344,6 +355,7 @@ pub(crate) struct CudaSparseRejectionSubmission {
     completion: Arc<CudaEvent>,
 }
 
+#[cfg(feature = "cuda")]
 impl CudaSparseRejectionSubmission {
     fn wait(&self) -> Result<()> {
         self.completion
@@ -352,32 +364,31 @@ impl CudaSparseRejectionSubmission {
     }
 }
 
-/// Role eligibility for the sparse-rejection device path. Solo shapes
-/// serve the compiled backend (the rocm alias presents the AMD device
-/// as CUDA); dual builds serve the hip role only - the NVIDIA role has
-/// no kernels here and is loudly refused at submit time, so gates send
+/// Role eligibility for the sparse-rejection device path. Every rocm
+/// build serves the hip role; the NVIDIA role (cuda builds) has no
+/// kernels here and is loudly refused at submit time, so gates send
 /// it to the CPU fallback instead.
 pub(crate) fn sparse_rejection_role_eligible(device: &candle_core::Device) -> bool {
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     {
         return device.is_hip();
     }
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     {
         return device.is_cuda();
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 struct HipSparseRejectionPinned<T> {
     allocation: HipPinnedHostSlice<T>,
     ptr: NonNull<T>,
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 unsafe impl<T: Send> Send for HipSparseRejectionPinned<T> {}
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 impl<T: HipDeviceRepr + HipValidAsZeroBits> HipSparseRejectionPinned<T> {
     fn new(stream: &Arc<HipStream>, len: usize) -> Result<Self> {
         let mut allocation =
@@ -404,7 +415,7 @@ impl<T: HipDeviceRepr + HipValidAsZeroBits> HipSparseRejectionPinned<T> {
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 struct HipSparseRejectionPending {
     generation: u64,
     batch: usize,
@@ -412,7 +423,7 @@ struct HipSparseRejectionPending {
     _output: SparseRejectionOutput,
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 pub(crate) struct HipSparseRejectionWorkspace {
     location: DeviceLocation,
     stream: Arc<HipStream>,
@@ -444,7 +455,7 @@ pub(crate) struct HipSparseRejectionWorkspace {
     pending: Option<HipSparseRejectionPending>,
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 impl Drop for HipSparseRejectionWorkspace {
     fn drop(&mut self) {
         if self.pending.is_some() {
@@ -453,7 +464,7 @@ impl Drop for HipSparseRejectionWorkspace {
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 pub(crate) struct HipSparseRejectionSubmission {
     workspace_id: u64,
     generation: u64,
@@ -462,7 +473,7 @@ pub(crate) struct HipSparseRejectionSubmission {
     completion: Arc<HipEvent>,
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 impl HipSparseRejectionSubmission {
     fn wait(&self) -> Result<()> {
         self.completion
@@ -471,7 +482,7 @@ impl HipSparseRejectionSubmission {
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 impl HipSparseRejectionWorkspace {
     fn new(device: &candle_core::Device, batch: usize, drafts: usize) -> Result<Self> {
         use candle_core::backend::BackendDevice;
@@ -554,8 +565,11 @@ pub(crate) enum SparseRejectionWorkspace {
     Hip(HipSparseRejectionWorkspace),
 }
 
-#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub(crate) type SparseRejectionWorkspace = CudaSparseRejectionWorkspace;
+
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+pub(crate) type SparseRejectionWorkspace = HipSparseRejectionWorkspace;
 
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 pub(crate) enum SparseRejectionSubmission {
@@ -563,8 +577,11 @@ pub(crate) enum SparseRejectionSubmission {
     Hip(HipSparseRejectionSubmission),
 }
 
-#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub(crate) type SparseRejectionSubmission = CudaSparseRejectionSubmission;
+
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+pub(crate) type SparseRejectionSubmission = HipSparseRejectionSubmission;
 
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 pub(crate) fn sparse_rejection_submit(
@@ -595,8 +612,11 @@ pub(crate) fn sparse_rejection_submit(
     Ok(SparseRejectionSubmission::Cuda(submission))
 }
 
-#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub(crate) use sparse_rejection_cuda_submit as sparse_rejection_submit;
+
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+pub(crate) use sparse_rejection_hip_submit as sparse_rejection_submit;
 
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 pub(crate) fn sparse_rejection_complete(
@@ -630,8 +650,11 @@ pub(crate) fn sparse_rejection_complete(
     }
 }
 
-#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub(crate) use sparse_rejection_cuda_complete as sparse_rejection_complete;
+
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+pub(crate) use sparse_rejection_hip_complete as sparse_rejection_complete;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SparseRejectionRow {
@@ -714,12 +737,12 @@ impl InplaceOp1 for SparseRejectionKernelLaunch {
     fn cuda_fwd(&self, storage: &mut CudaStorage, layout: &Layout) -> Result<()> {
         // In dual builds these symbols resolve to the hip companion; the
         // NVIDIA role would launch hip kernels on a CUDA stream.
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         {
             let _ = (storage, layout);
             candle_core::bail!("{OP} needs the serving (hip) role in dual builds")
         }
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(feature = "cuda")]
         {
             let stream = storage.device().cuda_stream();
             let outcomes = storage.as_cuda_slice_mut::<u32>()?;
@@ -772,7 +795,7 @@ impl InplaceOp1 for SparseRejectionKernelLaunch {
         }
     }
 
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     fn hip_fwd(&self, storage: &mut HipStorage, layout: &Layout) -> Result<()> {
         use candle_core::backend::BackendStorage;
         use candle_core::hip_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
@@ -828,6 +851,7 @@ impl InplaceOp1 for SparseRejectionKernelLaunch {
     }
 }
 
+#[cfg(feature = "cuda")]
 fn validate_input(input: &SparseRejectionDeviceInput<'_>) -> Result<SparseRejectionShape> {
     let shape = validate_input_shapes(input, false)?;
     if !input.target_logits.device().is_cuda() {
@@ -847,6 +871,7 @@ fn workspace_capacity(required: usize, name: &str) -> Result<usize> {
     })
 }
 
+#[cfg(feature = "cuda")]
 impl CudaSparseRejectionWorkspace {
     fn new(device: &candle_core::Device, batch: usize, drafts: usize) -> Result<Self> {
         let cuda_device = device.as_cuda_device()?;
@@ -920,12 +945,14 @@ impl CudaSparseRejectionWorkspace {
     }
 }
 
+#[cfg(feature = "cuda")]
 struct PinnedU32HtoD<'a> {
     host: &'a SparseRejectionPinned<u32>,
     len: usize,
     stream: &'a Arc<CudaStream>,
 }
 
+#[cfg(feature = "cuda")]
 impl InplaceOp1 for PinnedU32HtoD<'_> {
     fn name(&self) -> &'static str {
         "sparse-rejection-u32-htod"
@@ -936,7 +963,7 @@ impl InplaceOp1 for PinnedU32HtoD<'_> {
     }
 
     fn cuda_fwd(&self, storage: &mut CudaStorage, layout: &Layout) -> Result<()> {
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         {
             let _ = (storage, layout);
             candle_core::bail!(
@@ -944,7 +971,7 @@ impl InplaceOp1 for PinnedU32HtoD<'_> {
                 self.name()
             )
         }
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(feature = "cuda")]
         {
             let dst = storage.as_cuda_slice_mut::<u32>()?;
             let start = layout.start_offset();
@@ -967,7 +994,7 @@ impl InplaceOp1 for PinnedU32HtoD<'_> {
         }
     }
 
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     fn hip_fwd(&self, _storage: &mut HipStorage, _layout: &Layout) -> Result<()> {
         candle_core::bail!(
             "{} needs the hip pinned type (HipPinnedU32HtoD) in dual builds",
@@ -976,14 +1003,14 @@ impl InplaceOp1 for PinnedU32HtoD<'_> {
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 struct HipPinnedU32HtoD<'a> {
     host: &'a HipSparseRejectionPinned<u32>,
     len: usize,
     stream: &'a Arc<HipStream>,
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 impl InplaceOp1 for HipPinnedU32HtoD<'_> {
     fn name(&self) -> &'static str {
         "sparse-rejection-u32-htod"
@@ -1026,12 +1053,14 @@ impl InplaceOp1 for HipPinnedU32HtoD<'_> {
     }
 }
 
+#[cfg(feature = "cuda")]
 struct PinnedF32HtoD<'a> {
     host: &'a SparseRejectionPinned<f32>,
     len: usize,
     stream: &'a Arc<CudaStream>,
 }
 
+#[cfg(feature = "cuda")]
 impl InplaceOp1 for PinnedF32HtoD<'_> {
     fn name(&self) -> &'static str {
         "sparse-rejection-f32-htod"
@@ -1042,7 +1071,7 @@ impl InplaceOp1 for PinnedF32HtoD<'_> {
     }
 
     fn cuda_fwd(&self, storage: &mut CudaStorage, layout: &Layout) -> Result<()> {
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         {
             let _ = (storage, layout);
             candle_core::bail!(
@@ -1050,7 +1079,7 @@ impl InplaceOp1 for PinnedF32HtoD<'_> {
                 self.name()
             )
         }
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(feature = "cuda")]
         {
             let dst = storage.as_cuda_slice_mut::<f32>()?;
             let start = layout.start_offset();
@@ -1073,7 +1102,7 @@ impl InplaceOp1 for PinnedF32HtoD<'_> {
         }
     }
 
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     fn hip_fwd(&self, _storage: &mut HipStorage, _layout: &Layout) -> Result<()> {
         candle_core::bail!(
             "{} needs the hip pinned type (HipPinnedF32HtoD) in dual builds",
@@ -1082,14 +1111,14 @@ impl InplaceOp1 for PinnedF32HtoD<'_> {
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 struct HipPinnedF32HtoD<'a> {
     host: &'a HipSparseRejectionPinned<f32>,
     len: usize,
     stream: &'a Arc<HipStream>,
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 impl InplaceOp1 for HipPinnedF32HtoD<'_> {
     fn name(&self) -> &'static str {
         "sparse-rejection-f32-htod"
@@ -1132,6 +1161,7 @@ impl InplaceOp1 for HipPinnedF32HtoD<'_> {
     }
 }
 
+#[cfg(feature = "cuda")]
 fn enqueue_u32_htod(
     host: &SparseRejectionPinned<u32>,
     dst: &Tensor,
@@ -1150,6 +1180,7 @@ fn enqueue_u32_htod(
     dst.inplace_op1(&PinnedU32HtoD { host, len, stream })
 }
 
+#[cfg(feature = "cuda")]
 fn enqueue_f32_htod(
     host: &SparseRejectionPinned<f32>,
     dst: &Tensor,
@@ -1168,6 +1199,7 @@ fn enqueue_f32_htod(
     dst.inplace_op1(&PinnedF32HtoD { host, len, stream })
 }
 
+#[cfg(feature = "cuda")]
 fn enqueue_u32_dtoh(
     src: &Tensor,
     host: &mut SparseRejectionPinned<u32>,
@@ -1203,6 +1235,7 @@ fn enqueue_u32_dtoh(
     Ok(())
 }
 
+#[cfg(feature = "cuda")]
 fn enqueue_device_u32_dtoh(
     src: &SparseRejectionDeviceTensor,
     host: &mut SparseRejectionPinned<u32>,
@@ -1246,7 +1279,7 @@ fn validate_host_len(name: &str, actual: usize, expected: usize) -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 fn enqueue_hip_u32_htod(
     host: &HipSparseRejectionPinned<u32>,
     dst: &Tensor,
@@ -1265,7 +1298,7 @@ fn enqueue_hip_u32_htod(
     dst.inplace_op1(&HipPinnedU32HtoD { host, len, stream })
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 fn enqueue_hip_f32_htod(
     host: &HipSparseRejectionPinned<f32>,
     dst: &Tensor,
@@ -1284,7 +1317,7 @@ fn enqueue_hip_f32_htod(
     dst.inplace_op1(&HipPinnedF32HtoD { host, len, stream })
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 fn enqueue_hip_u32_dtoh(
     src: &Tensor,
     host: &mut HipSparseRejectionPinned<u32>,
@@ -1323,7 +1356,7 @@ fn enqueue_hip_u32_dtoh(
     Ok(())
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 fn enqueue_hip_device_u32_dtoh(
     src: &SparseRejectionDeviceTensor,
     host: &mut HipSparseRejectionPinned<u32>,
@@ -1363,6 +1396,7 @@ fn enqueue_hip_device_u32_dtoh(
     Ok(())
 }
 
+#[cfg(feature = "cuda")]
 pub(crate) fn sparse_rejection_cuda_submit(
     input: SparseRejectionWorkspaceInput<'_>,
     cache: &mut Option<CudaSparseRejectionWorkspace>,
@@ -1682,6 +1716,7 @@ pub(crate) fn sparse_rejection_cuda_submit(
     })
 }
 
+#[cfg(feature = "cuda")]
 pub(crate) fn sparse_rejection_cuda_complete(
     cache: &mut Option<CudaSparseRejectionWorkspace>,
     submission: &CudaSparseRejectionSubmission,
@@ -1758,6 +1793,7 @@ struct SparseRejectionTopKContext<'a> {
 }
 
 #[allow(clippy::too_many_lines)]
+#[cfg(feature = "cuda")]
 fn sparse_rejection_cuda_device_with_outcomes(
     input: SparseRejectionDeviceInput<'_>,
     outcomes: Option<&Tensor>,
@@ -1980,7 +2016,7 @@ fn sparse_rejection_cuda_device_with_outcomes(
     })
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 fn validate_hip_input(input: &SparseRejectionDeviceInput<'_>) -> Result<SparseRejectionShape> {
     let shape = validate_input_shapes(input, true)?;
     if !input.target_logits.device().is_hip() {
@@ -2148,7 +2184,7 @@ fn validate_input_shapes(
     })
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 fn dense_hip_rows(
     rows: &[Tensor],
     dtype: DType,
@@ -2198,7 +2234,7 @@ fn dense_hip_rows(
     }))
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 impl SparseRejectionDeviceTensor {
     fn from_hip_rows(
         rows: &[Tensor],
@@ -2219,7 +2255,7 @@ impl SparseRejectionDeviceTensor {
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 #[allow(clippy::too_many_lines)]
 fn sparse_rejection_hip_device_with_outcomes(
     input: SparseRejectionDeviceInput<'_>,
@@ -2443,7 +2479,7 @@ fn sparse_rejection_hip_device_with_outcomes(
     })
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 pub(crate) fn sparse_rejection_hip_submit(
     input: SparseRejectionWorkspaceInput<'_>,
     cache: &mut Option<HipSparseRejectionWorkspace>,
@@ -2763,7 +2799,7 @@ pub(crate) fn sparse_rejection_hip_submit(
     })
 }
 
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 pub(crate) fn sparse_rejection_hip_complete(
     cache: &mut Option<HipSparseRejectionWorkspace>,
     submission: &HipSparseRejectionSubmission,

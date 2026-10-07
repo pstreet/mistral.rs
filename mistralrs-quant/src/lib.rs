@@ -266,7 +266,7 @@ pub use utils::isq::{
 pub use utils::softcap;
 pub use utils::softmax_with_sinks;
 pub use utils::{fused_glu, fused_split_glu, GluActivationType};
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 pub use utils::{hip_slice_ptr_mut_on_stream, hip_slice_ptr_on_stream};
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp};
 pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};

@@ -1,22 +1,16 @@
 pub mod archive;
 pub mod cpu;
-#[cfg(all(feature = "rocm", not(feature = "cuda")))]
-pub(crate) mod cuda;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 #[path = "cuda_hip.rs"]
 pub(crate) mod cuda;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda_role;
-#[cfg(all(feature = "rocm", not(feature = "cuda")))]
-pub mod fast_mmq;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 #[path = "fast_mmq_hip.rs"]
 pub mod fast_mmq;
 #[cfg(feature = "cuda")]
 pub mod fast_mmq_cuda;
-#[cfg(all(feature = "rocm", not(feature = "cuda")))]
-pub mod fast_mmvq;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 #[path = "fast_mmvq_hip.rs"]
 pub mod fast_mmvq;
 #[cfg(feature = "cuda")]

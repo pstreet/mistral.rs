@@ -51,7 +51,7 @@ impl CustomOp1 for Fp8ToDtype {
         Ok((output, input_l.shape().clone()))
     }
 
-    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
         input_s: &candle_core::CudaStorage,
@@ -125,8 +125,7 @@ impl CustomOp1 for Fp8ToDtype {
 
         Ok((res, input_l.shape().clone()))
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
-    /// Dual-role twin of cuda_fwd: the same kernels through the hip
+    #[cfg(feature = "rocm")]
     /// role's bindings (companion-plugin FFI included).
     fn hip_fwd(
         &self,
@@ -134,7 +133,10 @@ impl CustomOp1 for Fp8ToDtype {
         input_l: &candle_core::Layout,
     ) -> Result<(candle_core::HipStorage, candle_core::Shape)> {
         use crate::utils::hip_slice_ptr;
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
         use candle_core::cuda::cudarc::driver::sys::CUstream;
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        use candle_core::role::backend::cudarc::driver::sys::CUstream;
         use candle_core::{backend::BackendStorage, HipStorage};
         use half::{bf16, f16};
 
@@ -290,7 +292,7 @@ impl CustomOp1 for DtypeToFp8 {
         Ok((output, input_l.shape().clone()))
     }
 
-    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
         input_s: &candle_core::CudaStorage,
@@ -360,8 +362,7 @@ impl CustomOp1 for DtypeToFp8 {
         let res = CudaStorage::wrap_cuda_slice(output, dev.clone());
         Ok((res, input_l.shape().clone()))
     }
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
-    /// Dual-role twin of cuda_fwd: the same kernels through the hip
+    #[cfg(feature = "rocm")]
     /// role's bindings (companion-plugin FFI included).
     fn hip_fwd(
         &self,
@@ -369,7 +370,10 @@ impl CustomOp1 for DtypeToFp8 {
         input_l: &candle_core::Layout,
     ) -> Result<(candle_core::HipStorage, candle_core::Shape)> {
         use crate::utils::hip_slice_ptr;
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
         use candle_core::cuda::cudarc::driver::sys::CUstream;
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        use candle_core::role::backend::cudarc::driver::sys::CUstream;
         use candle_core::{backend::BackendStorage, HipStorage};
         use half::{bf16, f16};
 

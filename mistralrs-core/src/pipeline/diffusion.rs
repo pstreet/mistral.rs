@@ -162,7 +162,7 @@ impl Loader for DiffusionLoader {
             .collect::<io::Result<Vec<_>>>()?;
 
         #[cfg(any(feature = "cuda", feature = "rocm"))]
-        if let Device::Cuda(dev) = &device {
+        if let Ok(dev) = device.as_role_device() {
             unsafe { dev.disable_event_tracking() };
         }
         let use_nccl = mistralrs_quant::distributed::use_nccl();

@@ -33,6 +33,7 @@ impl InplaceOp3 for IndexedRowCopy {
         rows_layout: &Layout,
     ) -> Result<()> {
         use candle_core::backend::BackendStorage;
+        #[cfg(feature = "cuda")]
         use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
 
         // In dual builds these symbols resolve to the hip companion; the
@@ -42,7 +43,7 @@ impl InplaceOp3 for IndexedRowCopy {
             let _ = (dst, dst_layout, src, src_layout, rows, rows_layout);
             candle_core::bail!("indexed row copy needs the serving (hip) role in dual builds")
         }
-        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        #[cfg(feature = "cuda")]
         {
             let dev = dst.device();
             let stream = dev.cuda_stream();
@@ -89,9 +90,14 @@ impl InplaceOp3 for IndexedRowCopy {
             drop(rows_guard);
             Ok(())
         }
+        #[cfg(not(feature = "cuda"))]
+        {
+            let _ = (dst, dst_layout, src, src_layout, rows, rows_layout);
+            candle_core::bail!("indexed row copy has no NVIDIA role in this build")
+        }
     }
 
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "rocm")]
     fn hip_fwd(
         &self,
         dst: &mut candle_core::HipStorage,
@@ -155,7 +161,9 @@ impl InplaceOp3 for IndexedRowCopy {
 pub(crate) fn copy_rows(src: &Tensor, dst: &Tensor, dst_rows: &Tensor) -> Result<()> {
     #[cfg(all(feature = "cuda", feature = "rocm"))]
     let is_gpu = src.device().is_cuda() || src.device().is_hip();
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    let is_gpu = src.device().is_hip();
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     let is_gpu = src.device().is_cuda();
     if !is_gpu
         || !src.device().same_device(dst.device())
@@ -235,6 +243,7 @@ pub(crate) fn clamp_slot_table(slots: &Tensor, capacity: u32, replacement: u32) 
         }
         fn cuda_fwd(&self, storage: &mut CudaStorage, layout: &Layout) -> Result<()> {
             use candle_core::backend::BackendStorage;
+            #[cfg(feature = "cuda")]
             use candle_core::cuda_backend::cudarc::driver::DevicePtrMut;
             #[cfg(all(feature = "cuda", feature = "rocm"))]
             {
@@ -243,7 +252,7 @@ pub(crate) fn clamp_slot_table(slots: &Tensor, capacity: u32, replacement: u32) 
                     "clamp-u32-index-table needs the serving (hip) role in dual builds"
                 )
             }
-            #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+            #[cfg(feature = "cuda")]
             {
                 if !layout.is_contiguous() {
                     candle_core::bail!("clamp-u32-index-table requires a contiguous table");
@@ -267,9 +276,14 @@ pub(crate) fn clamp_slot_table(slots: &Tensor, capacity: u32, replacement: u32) 
                 }
                 Ok(())
             }
+            #[cfg(not(feature = "cuda"))]
+            {
+                let _ = (storage, layout);
+                candle_core::bail!("clamp-u32-index-table has no NVIDIA role in this build")
+            }
         }
 
-        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        #[cfg(feature = "rocm")]
         fn hip_fwd(&self, storage: &mut candle_core::HipStorage, layout: &Layout) -> Result<()> {
             use candle_core::backend::BackendStorage;
             use mistralrs_quant::hip_slice_ptr_mut_on_stream;
@@ -299,7 +313,9 @@ pub(crate) fn clamp_slot_table(slots: &Tensor, capacity: u32, replacement: u32) 
     }
     #[cfg(all(feature = "cuda", feature = "rocm"))]
     let is_gpu = slots.device().is_cuda() || slots.device().is_hip();
-    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+    let is_gpu = slots.device().is_hip();
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     let is_gpu = slots.device().is_cuda();
     if !is_gpu {
         return Ok(());
