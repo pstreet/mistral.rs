@@ -125,7 +125,7 @@ pub struct NormalPipeline {
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
     #[cfg(any(feature = "cuda", feature = "rocm"))]
-    cuda_sparse_rejection: StdMutex<Option<crate::speculative::CudaSparseRejectionWorkspace>>,
+    cuda_sparse_rejection: StdMutex<Option<crate::speculative::SparseRejectionWorkspace>>,
     generation_defaults: Option<crate::ModelGenerationDefaults>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     tracked_modules: Vec<mistralrs_quant::TrackedModule>,
@@ -1774,7 +1774,7 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_sparse_rejection_workspace(
         &self,
-    ) -> &StdMutex<Option<crate::speculative::CudaSparseRejectionWorkspace>> {
+    ) -> &StdMutex<Option<crate::speculative::SparseRejectionWorkspace>> {
         &self.cuda_sparse_rejection
     }
 }

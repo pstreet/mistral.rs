@@ -61,7 +61,9 @@ fn sparse_distribution_is_cuda_eligible(sparse: &SparseSpeculativeProbs, drafts:
         && q_width > 0
         && q_width <= crate::cuda::speculative_rejection::SPARSE_REJECTION_MAX_Q_WIDTH
         && sparse.probs().dims() == [drafts, q_width]
-        && sparse.token_ids().device().is_cuda()
+        && crate::cuda::speculative_rejection::sparse_rejection_role_eligible(
+            sparse.token_ids().device(),
+        )
         && sparse
             .token_ids()
             .device()
@@ -122,7 +124,10 @@ pub(crate) fn greedy_device_verify_batch(
     let mut common_vocab = None;
 
     for (idx, input) in inputs.iter().enumerate() {
-        if !input.logits.device().is_cuda() || !can_greedy_device_verify(input.seq) {
+        if !crate::cuda::speculative_rejection::sparse_rejection_role_eligible(
+            input.logits.device(),
+        ) || !can_greedy_device_verify(input.seq)
+        {
             continue;
         }
         let logits = match *input.logits.dims() {
@@ -307,7 +312,7 @@ fn sparse_rejection_candidate<'a>(
     if plan.top_k > 0 && !matches!(logits.dtype(), DType::BF16 | DType::F16 | DType::F32) {
         return Ok(None);
     }
-    if !logits.device().is_cuda()
+    if !crate::cuda::speculative_rejection::sparse_rejection_role_eligible(logits.device())
         || matches!(
             input.proposal.as_device(),
             Some(tokens)
@@ -348,7 +353,7 @@ struct SparseRejectionPendingCandidate {
 pub(crate) struct SparseRejectionDeviceBatchSubmission {
     input_count: usize,
     candidates: Vec<SparseRejectionPendingCandidate>,
-    submission: crate::cuda::speculative_rejection::CudaSparseRejectionSubmission,
+    submission: crate::cuda::speculative_rejection::SparseRejectionSubmission,
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -499,10 +504,10 @@ fn submit_sparse_rejection_group(
     group_indices: &[usize],
     candidate_uniforms: &[(Vec<f32>, f32)],
     batched_target_logits: Option<&Tensor>,
-    workspace: &mut Option<crate::cuda::speculative_rejection::CudaSparseRejectionWorkspace>,
+    workspace: &mut Option<crate::cuda::speculative_rejection::SparseRejectionWorkspace>,
 ) -> Result<SparseRejectionDeviceBatchSubmission> {
     use crate::cuda::speculative_rejection::{
-        sparse_rejection_cuda_submit, SparseRejectionMode, SparseRejectionProposalInput,
+        sparse_rejection_submit, SparseRejectionMode, SparseRejectionProposalInput,
         SparseRejectionWorkspaceInput,
     };
 
@@ -531,7 +536,7 @@ fn submit_sparse_rejection_group(
             candidates.iter().map(|candidate| candidate.input_idx),
             group_indices.iter().copied(),
         ) && packed_target_shape_matches(batched.dims(), batch, drafts, seed.vocab)
-            && batched.device().is_cuda()
+            && crate::cuda::speculative_rejection::sparse_rejection_role_eligible(batched.device())
             && batched.device().same_device(device)
             && group.iter().all(|candidate| {
                 candidate.logits.dtype() == batched.dtype()
@@ -635,7 +640,7 @@ fn submit_sparse_rejection_group(
         .iter()
         .map(|&idx| candidate_uniforms[idx].1)
         .collect::<Vec<_>>();
-    let submission = sparse_rejection_cuda_submit(
+    let submission = sparse_rejection_submit(
         SparseRejectionWorkspaceInput {
             target_logits: &target_logits,
             proposal,
@@ -669,11 +674,11 @@ fn submit_sparse_rejection_group(
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn complete_sparse_rejection_device_verify_batch(
     pending: SparseRejectionDeviceBatchSubmission,
-    workspace: &mut Option<crate::cuda::speculative_rejection::CudaSparseRejectionWorkspace>,
+    workspace: &mut Option<crate::cuda::speculative_rejection::SparseRejectionWorkspace>,
 ) -> Result<SparseRejectionDeviceVerifyOutput> {
-    use crate::cuda::speculative_rejection::sparse_rejection_cuda_complete;
+    use crate::cuda::speculative_rejection::sparse_rejection_complete;
 
-    let completion = sparse_rejection_cuda_complete(workspace, &pending.submission)?;
+    let completion = sparse_rejection_complete(workspace, &pending.submission)?;
     decode_sparse_rejection_completion(pending.input_count, pending.candidates, completion)
 }
 
@@ -682,7 +687,7 @@ pub(crate) fn try_submit_sparse_rejection_device_verify_batch(
     inputs: &[SparseRejectionVerifyInput<'_>],
     batched_target_logits: Option<&Tensor>,
     rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
-    workspace: &mut Option<crate::cuda::speculative_rejection::CudaSparseRejectionWorkspace>,
+    workspace: &mut Option<crate::cuda::speculative_rejection::SparseRejectionWorkspace>,
 ) -> Result<Option<SparseRejectionDeviceBatchSubmission>> {
     let candidates = sparse_rejection_candidates(inputs)?;
     let Some(seed) = candidates.first() else {
@@ -713,7 +718,7 @@ pub(crate) fn sparse_rejection_device_verify_batch(
     inputs: &[SparseRejectionVerifyInput<'_>],
     batched_target_logits: Option<&Tensor>,
     rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
-    workspace: &mut Option<crate::cuda::speculative_rejection::CudaSparseRejectionWorkspace>,
+    workspace: &mut Option<crate::cuda::speculative_rejection::SparseRejectionWorkspace>,
 ) -> Result<SparseRejectionDeviceVerifyOutput> {
     let candidates = sparse_rejection_candidates(inputs)?;
     let candidate_uniforms = sparse_rejection_uniforms(&candidates, inputs, rng);

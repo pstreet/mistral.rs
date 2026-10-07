@@ -13,6 +13,17 @@ use candle_core::{
     Tensor,
 };
 
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use candle_core::hip_backend::cudarc::driver::{
+    CudaEvent as HipEvent, CudaStream as HipStream, DevicePtr as HipDevicePtr,
+    DevicePtrMut as HipDevicePtrMut, DeviceRepr as HipDeviceRepr,
+    PinnedHostSlice as HipPinnedHostSlice, ValidAsZeroBits as HipValidAsZeroBits,
+};
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use candle_core::hip_backend::{CudaDevice as HipDevice, CudaStorageSlice as HipStorageSlice};
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use candle_core::HipStorage;
+
 use crate::ops::{
     cuda_topk_ranked_packed_batched, cuda_topk_ranked_packed_batched_with_workspace,
     CudaRankedTopKPackedWorkspace, RankedTopKPackedOutput, CUDA_TOPK_MAX_K,
@@ -341,6 +352,287 @@ impl CudaSparseRejectionSubmission {
     }
 }
 
+/// Role eligibility for the sparse-rejection device path. Solo shapes
+/// serve the compiled backend (the rocm alias presents the AMD device
+/// as CUDA); dual builds serve the hip role only - the NVIDIA role has
+/// no kernels here and is loudly refused at submit time, so gates send
+/// it to the CPU fallback instead.
+pub(crate) fn sparse_rejection_role_eligible(device: &candle_core::Device) -> bool {
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    {
+        return device.is_hip();
+    }
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+    {
+        return device.is_cuda();
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+struct HipSparseRejectionPinned<T> {
+    allocation: HipPinnedHostSlice<T>,
+    ptr: NonNull<T>,
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+unsafe impl<T: Send> Send for HipSparseRejectionPinned<T> {}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+impl<T: HipDeviceRepr + HipValidAsZeroBits> HipSparseRejectionPinned<T> {
+    fn new(stream: &Arc<HipStream>, len: usize) -> Result<Self> {
+        let mut allocation =
+            unsafe { stream.context().alloc_pinned::<T>(len) }.map_err(candle_core::Error::wrap)?;
+        let ptr = NonNull::new(allocation.as_mut_ptr().map_err(candle_core::Error::wrap)?)
+            .ok_or_else(|| candle_core::Error::msg("CUDA returned a null pinned pointer"))?;
+        Ok(Self { allocation, ptr })
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [T] {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.allocation.len()) }
+    }
+
+    fn as_slice(&self) -> &[T] {
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.allocation.len()) }
+    }
+
+    fn as_ptr(&self) -> *const T {
+        self.ptr.as_ptr()
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut T {
+        self.ptr.as_ptr()
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+struct HipSparseRejectionPending {
+    generation: u64,
+    batch: usize,
+    drafts: usize,
+    _output: SparseRejectionOutput,
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) struct HipSparseRejectionWorkspace {
+    location: DeviceLocation,
+    stream: Arc<HipStream>,
+    capacity_batch: usize,
+    capacity_drafts: usize,
+    id: u64,
+    next_generation: u64,
+    draft_tokens: Tensor,
+    inverse_temperatures: Tensor,
+    row_inverse_temperatures: Tensor,
+    target_top_k: Tensor,
+    top_p: Tensor,
+    min_p: Tensor,
+    accept_uniforms: Tensor,
+    sample_uniforms: Tensor,
+    deterministic_q_probs: Tensor,
+    outcomes: Tensor,
+    draft_tokens_host: HipSparseRejectionPinned<u32>,
+    inverse_temperatures_host: HipSparseRejectionPinned<f32>,
+    row_inverse_temperatures_host: HipSparseRejectionPinned<f32>,
+    target_top_k_host: HipSparseRejectionPinned<u32>,
+    top_p_host: HipSparseRejectionPinned<f32>,
+    min_p_host: HipSparseRejectionPinned<f32>,
+    accept_uniforms_host: HipSparseRejectionPinned<f32>,
+    sample_uniforms_host: HipSparseRejectionPinned<f32>,
+    outcomes_host: HipSparseRejectionPinned<u32>,
+    topk: Option<CudaRankedTopKPackedWorkspace>,
+    completion: Arc<HipEvent>,
+    pending: Option<HipSparseRejectionPending>,
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+impl Drop for HipSparseRejectionWorkspace {
+    fn drop(&mut self) {
+        if self.pending.is_some() {
+            let _ = self.completion.synchronize();
+        }
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) struct HipSparseRejectionSubmission {
+    workspace_id: u64,
+    generation: u64,
+    batch: usize,
+    drafts: usize,
+    completion: Arc<HipEvent>,
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+impl HipSparseRejectionSubmission {
+    fn wait(&self) -> Result<()> {
+        self.completion
+            .synchronize()
+            .map_err(candle_core::Error::wrap)
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+impl HipSparseRejectionWorkspace {
+    fn new(device: &candle_core::Device, batch: usize, drafts: usize) -> Result<Self> {
+        use candle_core::backend::BackendDevice;
+        use candle_core::hip_backend::cudarc::driver::sys as hip_sys;
+
+        let hip_device = device.as_hip_device()?;
+        let stream = hip_device.cuda_stream();
+        let capacity_batch = workspace_capacity(batch, "batch")?;
+        let capacity_drafts = workspace_capacity(drafts, "draft")?;
+        let draft_elems = capacity_batch
+            .checked_mul(capacity_drafts)
+            .ok_or_else(|| candle_core::Error::msg("sparse rejection draft workspace overflow"))?;
+        let outcome_elems = capacity_batch
+            .checked_mul(SPARSE_REJECTION_OUTCOME_WIDTH)
+            .ok_or_else(|| {
+                candle_core::Error::msg("sparse rejection outcome workspace overflow")
+            })?;
+        let row_elems = capacity_drafts
+            .checked_add(1)
+            .and_then(|rows| capacity_batch.checked_mul(rows))
+            .ok_or_else(|| {
+                candle_core::Error::msg("sparse rejection row temperature workspace overflow")
+            })?;
+        let event_flags = Some(hip_sys::CUevent_flags::CU_EVENT_BLOCKING_SYNC);
+        Ok(Self {
+            location: hip_device.location(),
+            stream: stream.clone(),
+            capacity_batch,
+            capacity_drafts,
+            id: sparse_rejection_workspace_id(),
+            next_generation: 1,
+            draft_tokens: Tensor::zeros(draft_elems, DType::U32, device)?,
+            inverse_temperatures: Tensor::zeros(capacity_batch, DType::F32, device)?,
+            row_inverse_temperatures: Tensor::zeros(row_elems, DType::F32, device)?,
+            target_top_k: Tensor::zeros(capacity_batch, DType::U32, device)?,
+            top_p: Tensor::zeros(capacity_batch, DType::F32, device)?,
+            min_p: Tensor::zeros(capacity_batch, DType::F32, device)?,
+            accept_uniforms: Tensor::zeros(draft_elems, DType::F32, device)?,
+            sample_uniforms: Tensor::zeros(capacity_batch, DType::F32, device)?,
+            deterministic_q_probs: Tensor::ones(draft_elems, DType::F32, device)?,
+            outcomes: Tensor::zeros(outcome_elems, DType::U32, device)?,
+            draft_tokens_host: HipSparseRejectionPinned::new(&stream, draft_elems)?,
+            inverse_temperatures_host: HipSparseRejectionPinned::new(&stream, capacity_batch)?,
+            row_inverse_temperatures_host: HipSparseRejectionPinned::new(&stream, row_elems)?,
+            target_top_k_host: HipSparseRejectionPinned::new(&stream, capacity_batch)?,
+            top_p_host: HipSparseRejectionPinned::new(&stream, capacity_batch)?,
+            min_p_host: HipSparseRejectionPinned::new(&stream, capacity_batch)?,
+            accept_uniforms_host: HipSparseRejectionPinned::new(&stream, draft_elems)?,
+            sample_uniforms_host: HipSparseRejectionPinned::new(&stream, capacity_batch)?,
+            outcomes_host: HipSparseRejectionPinned::new(&stream, outcome_elems)?,
+            topk: None,
+            completion: Arc::new(
+                stream
+                    .context()
+                    .new_event(event_flags)
+                    .map_err(candle_core::Error::wrap)?,
+            ),
+            pending: None,
+        })
+    }
+
+    fn can_hold(
+        &self,
+        location: DeviceLocation,
+        stream: &Arc<HipStream>,
+        batch: usize,
+        drafts: usize,
+    ) -> bool {
+        self.location == location
+            && Arc::ptr_eq(self.stream.context(), stream.context())
+            && self.stream.cu_stream() == stream.cu_stream()
+            && self.capacity_batch >= batch
+            && self.capacity_drafts >= drafts
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) enum SparseRejectionWorkspace {
+    Cuda(CudaSparseRejectionWorkspace),
+    Hip(HipSparseRejectionWorkspace),
+}
+
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+pub(crate) type SparseRejectionWorkspace = CudaSparseRejectionWorkspace;
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) enum SparseRejectionSubmission {
+    Cuda(CudaSparseRejectionSubmission),
+    Hip(HipSparseRejectionSubmission),
+}
+
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+pub(crate) type SparseRejectionSubmission = CudaSparseRejectionSubmission;
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn sparse_rejection_submit(
+    input: SparseRejectionWorkspaceInput<'_>,
+    cache: &mut Option<SparseRejectionWorkspace>,
+) -> Result<SparseRejectionSubmission> {
+    if input.target_logits.device().is_hip() {
+        let mut slot = match cache.take() {
+            Some(SparseRejectionWorkspace::Hip(workspace)) => Some(workspace),
+            Some(SparseRejectionWorkspace::Cuda(_)) => {
+                candle_core::bail!("{OP} workspace role switched mid-stream")
+            }
+            None => None,
+        };
+        let submission = sparse_rejection_hip_submit(input, &mut slot)?;
+        *cache = slot.map(SparseRejectionWorkspace::Hip);
+        return Ok(SparseRejectionSubmission::Hip(submission));
+    }
+    let mut slot = match cache.take() {
+        Some(SparseRejectionWorkspace::Cuda(workspace)) => Some(workspace),
+        Some(SparseRejectionWorkspace::Hip(_)) => {
+            candle_core::bail!("{OP} workspace role switched mid-stream")
+        }
+        None => None,
+    };
+    let submission = sparse_rejection_cuda_submit(input, &mut slot)?;
+    *cache = slot.map(SparseRejectionWorkspace::Cuda);
+    Ok(SparseRejectionSubmission::Cuda(submission))
+}
+
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+pub(crate) use sparse_rejection_cuda_submit as sparse_rejection_submit;
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn sparse_rejection_complete(
+    cache: &mut Option<SparseRejectionWorkspace>,
+    submission: &SparseRejectionSubmission,
+) -> Result<SparseRejectionCompletion> {
+    match (cache.take(), submission) {
+        (
+            Some(SparseRejectionWorkspace::Hip(workspace)),
+            SparseRejectionSubmission::Hip(submission),
+        ) => {
+            let mut slot = Some(workspace);
+            let result = sparse_rejection_hip_complete(&mut slot, submission);
+            if let Some(restored) = slot.take() {
+                *cache = Some(SparseRejectionWorkspace::Hip(restored));
+            }
+            result
+        }
+        (
+            Some(SparseRejectionWorkspace::Cuda(workspace)),
+            SparseRejectionSubmission::Cuda(submission),
+        ) => {
+            let mut slot = Some(workspace);
+            let result = sparse_rejection_cuda_complete(&mut slot, submission);
+            if let Some(restored) = slot.take() {
+                *cache = Some(SparseRejectionWorkspace::Cuda(restored));
+            }
+            result
+        }
+        _ => candle_core::bail!("{OP} workspace and submission roles do not match"),
+    }
+}
+
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+pub(crate) use sparse_rejection_cuda_complete as sparse_rejection_complete;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SparseRejectionRow {
     pub(crate) accepted_count: u32,
@@ -420,6 +712,71 @@ impl InplaceOp1 for SparseRejectionKernelLaunch {
     }
 
     fn cuda_fwd(&self, storage: &mut CudaStorage, layout: &Layout) -> Result<()> {
+        // In dual builds these symbols resolve to the hip companion; the
+        // NVIDIA role would launch hip kernels on a CUDA stream.
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        {
+            let _ = (storage, layout);
+            candle_core::bail!("{OP} needs the serving (hip) role in dual builds")
+        }
+        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        {
+            let stream = storage.device().cuda_stream();
+            let outcomes = storage.as_cuda_slice_mut::<u32>()?;
+            let (outcomes_ptr, outcomes_guard) = outcomes.device_ptr_mut(&stream);
+            let outcomes_ptr = unsafe { (outcomes_ptr as *mut u32).add(layout.start_offset()) };
+            unsafe {
+                match self.mode {
+                    SparseRejectionMode::Categorical => ffi::sparse_rejection_categorical_f32(
+                        self.target_ptr as *const f32,
+                        self.draft_ptr as *const u32,
+                        self.q_ids_ptr as *const u32,
+                        self.q_probs_ptr as *const f32,
+                        self.temperature_ptr as *const f32,
+                        self.top_k_ptr as *const u32,
+                        self.top_p_ptr as *const f32,
+                        self.min_p_ptr as *const f32,
+                        self.accept_ptr as *const f32,
+                        self.sample_ptr as *const f32,
+                        outcomes_ptr,
+                        self.batch,
+                        self.drafts,
+                        self.vocab,
+                        self.q_width,
+                        stream.cu_stream() as i64,
+                    ),
+                    SparseRejectionMode::BoundedTopK { .. } => ffi::sparse_rejection_topk_f32(
+                        self.target_ptr as *const f32,
+                        self.draft_ptr as *const u32,
+                        self.q_ids_ptr as *const u32,
+                        self.q_probs_ptr as *const f32,
+                        self.temperature_ptr as *const f32,
+                        self.top_k_ptr as *const u32,
+                        self.top_p_ptr as *const f32,
+                        self.min_p_ptr as *const f32,
+                        self.accept_ptr as *const f32,
+                        self.sample_ptr as *const f32,
+                        outcomes_ptr,
+                        self.batch,
+                        self.drafts,
+                        self.vocab,
+                        self.q_width,
+                        self.packed_k
+                            .expect("bounded top-k launch has a packed width"),
+                        stream.cu_stream() as i64,
+                    ),
+                }
+            }
+            drop(outcomes_guard);
+            Ok(())
+        }
+    }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    fn hip_fwd(&self, storage: &mut HipStorage, layout: &Layout) -> Result<()> {
+        use candle_core::backend::BackendStorage;
+        use candle_core::hip_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+
         let stream = storage.device().cuda_stream();
         let outcomes = storage.as_cuda_slice_mut::<u32>()?;
         let (outcomes_ptr, outcomes_guard) = outcomes.device_ptr_mut(&stream);
@@ -472,161 +829,11 @@ impl InplaceOp1 for SparseRejectionKernelLaunch {
 }
 
 fn validate_input(input: &SparseRejectionDeviceInput<'_>) -> Result<SparseRejectionShape> {
-    let target_dims = input.target_logits.dims();
-    if target_dims.len() != 3 {
-        candle_core::bail!(
-            "{OP} expected target logits with shape [batch, drafts + 1, vocab], got {target_dims:?}"
-        );
-    }
-    let batch = target_dims[0];
-    let rows = target_dims[1];
-    let vocab = target_dims[2];
-    if batch == 0 || rows < 2 || vocab == 0 {
-        candle_core::bail!(
-            "{OP} requires a non-empty batch, at least one draft, and a non-empty vocabulary"
-        );
-    }
-    let drafts = rows - 1;
-    let q_dims = input.q_token_ids.dims();
-    if q_dims.len() != 3 || q_dims[0] != batch || q_dims[1] != drafts {
-        candle_core::bail!(
-            "{OP} expected q token ids with shape [{batch}, {drafts}, q_width], got {q_dims:?}"
-        );
-    }
-    let q_width = q_dims[2];
-    if q_width == 0 || q_width > SPARSE_REJECTION_MAX_Q_WIDTH {
-        candle_core::bail!("{OP} q_width={q_width} must be in [1, {SPARSE_REJECTION_MAX_Q_WIDTH}]");
-    }
-
-    let draft_shape = [batch, drafts];
-    let q_shape = [batch, drafts, q_width];
-    let batch_shape = [batch];
-    match input.mode {
-        SparseRejectionMode::Categorical if input.target_logits.dtype() != DType::F32 => {
-            candle_core::bail!("{OP} categorical mode requires F32 target logits");
-        }
-        SparseRejectionMode::BoundedTopK { .. }
-            if !matches!(
-                input.target_logits.dtype(),
-                DType::BF16 | DType::F16 | DType::F32
-            ) =>
-        {
-            candle_core::bail!("{OP} bounded top-k mode requires BF16, F16, or F32 target logits");
-        }
-        _ => {}
-    }
-    if !input.target_logits.is_contiguous() {
-        candle_core::bail!("{OP} requires contiguous target logits");
-    }
-    let device_specs = [
-        (
-            input.draft_tokens,
-            DType::U32,
-            draft_shape.as_slice(),
-            "draft tokens",
-        ),
-        (
-            input.q_token_ids,
-            DType::U32,
-            q_shape.as_slice(),
-            "q token ids",
-        ),
-        (
-            input.q_probs,
-            DType::F32,
-            q_shape.as_slice(),
-            "q probabilities",
-        ),
-    ];
-    for (tensor, dtype, shape, name) in device_specs {
-        if tensor.dtype() != dtype {
-            candle_core::bail!(
-                "{OP} expected {name} to have dtype {dtype:?}, got {:?}",
-                tensor.dtype()
-            );
-        }
-        if tensor.dims() != shape {
-            candle_core::bail!(
-                "{OP} expected {name} with shape {shape:?}, got {:?}",
-                tensor.dims()
-            );
-        }
-        if !tensor.is_contiguous() {
-            candle_core::bail!("{OP} requires contiguous {name}");
-        }
-        if !input.target_logits.device().same_device(tensor.device()) {
-            candle_core::bail!("{OP} requires every tensor on one CUDA device");
-        }
-    }
-    let tensor_specs = [
-        (
-            input.inverse_temperatures,
-            DType::F32,
-            batch_shape.as_slice(),
-            "inverse temperatures",
-        ),
-        (
-            input.target_top_k,
-            DType::U32,
-            batch_shape.as_slice(),
-            "target top-k",
-        ),
-        (input.top_p, DType::F32, batch_shape.as_slice(), "top-p"),
-        (input.min_p, DType::F32, batch_shape.as_slice(), "min-p"),
-        (
-            input.accept_uniforms,
-            DType::F32,
-            draft_shape.as_slice(),
-            "accept uniforms",
-        ),
-        (
-            input.sample_uniforms,
-            DType::F32,
-            batch_shape.as_slice(),
-            "sample uniforms",
-        ),
-    ];
-    for (tensor, dtype, shape, name) in tensor_specs {
-        if tensor.dtype() != dtype {
-            candle_core::bail!(
-                "{OP} expected {name} to have dtype {dtype:?}, got {:?}",
-                tensor.dtype()
-            );
-        }
-        if tensor.dims() != shape {
-            candle_core::bail!(
-                "{OP} expected {name} with shape {shape:?}, got {:?}",
-                tensor.dims()
-            );
-        }
-        if !tensor.is_contiguous() {
-            candle_core::bail!("{OP} requires contiguous {name}");
-        }
-        if !input.target_logits.device().same_device(tensor.device()) {
-            candle_core::bail!("{OP} requires every tensor on one CUDA device");
-        }
-    }
+    let shape = validate_input_shapes(input, false)?;
     if !input.target_logits.device().is_cuda() {
         candle_core::bail!("{OP} requires CUDA tensors");
     }
-
-    let batch_i32 = i32::try_from(batch).map_err(candle_core::Error::wrap)?;
-    let drafts_i32 = i32::try_from(drafts).map_err(candle_core::Error::wrap)?;
-    let vocab_i32 = i32::try_from(vocab).map_err(candle_core::Error::wrap)?;
-    let q_width_i32 = i32::try_from(q_width).map_err(candle_core::Error::wrap)?;
-    batch
-        .checked_mul(SPARSE_REJECTION_OUTCOME_WIDTH)
-        .ok_or_else(|| candle_core::Error::msg("sparse rejection outcome size overflow"))?;
-
-    Ok(SparseRejectionShape {
-        batch,
-        rows,
-        vocab,
-        batch_i32,
-        drafts_i32,
-        vocab_i32,
-        q_width_i32,
-    })
+    Ok(shape)
 }
 
 fn sparse_rejection_workspace_id() -> u64 {
@@ -729,12 +936,81 @@ impl InplaceOp1 for PinnedU32HtoD<'_> {
     }
 
     fn cuda_fwd(&self, storage: &mut CudaStorage, layout: &Layout) -> Result<()> {
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        {
+            let _ = (storage, layout);
+            candle_core::bail!(
+                "{} needs the serving (hip) role in dual builds",
+                self.name()
+            )
+        }
+        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        {
+            let dst = storage.as_cuda_slice_mut::<u32>()?;
+            let start = layout.start_offset();
+            let mut dst = dst.slice_mut(start..start + self.len);
+            let (dst_ptr, dst_guard) = dst.device_ptr_mut(self.stream);
+            let result = unsafe {
+                sys::cuMemcpyHtoDAsync_v2(
+                    dst_ptr,
+                    self.host.as_ptr().cast(),
+                    self.len * std::mem::size_of::<u32>(),
+                    self.stream.cu_stream(),
+                )
+            };
+            drop(dst_guard);
+            if result != sys::CUresult::CUDA_SUCCESS {
+                return Err(candle_core::Error::msg(format!("{result:?}"))
+                    .context("sparse rejection U32 H2D copy failed"));
+            }
+            Ok(())
+        }
+    }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    fn hip_fwd(&self, _storage: &mut HipStorage, _layout: &Layout) -> Result<()> {
+        candle_core::bail!(
+            "{} needs the hip pinned type (HipPinnedU32HtoD) in dual builds",
+            self.name()
+        )
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+struct HipPinnedU32HtoD<'a> {
+    host: &'a HipSparseRejectionPinned<u32>,
+    len: usize,
+    stream: &'a Arc<HipStream>,
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+impl InplaceOp1 for HipPinnedU32HtoD<'_> {
+    fn name(&self) -> &'static str {
+        "sparse-rejection-u32-htod"
+    }
+
+    fn cpu_fwd(&self, _storage: &mut CpuStorage, _layout: &Layout) -> Result<()> {
+        candle_core::bail!("{} requires CUDA storage", self.name())
+    }
+
+    fn cuda_fwd(&self, _storage: &mut CudaStorage, _layout: &Layout) -> Result<()> {
+        candle_core::bail!(
+            "{} needs the serving (hip) role in dual builds",
+            self.name()
+        )
+    }
+
+    fn hip_fwd(&self, storage: &mut HipStorage, layout: &Layout) -> Result<()> {
+        use candle_core::backend::BackendStorage;
+        use candle_core::hip_backend::cudarc::driver::sys as hip_sys;
+        use candle_core::hip_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+
         let dst = storage.as_cuda_slice_mut::<u32>()?;
         let start = layout.start_offset();
         let mut dst = dst.slice_mut(start..start + self.len);
         let (dst_ptr, dst_guard) = dst.device_ptr_mut(self.stream);
         let result = unsafe {
-            sys::cuMemcpyHtoDAsync_v2(
+            hip_sys::cuMemcpyHtoDAsync_v2(
                 dst_ptr,
                 self.host.as_ptr().cast(),
                 self.len * std::mem::size_of::<u32>(),
@@ -742,7 +1018,7 @@ impl InplaceOp1 for PinnedU32HtoD<'_> {
             )
         };
         drop(dst_guard);
-        if result != sys::CUresult::CUDA_SUCCESS {
+        if result != hip_sys::CUresult::CUDA_SUCCESS {
             return Err(candle_core::Error::msg(format!("{result:?}"))
                 .context("sparse rejection U32 H2D copy failed"));
         }
@@ -766,12 +1042,81 @@ impl InplaceOp1 for PinnedF32HtoD<'_> {
     }
 
     fn cuda_fwd(&self, storage: &mut CudaStorage, layout: &Layout) -> Result<()> {
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        {
+            let _ = (storage, layout);
+            candle_core::bail!(
+                "{} needs the serving (hip) role in dual builds",
+                self.name()
+            )
+        }
+        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        {
+            let dst = storage.as_cuda_slice_mut::<f32>()?;
+            let start = layout.start_offset();
+            let mut dst = dst.slice_mut(start..start + self.len);
+            let (dst_ptr, dst_guard) = dst.device_ptr_mut(self.stream);
+            let result = unsafe {
+                sys::cuMemcpyHtoDAsync_v2(
+                    dst_ptr,
+                    self.host.as_ptr().cast(),
+                    self.len * std::mem::size_of::<f32>(),
+                    self.stream.cu_stream(),
+                )
+            };
+            drop(dst_guard);
+            if result != sys::CUresult::CUDA_SUCCESS {
+                return Err(candle_core::Error::msg(format!("{result:?}"))
+                    .context("sparse rejection F32 H2D copy failed"));
+            }
+            Ok(())
+        }
+    }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    fn hip_fwd(&self, _storage: &mut HipStorage, _layout: &Layout) -> Result<()> {
+        candle_core::bail!(
+            "{} needs the hip pinned type (HipPinnedF32HtoD) in dual builds",
+            self.name()
+        )
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+struct HipPinnedF32HtoD<'a> {
+    host: &'a HipSparseRejectionPinned<f32>,
+    len: usize,
+    stream: &'a Arc<HipStream>,
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+impl InplaceOp1 for HipPinnedF32HtoD<'_> {
+    fn name(&self) -> &'static str {
+        "sparse-rejection-f32-htod"
+    }
+
+    fn cpu_fwd(&self, _storage: &mut CpuStorage, _layout: &Layout) -> Result<()> {
+        candle_core::bail!("{} requires CUDA storage", self.name())
+    }
+
+    fn cuda_fwd(&self, _storage: &mut CudaStorage, _layout: &Layout) -> Result<()> {
+        candle_core::bail!(
+            "{} needs the serving (hip) role in dual builds",
+            self.name()
+        )
+    }
+
+    fn hip_fwd(&self, storage: &mut HipStorage, layout: &Layout) -> Result<()> {
+        use candle_core::backend::BackendStorage;
+        use candle_core::hip_backend::cudarc::driver::sys as hip_sys;
+        use candle_core::hip_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+
         let dst = storage.as_cuda_slice_mut::<f32>()?;
         let start = layout.start_offset();
         let mut dst = dst.slice_mut(start..start + self.len);
         let (dst_ptr, dst_guard) = dst.device_ptr_mut(self.stream);
         let result = unsafe {
-            sys::cuMemcpyHtoDAsync_v2(
+            hip_sys::cuMemcpyHtoDAsync_v2(
                 dst_ptr,
                 self.host.as_ptr().cast(),
                 self.len * std::mem::size_of::<f32>(),
@@ -779,7 +1124,7 @@ impl InplaceOp1 for PinnedF32HtoD<'_> {
             )
         };
         drop(dst_guard);
-        if result != sys::CUresult::CUDA_SUCCESS {
+        if result != hip_sys::CUresult::CUDA_SUCCESS {
             return Err(candle_core::Error::msg(format!("{result:?}"))
                 .context("sparse rejection F32 H2D copy failed"));
         }
@@ -897,6 +1242,123 @@ fn enqueue_device_u32_dtoh(
 fn validate_host_len(name: &str, actual: usize, expected: usize) -> Result<()> {
     if actual != expected {
         candle_core::bail!("{OP} expected {expected} {name} values, got {actual}");
+    }
+    Ok(())
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+fn enqueue_hip_u32_htod(
+    host: &HipSparseRejectionPinned<u32>,
+    dst: &Tensor,
+    len: usize,
+    stream: &Arc<HipStream>,
+) -> Result<()> {
+    if !dst.device().is_hip() {
+        candle_core::bail!("{OP} workspace destination must be hip");
+    }
+    if dst.dtype() != DType::U32 {
+        candle_core::bail!("{OP} workspace destination must be U32");
+    }
+    if !dst.is_contiguous() || len > dst.elem_count() || len > host.allocation.len() {
+        candle_core::bail!("{OP} workspace U32 copy exceeds its capacity");
+    }
+    dst.inplace_op1(&HipPinnedU32HtoD { host, len, stream })
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+fn enqueue_hip_f32_htod(
+    host: &HipSparseRejectionPinned<f32>,
+    dst: &Tensor,
+    len: usize,
+    stream: &Arc<HipStream>,
+) -> Result<()> {
+    if !dst.device().is_hip() {
+        candle_core::bail!("{OP} workspace destination must be hip");
+    }
+    if dst.dtype() != DType::F32 {
+        candle_core::bail!("{OP} workspace destination must be F32");
+    }
+    if !dst.is_contiguous() || len > dst.elem_count() || len > host.allocation.len() {
+        candle_core::bail!("{OP} workspace F32 copy exceeds its capacity");
+    }
+    dst.inplace_op1(&HipPinnedF32HtoD { host, len, stream })
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+fn enqueue_hip_u32_dtoh(
+    src: &Tensor,
+    host: &mut HipSparseRejectionPinned<u32>,
+    len: usize,
+    stream: &Arc<HipStream>,
+) -> Result<()> {
+    use candle_core::hip_backend::cudarc::driver::sys as hip_sys;
+    use candle_core::hip_backend::cudarc::driver::{DevicePtr, DevicePtrMut as _};
+
+    let (storage, layout) = src.storage_and_layout();
+    let candle_core::Storage::Hip(storage) = &*storage else {
+        candle_core::bail!("{OP} workspace source must be hip");
+    };
+    let HipStorageSlice::U32(slice) = &storage.slice else {
+        candle_core::bail!("{OP} workspace source must be U32");
+    };
+    if !layout.is_contiguous() || len > src.elem_count() || len > host.allocation.len() {
+        candle_core::bail!("{OP} workspace D2H copy exceeds its capacity");
+    }
+    let start = layout.start_offset();
+    let slice = slice.slice(start..start + len);
+    let (src_ptr, src_guard) = slice.device_ptr(stream);
+    let result = unsafe {
+        hip_sys::cuMemcpyDtoHAsync_v2(
+            host.as_mut_ptr().cast(),
+            src_ptr,
+            len * std::mem::size_of::<u32>(),
+            stream.cu_stream(),
+        )
+    };
+    drop(src_guard);
+    if result != hip_sys::CUresult::CUDA_SUCCESS {
+        return Err(candle_core::Error::msg(format!("{result:?}"))
+            .context("sparse rejection U32 D2H copy failed"));
+    }
+    Ok(())
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+fn enqueue_hip_device_u32_dtoh(
+    src: &SparseRejectionDeviceTensor,
+    host: &mut HipSparseRejectionPinned<u32>,
+    len: usize,
+    stream: &Arc<HipStream>,
+) -> Result<()> {
+    use candle_core::hip_backend::cudarc::driver::sys as hip_sys;
+    use candle_core::hip_backend::cudarc::driver::{DevicePtr, DevicePtrMut as _};
+
+    let anchor = src.anchor();
+    let (storage, layout) = anchor.storage_and_layout();
+    let Storage::Hip(storage) = &*storage else {
+        candle_core::bail!("{OP} workspace source must be hip");
+    };
+    let HipStorageSlice::U32(slice) = &storage.slice else {
+        candle_core::bail!("{OP} workspace source must be U32");
+    };
+    if !src.is_contiguous() || len > src.elem_count() || len > host.allocation.len() {
+        candle_core::bail!("{OP} workspace D2H copy exceeds its capacity");
+    }
+    let start = layout.start_offset();
+    let slice = slice.slice(start..start + len);
+    let (src_ptr, src_guard) = slice.device_ptr(stream);
+    let result = unsafe {
+        hip_sys::cuMemcpyDtoHAsync_v2(
+            host.as_mut_ptr().cast(),
+            src_ptr,
+            len * std::mem::size_of::<u32>(),
+            stream.cu_stream(),
+        )
+    };
+    drop(src_guard);
+    if result != hip_sys::CUresult::CUDA_SUCCESS {
+        return Err(candle_core::Error::msg(format!("{result:?}"))
+            .context("sparse rejection U32 D2H copy failed"));
     }
     Ok(())
 }
@@ -1516,6 +1978,834 @@ fn sparse_rejection_cuda_device_with_outcomes(
         _packed_target: packed_target,
         _row_inverse_temperatures: None,
     })
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+fn validate_hip_input(input: &SparseRejectionDeviceInput<'_>) -> Result<SparseRejectionShape> {
+    let shape = validate_input_shapes(input, true)?;
+    if !input.target_logits.device().is_hip() {
+        candle_core::bail!("{OP} requires hip tensors");
+    }
+    Ok(shape)
+}
+
+fn validate_input_shapes(
+    input: &SparseRejectionDeviceInput<'_>,
+    hip: bool,
+) -> Result<SparseRejectionShape> {
+    let role = if hip { "hip" } else { "CUDA" };
+    let target_dims = input.target_logits.dims();
+    if target_dims.len() != 3 {
+        candle_core::bail!(
+            "{OP} expected target logits with shape [batch, drafts + 1, vocab], got {target_dims:?}"
+        );
+    }
+    let batch = target_dims[0];
+    let rows = target_dims[1];
+    let vocab = target_dims[2];
+    if batch == 0 || rows < 2 || vocab == 0 {
+        candle_core::bail!(
+            "{OP} requires a non-empty batch, at least one draft, and a non-empty vocabulary"
+        );
+    }
+    let drafts = rows - 1;
+    let q_dims = input.q_token_ids.dims();
+    if q_dims.len() != 3 || q_dims[0] != batch || q_dims[1] != drafts {
+        candle_core::bail!(
+            "{OP} expected q token ids with shape [{batch}, {drafts}, q_width], got {q_dims:?}"
+        );
+    }
+    let q_width = q_dims[2];
+    if q_width == 0 || q_width > SPARSE_REJECTION_MAX_Q_WIDTH {
+        candle_core::bail!("{OP} q_width={q_width} must be in [1, {SPARSE_REJECTION_MAX_Q_WIDTH}]");
+    }
+
+    let draft_shape = [batch, drafts];
+    let q_shape = [batch, drafts, q_width];
+    let batch_shape = [batch];
+    match input.mode {
+        SparseRejectionMode::Categorical if input.target_logits.dtype() != DType::F32 => {
+            candle_core::bail!("{OP} categorical mode requires F32 target logits");
+        }
+        SparseRejectionMode::BoundedTopK { .. }
+            if !matches!(
+                input.target_logits.dtype(),
+                DType::BF16 | DType::F16 | DType::F32
+            ) =>
+        {
+            candle_core::bail!("{OP} bounded top-k mode requires BF16, F16, or F32 target logits");
+        }
+        _ => {}
+    }
+    if !input.target_logits.is_contiguous() {
+        candle_core::bail!("{OP} requires contiguous target logits");
+    }
+    let device_specs = [
+        (
+            input.draft_tokens,
+            DType::U32,
+            draft_shape.as_slice(),
+            "draft tokens",
+        ),
+        (
+            input.q_token_ids,
+            DType::U32,
+            q_shape.as_slice(),
+            "q token ids",
+        ),
+        (
+            input.q_probs,
+            DType::F32,
+            q_shape.as_slice(),
+            "q probabilities",
+        ),
+    ];
+    for (tensor, dtype, shape, name) in device_specs {
+        if tensor.dtype() != dtype {
+            candle_core::bail!(
+                "{OP} expected {name} to have dtype {dtype:?}, got {:?}",
+                tensor.dtype()
+            );
+        }
+        if tensor.dims() != shape {
+            candle_core::bail!(
+                "{OP} expected {name} with shape {shape:?}, got {:?}",
+                tensor.dims()
+            );
+        }
+        if !tensor.is_contiguous() {
+            candle_core::bail!("{OP} requires contiguous {name}");
+        }
+        if !input.target_logits.device().same_device(tensor.device()) {
+            candle_core::bail!("{OP} requires every tensor on one {role} device");
+        }
+    }
+    let tensor_specs = [
+        (
+            input.inverse_temperatures,
+            DType::F32,
+            batch_shape.as_slice(),
+            "inverse temperatures",
+        ),
+        (
+            input.target_top_k,
+            DType::U32,
+            batch_shape.as_slice(),
+            "target top-k",
+        ),
+        (input.top_p, DType::F32, batch_shape.as_slice(), "top-p"),
+        (input.min_p, DType::F32, batch_shape.as_slice(), "min-p"),
+        (
+            input.accept_uniforms,
+            DType::F32,
+            draft_shape.as_slice(),
+            "accept uniforms",
+        ),
+        (
+            input.sample_uniforms,
+            DType::F32,
+            batch_shape.as_slice(),
+            "sample uniforms",
+        ),
+    ];
+    for (tensor, dtype, shape, name) in tensor_specs {
+        if tensor.dtype() != dtype {
+            candle_core::bail!(
+                "{OP} expected {name} to have dtype {dtype:?}, got {:?}",
+                tensor.dtype()
+            );
+        }
+        if tensor.dims() != shape {
+            candle_core::bail!(
+                "{OP} expected {name} with shape {shape:?}, got {:?}",
+                tensor.dims()
+            );
+        }
+        if !tensor.is_contiguous() {
+            candle_core::bail!("{OP} requires contiguous {name}");
+        }
+        if !input.target_logits.device().same_device(tensor.device()) {
+            candle_core::bail!("{OP} requires every tensor on one {role} device");
+        }
+    }
+
+    let batch_i32 = i32::try_from(batch).map_err(candle_core::Error::wrap)?;
+    let drafts_i32 = i32::try_from(drafts).map_err(candle_core::Error::wrap)?;
+    let vocab_i32 = i32::try_from(vocab).map_err(candle_core::Error::wrap)?;
+    let q_width_i32 = i32::try_from(q_width).map_err(candle_core::Error::wrap)?;
+    batch
+        .checked_mul(SPARSE_REJECTION_OUTCOME_WIDTH)
+        .ok_or_else(|| candle_core::Error::msg("sparse rejection outcome size overflow"))?;
+
+    Ok(SparseRejectionShape {
+        batch,
+        rows,
+        vocab,
+        batch_i32,
+        drafts_i32,
+        vocab_i32,
+        q_width_i32,
+    })
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+fn dense_hip_rows(
+    rows: &[Tensor],
+    dtype: DType,
+    row_shape: &[usize],
+    device: &candle_core::Device,
+) -> Result<Option<DenseCudaRows>> {
+    if rows.is_empty() || !device.is_hip() {
+        return Ok(None);
+    }
+    let row_elems = row_shape.iter().try_fold(1usize, |elements, dim| {
+        elements
+            .checked_mul(*dim)
+            .ok_or_else(|| candle_core::Error::msg("sparse rejection row size overflow"))
+    })?;
+    let mut storage_id = None;
+    let mut first_offset = None;
+    for (index, row) in rows.iter().enumerate() {
+        if row.dtype() != dtype
+            || row.dims() != row_shape
+            || !row.is_contiguous()
+            || !row.device().same_device(device)
+        {
+            return Ok(None);
+        }
+        let (storage, layout) = row.storage_and_layout();
+        if !matches!(&*storage, Storage::Hip(_)) {
+            return Ok(None);
+        }
+        let row_storage_id = std::ptr::from_ref::<Storage>(&*storage) as usize;
+        let row_offset = layout.start_offset();
+        let first_storage_id = *storage_id.get_or_insert(row_storage_id);
+        let first_row_offset = *first_offset.get_or_insert(row_offset);
+        let expected_offset = index
+            .checked_mul(row_elems)
+            .and_then(|offset| first_row_offset.checked_add(offset))
+            .ok_or_else(|| candle_core::Error::msg("sparse rejection row offset overflow"))?;
+        if row_storage_id != first_storage_id || row_offset != expected_offset {
+            return Ok(None);
+        }
+    }
+    let mut shape = Vec::with_capacity(row_shape.len() + 1);
+    shape.push(rows.len());
+    shape.extend_from_slice(row_shape);
+    Ok(Some(DenseCudaRows {
+        rows: rows.to_vec(),
+        shape: Shape::from_dims(&shape),
+    }))
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+impl SparseRejectionDeviceTensor {
+    fn from_hip_rows(
+        rows: &[Tensor],
+        dtype: DType,
+        row_shape: &[usize],
+        device: &candle_core::Device,
+    ) -> Result<Self> {
+        if let Some(rows) = dense_hip_rows(rows, dtype, row_shape, device)? {
+            return Ok(Self::DenseRows(rows));
+        }
+        let rows = rows.iter().collect::<Vec<_>>();
+        let tensor = match rows.as_slice() {
+            [row] => row.unsqueeze(0)?.contiguous()?,
+            [] => candle_core::bail!("{OP} cannot materialize an empty row batch"),
+            _ => Tensor::stack(&rows, 0)?.contiguous()?,
+        };
+        Ok(Self::Tensor(tensor))
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[allow(clippy::too_many_lines)]
+fn sparse_rejection_hip_device_with_outcomes(
+    input: SparseRejectionDeviceInput<'_>,
+    outcomes: Option<&Tensor>,
+    mut topk_context: Option<SparseRejectionTopKContext<'_>>,
+) -> Result<SparseRejectionOutput> {
+    use candle_core::backend::BackendStorage;
+    use candle_core::hip_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+
+    let shape = validate_hip_input(&input)?;
+    let packed_target = match input.mode {
+        SparseRejectionMode::Categorical => None,
+        SparseRejectionMode::BoundedTopK { max_top_k } => {
+            if max_top_k == 0 || max_top_k > CUDA_TOPK_MAX_K {
+                candle_core::bail!("{OP} max_top_k={max_top_k} must be in [1, {CUDA_TOPK_MAX_K}]");
+            }
+            let flattened = input
+                .target_logits
+                .reshape((shape.batch * shape.rows, shape.vocab))?;
+            let packed = if let Some(context) = topk_context.as_mut() {
+                cuda_topk_ranked_packed_batched_with_workspace(
+                    &flattened,
+                    max_top_k,
+                    &mut *context.workspace,
+                )?
+            } else {
+                cuda_topk_ranked_packed_batched(&flattened, max_top_k)?
+            };
+            Some(packed)
+        }
+    };
+    let kernel_target = packed_target.as_ref().map_or_else(
+        || input.target_logits.clone(),
+        |packed| packed.packed.clone(),
+    );
+
+    let (target_storage, target_layout) = kernel_target.storage_and_layout();
+    let target_storage = match &*target_storage {
+        candle_core::Storage::Hip(storage) => storage,
+        _ => candle_core::bail!("{OP} requires hip target logits"),
+    };
+    let draft_tokens = input.draft_tokens.anchor();
+    let (draft_storage, draft_layout) = draft_tokens.storage_and_layout();
+    let draft_storage = match &*draft_storage {
+        candle_core::Storage::Hip(storage) => storage,
+        _ => candle_core::bail!("{OP} requires hip draft tokens"),
+    };
+    let q_token_ids = input.q_token_ids.anchor();
+    let (q_ids_storage, q_ids_layout) = q_token_ids.storage_and_layout();
+    let q_ids_storage = match &*q_ids_storage {
+        candle_core::Storage::Hip(storage) => storage,
+        _ => candle_core::bail!("{OP} requires hip q token ids"),
+    };
+    let q_probs = input.q_probs.anchor();
+    let (q_probs_storage, q_probs_layout) = q_probs.storage_and_layout();
+    let q_probs_storage = match &*q_probs_storage {
+        candle_core::Storage::Hip(storage) => storage,
+        _ => candle_core::bail!("{OP} requires hip q probabilities"),
+    };
+    let (temperature_storage, temperature_layout) = input.inverse_temperatures.storage_and_layout();
+    let temperature_storage = match &*temperature_storage {
+        candle_core::Storage::Hip(storage) => storage,
+        _ => candle_core::bail!("{OP} requires hip inverse temperatures"),
+    };
+    let (top_k_storage, top_k_layout) = input.target_top_k.storage_and_layout();
+    let top_k_storage = match &*top_k_storage {
+        candle_core::Storage::Hip(storage) => storage,
+        _ => candle_core::bail!("{OP} requires hip target top-k"),
+    };
+    let (top_p_storage, top_p_layout) = input.top_p.storage_and_layout();
+    let top_p_storage = match &*top_p_storage {
+        candle_core::Storage::Hip(storage) => storage,
+        _ => candle_core::bail!("{OP} requires hip top-p"),
+    };
+    let (min_p_storage, min_p_layout) = input.min_p.storage_and_layout();
+    let min_p_storage = match &*min_p_storage {
+        candle_core::Storage::Hip(storage) => storage,
+        _ => candle_core::bail!("{OP} requires hip min-p"),
+    };
+    let (accept_storage, accept_layout) = input.accept_uniforms.storage_and_layout();
+    let accept_storage = match &*accept_storage {
+        candle_core::Storage::Hip(storage) => storage,
+        _ => candle_core::bail!("{OP} requires hip accept uniforms"),
+    };
+    let (sample_storage, sample_layout) = input.sample_uniforms.storage_and_layout();
+    let sample_storage = match &*sample_storage {
+        candle_core::Storage::Hip(storage) => storage,
+        _ => candle_core::bail!("{OP} requires hip sample uniforms"),
+    };
+
+    let HipStorageSlice::F32(target_slice) = &target_storage.slice else {
+        candle_core::bail!("{OP} target storage dtype mismatch");
+    };
+    let HipStorageSlice::U32(draft_slice) = &draft_storage.slice else {
+        candle_core::bail!("{OP} draft storage dtype mismatch");
+    };
+    let HipStorageSlice::U32(q_ids_slice) = &q_ids_storage.slice else {
+        candle_core::bail!("{OP} q token id storage dtype mismatch");
+    };
+    let HipStorageSlice::F32(q_probs_slice) = &q_probs_storage.slice else {
+        candle_core::bail!("{OP} q probability storage dtype mismatch");
+    };
+    let HipStorageSlice::F32(temperature_slice) = &temperature_storage.slice else {
+        candle_core::bail!("{OP} inverse temperature storage dtype mismatch");
+    };
+    let HipStorageSlice::U32(top_k_slice) = &top_k_storage.slice else {
+        candle_core::bail!("{OP} target top-k storage dtype mismatch");
+    };
+    let HipStorageSlice::F32(top_p_slice) = &top_p_storage.slice else {
+        candle_core::bail!("{OP} top-p storage dtype mismatch");
+    };
+    let HipStorageSlice::F32(min_p_slice) = &min_p_storage.slice else {
+        candle_core::bail!("{OP} min-p storage dtype mismatch");
+    };
+    let HipStorageSlice::F32(accept_slice) = &accept_storage.slice else {
+        candle_core::bail!("{OP} accept uniform storage dtype mismatch");
+    };
+    let HipStorageSlice::F32(sample_slice) = &sample_storage.slice else {
+        candle_core::bail!("{OP} sample uniform storage dtype mismatch");
+    };
+
+    let dev = target_storage.device();
+    let stream = dev.cuda_stream();
+    let (target_ptr, target_guard) = target_slice.device_ptr(&stream);
+    let target_ptr = unsafe { (target_ptr as *const f32).add(target_layout.start_offset()) };
+    let (draft_ptr, draft_guard) = draft_slice.device_ptr(&stream);
+    let draft_ptr = unsafe { (draft_ptr as *const u32).add(draft_layout.start_offset()) };
+    let (q_ids_ptr, q_ids_guard) = q_ids_slice.device_ptr(&stream);
+    let q_ids_ptr = unsafe { (q_ids_ptr as *const u32).add(q_ids_layout.start_offset()) };
+    let (q_probs_ptr, q_probs_guard) = q_probs_slice.device_ptr(&stream);
+    let q_probs_ptr = unsafe { (q_probs_ptr as *const f32).add(q_probs_layout.start_offset()) };
+    let (temperature_ptr, temperature_guard) = temperature_slice.device_ptr(&stream);
+    let temperature_ptr =
+        unsafe { (temperature_ptr as *const f32).add(temperature_layout.start_offset()) };
+    let (top_k_ptr, top_k_guard) = top_k_slice.device_ptr(&stream);
+    let top_k_ptr = unsafe { (top_k_ptr as *const u32).add(top_k_layout.start_offset()) };
+    let (top_p_ptr, top_p_guard) = top_p_slice.device_ptr(&stream);
+    let top_p_ptr = unsafe { (top_p_ptr as *const f32).add(top_p_layout.start_offset()) };
+    let (min_p_ptr, min_p_guard) = min_p_slice.device_ptr(&stream);
+    let min_p_ptr = unsafe { (min_p_ptr as *const f32).add(min_p_layout.start_offset()) };
+    let (accept_ptr, accept_guard) = accept_slice.device_ptr(&stream);
+    let accept_ptr = unsafe { (accept_ptr as *const f32).add(accept_layout.start_offset()) };
+    let (sample_ptr, sample_guard) = sample_slice.device_ptr(&stream);
+    let sample_ptr = unsafe { (sample_ptr as *const f32).add(sample_layout.start_offset()) };
+
+    let outcomes = match outcomes {
+        Some(outcomes) => {
+            if outcomes.dtype() != DType::U32
+                || outcomes.dims() != [shape.batch, SPARSE_REJECTION_OUTCOME_WIDTH]
+                || !outcomes.is_contiguous()
+                || !outcomes.device().same_device(input.target_logits.device())
+            {
+                candle_core::bail!(
+                    "{OP} workspace outcomes must be contiguous hip U32 with shape [{}, {}]",
+                    shape.batch,
+                    SPARSE_REJECTION_OUTCOME_WIDTH
+                );
+            }
+            outcomes.clone()
+        }
+        None => {
+            let outcome_elems = shape.batch * SPARSE_REJECTION_OUTCOME_WIDTH;
+            let outcomes = unsafe { dev.alloc::<u32>(outcome_elems) }?;
+            Tensor::from((
+                candle_core::Storage::Hip(HipStorage::wrap_cuda_slice(outcomes, dev.clone())),
+                Shape::from_dims(&[shape.batch, SPARSE_REJECTION_OUTCOME_WIDTH]),
+            ))
+        }
+    };
+    let packed_k = packed_target
+        .as_ref()
+        .map(|packed| i32::try_from(packed.k).map_err(candle_core::Error::wrap))
+        .transpose()?;
+    outcomes.inplace_op1(&SparseRejectionKernelLaunch {
+        mode: input.mode,
+        target_ptr: target_ptr as usize,
+        draft_ptr: draft_ptr as usize,
+        q_ids_ptr: q_ids_ptr as usize,
+        q_probs_ptr: q_probs_ptr as usize,
+        temperature_ptr: temperature_ptr as usize,
+        top_k_ptr: top_k_ptr as usize,
+        top_p_ptr: top_p_ptr as usize,
+        min_p_ptr: min_p_ptr as usize,
+        accept_ptr: accept_ptr as usize,
+        sample_ptr: sample_ptr as usize,
+        batch: shape.batch_i32,
+        drafts: shape.drafts_i32,
+        vocab: shape.vocab_i32,
+        q_width: shape.q_width_i32,
+        packed_k,
+    })?;
+
+    drop(target_guard);
+    drop(draft_guard);
+    drop(q_ids_guard);
+    drop(q_probs_guard);
+    drop(temperature_guard);
+    drop(top_k_guard);
+    drop(top_p_guard);
+    drop(min_p_guard);
+    drop(accept_guard);
+    drop(sample_guard);
+
+    let mut inputs = vec![
+        input.target_logits.clone(),
+        input.inverse_temperatures.clone(),
+        input.target_top_k.clone(),
+        input.top_p.clone(),
+        input.min_p.clone(),
+        input.accept_uniforms.clone(),
+        input.sample_uniforms.clone(),
+    ];
+    input.draft_tokens.extend_inputs(&mut inputs);
+    input.q_token_ids.extend_inputs(&mut inputs);
+    input.q_probs.extend_inputs(&mut inputs);
+    Ok(SparseRejectionOutput {
+        _outcomes: outcomes.clone(),
+        _inputs: inputs,
+        _packed_target: packed_target,
+        _row_inverse_temperatures: None,
+    })
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn sparse_rejection_hip_submit(
+    input: SparseRejectionWorkspaceInput<'_>,
+    cache: &mut Option<HipSparseRejectionWorkspace>,
+) -> Result<HipSparseRejectionSubmission> {
+    let [batch, rows, _] = input.target_logits.dims() else {
+        candle_core::bail!(
+            "{OP} expected target logits with shape [batch, drafts + 1, vocab], got {:?}",
+            input.target_logits.dims()
+        );
+    };
+    if *batch == 0 || *rows < 2 {
+        candle_core::bail!("{OP} requires a non-empty batch and at least one draft");
+    }
+    let batch = *batch;
+    let rows = *rows;
+    let drafts = rows - 1;
+    let draft_elems = batch
+        .checked_mul(drafts)
+        .ok_or_else(|| candle_core::Error::msg("sparse rejection draft input overflow"))?;
+    match input.draft_tokens {
+        SparseRejectionDraftInput::Host(tokens) => {
+            validate_host_len("draft token", tokens.len(), draft_elems)?;
+        }
+        #[cfg(test)]
+        SparseRejectionDraftInput::Device(tokens) => {
+            if tokens.dtype() != DType::U32
+                || tokens.dims() != [batch, drafts]
+                || !tokens.is_contiguous()
+                || !tokens.device().same_device(input.target_logits.device())
+            {
+                candle_core::bail!(
+                    "{OP} device draft tokens must be contiguous hip U32 with shape [{batch}, {drafts}] on the target device"
+                );
+            }
+        }
+        SparseRejectionDraftInput::DeviceRows(tokens) => {
+            if tokens.len() != batch {
+                candle_core::bail!(
+                    "{OP} expected {batch} device draft token rows, got {}",
+                    tokens.len()
+                );
+            }
+        }
+    }
+    if let SparseRejectionProposalInput::SparseRows { token_ids, probs } = input.proposal {
+        if token_ids.len() != batch || probs.len() != batch {
+            candle_core::bail!(
+                "{OP} expected {batch} sparse proposal rows, got {} token-id and {} probability rows",
+                token_ids.len(),
+                probs.len()
+            );
+        }
+    }
+    validate_host_len(
+        "inverse temperature",
+        input.inverse_temperatures.len(),
+        batch,
+    )?;
+    validate_host_len("target top-k", input.target_top_k.len(), batch)?;
+    validate_host_len("top-p", input.top_p.len(), batch)?;
+    validate_host_len("min-p", input.min_p.len(), batch)?;
+    validate_host_len("accept uniform", input.accept_uniforms.len(), draft_elems)?;
+    validate_host_len("sample uniform", input.sample_uniforms.len(), batch)?;
+
+    let hip_device = input.target_logits.device().as_hip_device()?;
+    let location = hip_device.location();
+    let stream = hip_device.cuda_stream();
+    let needs_alloc = cache
+        .as_ref()
+        .is_none_or(|workspace| !workspace.can_hold(location, &stream, batch, drafts));
+    if needs_alloc {
+        if cache
+            .as_ref()
+            .is_some_and(|workspace| workspace.pending.is_some())
+        {
+            candle_core::bail!("{OP} cannot resize while a submission is pending");
+        }
+        *cache = Some(HipSparseRejectionWorkspace::new(
+            input.target_logits.device(),
+            batch,
+            drafts,
+        )?);
+    }
+    let workspace = cache
+        .as_mut()
+        .expect("sparse rejection workspace was allocated above");
+    if workspace.pending.is_some() {
+        candle_core::bail!("{OP} workspace already has a pending submission");
+    }
+    let generation = workspace.next_generation;
+
+    let result = (|| {
+        if let SparseRejectionDraftInput::Host(tokens) = input.draft_tokens {
+            workspace.draft_tokens_host.as_mut_slice()[..draft_elems].copy_from_slice(tokens);
+        }
+        workspace.inverse_temperatures_host.as_mut_slice()[..batch]
+            .copy_from_slice(input.inverse_temperatures);
+        workspace.target_top_k_host.as_mut_slice()[..batch].copy_from_slice(input.target_top_k);
+        workspace.top_p_host.as_mut_slice()[..batch].copy_from_slice(input.top_p);
+        workspace.min_p_host.as_mut_slice()[..batch].copy_from_slice(input.min_p);
+        workspace.accept_uniforms_host.as_mut_slice()[..draft_elems]
+            .copy_from_slice(input.accept_uniforms);
+        workspace.sample_uniforms_host.as_mut_slice()[..batch]
+            .copy_from_slice(input.sample_uniforms);
+        let row_elems = if matches!(input.mode, SparseRejectionMode::BoundedTopK { .. }) {
+            let row_elems = batch.checked_mul(rows).ok_or_else(|| {
+                candle_core::Error::msg("sparse rejection row temperature input overflow")
+            })?;
+            for (row_temperatures, &inverse_temperature) in
+                workspace.row_inverse_temperatures_host.as_mut_slice()[..row_elems]
+                    .chunks_exact_mut(rows)
+                    .zip(input.inverse_temperatures)
+            {
+                row_temperatures.fill(inverse_temperature);
+            }
+            Some(row_elems)
+        } else {
+            None
+        };
+
+        if matches!(input.draft_tokens, SparseRejectionDraftInput::Host(_)) {
+            enqueue_hip_u32_htod(
+                &workspace.draft_tokens_host,
+                &workspace.draft_tokens,
+                draft_elems,
+                &stream,
+            )?;
+        }
+        enqueue_hip_f32_htod(
+            &workspace.inverse_temperatures_host,
+            &workspace.inverse_temperatures,
+            batch,
+            &stream,
+        )?;
+        enqueue_hip_u32_htod(
+            &workspace.target_top_k_host,
+            &workspace.target_top_k,
+            batch,
+            &stream,
+        )?;
+        enqueue_hip_f32_htod(&workspace.top_p_host, &workspace.top_p, batch, &stream)?;
+        enqueue_hip_f32_htod(&workspace.min_p_host, &workspace.min_p, batch, &stream)?;
+        enqueue_hip_f32_htod(
+            &workspace.accept_uniforms_host,
+            &workspace.accept_uniforms,
+            draft_elems,
+            &stream,
+        )?;
+        enqueue_hip_f32_htod(
+            &workspace.sample_uniforms_host,
+            &workspace.sample_uniforms,
+            batch,
+            &stream,
+        )?;
+        if let Some(row_elems) = row_elems {
+            enqueue_hip_f32_htod(
+                &workspace.row_inverse_temperatures_host,
+                &workspace.row_inverse_temperatures,
+                row_elems,
+                &stream,
+            )?;
+        }
+
+        let draft_tokens = match input.draft_tokens {
+            SparseRejectionDraftInput::Host(_) => {
+                let tokens = workspace
+                    .draft_tokens
+                    .narrow(0, 0, draft_elems)?
+                    .reshape((batch, drafts))?;
+                SparseRejectionDeviceTensor::from_tensor(&tokens)
+            }
+            #[cfg(test)]
+            SparseRejectionDraftInput::Device(tokens) => {
+                SparseRejectionDeviceTensor::from_tensor(tokens)
+            }
+            SparseRejectionDraftInput::DeviceRows(tokens) => {
+                SparseRejectionDeviceTensor::from_hip_rows(
+                    tokens,
+                    DType::U32,
+                    &[drafts],
+                    input.target_logits.device(),
+                )?
+            }
+        };
+        let (q_token_ids, q_probs) = match input.proposal {
+            SparseRejectionProposalInput::Deterministic => (
+                draft_tokens.reshape(Shape::from_dims(&[batch, drafts, 1]))?,
+                SparseRejectionDeviceTensor::from_tensor(
+                    &workspace
+                        .deterministic_q_probs
+                        .narrow(0, 0, draft_elems)?
+                        .reshape((batch, drafts, 1))?,
+                ),
+            ),
+            #[cfg(test)]
+            SparseRejectionProposalInput::Sparse { token_ids, probs } => (
+                SparseRejectionDeviceTensor::from_tensor(token_ids),
+                SparseRejectionDeviceTensor::from_tensor(probs),
+            ),
+            SparseRejectionProposalInput::SparseRows { token_ids, probs } => {
+                let Some(first) = token_ids.first() else {
+                    candle_core::bail!("{OP} requires sparse proposal rows");
+                };
+                let [row_drafts, q_width] = first.dims() else {
+                    candle_core::bail!(
+                        "{OP} expected sparse proposal rows with shape [drafts, q_width], got {:?}",
+                        first.dims()
+                    );
+                };
+                if *row_drafts != drafts {
+                    candle_core::bail!(
+                        "{OP} expected sparse proposal rows with {drafts} drafts, got {row_drafts}"
+                    );
+                }
+                let row_shape = [drafts, *q_width];
+                (
+                    SparseRejectionDeviceTensor::from_hip_rows(
+                        token_ids,
+                        DType::U32,
+                        &row_shape,
+                        input.target_logits.device(),
+                    )?,
+                    SparseRejectionDeviceTensor::from_hip_rows(
+                        probs,
+                        DType::F32,
+                        &row_shape,
+                        input.target_logits.device(),
+                    )?,
+                )
+            }
+        };
+        let inverse_temperatures = workspace.inverse_temperatures.narrow(0, 0, batch)?;
+        let target_top_k = workspace.target_top_k.narrow(0, 0, batch)?;
+        let top_p = workspace.top_p.narrow(0, 0, batch)?;
+        let min_p = workspace.min_p.narrow(0, 0, batch)?;
+        let accept_uniforms = workspace
+            .accept_uniforms
+            .narrow(0, 0, draft_elems)?
+            .reshape((batch, drafts))?;
+        let sample_uniforms = workspace.sample_uniforms.narrow(0, 0, batch)?;
+        let row_inverse_temperatures = row_elems
+            .map(|row_elems| workspace.row_inverse_temperatures.narrow(0, 0, row_elems))
+            .transpose()?;
+        let outcome_elems = batch * SPARSE_REJECTION_OUTCOME_WIDTH;
+        let outcomes = workspace
+            .outcomes
+            .narrow(0, 0, outcome_elems)?
+            .reshape((batch, SPARSE_REJECTION_OUTCOME_WIDTH))?;
+        let output = sparse_rejection_hip_device_with_outcomes(
+            SparseRejectionDeviceInput {
+                target_logits: input.target_logits,
+                draft_tokens: &draft_tokens,
+                q_token_ids: &q_token_ids,
+                q_probs: &q_probs,
+                inverse_temperatures: &inverse_temperatures,
+                target_top_k: &target_top_k,
+                top_p: &top_p,
+                min_p: &min_p,
+                accept_uniforms: &accept_uniforms,
+                sample_uniforms: &sample_uniforms,
+                mode: input.mode,
+            },
+            Some(&outcomes),
+            row_inverse_temperatures
+                .as_ref()
+                .map(|_| SparseRejectionTopKContext {
+                    workspace: &mut workspace.topk,
+                }),
+        )?;
+        enqueue_hip_u32_dtoh(
+            &outcomes,
+            &mut workspace.outcomes_host,
+            outcome_elems,
+            &stream,
+        )?;
+        let device_drafts = match input.draft_tokens {
+            #[cfg(test)]
+            SparseRejectionDraftInput::Device(_) => true,
+            SparseRejectionDraftInput::DeviceRows(_) => true,
+            SparseRejectionDraftInput::Host(_) => false,
+        };
+        if device_drafts {
+            enqueue_hip_device_u32_dtoh(
+                &draft_tokens,
+                &mut workspace.draft_tokens_host,
+                draft_elems,
+                &stream,
+            )?;
+        }
+        workspace
+            .completion
+            .record(&stream)
+            .map_err(candle_core::Error::wrap)?;
+        Ok(output)
+    })();
+    let output = match result {
+        Ok(output) => output,
+        Err(error) => {
+            let _ = stream.synchronize();
+            return Err(error);
+        }
+    };
+
+    workspace.next_generation = generation.wrapping_add(1).max(1);
+    workspace.pending = Some(HipSparseRejectionPending {
+        generation,
+        batch,
+        drafts,
+        _output: output,
+    });
+    Ok(HipSparseRejectionSubmission {
+        workspace_id: workspace.id,
+        generation,
+        batch,
+        drafts,
+        completion: workspace.completion.clone(),
+    })
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn sparse_rejection_hip_complete(
+    cache: &mut Option<HipSparseRejectionWorkspace>,
+    submission: &HipSparseRejectionSubmission,
+) -> Result<SparseRejectionCompletion> {
+    let workspace = cache
+        .as_mut()
+        .ok_or_else(|| candle_core::Error::msg("sparse rejection workspace is missing"))?;
+    if submission.workspace_id != workspace.id {
+        candle_core::bail!("{OP} received a submission from a different workspace");
+    }
+    let Some(pending) = workspace.pending.as_ref() else {
+        candle_core::bail!("{OP} received an inactive submission");
+    };
+    if pending.generation != submission.generation
+        || pending.batch != submission.batch
+        || pending.drafts != submission.drafts
+    {
+        candle_core::bail!("{OP} received a stale submission");
+    }
+    let wait_result = submission.wait();
+    if let Err(error) = wait_result {
+        workspace.pending = None;
+        return Err(error);
+    }
+    let outcome_elems = submission.batch * SPARSE_REJECTION_OUTCOME_WIDTH;
+    let rows = workspace.outcomes_host.as_slice()[..outcome_elems]
+        .as_chunks::<SPARSE_REJECTION_OUTCOME_WIDTH>()
+        .0
+        .iter()
+        .map(|row| SparseRejectionRow {
+            accepted_count: row[0],
+            continuation: row[1],
+            status: row[2],
+        })
+        .collect();
+    let draft_tokens = workspace.draft_tokens_host.as_slice()
+        [..submission.batch * submission.drafts]
+        .chunks_exact(submission.drafts)
+        .map(ToOwned::to_owned)
+        .collect();
+    workspace.pending = None;
+    Ok(SparseRejectionCompletion { rows, draft_tokens })
 }
 
 #[cfg(test)]

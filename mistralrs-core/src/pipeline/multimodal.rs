@@ -232,7 +232,7 @@ pub struct MultimodalPipeline {
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
     #[cfg(any(feature = "cuda", feature = "rocm"))]
-    cuda_sparse_rejection: StdMutex<Option<crate::speculative::CudaSparseRejectionWorkspace>>,
+    cuda_sparse_rejection: StdMutex<Option<crate::speculative::SparseRejectionWorkspace>>,
     // Attention inputs of the last prompt-chunk forward, so a built-in drafter can prefill with them
     last_prompt_attention: StdMutex<Option<(PagedAttentionInputMetadata, FlashParams)>>,
 
@@ -1846,7 +1846,7 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_sparse_rejection_workspace(
         &self,
-    ) -> &StdMutex<Option<crate::speculative::CudaSparseRejectionWorkspace>> {
+    ) -> &StdMutex<Option<crate::speculative::SparseRejectionWorkspace>> {
         &self.cuda_sparse_rejection
     }
 }

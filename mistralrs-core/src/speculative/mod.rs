@@ -12,7 +12,7 @@ pub mod verifier;
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 #[doc(hidden)]
-pub use crate::cuda::speculative_rejection::CudaSparseRejectionWorkspace;
+pub(crate) use crate::cuda::speculative_rejection::SparseRejectionWorkspace;
 pub use config::{
     reserve_external_mtp_memory, reserve_external_mtp_memory_with_runtime, MtpConfig,
     MtpDraftSamplingMethod, MtpRuntimeConfig, SpeculativeConfig,

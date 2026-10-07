@@ -123,7 +123,7 @@ pub trait SpeculativePipelineExt: Pipeline {
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn cuda_sparse_rejection_workspace(
         &self,
-    ) -> &std::sync::Mutex<Option<crate::speculative::CudaSparseRejectionWorkspace>>;
+    ) -> &std::sync::Mutex<Option<crate::speculative::SparseRejectionWorkspace>>;
 }
 
 /// Drop staged speculative proposals when the next step cannot verify them.
