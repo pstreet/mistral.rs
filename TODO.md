@@ -197,12 +197,16 @@ facade today, so the MTP port gates the cutover):
       disable-warn, stream presumably left capturing - leak path
       unidentified; re-entry: info-level bypass run + replay-path
       audit). Eager gates stay until capture demonstrably works.
-- [ ] ~M `speculative_rejection.rs` dual-role port (pinned staging, stream
-      events, 3 kernel-launch ops, dense row packing - all CudaStorage
-      typed): the last code gap for MTP on the dual hip role. The hybrid
-      MTP rollback is already unblocked (indexed_copy dual port,
-      2026-10-06); this file gates the MTP verify path. = role-identity
-      Phase 2; also gates the Phase 3 prod cutover (prod is MTP-locked).
+- [x] ~M `speculative_rejection.rs` dual-role port (done 2026-10-07,
+      commit 3c24dda25): hip_fwd twins for the kernel launch + both
+      pinned staging ops, parallel hip workspace/submission, hip
+      staging/submit/complete/validate/dense paths, dispatch enums
+      with solo aliases, verifier gates widened to the hip role.
+      PROOF (dual fast binary, 27B hip:0, MTP n=2 greedy):
+      "Speculative decoding enabled", 130 sparse GPU verifications
+      on-device, 402 drafts proposed with pos0/1/2 accepts 101/52/27,
+      ZERO cpu fallbacks, 0 errors; ~19-20 tok/s sustained vs 11.4
+      mtp-off (+70%). The MTP verify path runs on hip kernels.
 - [ ] ~M NVIDIA-role MTP: (a) memory - 27B Q4K + drafter = PA "0 GPU
       blocks" at BOTH 2048MB and 1024MB KV (mtp-off fits at 21.4GB/24GB);
       try smaller KV + `mtp_draft_lm_head_isq = "Q4K"` before anything
