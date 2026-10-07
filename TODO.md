@@ -107,6 +107,11 @@ facade today, so the MTP port gates the cutover):
    gemv -> plain GEMM (mirrors dual); hqq bitpack -> CPU pack at
    load (dequant stays device-side). Full 4-shape matrix
    verification in flight; then hardware proof on the APU.
+   LANDED 2026-10-07 (compile side): candle 071c650d + mistral.rs
+   587be98d2, both post-fmt 0/0/0/0 on the full matrix. NEXT per
+   plan (d): solo-rocm fast/release build + smoke + MTP serve on the
+   APU (hip hw), parity bench vs the pre-cutover binary, then the
+   user-owned prod re-validation. Prod :1235 still untouched.
 4. Vulkan: future third shell; the include!-body pattern is the
    extension point. No work yet.
 
