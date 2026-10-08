@@ -4339,9 +4339,13 @@ impl CudaGraphHostStaging {
 pub(crate) fn is_cuda_graph_device(device: &candle_core::Device) -> bool {
     device.is_hip() || device.is_cuda()
 }
-#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 pub(crate) fn is_cuda_graph_device(device: &candle_core::Device) -> bool {
     device.is_cuda()
+}
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+pub(crate) fn is_cuda_graph_device(device: &candle_core::Device) -> bool {
+    device.is_hip()
 }
 
 fn copy_var_map(

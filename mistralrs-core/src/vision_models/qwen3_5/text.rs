@@ -2843,7 +2843,7 @@ impl crate::speculative::SpeculativeTargetMixin for Qwen3_5TextModel {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const SUPPORTS_CUDA_DECODE_GRAPHS: bool = true;
 
 impl NormalModel for Qwen3_5TextModel {
@@ -2927,7 +2927,7 @@ impl NormalModel for Qwen3_5TextModel {
         true
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn supports_cuda_decode_graphs(&self) -> bool {
         SUPPORTS_CUDA_DECODE_GRAPHS
     }
@@ -2952,7 +2952,7 @@ mod tests {
         speculative::SpeculativeGraphState,
     };
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     use super::SUPPORTS_CUDA_DECODE_GRAPHS;
 
     #[test]
@@ -3231,7 +3231,7 @@ mod tests {
         assert!(state.for_real_batch(2).is_err());
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn text_architecture_supports_cuda_decode_graphs() {
         const _: () = assert!(SUPPORTS_CUDA_DECODE_GRAPHS);

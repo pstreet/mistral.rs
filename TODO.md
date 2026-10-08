@@ -138,6 +138,29 @@ facade today, so the MTP port gates the cutover):
      is_hip() (the alias-era check). Lesson journaled: the
      compiler matrix can't catch runtime-only gates in crates
      whose SOLO arm compiles but behaves wrong.
+   RELEASE PARITY SUITE 2026-10-08 (release builds, APU, prod
+   paused/restored per arm, standing harness: essay-600tok temp0.3
+   x3 + 270-tok prefill x3; OLD = pre-cutover alias binary,
+   NEW = cutover binary):
+   - Round 1 caught TWO more silent eager regressions (probe +
+     dispatch-metrics guided): (a) is_cuda_graph_device's solo
+     arm still checked is_cuda() -> graphs never armed on Hip;
+     (b) qwen3_5 TEXT model's supports_cuda_decode_graphs was
+     cfg(feature=cuda)-gated -> trait default false -> 4B decode
+     model_unsupported-skipped every step (the multimodal wrapper
+     was already any(cuda,rocm), which is why the 27B graphed).
+     Both widened; the dual-hip graph-capture fixes (Oct 6) carry
+     over cleanly to solo-rocm.
+   - FINAL NUMBERS (new binary ahead on every metric):
+     4B decode 41.76/41.76/41.67 vs OLD 38.2 (+9.3%); 27B
+     decode 11.31/11.31/11.28 vs OLD 10.6 (+6.7%); 4B prefill
+     ~1606 vs ~1515 (+6%); 27B prefill ~339 vs ~327 (+4%).
+     27B MTP n=2 (new capability): 10.41/9.49/9.62 - roughly
+     mtp-off parity on this saturated APU at ~48% acceptance
+     (MTP's win shows at higher-acceptance workloads / prod's
+     35B n=2 sweep).
+   Phase 3 parity acceptance MET: the cutover binary is
+   performance-positive vs the alias binary on both models.
 4. Vulkan: future third shell; the include!-body pattern is the
    extension point. No work yet.
 
