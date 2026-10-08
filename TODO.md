@@ -423,6 +423,13 @@ facade today, so the MTP port gates the cutover):
       next binary swap. The deploy TOML with the TEMP max_seqs=2
       (+ comment) rode into the same commit - prod config state is
       now versioned.
+      ROLLBACK POLICY CHANGE 2026-10-09 (user): no more rollback
+      binary snapshots - rebuild from the committed tree is the
+      rollback (~7m release with the caches; prod is a tinkering
+      box, not an HA service). The pre-topk-port/pre-ctxcap/
+      pre-logger snapshots are deleted; future swaps skip the
+      backup step. The /mistralrs.pre-* gitignore entry stays as
+      a tripwire.
 
 - [x] ~M cuda-only 3x decode gap (CLOSED 2026-10-07, root-caused, not tuned).
       It was never host overhead: cuda-only ran the GDN recurrence on CPU
