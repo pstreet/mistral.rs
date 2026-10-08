@@ -379,6 +379,18 @@ facade today, so the MTP port gates the cutover):
       (the model's declared native). No fleet model carries
       rope_scaling metadata; if one ever does, the cap clamps
       at declared native - the conservative direction.
+      PROD SWAP 2 2026-10-08 23:28 UTC: ctx-cap fix live in prod
+      (9877bd866, release 7m07s). Rollback chain: 
+      mistralrs.pre-ctxcap (topk-port, 22:24) -> pre-topk-port
+      (settle-retry, 20:24). Verified: health 10s, 27B sanity
+      200 with its full 256k pool (6528MB; declares 262144 so
+      correctly UNCAPPED), and the 16B PROOF: "capping KV cache
+      from 12288 MB to 1920 MB (40960 tokens)" - 10.3GB saved
+      per 16B load. 16B serves (HTTP 200); GTT 45.2 -> 47.6GB
+      means its total footprint is ~2.4GB vs ~12.7GB uncapped.
+      The 128k-native 30Bs (Llama3.2, Muse) will cap to ~half
+      pool on their next demand-load. GTT steady state for the
+      27B serving: 45.2GB.
 
 - [x] ~M cuda-only 3x decode gap (CLOSED 2026-10-07, root-caused, not tuned).
       It was never host overhead: cuda-only ran the GDN recurrence on CPU
