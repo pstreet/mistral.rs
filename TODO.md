@@ -356,6 +356,29 @@ facade today, so the MTP port gates the cutover):
       under the repo, never /tmp (tmpfs = RAM). The GTT 45G is
       prod's real serving footprint, not a leak; per-model 
       max_seqs would shrink the checkpoint pool share.
+      CTX-CAP BUG (found 2026-10-08 ~23:30 via user question,
+      fixed same night): calculate_cache_config caps the KV pool
+      at the model's native context on unified-memory devices,
+      but the gate (is_integrated_gpu) has cfg arms only for
+      solo shapes - in the dual build Device::Hip falls to
+      _ => false, so the cap has been DEAD on the hip role since
+      the dual cutover. Fleet GGUF context_length declarations:
+      27B/35B/4B/coder-next/gemma-26b all 262144 (matches the
+      global context_len, no current waste), but Llama3.2-30B
+      and Muse-30B declare 131072 (2x over-alloc) and Qwen3-16B
+      declares 40960 (6.4x, ~6GB unified RAM per load for a pool
+      it cannot use past 40k). Fix is surgical: cap_to_model_
+      context ||= cache_engine::is_hip_role(device) (the
+      dual-correct role helper). The OTHER is_integrated_gpu
+      callers are deliberately untouched: memory accounting
+      (GTT-query branch), ISQ staging, device-map heuristics -
+      all recent capacity tuning was measured under
+      hip-as-discrete; flipping those is a deliberate change
+      (AUDIT ITEM), not a bugfix.
+      YaRN note: the cap target is GGUF context_length metadata
+      (the model's declared native). No fleet model carries
+      rope_scaling metadata; if one ever does, the cap clamps
+      at declared native - the conservative direction.
 
 - [x] ~M cuda-only 3x decode gap (CLOSED 2026-10-07, root-caused, not tuned).
       It was never host overhead: cuda-only ran the GDN recurrence on CPU

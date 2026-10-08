@@ -723,7 +723,12 @@ pub fn calculate_cache_config(
     // Unified-memory devices share RAM with the OS and CPU, so cap the cache to what the model can use.
     #[allow(unused_mut, unused_variables)]
     let mut mem_gpu = min_mem_gpu;
-    let cap_to_model_context = device.is_metal() || crate::utils::normal::is_integrated_gpu(device);
+    // Hip role devices are unified-memory in every rocm shape; is_integrated_gpu
+    // has no dual arm, so gate on the role helper to keep the model-context cap
+    // live in cuda,rocm builds too.
+    let cap_to_model_context = device.is_metal()
+        || crate::utils::normal::is_integrated_gpu(device)
+        || crate::paged_attention::cache_engine::is_hip_role(device);
     if cap_to_model_context {
         let max_tokens = max_num_tokens
             .filter(|&n| n > 0)
