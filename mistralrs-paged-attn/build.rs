@@ -24,6 +24,33 @@ const CUDA_BUILD_ROOT_ENV: &str = "MISTRALRS_CUDA_BUILD_ROOT";
 /// Deliberately excluded: all link steps (drivers decline them), and
 /// sccache for nvcc (reports phantom hits on failed compiles).
 /// Opt in: MISTRALRS_CCACHE_GPU=1 (set in ~/.cargo/config.toml).
+/// Linker args selecting mold for GPU companion `.so` links when it is
+/// on PATH (fast links); empty otherwise, keeping the driver default.
+/// hipcc (clang-based) takes `-fuse-ld` directly; nvcc needs it routed
+/// through the host compiler driver via `-Xcompiler`.
+fn mold_available() -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join("mold").is_file()))
+}
+
+#[allow(dead_code)]
+fn mold_link_args_for_hipcc() -> Vec<&'static str> {
+    if mold_available() {
+        vec!["-fuse-ld=mold"]
+    } else {
+        Vec::new()
+    }
+}
+
+#[allow(dead_code)]
+fn mold_link_args_for_nvcc() -> Vec<&'static str> {
+    if mold_available() {
+        vec!["-Xcompiler", "-fuse-ld=mold"]
+    } else {
+        Vec::new()
+    }
+}
+
 #[allow(dead_code)]
 fn compiler_command(program: impl AsRef<std::path::Path>) -> std::process::Command {
     if std::env::var("MISTRALRS_CCACHE_GPU").as_deref() == Ok("1") {
@@ -391,6 +418,7 @@ fn build_rocm() -> Result<()> {
             std::fs::remove_file(&so).expect("remove stale libmistralrspagedattention_hip.so");
         }
         let status = Command::new(format!("{root}/bin/hipcc"))
+            .args(mold_link_args_for_hipcc())
             .arg("--shared")
             .arg("-o")
             .arg(&so)
@@ -484,6 +512,7 @@ fn build_cuda_companion() -> Result<()> {
         std::fs::remove_file(&so)?;
     }
     let status = Command::new(&nvcc)
+        .args(mold_link_args_for_nvcc())
         .arg("--shared")
         .arg("--cudart")
         .arg("shared")

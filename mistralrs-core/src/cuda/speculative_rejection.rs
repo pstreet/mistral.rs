@@ -28,7 +28,7 @@ use candle_core::HipStorage;
 
 use crate::ops::{
     cuda_topk_ranked_packed_batched, cuda_topk_ranked_packed_batched_with_workspace,
-    CudaRankedTopKPackedWorkspace, RankedTopKPackedOutput, CUDA_TOPK_MAX_K,
+    RankedTopKPackedOutput, RankedTopKPackedWorkspace, CUDA_TOPK_MAX_K,
 };
 
 use super::ffi;
@@ -332,7 +332,7 @@ pub struct CudaSparseRejectionWorkspace {
     accept_uniforms_host: SparseRejectionPinned<f32>,
     sample_uniforms_host: SparseRejectionPinned<f32>,
     outcomes_host: SparseRejectionPinned<u32>,
-    topk: Option<CudaRankedTopKPackedWorkspace>,
+    topk: Option<RankedTopKPackedWorkspace>,
     completion: Arc<CudaEvent>,
     pending: Option<CudaSparseRejectionPending>,
 }
@@ -454,7 +454,7 @@ pub(crate) struct HipSparseRejectionWorkspace {
     accept_uniforms_host: HipSparseRejectionPinned<f32>,
     sample_uniforms_host: HipSparseRejectionPinned<f32>,
     outcomes_host: HipSparseRejectionPinned<u32>,
-    topk: Option<CudaRankedTopKPackedWorkspace>,
+    topk: Option<RankedTopKPackedWorkspace>,
     completion: Arc<HipEvent>,
     pending: Option<HipSparseRejectionPending>,
 }
@@ -1797,7 +1797,7 @@ pub(crate) fn sparse_rejection_cuda(
 }
 
 struct SparseRejectionTopKContext<'a> {
-    workspace: &'a mut Option<CudaRankedTopKPackedWorkspace>,
+    workspace: &'a mut Option<RankedTopKPackedWorkspace>,
 }
 
 #[allow(clippy::too_many_lines)]

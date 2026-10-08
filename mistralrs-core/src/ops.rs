@@ -9,15 +9,15 @@ use crate::layers::Activation;
 use candle_core::Shape;
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-const CUDA_TOPK_CHUNK_SIZE: usize = 2048;
+pub(crate) const CUDA_TOPK_CHUNK_SIZE: usize = 2048;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) const CUDA_TOPK_MAX_EXACT_PACKED_VOCAB: usize = (1 << 24) + 1;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-const CUDA_TOPK_MAX_GRID_Y: usize = 65_535;
+pub(crate) const CUDA_TOPK_MAX_GRID_Y: usize = 65_535;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) const CUDA_TOPK_MAX_K: usize = 128;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-const CUDA_TOPK_MAX_STAGE2_CANDIDATES: usize = 47 * 1024;
+pub(crate) const CUDA_TOPK_MAX_STAGE2_CANDIDATES: usize = 47 * 1024;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) const CUDA_CATEGORICAL_PACKED_WIDTH: usize = 2;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -25,7 +25,7 @@ pub(crate) const CUDA_TOP1_PACKED_WIDTH: usize = 2;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) const CUDA_TOP1_INVALID_TOKEN: u32 = u32::MAX;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-const CUDA_ASYNC_TOKEN_RING_SLOTS: usize = 2;
+pub(crate) const CUDA_ASYNC_TOKEN_RING_SLOTS: usize = 2;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 const CUDA_TOPK_SAMPLING_PARAM_WIDTH: usize = 5;
 #[cfg(feature = "cuda")]
@@ -1423,6 +1423,17 @@ pub(crate) fn cuda_topk_logits_packed_batched_with_workspace(
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+pub(crate) fn cuda_topk_ranked_packed_batched_with_workspace(
+    input: &Tensor,
+    k: usize,
+    cache: &mut Option<CudaRankedTopKPackedWorkspace>,
+) -> Result<RankedTopKPackedOutput> {
+    cuda_topk_ranked_packed_batched_with_workspace_impl(input, k, cache)
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 pub(crate) fn cuda_topk_ranked_packed_batched(
     input: &Tensor,
     k: usize,
@@ -1432,7 +1443,7 @@ pub(crate) fn cuda_topk_ranked_packed_batched(
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-pub(crate) fn cuda_topk_ranked_packed_batched_with_workspace(
+fn cuda_topk_ranked_packed_batched_with_workspace_impl(
     input: &Tensor,
     k: usize,
     cache: &mut Option<CudaRankedTopKPackedWorkspace>,
@@ -2663,8 +2674,8 @@ impl CudaTop1Submission {
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaTop1Completion<'a> {
-    token_ids: &'a [u32],
-    packed: Option<&'a [f32]>,
+    pub(crate) token_ids: &'a [u32],
+    pub(crate) packed: Option<&'a [f32]>,
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -2688,7 +2699,7 @@ struct CudaTop1SubmitOptions<'a> {
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-fn final_logits_row(input: &Tensor) -> Result<Tensor> {
+pub(crate) fn final_logits_row(input: &Tensor) -> Result<Tensor> {
     let dims = input.dims();
     if dims.len() <= 1 {
         return input.contiguous();
@@ -3359,6 +3370,7 @@ fn cuda_top1_logits_submit_inner(
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 pub(crate) fn cuda_top1_logits_submit_batched(
     input: &Tensor,
     cache: &mut Option<CudaTop1LogitsWorkspace>,
@@ -3381,6 +3393,7 @@ pub(crate) fn cuda_top1_logits_submit_batched(
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 pub(crate) fn cuda_top1_logits_submit_batched_packed(
     input: &Tensor,
     cache: &mut Option<CudaTop1LogitsWorkspace>,
@@ -3403,6 +3416,7 @@ pub(crate) fn cuda_top1_logits_submit_batched_packed(
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 pub(crate) fn cuda_top1_logits_submit_batched_into(
     input: &Tensor,
     token_ids_dst: &Tensor,
@@ -3426,6 +3440,7 @@ pub(crate) fn cuda_top1_logits_submit_batched_into(
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 pub(crate) fn cuda_top1_device_tokens_wait_on(
     workspace: &mut CudaTop1LogitsWorkspace,
     submission: &CudaTop1Submission,
@@ -3439,6 +3454,7 @@ pub(crate) fn cuda_top1_device_tokens_wait_on(
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 pub(crate) fn cuda_top1_device_tokens_release_after(
     workspace: &mut CudaTop1LogitsWorkspace,
     submission: &CudaTop1Submission,
@@ -3452,7 +3468,16 @@ pub(crate) fn cuda_top1_device_tokens_release_after(
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 pub(crate) fn cuda_top1_submission_complete<'a>(
+    workspace: &'a mut CudaTop1LogitsWorkspace,
+    submission: &CudaTop1Submission,
+) -> Result<CudaTop1Completion<'a>> {
+    cuda_top1_submission_complete_hip(workspace, submission)
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+fn cuda_top1_submission_complete_hip<'a>(
     workspace: &'a mut CudaTop1LogitsWorkspace,
     submission: &CudaTop1Submission,
 ) -> Result<CudaTop1Completion<'a>> {
@@ -3475,13 +3500,22 @@ pub(crate) fn cuda_top1_submission_complete<'a>(
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-pub(crate) fn cuda_top1_submission_cancel(
+fn cuda_top1_submission_cancel_hip(
     workspace: &mut CudaTop1LogitsWorkspace,
     submission: &CudaTop1Submission,
 ) -> Result<()> {
     const OP: &str = "cuda_top1_submission_cancel";
     validate_cuda_top1_submission(workspace, submission, OP)?;
     workspace.token_ring.cancel(&submission.token, OP)
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+pub(crate) fn cuda_top1_submission_cancel(
+    workspace: &mut CudaTop1LogitsWorkspace,
+    submission: &CudaTop1Submission,
+) -> Result<()> {
+    cuda_top1_submission_cancel_hip(workspace, submission)
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -3503,7 +3537,7 @@ fn cuda_top1_logits_f32_packed_cached_inner<'a>(
             op,
         },
     )?;
-    let completion = cuda_top1_submission_complete(
+    let completion = cuda_top1_submission_complete_hip(
         cache
             .as_mut()
             .expect("CUDA top-1 workspace was allocated during submission"),
@@ -3515,6 +3549,7 @@ fn cuda_top1_logits_f32_packed_cached_inner<'a>(
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 pub fn cuda_top1_logits_f32_cached(
     input: &Tensor,
     cache: &mut Option<CudaTop1LogitsWorkspace>,
@@ -3765,8 +3800,11 @@ fn cuda_topk_sampling_submit_inner(
         .reserve(input, token_ids_dst, *rows, op)?;
     let slot_index = reservation.slot;
     let result = (|| {
-        let ranked =
-            cuda_topk_ranked_packed_batched_with_workspace(input, max_k, &mut workspace.ranked)?;
+        let ranked = cuda_topk_ranked_packed_batched_with_workspace_impl(
+            input,
+            max_k,
+            &mut workspace.ranked,
+        )?;
         let slot = &mut workspace.slots[slot_index];
         copy_cuda_topk_sampling_params(dev, slot, params)?;
 
@@ -4205,7 +4243,7 @@ pub(crate) struct RankedTopKPackedOutput {
     /// Each row is packed as `[values; indices_as_f32]`.
     pub(crate) packed: Tensor,
     pub(crate) k: usize,
-    _workspace: Vec<Tensor>,
+    pub(crate) _workspace: Vec<Tensor>,
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -9185,5 +9223,350 @@ mod tests {
             assert!((g - w).abs() < 1e-2, "topk value {g} vs {w}");
         }
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dual-build NVIDIA-role dispatch. The entries above keep their solo meaning;
+// in dual builds these route by tensor device between the hip originals and
+// the cuda twin (cuda/ops_cuda_role.rs). Cache types become role enums; solo
+// builds alias them so every call site is shape-agnostic. Role mismatch and
+// mid-stream role switch refuse loudly, mirroring sparse_rejection.
+// ---------------------------------------------------------------------------
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) enum Top1LogitsWorkspace {
+    Nvidia(crate::cuda::ops_cuda_role::CudaTop1LogitsWorkspace),
+    Hip(CudaTop1LogitsWorkspace),
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) enum Top1Submission {
+    Nvidia(crate::cuda::ops_cuda_role::CudaTop1Submission),
+    Hip(CudaTop1Submission),
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+impl Top1Submission {
+    pub(crate) fn batch_size(&self) -> usize {
+        match self {
+            Self::Nvidia(sub) => sub.batch_size(),
+            Self::Hip(sub) => sub.batch_size(),
+        }
+    }
+
+    pub(crate) fn wait(&self) -> Result<()> {
+        match self {
+            Self::Nvidia(sub) => sub.wait(),
+            Self::Hip(sub) => sub.wait(),
+        }
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) enum RankedTopKPackedWorkspace {
+    Nvidia(crate::cuda::ops_cuda_role::CudaRankedTopKPackedWorkspace),
+    Hip(CudaRankedTopKPackedWorkspace),
+}
+
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+pub(crate) type Top1LogitsWorkspace = CudaTop1LogitsWorkspace;
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+pub(crate) type Top1Submission = CudaTop1Submission;
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+pub(crate) type RankedTopKPackedWorkspace = CudaRankedTopKPackedWorkspace;
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+fn take_top1_hip(
+    cache: &mut Option<Top1LogitsWorkspace>,
+    op: &'static str,
+) -> Result<Option<CudaTop1LogitsWorkspace>> {
+    match cache.take() {
+        None => Ok(None),
+        Some(Top1LogitsWorkspace::Hip(workspace)) => Ok(Some(workspace)),
+        Some(Top1LogitsWorkspace::Nvidia(_)) => {
+            candle_core::bail!("{op} workspace role switched mid-stream")
+        }
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+fn take_top1_nvidia(
+    cache: &mut Option<Top1LogitsWorkspace>,
+    op: &'static str,
+) -> Result<Option<crate::cuda::ops_cuda_role::CudaTop1LogitsWorkspace>> {
+    match cache.take() {
+        None => Ok(None),
+        Some(Top1LogitsWorkspace::Nvidia(workspace)) => Ok(Some(workspace)),
+        Some(Top1LogitsWorkspace::Hip(_)) => {
+            candle_core::bail!("{op} workspace role switched mid-stream")
+        }
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+fn take_ranked_hip(
+    cache: &mut Option<RankedTopKPackedWorkspace>,
+    op: &'static str,
+) -> Result<Option<CudaRankedTopKPackedWorkspace>> {
+    match cache.take() {
+        None => Ok(None),
+        Some(RankedTopKPackedWorkspace::Hip(workspace)) => Ok(Some(workspace)),
+        Some(RankedTopKPackedWorkspace::Nvidia(_)) => {
+            candle_core::bail!("{op} workspace role switched mid-stream")
+        }
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+fn take_ranked_nvidia(
+    cache: &mut Option<RankedTopKPackedWorkspace>,
+    op: &'static str,
+) -> Result<Option<crate::cuda::ops_cuda_role::CudaRankedTopKPackedWorkspace>> {
+    match cache.take() {
+        None => Ok(None),
+        Some(RankedTopKPackedWorkspace::Nvidia(workspace)) => Ok(Some(workspace)),
+        Some(RankedTopKPackedWorkspace::Hip(_)) => {
+            candle_core::bail!("{op} workspace role switched mid-stream")
+        }
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_top1_logits_submit_batched(
+    input: &Tensor,
+    cache: &mut Option<Top1LogitsWorkspace>,
+) -> Result<Top1Submission> {
+    const OP: &str = "cuda_top1_logits_submit_batched";
+    if input.device().is_cuda() {
+        let mut slot = take_top1_nvidia(cache, OP)?;
+        let submission =
+            crate::cuda::ops_cuda_role::cuda_top1_logits_submit_batched(input, &mut slot)?;
+        *cache = slot.map(Top1LogitsWorkspace::Nvidia);
+        return Ok(Top1Submission::Nvidia(submission));
+    }
+    let [batch, vocab] = input.dims() else {
+        candle_core::bail!("{OP} requires logits with shape [batch, vocab]");
+    };
+    let mut slot = take_top1_hip(cache, OP)?;
+    let submission = cuda_top1_logits_submit_inner(
+        input,
+        &mut slot,
+        CudaTop1SubmitOptions {
+            nrows: *batch,
+            ncols: *vocab,
+            token_ids_dst: None,
+            copy_packed: false,
+            op: OP,
+        },
+    )?;
+    *cache = slot.map(Top1LogitsWorkspace::Hip);
+    Ok(Top1Submission::Hip(submission))
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_top1_logits_submit_batched_packed(
+    input: &Tensor,
+    cache: &mut Option<Top1LogitsWorkspace>,
+) -> Result<Top1Submission> {
+    const OP: &str = "cuda_top1_logits_submit_batched_packed";
+    if input.device().is_cuda() {
+        let mut slot = take_top1_nvidia(cache, OP)?;
+        let submission =
+            crate::cuda::ops_cuda_role::cuda_top1_logits_submit_batched_packed(input, &mut slot)?;
+        *cache = slot.map(Top1LogitsWorkspace::Nvidia);
+        return Ok(Top1Submission::Nvidia(submission));
+    }
+    let [batch, vocab] = input.dims() else {
+        candle_core::bail!("{OP} requires logits with shape [batch, vocab]");
+    };
+    let mut slot = take_top1_hip(cache, OP)?;
+    let submission = cuda_top1_logits_submit_inner(
+        input,
+        &mut slot,
+        CudaTop1SubmitOptions {
+            nrows: *batch,
+            ncols: *vocab,
+            token_ids_dst: None,
+            copy_packed: true,
+            op: OP,
+        },
+    )?;
+    *cache = slot.map(Top1LogitsWorkspace::Hip);
+    Ok(Top1Submission::Hip(submission))
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_top1_logits_submit_batched_into(
+    input: &Tensor,
+    token_ids_dst: &Tensor,
+    cache: &mut Option<Top1LogitsWorkspace>,
+) -> Result<Top1Submission> {
+    const OP: &str = "cuda_top1_logits_submit_batched_into";
+    if input.device().is_cuda() {
+        let mut slot = take_top1_nvidia(cache, OP)?;
+        let submission = crate::cuda::ops_cuda_role::cuda_top1_logits_submit_batched_into(
+            input,
+            token_ids_dst,
+            &mut slot,
+        )?;
+        *cache = slot.map(Top1LogitsWorkspace::Nvidia);
+        return Ok(Top1Submission::Nvidia(submission));
+    }
+    let [batch, vocab] = input.dims() else {
+        candle_core::bail!("{OP} requires logits with shape [batch, vocab]");
+    };
+    let mut slot = take_top1_hip(cache, OP)?;
+    let submission = cuda_top1_logits_submit_inner(
+        input,
+        &mut slot,
+        CudaTop1SubmitOptions {
+            nrows: *batch,
+            ncols: *vocab,
+            token_ids_dst: Some(token_ids_dst),
+            copy_packed: false,
+            op: OP,
+        },
+    )?;
+    *cache = slot.map(Top1LogitsWorkspace::Hip);
+    Ok(Top1Submission::Hip(submission))
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_top1_submission_complete<'a>(
+    workspace: &'a mut Top1LogitsWorkspace,
+    submission: &Top1Submission,
+) -> Result<CudaTop1Completion<'a>> {
+    const OP: &str = "cuda_top1_submission_complete";
+    match (workspace, submission) {
+        (Top1LogitsWorkspace::Nvidia(workspace), Top1Submission::Nvidia(submission)) => {
+            crate::cuda::ops_cuda_role::cuda_top1_submission_complete(workspace, submission)
+        }
+        (Top1LogitsWorkspace::Hip(workspace), Top1Submission::Hip(submission)) => {
+            cuda_top1_submission_complete_hip(workspace, submission)
+        }
+        _ => candle_core::bail!("{OP} workspace and submission roles do not match"),
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_top1_submission_cancel(
+    workspace: &mut Top1LogitsWorkspace,
+    submission: &Top1Submission,
+) -> Result<()> {
+    const OP: &str = "cuda_top1_submission_cancel";
+    match (workspace, submission) {
+        (Top1LogitsWorkspace::Nvidia(workspace), Top1Submission::Nvidia(submission)) => {
+            crate::cuda::ops_cuda_role::cuda_top1_submission_cancel(workspace, submission)
+        }
+        (Top1LogitsWorkspace::Hip(workspace), Top1Submission::Hip(submission)) => {
+            cuda_top1_submission_cancel_hip(workspace, submission)
+        }
+        _ => candle_core::bail!("{OP} workspace and submission roles do not match"),
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub fn cuda_top1_logits_f32_cached(
+    input: &Tensor,
+    cache: &mut Option<Top1LogitsWorkspace>,
+) -> Result<[f32; CUDA_TOP1_PACKED_WIDTH]> {
+    const OP: &str = "cuda_top1_logits_f32_cached";
+    if input.device().is_cuda() {
+        let mut slot = take_top1_nvidia(cache, OP)?;
+        let packed = crate::cuda::ops_cuda_role::cuda_top1_logits_f32_cached(input, &mut slot)?;
+        *cache = slot.map(Top1LogitsWorkspace::Nvidia);
+        return Ok(packed);
+    }
+    let input = final_logits_row(input)?;
+    let ncols = input.elem_count();
+    let mut slot = take_top1_hip(cache, OP)?;
+    let packed = cuda_top1_logits_f32_packed_cached_inner(&input, 1, ncols, &mut slot, OP)?;
+    let out = [packed[0], packed[1]];
+    *cache = slot.map(Top1LogitsWorkspace::Hip);
+    Ok(out)
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_topk_ranked_packed_batched(
+    input: &Tensor,
+    k: usize,
+) -> Result<RankedTopKPackedOutput> {
+    if input.device().is_cuda() {
+        return crate::cuda::ops_cuda_role::cuda_topk_ranked_packed_batched(input, k);
+    }
+    let mut workspace = None;
+    cuda_topk_ranked_packed_batched_with_workspace(input, k, &mut workspace)
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_topk_ranked_packed_batched_with_workspace(
+    input: &Tensor,
+    k: usize,
+    cache: &mut Option<RankedTopKPackedWorkspace>,
+) -> Result<RankedTopKPackedOutput> {
+    const OP: &str = "cuda_topk_ranked_packed_batched";
+    if input.device().is_cuda() {
+        let mut slot = take_ranked_nvidia(cache, OP)?;
+        let output = crate::cuda::ops_cuda_role::cuda_topk_ranked_packed_batched_with_workspace(
+            input, k, &mut slot,
+        )?;
+        *cache = slot.map(RankedTopKPackedWorkspace::Nvidia);
+        return Ok(output);
+    }
+    let mut slot = take_ranked_hip(cache, OP)?;
+    let output = cuda_topk_ranked_packed_batched_with_workspace_impl(input, k, &mut slot)?;
+    *cache = slot.map(RankedTopKPackedWorkspace::Hip);
+    Ok(output)
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_top1_device_tokens_wait_on(
+    workspace: &mut Top1LogitsWorkspace,
+    submission: &Top1Submission,
+    consumer_stream: &std::sync::Arc<candle_core::role::backend::cudarc::driver::CudaStream>,
+) -> Result<()> {
+    const OP: &str = "cuda_top1_device_tokens_wait_on";
+    match (workspace, submission) {
+        (Top1LogitsWorkspace::Hip(workspace), Top1Submission::Hip(submission)) => {
+            validate_cuda_top1_submission(workspace, submission, OP)?;
+            workspace
+                .token_ring
+                .wait_on(&submission.token, consumer_stream, OP)
+        }
+        (Top1LogitsWorkspace::Nvidia(_), Top1Submission::Nvidia(_)) => candle_core::bail!(
+            "{OP} is not used on the NVIDIA role (cross-stream top-1 waits are a hip-role lookahead path)"
+        ),
+        _ => candle_core::bail!("{OP} workspace and submission roles do not match"),
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_top1_device_tokens_release_after(
+    workspace: &mut Top1LogitsWorkspace,
+    submission: &Top1Submission,
+    consumer_stream: &std::sync::Arc<candle_core::role::backend::cudarc::driver::CudaStream>,
+) -> Result<()> {
+    const OP: &str = "cuda_top1_device_tokens_release_after";
+    match (workspace, submission) {
+        (Top1LogitsWorkspace::Hip(workspace), Top1Submission::Hip(submission)) => {
+            validate_cuda_top1_submission(workspace, submission, OP)?;
+            workspace
+                .token_ring
+                .release_after(&submission.token, consumer_stream, OP)
+        }
+        (Top1LogitsWorkspace::Nvidia(_), Top1Submission::Nvidia(_)) => candle_core::bail!(
+            "{OP} is not used on the NVIDIA role (cross-stream top-1 waits are a hip-role lookahead path)"
+        ),
+        _ => candle_core::bail!("{OP} workspace and submission roles do not match"),
     }
 }

@@ -21,6 +21,8 @@ pub(crate) mod indexed_copy;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) mod input_packing;
 pub mod moe;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) mod ops_cuda_role;
 #[cfg(feature = "cuda")]
 pub(crate) mod preload;
 #[cfg(any(feature = "cuda", feature = "rocm"))]

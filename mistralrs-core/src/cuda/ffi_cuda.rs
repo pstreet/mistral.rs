@@ -609,5 +609,114 @@ cuda_kernel! {
         packed_k: i32,
         stream: i64,
     );
+    topk_large_ranked_state_words_per_row = "topk_large_ranked_state_words_per_row"() -> usize;
+    topk_large_ranked_f32_packed_batched = "topk_large_ranked_f32_packed_batched"(
+        input: *const f32,
+        block_values: *mut f32,
+        block_indices: *mut u32,
+        packed_out: *mut f32,
+        radix_workspace: *mut std::ffi::c_void,
+        nrows: i32,
+        ncols: i32,
+        k: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        stream: i64,
+    ) -> i32;
+    topk_large_ranked_bf16_packed_batched = "topk_large_ranked_bf16_packed_batched"(
+        input: *const std::ffi::c_void,
+        block_values: *mut f32,
+        block_indices: *mut u32,
+        packed_out: *mut f32,
+        radix_workspace: *mut std::ffi::c_void,
+        nrows: i32,
+        ncols: i32,
+        k: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        stream: i64,
+    ) -> i32;
+    topk_large_ranked_f16_packed_batched = "topk_large_ranked_f16_packed_batched"(
+        input: *const std::ffi::c_void,
+        block_values: *mut f32,
+        block_indices: *mut u32,
+        packed_out: *mut f32,
+        radix_workspace: *mut std::ffi::c_void,
+        nrows: i32,
+        ncols: i32,
+        k: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        stream: i64,
+    ) -> i32;
+    top1_large_f32_packed = "top1_large_f32_packed"(
+        input: *const f32,
+        block_values: *mut f32,
+        block_indices: *mut u32,
+        packed_out: *mut f32,
+        token_ids_out: *mut u32,
+        ncols: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        stream: i64,
+    );
+    top1_large_f32_packed_batched = "top1_large_f32_packed_batched"(
+        input: *const f32,
+        block_values: *mut f32,
+        block_indices: *mut u32,
+        packed_out: *mut f32,
+        token_ids_out: *mut u32,
+        nrows: i32,
+        ncols: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        stream: i64,
+    );
+    top1_large_bf16_packed = "top1_large_bf16_packed"(
+        input: *const std::ffi::c_void,
+        block_values: *mut f32,
+        block_indices: *mut u32,
+        packed_out: *mut f32,
+        token_ids_out: *mut u32,
+        ncols: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        stream: i64,
+    );
+    top1_large_bf16_packed_batched = "top1_large_bf16_packed_batched"(
+        input: *const std::ffi::c_void,
+        block_values: *mut f32,
+        block_indices: *mut u32,
+        packed_out: *mut f32,
+        token_ids_out: *mut u32,
+        nrows: i32,
+        ncols: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        stream: i64,
+    );
+    top1_large_f16_packed = "top1_large_f16_packed"(
+        input: *const std::ffi::c_void,
+        block_values: *mut f32,
+        block_indices: *mut u32,
+        packed_out: *mut f32,
+        token_ids_out: *mut u32,
+        ncols: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        stream: i64,
+    );
+    top1_large_f16_packed_batched = "top1_large_f16_packed_batched"(
+        input: *const std::ffi::c_void,
+        block_values: *mut f32,
+        block_indices: *mut u32,
+        packed_out: *mut f32,
+        token_ids_out: *mut u32,
+        nrows: i32,
+        ncols: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        stream: i64,
+    );
 
 }

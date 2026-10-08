@@ -310,7 +310,7 @@ pub struct Sampler {
     logits_bias: HashMap<u32, f32>,
     logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
     #[cfg(any(feature = "cuda", feature = "rocm"))]
-    top1_cache: Arc<Mutex<Option<crate::ops::CudaTop1LogitsWorkspace>>>,
+    top1_cache: Arc<Mutex<Option<crate::ops::Top1LogitsWorkspace>>>,
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     topk_sampling_cache: Arc<Mutex<Option<crate::ops::CudaTopKSamplingWorkspace>>>,
 }
@@ -331,8 +331,8 @@ pub(crate) struct CudaTop1BatchCompletion {
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaTop1BatchSubmission {
-    cache: Arc<Mutex<Option<crate::ops::CudaTop1LogitsWorkspace>>>,
-    submission: Option<crate::ops::CudaTop1Submission>,
+    cache: Arc<Mutex<Option<crate::ops::Top1LogitsWorkspace>>>,
+    submission: Option<crate::ops::Top1Submission>,
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
