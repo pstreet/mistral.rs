@@ -242,6 +242,24 @@ facade today, so the MTP port gates the cutover):
       loop (mirrors the seeded path, loud caps line per entry).
       RE-RUN QUEUED with nvidia-smi as device witness + a boot-log
       assertion on the Cuda caps line before any trial counts.
+      RE-RUN RESULTS 2026-10-08 (5 rounds, all witnessed): the 3090
+      serves (4B Q8_0 on cuda:0, 8.5GB VRAM, decode 70.25/70.34/70.31
+      vs 41.76 hip, +68% - first real NVIDIA-role serving), but MTP
+      verify remains UNPROVEN on hardware: the 4B is hybrid and MTP
+      never attached (no "Speculative decoding enabled", empty
+      counters - same recurrent-restore gap as graphs-eager, now
+      observed on the NVIDIA role too), and the 27B cannot load on
+      24GB under the global 262k-context config (15.5GB ISQ weights +
+      6.5GB KV + fixed reservations overflow; the pool budget
+      MbAmount/ContextSize hard-fails instead of fitting, and
+      per-model max_model_len does not shrink the pool). Graphs-off
+      and 32k-ctx variants fail identically, so the consumer is fixed
+      reservations, not KV/MTP/arena alone. 27B-on-3090 needs
+      spill-aware KV fitting or a per-model paged budget (backlog P1).
+      Efficient proof path: cuda-shape GPU unit tests for
+      sparse_rejection submit/complete on cuda:0 tensors (tiny, no
+      24GB constraint) instead of full serving. All bench aliases
+      removed from prod TOML; global context restored 262144.
 
 - [x] ~M cuda-only 3x decode gap (CLOSED 2026-10-07, root-caused, not tuned).
       It was never host overhead: cuda-only ran the GDN recurrence on CPU
@@ -494,6 +512,13 @@ facade today, so the MTP port gates the cutover):
 - [ ] ~S KV pool right-sizing: prod `context_len = 262144` reserves
       ~7GB+ real traffic may never touch. Reclaim to a second resident
       or a bigger graph pool; measure resident-set vs Evict behavior.
+      Extends to per-model paged budget (or spill-aware KV fitting):
+      2026-10-08 the 27B could not load on the 24GB 3090 under the
+      global pool (15.5GB weights + 6.5GB KV + fixed reservations
+      overflow; MbAmount/ContextSize hard-fails, per-model
+      max_model_len does not shrink the pool, graphs-off changes
+      nothing). Small GPUs need either per-model `context_len`/budget
+      or a mapper that spills more layers to make KV room.
 - [ ] ~S Re-bench quants on the cutover binary: Q6_K vs Q4_K_M (27B),
       Q5_K_XL vs Q4_K_XL (35B). The +54% came from kernels, not
       weights, so the quant tradeoff curve moved.
