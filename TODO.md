@@ -294,11 +294,14 @@ facade today, so the MTP port gates the cutover):
       recurrent-prefix reservations eat the KV budget.
       TOPK PORT HARDWARE-PROVEN 2026-10-08 ~21:34 UTC (probe lane,
       fast build + standalone :1244, graphs off, 3090):
-      (a) GREEDY PROOF (mtp=false): sanity "1776" correct + 600-tok
-      essay 28.8 tok/s, ZERO errors - greedy decode routes through
-      the twin's cuda_top1_logits_f32_cached -> workspace -> ring ->
-      pinned staging -> top1_large_f32 via ffi_cuda. 600 submissions
-      and completions through the ported machinery.
+      (a) GREEDY RUN (mtp=false): sanity "1776" correct + 600-tok
+      essay 28.8 tok/s, ZERO errors. CORRECTION (2026-10-08,
+      post-commit code check): this run did NOT exercise the twin -
+      in dual builds device_sampling_supported gates
+      try_sample_batch_cuda to hip devices (device_has_fused_ops
+      returns is_hip()), so NVIDIA-role batch sampling, greedy
+      included, degrades to host sampling. The twin's hardware
+      proof is (b) alone.
       (b) FULL MTP LOOP PROOF (mtp=true, lazy, text-only load,
       max_seqs=1, context 16k): "Speculative decoding enabled
       (built-in, n_predict=2)" + sanity "1776" CORRECT through MTP +
@@ -306,6 +309,13 @@ facade today, so the MTP port gates the cutover):
       and accept ALL on cuda kernels (top1 twin + ranked twin +
       sparse rejection). Resident 19.6GB. First MTP tokens ever
       generated on the NVIDIA role.
+      STRUCTURAL NOTE FOR THE 3090 BENCH: NVIDIA-role non-MTP
+      sampling runs host-side (full-vocab copy + sync per token)
+      while MTP-on samples on-device via the verify twins, so the
+      on/off delta carries that component - interpret accordingly.
+      Non-MTP sampling parity needs the topk-sampling twin
+      (sample_ranked_topk, categorical_large) - backlog, sharpened
+      by this finding.
       ATTACH-HEADROOM FINDINGS (probe series b-f): eager attach OOMs
       (ISQ staging held at attach instant); lazy attach at
       max_seqs=2/32k also OOM'd on the probe (23.9GB held vs
