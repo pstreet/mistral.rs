@@ -424,6 +424,41 @@ fn trim_cuda_mempool(device: &Device) -> candle_core::Result<()> {
     Ok(())
 }
 
+// The post-load query below can catch pool pressure from load transients
+// (ISQ/upload staging freed but pool-held, or still draining): sync,
+// trim, and re-query until the reading stops rising, so the fit check
+// measures settled memory instead of mid-drain pressure. Bounded and
+// loud; never returns less than the first reading.
+fn settled_post_load_memory(
+    device: &Device,
+) -> candle_core::Result<crate::utils::memory_usage::DeviceMemory> {
+    use crate::utils::memory_usage::DeviceMemory;
+    let mut best = MemoryUsage.query(device)?;
+    for _ in 0..4 {
+        #[cfg(feature = "cuda")]
+        {
+            let _ = MemoryUsage.synchronize_cuda_context(device);
+            let _ = trim_cuda_mempool(device);
+        }
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+        {
+            let _ = device.synchronize();
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let next: DeviceMemory = MemoryUsage.query(device)?;
+        if next.available() <= best.available() {
+            break;
+        }
+        tracing::warn!(
+            "post-load memory reading rose {} -> {} MB available; load transients still draining, re-checking.",
+            best.available() / SIZE_IN_MB,
+            next.available() / SIZE_IN_MB
+        );
+        best = next;
+    }
+    Ok(best)
+}
+
 const SIZE_IN_MB: usize = 1024 * 1024;
 
 macro_rules! mb_to_blocks {
@@ -601,7 +636,7 @@ pub fn calculate_cache_config(
         let post_load_memory = if model_weight_size_in_bytes.is_none()
             && (device.is_cuda() || crate::paged_attention::cache_engine::is_hip_role(device))
         {
-            Some(MemoryUsage.query(device)?)
+            Some(settled_post_load_memory(device)?)
         } else {
             None
         };

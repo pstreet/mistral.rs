@@ -118,6 +118,7 @@ model_id = "models/orcarouter/Qwen3.8-27B-Uncensored-GGUF"
 alias = "qwen3.8-27b-cuda"
 device = "cuda:0"
 lazy = true
+context_len = 32768
 k_cache_type = "Q8_0"
 v_cache_type = "Q4_0"
 
