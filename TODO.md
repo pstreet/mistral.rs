@@ -260,6 +260,38 @@ facade today, so the MTP port gates the cutover):
       sparse_rejection submit/complete on cuda:0 tensors (tiny, no
       24GB constraint) instead of full serving. All bench aliases
       removed from prod TOML; global context restored 262144.
+      27B-ON-3090 SOLVED IN THREE CONFIG STEPS 2026-10-08 late
+      (probe-guided via [cache-fit]/[res-split], probes removed
+      before commit): (1) per-model context_len=32768 sizes the pool
+      correctly (requested 6.5GB -> 816MB); (2) prefix_cache_n: the
+      TOML said "no prefix caching" but the line was COMMENTED OUT,
+      so the default 16 silently won and reserved 2511MB of hybrid
+      recurrent prefix snapshots (17 x ~148MB) against the KV
+      budget - on hip too, contradicting documented intent;
+      uncommented (KEPT, helps both roles); (3) max_seqs: default
+      32 -> capacity 33 x 3 MTP checkpoint lanes x ~148MB ~ 14.5GB
+      recurrent state made the MTP attach OOM on 24GB; TEMP
+      max_seqs=2 shrank it to ~1.3GB and the attach SUCCEEDED.
+      MILESTONE 20:32 UTC: "Speculative decoding enabled: MTP
+      assistant built-in with n_predict=2" - the first MTP attach
+      on the NVIDIA role, ever. 27B ISQ-Q4K + Q8/Q4 KV + MTP n=2
+      resident at 19.6GB/24GB on the 3090.
+      FIRST FORWARD STEP FOUND THE REMAINING PORT GAP:
+      "cuda_top1_logits_submit_batched requires CUDA logits" -
+      ops.rs topk/top1 storage arms are (cuda,not-rocm)->Cuda /
+      (rocm)->Hip, so DUAL builds have no Cuda arm and NVIDIA-role
+      tensors bail. The verify-path dispatch was widened in Phase 2
+      but the topk ops underneath (proposer top1 submit, verifier
+      ranked-packed batched + workspace, logits packed batched)
+      were not. Port shape per op: accept Storage::Cuda in dual,
+      launch via ffi_cuda (all kernel symbols ALREADY in the nvcc
+      companion - verified by nm: top1_large_f32_packed_batched,
+      sample_ranked_topk, sparse_rejection_topk_f32), workspace
+      types dual-handled. Rust-only, no build.rs changes.
+      max_seqs restored (TEMP removed); alias kept for the
+      continuation; probes still in the working tree (remove before
+      commit). BACKLOG: per-model max_seqs + a loud log when
+      recurrent-prefix reservations eat the KV budget.
 
 - [x] ~M cuda-only 3x decode gap (CLOSED 2026-10-07, root-caused, not tuned).
       It was never host overhead: cuda-only ran the GDN recurrence on CPU
