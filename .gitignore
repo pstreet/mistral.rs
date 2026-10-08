@@ -16,3 +16,7 @@ docs/node_modules/
 docs/dist/
 docs/.astro/
 out/
+
+# Rollback binary backups and scratch target dirs - never commit
+/mistralrs.pre-*
+/scratch/
