@@ -410,6 +410,19 @@ facade today, so the MTP port gates the cutover):
       to the HIP 27B (default alias, same model name); the cuda
       load was one clean cycle 23:34:32 -> 23:35:28. First ever
       dual-vendor concurrent serving on this box.
+      ENGINE LOGGER LABELING 2026-10-09 ~00:20 UTC (user request,
+      85b6517ff): IntervalLogger throughput lines now carry
+      [routing-id @ Device] - the alias when one exists (threaded
+      via RebootState.model_label from registration, add_model,
+      and the demand-load reload so reloads keep identity),
+      pipeline name otherwise; device string matches the [device]
+      caps-line format. Motivated by the dual-role run: both 27B
+      engines share one model_id path, so only alias + device
+      distinguish interleaved Throughput/MTP lines. Matrix green
+      (cpu/cuda/rocm/dual + full workspace). Goes live at the
+      next binary swap. The deploy TOML with the TEMP max_seqs=2
+      (+ comment) rode into the same commit - prod config state is
+      now versioned.
 
 - [x] ~M cuda-only 3x decode gap (CLOSED 2026-10-07, root-caused, not tuned).
       It was never host overhead: cuda-only ran the GDN recurrence on CPU
