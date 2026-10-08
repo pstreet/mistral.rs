@@ -17,6 +17,23 @@ const FA3_SOURCES: [&str; 4] = [
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 const CUDA_BUILD_ROOT_ENV: &str = "MISTRALRS_CUDA_BUILD_ROOT";
 
+/// Route hipcc TU compiles (`-c` steps only) through ccache when opted
+/// in: identical invocations across target dirs are served from cache.
+/// Verified: ccache hits repeat `-c` compiles with identical objects.
+/// Deliberately excluded: nvcc (sccache corrupts its temp files, ccache
+/// declines it) and hipcc link steps (uncacheable driver links).
+/// Opt in: MISTRALRS_CCACHE_HIPCC=1 (set in ~/.cargo/config.toml).
+#[allow(dead_code)]
+fn compiler_command(program: impl AsRef<std::path::Path>) -> std::process::Command {
+    if std::env::var("MISTRALRS_CCACHE_HIPCC").as_deref() == Ok("1") {
+        let mut cmd = std::process::Command::new("ccache");
+        cmd.arg(program.as_ref());
+        cmd
+    } else {
+        std::process::Command::new(program.as_ref())
+    }
+}
+
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 fn cuda_build_dir(out_dir: &std::path::Path, component: &str) -> std::path::PathBuf {
     println!("cargo:rerun-if-env-changed={CUDA_BUILD_ROOT_ENV}");
@@ -334,7 +351,7 @@ fn build_rocm() -> Result<()> {
         .collect::<Vec<_>>();
 
     for (kernel, object) in PAGED_ATTN_ROCM_KERNELS.iter().zip(&objects) {
-        let status = Command::new(format!("{root}/bin/hipcc"))
+        let status = compiler_command(format!("{root}/bin/hipcc"))
             .arg(kernel)
             .arg("-I")
             .arg(&compat)

@@ -11,6 +11,18 @@ const GDN_FP8_PRODUCER_MIN_CUDA: u32 = 1108;
 #[cfg(all(feature = "cuda", not(feature = "rocm")))]
 const CUDA_BUILD_ROOT_ENV: &str = "MISTRALRS_CUDA_BUILD_ROOT";
 
+/// Opt in: MISTRALRS_CCACHE_HIPCC=1 (set in ~/.cargo/config.toml).
+#[allow(dead_code)]
+fn compiler_command(program: impl AsRef<std::path::Path>) -> std::process::Command {
+    if std::env::var("MISTRALRS_CCACHE_HIPCC").as_deref() == Ok("1") {
+        let mut cmd = std::process::Command::new("ccache");
+        cmd.arg(program.as_ref());
+        cmd
+    } else {
+        std::process::Command::new(program.as_ref())
+    }
+}
+
 #[cfg(all(feature = "cuda", not(feature = "rocm")))]
 fn cuda_build_dir(out_dir: &std::path::Path, component: &str) -> std::path::PathBuf {
     println!("cargo:rerun-if-env-changed={CUDA_BUILD_ROOT_ENV}");
@@ -157,7 +169,7 @@ fn build_rocm() {
             .to_string_lossy()
             .into_owned();
         let object = build_dir.join(format!("{stem}.o"));
-        let mut cmd = Command::new(format!("{root}/bin/hipcc"));
+        let mut cmd = compiler_command(format!("{root}/bin/hipcc"));
         cmd.arg(src)
             .arg("-I")
             .arg(&compat)
@@ -203,7 +215,7 @@ fn build_rocm() {
             .to_string_lossy()
             .into_owned();
         let object = build_dir.join(format!("{stem}.o"));
-        let status = Command::new(format!("{root}/bin/hipcc"))
+        let status = compiler_command(format!("{root}/bin/hipcc"))
             .arg(src)
             .arg("-I")
             .arg(&compat)
