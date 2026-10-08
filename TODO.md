@@ -342,6 +342,20 @@ facade today, so the MTP port gates the cutover):
       (capacity backlog: settle-then-attach / per-model max_seqs);
       its forward-step bug IS fixed by this binary, proven on the
       probe lane tonight.
+      MEMORY AUDIT 2026-10-08 ~23:00 UTC (user asked why the box
+      was full): 72G used + 36.6G swap decomposed. 45G = amdgpu
+      GTT (kernel-accounted, invisible to ps): the hip role
+      serving the 27B - weights + 262k-context KV pool + MTP
+      checkpoint pool at capacity 33 (~14.5G) + graphs + 
+      workspaces. 24G = mistralrs anon RSS (host runtime +
+      managed copies; zero swap). 36.6G swap = /tmp TMPFS holding
+      ~35G of scratch CARGO_TARGET_DIRs from the session's shape
+      checks (twincheck/fitctx/settle/lazydev/mtpcuda x 
+      cuda/rocm/dual) - deleted, swap fell to 3.9G instantly.
+      POLICY FIX (AGENTS.md): scratch target dirs go on disk
+      under the repo, never /tmp (tmpfs = RAM). The GTT 45G is
+      prod's real serving footprint, not a leak; per-model 
+      max_seqs would shrink the checkpoint pool share.
 
 - [x] ~M cuda-only 3x decode gap (CLOSED 2026-10-07, root-caused, not tuned).
       It was never host overhead: cuda-only ran the GDN recurrence on CPU
