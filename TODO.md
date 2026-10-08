@@ -230,6 +230,18 @@ facade today, so the MTP port gates the cutover):
       serves on both roles. Uplift smaller than hip's published
       +36-77%: follow-up work is graphs-capture proof + FA2 dispatch
       audit on the NVIDIA role (backlog P1).
+      CORRECTION 2026-10-08: the numbers above are VOID as a cuda
+      proof. nvidia-smi showed 1 MiB on the 3090 after the alias
+      loaded+served, no Cuda caps line at any boot, prefill identical
+      to hip: the alias served on the iGPU. Root cause:
+      `build_all_lazy` (all prod entries are lazy) built one shared
+      device from the global spec and never read per-model
+      device_spec - the flat `device` key parsed and converted fine,
+      then was silently dropped at registration (only the seeded path
+      resolved it). Fix: per-entry resolve_and_report in the lazy
+      loop (mirrors the seeded path, loud caps line per entry).
+      RE-RUN QUEUED with nvidia-smi as device witness + a boot-log
+      assertion on the Cuda caps line before any trial counts.
 
 - [x] ~M cuda-only 3x decode gap (CLOSED 2026-10-07, root-caused, not tuned).
       It was never host overhead: cuda-only ran the GDN recurrence on CPU

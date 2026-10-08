@@ -1875,12 +1875,6 @@ impl MistralRsForServerBuilder {
             mistralrs_core::MistralRs::new_headless(self.router_policy, self.log.clone());
         let search_embedding_model =
             get_search_embedding_model(self.enable_search, self.search_embedding_model);
-        let shared = LazyRegisterShared {
-            mistralrs: &mistralrs,
-            device: &device,
-            no_paged_attn: !paged_attn,
-            search_embedding_model,
-        };
         let mut registered_ids = HashSet::new();
         let mut used_names = HashSet::new();
         let mut loaded_model_ids = Vec::new();
@@ -1889,8 +1883,22 @@ impl MistralRsForServerBuilder {
                 "Registering lazy model from config key: {}",
                 model_config.model_id
             );
+            // Per-model device: the entry's explicit spec wins over the
+            // shared device (global spec or auto), with a caps log line.
+            // Without this the all-lazy path silently drops per-model
+            // `device` and serves everything on the global device.
+            let entry_device = match model_config.device_spec {
+                Some(spec) => mistralrs_core::device_spec::resolve_and_report(Some(&spec))?,
+                None => device.clone(),
+            };
+            let shared_entry = LazyRegisterShared {
+                mistralrs: &mistralrs,
+                device: &entry_device,
+                no_paged_attn: !paged_attn,
+                search_embedding_model: search_embedding_model.clone(),
+            };
             self.register_lazy_entry(
-                &shared,
+                &shared_entry,
                 model_config,
                 &mut registered_ids,
                 &mut used_names,
