@@ -41,6 +41,7 @@ impl IntervalLogger {
     pub fn new(
         interval: Duration,
         encoder_cache_counters: Option<(Arc<AtomicUsize>, Arc<AtomicUsize>)>,
+        model_label: String,
     ) -> Self {
         let prefix_cache_stats = Arc::new(Mutex::new(PrefixCacheStats::default()));
         let tokens_processed = Arc::new(AtomicUsize::new(0));
@@ -166,7 +167,7 @@ impl IntervalLogger {
                     let cumulative_prefill = t_cumulative_prefill_tokens.load(Ordering::Relaxed);
                     let cumulative_decode = t_cumulative_decode_tokens.load(Ordering::Relaxed);
                     info!(
-                        "Throughput (T/s) {:.2} (prefill {:.2}, decode {:.2}), cumulative prefill {cumulative_prefill}, decode {cumulative_decode}, Prefix cache hitrate {:.2}%{enc_cache_info}{spec_info}, {num_running} running, {num_waiting} waiting",
+                        "{model_label} Throughput (T/s) {:.2} (prefill {:.2}, decode {:.2}), cumulative prefill {cumulative_prefill}, decode {cumulative_decode}, Prefix cache hitrate {:.2}%{enc_cache_info}{spec_info}, {num_running} running, {num_waiting} waiting",
                         tokens_processed as f64 / elapsed_secs,
                         prefill_tokens_processed as f64 / elapsed_secs,
                         decode_tokens_processed as f64 / elapsed_secs,

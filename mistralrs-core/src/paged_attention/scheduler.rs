@@ -1999,7 +1999,7 @@ mod tests {
         let seq = test_sequence(seq_id, tokens.len());
         get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
         scheduler.waiting.push_back(seq);
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
 
         let disabled = scheduler.schedule(&logger, None);
         assert_eq!(disabled.num_cached_tokens, vec![0]);
@@ -2034,7 +2034,7 @@ mod tests {
             assert_eq!(seq.num_computed_tokens(), 0);
         }
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let mut validator = RecordingPrefixValidator::default();
         let output = scheduler.schedule(&logger, Some(&mut validator));
 
@@ -2049,7 +2049,7 @@ mod tests {
         scheduler.running.push_back(test_sequence(10, 4));
         scheduler.running.push_back(test_sequence(20, 7));
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let output = Scheduler::schedule(&mut scheduler, &logger, None);
         let SchedulerOutput::PagedAttention {
             output,
@@ -2070,7 +2070,7 @@ mod tests {
         let seq = test_sequence(20, 16);
         scheduler._preempt(seq);
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let mut validator = RecordingPrefixValidator::default();
         let committed_ids = Arc::clone(&validator.committed_ids);
         let SchedulerOutput::PagedAttention {
@@ -2229,7 +2229,7 @@ mod tests {
         }
         scheduler.waiting.push_back(seq);
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let mut validator = RecordingPrefixValidator::default();
         let output = scheduler.schedule(&logger, Some(&mut validator));
 
@@ -2265,7 +2265,7 @@ mod tests {
             seq.set_recurrent_state_idx(Some(7));
         }
         scheduler.waiting.push_back(seq);
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let mut validator = RecordingPrefixValidator::default();
 
         let blocked = scheduler.schedule(&logger, Some(&mut validator));
@@ -2320,7 +2320,7 @@ mod tests {
             .get_block_ids(10)
             .unwrap()
             .to_vec();
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let SchedulerOutput::PagedAttention {
             output,
             preempted_sequence_ids,
@@ -2380,7 +2380,7 @@ mod tests {
         }
         scheduler.waiting.push_back(text);
         scheduler.waiting.push_back(image);
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let mut validator = RecordingPrefixValidator::default();
 
         let text_batch = scheduler.schedule(&logger, Some(&mut validator));
@@ -2424,7 +2424,7 @@ mod tests {
         scheduler.waiting.push_back(oversized.clone());
         scheduler.waiting_counts.insert(1, WAITING_TIMEOUT);
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let mut validator = RecordingPrefixValidator::default();
         let output = scheduler.schedule(&logger, Some(&mut validator));
 
@@ -2454,7 +2454,7 @@ mod tests {
         }
         scheduler.waiting.push_back(seq.clone());
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let mut validator = FailingPrefixValidator::default();
         let output = scheduler.schedule(&logger, Some(&mut validator));
 
@@ -2483,7 +2483,7 @@ mod tests {
         }
         scheduler.waiting.push_back(seq.clone());
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let mut validator = FailingCommitPrefixValidator::default();
         let output = scheduler.schedule(&logger, Some(&mut validator));
 
@@ -2861,7 +2861,7 @@ mod tests {
         get_mut_arcmutex!(raw).set_state(SequenceState::Waiting);
         scheduler.waiting.push_back(raw);
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let output = scheduler.schedule(&logger, None);
 
         assert_eq!(output.num_cached_tokens, vec![0]);
@@ -2891,7 +2891,7 @@ mod tests {
         get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
         scheduler.waiting.push_back(seq);
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         logger.add_new_sequence();
         let first = scheduler.schedule(&logger, None);
 
@@ -2919,7 +2919,7 @@ mod tests {
         get_mut_arcmutex!(waiting).set_state(SequenceState::Waiting);
         scheduler.waiting.push_back(waiting);
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let completion = scheduler.schedule(&logger, None);
         assert_eq!(completion.scheduled.len(), 1);
         assert!(!get_mut_arcmutex!(completion.scheduled[0]).is_prompt());
@@ -2948,7 +2948,7 @@ mod tests {
         }
         scheduler.running.push_back(prompt);
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let decode = scheduler.schedule(&logger, None);
         assert_eq!(decode.scheduled.len(), 1);
         assert_eq!(*get_mut_arcmutex!(decode.scheduled[0]).id(), 0);
@@ -2977,7 +2977,7 @@ mod tests {
             scheduler.running.push_back(prompt);
         }
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let decode = scheduler.schedule(&logger, None);
         assert_eq!(*get_mut_arcmutex!(decode.scheduled[0]).id(), 0);
 
@@ -3012,7 +3012,7 @@ mod tests {
             scheduler.running.push_back(prompt);
         }
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let first = scheduler.schedule(&logger, None);
         assert_eq!(
             first
@@ -3067,7 +3067,7 @@ mod tests {
         get_mut_arcmutex!(waiting).set_state(SequenceState::Waiting);
         scheduler.waiting.push_back(waiting);
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let completion = scheduler.schedule(&logger, None);
 
         assert_eq!(completion.scheduled.len(), 1);
@@ -3085,7 +3085,7 @@ mod tests {
         get_mut_arcmutex!(waiting).set_state(SequenceState::Waiting);
         scheduler.waiting.push_back(waiting);
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let completion = scheduler.schedule(&logger, None);
 
         assert_eq!(completion.scheduled.len(), 1);
@@ -3102,7 +3102,7 @@ mod tests {
         get_mut_arcmutex!(waiting).set_state(SequenceState::Waiting);
         scheduler.waiting.push_back(waiting);
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let prompt = scheduler.schedule(&logger, None);
 
         assert_eq!(prompt.scheduled.len(), 1);
@@ -3714,7 +3714,7 @@ mod tests {
             scheduler.waiting.push_back(seq);
         }
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let prompt = scheduler.schedule(&logger, None);
 
         assert_eq!(prompt.scheduled.len(), 3);
@@ -3737,7 +3737,7 @@ mod tests {
             scheduler.waiting.push_back(seq);
         }
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let mut first = scheduler.schedule(&logger, None);
         assert_eq!(
             first
@@ -3818,7 +3818,7 @@ mod tests {
             scheduler.running.push_back(seq);
         }
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let first = scheduler.schedule(&logger, None);
         let first_ids = first
             .scheduled
@@ -3851,7 +3851,7 @@ mod tests {
         get_mut_arcmutex!(newcomer).set_num_computed_tokens(4);
         scheduler.running.push_back(newcomer.clone());
 
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let staged = scheduler.schedule(&logger, None);
         let staged_ids = staged
             .scheduled
@@ -3994,7 +3994,7 @@ mod tests {
         let seq = test_sequence(0, 32);
         get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
         scheduler.waiting.push_back(seq);
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
 
         let output = scheduler.schedule(&logger, None);
 
@@ -4013,7 +4013,7 @@ mod tests {
         let seq = test_sequence(0, 24);
         get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
         scheduler.waiting.push_back(seq.clone());
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
 
         let first = scheduler.schedule(&logger, None);
         let first_chunk = first.scheduled_prompt_chunks.unwrap()[0];
@@ -4073,7 +4073,7 @@ mod tests {
         get_mut_arcmutex!(prompt).set_state(SequenceState::Waiting);
         scheduler.waiting.push_back(prompt);
         scheduler.decode_steps_since_prefill = scheduler.config.max_decode_steps_before_prefill;
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let mut validator = RecordingPrefixValidator::default();
         let committed_ids = Arc::clone(&validator.committed_ids);
 
@@ -4105,7 +4105,7 @@ mod tests {
         let (seq, receiver) = test_sequence_with_media_and_receiver(0, 32, None, None, None);
         get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
         scheduler.waiting.push_back(seq.clone());
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
 
         let output = scheduler.schedule(&logger, None);
         let chunk_end = output.scheduled_prompt_chunks.unwrap()[0].end;
@@ -4147,7 +4147,7 @@ mod tests {
         let seq = test_sequence(0, tokens.len());
         get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
         scheduler.waiting.push_back(seq.clone());
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
         let mut validator = RecordingPrefixValidator::default();
         let committed_ids = Arc::clone(&validator.committed_ids);
 
@@ -4198,7 +4198,7 @@ mod tests {
         let (seq, mut receiver) = test_sequence_with_media_and_receiver(0, 25, None, None, None);
         get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
         scheduler.waiting.push_back(seq.clone());
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
 
         let output = scheduler.schedule(&logger, None);
 
@@ -4224,7 +4224,7 @@ mod tests {
         let seq = test_sequence(0, 10);
         get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
         scheduler.waiting.push_back(seq.clone());
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
 
         for expected in [(0, 4), (4, 8), (8, 10)] {
             let output = scheduler.schedule(&logger, None);
@@ -4247,7 +4247,7 @@ mod tests {
         let seq = test_sequence(0, 64);
         get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
         scheduler.waiting.push_back(seq.clone());
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
 
         for expected in [(0, 32), (32, 56), (56, 64)] {
             let output = scheduler.schedule(&logger, None);
@@ -4271,7 +4271,7 @@ mod tests {
         let seq = test_sequence(0, 64);
         get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
         scheduler.waiting.push_back(seq.clone());
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
 
         for expected in [(0, 32), (32, 40), (40, 64)] {
             let output = scheduler.schedule(&logger, None);
@@ -4288,7 +4288,7 @@ mod tests {
     fn text_auxiliary_policy_keeps_multimodal_suffix_replay() {
         let policy =
             SpeculativePrefixCheckpointPolicy::new(SpeculativePrefixReplay::Suffix(16), true);
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
 
         let mut text_scheduler = test_scheduler();
         text_scheduler.scheduler_visible_prompt_chunks = true;
@@ -4355,7 +4355,7 @@ mod tests {
             prompt.set_num_computed_tokens(4);
         }
         scheduler.running.push_back(prompt);
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
 
         for _ in 0..scheduler.config.max_decode_steps_before_prefill {
             let output = scheduler.schedule(&logger, None);
@@ -4391,7 +4391,7 @@ mod tests {
         }
         scheduler.running.push_back(prompt.clone());
         scheduler.decode_steps_since_prefill = scheduler.config.max_decode_steps_before_prefill;
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
 
         let prefill = scheduler.schedule(&logger, None);
         let chunks = prefill.scheduled_prompt_chunks.unwrap();
@@ -4406,7 +4406,7 @@ mod tests {
 
     #[test]
     fn unsupported_prompt_paths_remain_atomic() {
-        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None, String::new());
 
         let mut raw_scheduler = test_scheduler();
         raw_scheduler.scheduler_visible_prompt_chunks = true;

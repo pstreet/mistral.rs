@@ -548,6 +548,8 @@ struct RebootState {
     mcp_client_config: Option<McpClientConfig>,
     /// Optional loader config for reloading after unload
     loader_config: Option<ModelLoaderConfig>,
+    /// Routing id (alias override) for engine log lines; falls back to the pipeline name.
+    model_label: Option<String>,
 }
 
 /// Model status for loaded/unloaded state
@@ -1276,6 +1278,7 @@ impl MistralRs {
         let metadata = pipeline_guard.get_metadata();
         let kind = metadata.kind.clone();
         let device = pipeline_guard.device();
+        let pipeline_name = pipeline_guard.name();
         let modalities = metadata.modalities.clone();
         let max_seq_len = match &category {
             ModelCategory::Diffusion | ModelCategory::Speech => None,
@@ -1293,6 +1296,14 @@ impl MistralRs {
         let logger = Arc::new(IntervalLogger::new(
             Duration::from_secs(5),
             encoder_cache_counters,
+            format!(
+                "[{} @ {:?}]",
+                reboot_state
+                    .model_label
+                    .as_deref()
+                    .unwrap_or(&pipeline_name),
+                device
+            ),
         ));
         let logger_for_engine = logger.clone();
 
@@ -1656,6 +1667,7 @@ impl MistralRs {
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
             method: method.clone(),
+            model_label: model_id_override.clone(),
             no_kv_cache,
             no_prefix_cache,
             prefix_cache_n,
@@ -2640,6 +2652,7 @@ impl MistralRs {
             search_callback: engine_config.search_callback.clone(),
             tool_callbacks: engine_config.tool_callbacks.clone(),
             mcp_client_config: config.mcp_client_config.clone(),
+            model_label: Some(model_id.clone()),
             loader_config: config.loader_config.clone(),
         };
 
@@ -3260,6 +3273,7 @@ impl MistralRs {
             search_callback: unloaded_state.engine_config.search_callback.clone(),
             tool_callbacks: unloaded_state.engine_config.tool_callbacks.clone(),
             mcp_client_config: unloaded_state.mcp_client_config.clone(),
+            model_label: Some(model_id.to_string()),
             loader_config: Some(unloaded_state.loader_config.clone()),
         };
 

@@ -48,6 +48,11 @@ evict_busy_wait_secs = 300
 idle_ttl_secs = 1800
 
 [runtime]
+# TEMP 2026-10-08 (dual-role exercise): the 27B-cuda MTP attach needs the
+# recurrent checkpoint pool at capacity 3 (~1.3GB), not 33 (~14.5GB OOM on
+# the 24GB 3090). Global cap until per-model max_seqs lands (backlog).
+# Removing this line restores the default 32 - and re-blocks the cuda alias.
+max_seqs = 2
 # Match llama-server's --no-warmup behavior: no prefix caching for this setup.
 # NOTE 2026-10-08: this line was commented out, so the default (16) silently
 # won and reserved ~2.5GB of hybrid recurrent prefix snapshots against the KV
