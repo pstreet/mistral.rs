@@ -330,6 +330,18 @@ facade today, so the MTP port gates the cutover):
       PROBE-LANE VALIDATION: the fast+spare-port policy carried six
       probe rounds with ZERO prod restarts; 4m22s fast build vs 17m
       release; ccache 81% kernel hit rate across the rounds.
+      PROD SWAP 2026-10-08 22:24 UTC: release rebuild (dual,
+      7m08s with the caches) with the topk port live - the settle-
+      retry era probes are gone from the artifact. Rollback copy:
+      mistralrs.pre-topk-port (the 20:24 settle-retry build). 
+      Verified: health in 10s, both caps lines (Hip gfx1151 serving
+      role + Cuda sm8.6, graphs/paged_attn/gguf/mtp all on), 
+      default-model sanity 200 (thinking-model empty-content quirk),
+      3090 idle at 275MiB, no startup errors. Known state: the
+      27B-cuda alias still attach-OOMs at default max_seqs=32
+      (capacity backlog: settle-then-attach / per-model max_seqs);
+      its forward-step bug IS fixed by this binary, proven on the
+      probe lane tonight.
 
 - [x] ~M cuda-only 3x decode gap (CLOSED 2026-10-07, root-caused, not tuned).
       It was never host overhead: cuda-only ran the GDN recurrence on CPU
