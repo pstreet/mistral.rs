@@ -163,7 +163,13 @@ mod tests {
     #[test]
     fn post_load_cache_budget_preserves_memory_mode_semantics() -> anyhow::Result<()> {
         assert_eq!(
-            fit_post_load_cache_budget(MemoryGpuConfig::Utilization(0.85), 40_000, 35_000)?,
+            fit_post_load_cache_budget(
+                MemoryGpuConfig::Utilization(0.85),
+                40_000,
+                35_000,
+                false,
+                4096
+            )?,
             35_000
         );
         assert_eq!(
@@ -174,6 +180,8 @@ mod tests {
                 },
                 40_000,
                 35_000,
+                false,
+                4096,
             )?,
             35_000
         );
@@ -184,15 +192,71 @@ mod tests {
             },
             40_000,
             35_000,
+            false,
+            4096,
         )
         .is_err());
-        assert!(
-            fit_post_load_cache_budget(MemoryGpuConfig::MbAmount(40_000), 40_000, 35_000,).is_err()
+        assert!(fit_post_load_cache_budget(
+            MemoryGpuConfig::MbAmount(40_000),
+            40_000,
+            35_000,
+            false,
+            4096
+        )
+        .is_err());
+        assert!(fit_post_load_cache_budget(
+            MemoryGpuConfig::ContextSize(131_072),
+            40_000,
+            35_000,
+            false,
+            4096
+        )
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn fit_ctx_shrinks_hard_budgets_to_available() -> anyhow::Result<()> {
+        // ContextSize: 131072 tokens requested, only 35GB available at
+        // 256KB/token -> fits ~140k tokens worth, returns the MB that fit.
+        assert_eq!(
+            fit_post_load_cache_budget(
+                MemoryGpuConfig::ContextSize(131_072),
+                40_000,
+                35_000,
+                true,
+                262_144,
+            )?,
+            35_000
         );
-        assert!(
-            fit_post_load_cache_budget(MemoryGpuConfig::ContextSize(131_072), 40_000, 35_000,)
-                .is_err()
+        // MbAmount shrinks to available.
+        assert_eq!(
+            fit_post_load_cache_budget(
+                MemoryGpuConfig::MbAmount(40_000),
+                40_000,
+                35_000,
+                true,
+                4096
+            )?,
+            35_000
         );
+        // Below the 2048-token floor: still refuses, fit or not.
+        assert!(fit_post_load_cache_budget(
+            MemoryGpuConfig::ContextSize(131_072),
+            40_000,
+            10,
+            true,
+            262_144,
+        )
+        .is_err());
+        assert!(fit_post_load_cache_budget(
+            MemoryGpuConfig::MbAmount(40_000),
+            40_000,
+            10,
+            true,
+            262_144,
+        )
+        .is_err());
         Ok(())
     }
 }
@@ -213,6 +277,7 @@ pub struct PagedAttentionConfig {
     pub(crate) recurrent_checkpoint_lanes_auto: bool,
     pub(crate) recurrent_prefix_capacity: usize,
     pub(crate) resolve_memory_utilization_after_load: bool,
+    pub(crate) fit_ctx: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -241,7 +306,15 @@ impl PagedAttentionConfig {
             recurrent_checkpoint_lanes_auto: false,
             recurrent_prefix_capacity: 0,
             resolve_memory_utilization_after_load: true,
+            fit_ctx: false,
         })
+    }
+
+    /// Shrink-to-fit: when the configured pool does not fit post-load
+    /// memory, cut it (loudly) instead of refusing to load. Off by default.
+    pub fn with_fit_ctx(mut self, fit_ctx: bool) -> Self {
+        self.fit_ctx = fit_ctx;
+        self
     }
 
     pub fn with_serving_capacity(mut self, serving_capacity: usize) -> anyhow::Result<Self> {
@@ -365,10 +438,15 @@ macro_rules! ctxt_to_blocks {
     };
 }
 
+/// Floor for shrink-to-fit: refuse to serve rather than fit below this.
+pub const FIT_CTX_MIN_TOKENS: usize = 2048;
+
 fn fit_post_load_cache_budget(
     config: MemoryGpuConfig,
     requested_mb: usize,
     available_mb: usize,
+    fit_ctx: bool,
+    bytes_per_token: usize,
 ) -> anyhow::Result<usize> {
     match config {
         MemoryGpuConfig::Utilization(_) => Ok(requested_mb.min(available_mb)),
@@ -384,12 +462,39 @@ fn fit_post_load_cache_budget(
             Ok(fitted_mb)
         }
         MemoryGpuConfig::MbAmount(_) | MemoryGpuConfig::ContextSize(_) => {
-            if requested_mb > available_mb {
+            if requested_mb <= available_mb {
+                return Ok(requested_mb);
+            }
+            if !fit_ctx {
                 anyhow::bail!(
                     "PagedAttention KV cache requires {requested_mb} MB but only {available_mb} MB is safely available after model loading."
                 );
             }
-            Ok(requested_mb)
+            let floor_mb = FIT_CTX_MIN_TOKENS
+                .saturating_mul(bytes_per_token.max(1))
+                .div_ceil(SIZE_IN_MB)
+                .max(1);
+            if available_mb < floor_mb {
+                anyhow::bail!(
+                    "PagedAttention KV cache requires {requested_mb} MB but only {available_mb} MB is safely available after model loading (fit-ctx floor is {floor_mb} MB)."
+                );
+            }
+            let fitted_mb = available_mb;
+            match config {
+                MemoryGpuConfig::ContextSize(toks) => {
+                    let fitted_toks =
+                        (fitted_mb * SIZE_IN_MB / bytes_per_token.max(1)).max(FIT_CTX_MIN_TOKENS);
+                    tracing::warn!(
+                        "fit-ctx: KV cache context cut {toks} -> {fitted_toks} tokens ({requested_mb} -> {fitted_mb} MB) to fit available memory."
+                    );
+                }
+                _ => {
+                    tracing::warn!(
+                        "fit-ctx: KV cache budget cut {requested_mb} -> {fitted_mb} MB to fit available memory."
+                    );
+                }
+            }
+            Ok(fitted_mb)
         }
     }
 }
@@ -421,6 +526,7 @@ pub fn calculate_cache_config(
     silent: bool,
     model_weight_size_in_bytes: Option<usize>,
     max_num_tokens: Option<usize>,
+    fit_ctx: bool,
 ) -> anyhow::Result<CacheConfig> {
     let block_size = block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
     if !SUPPORTED_BLOCK_SIZE.contains(&block_size) {
@@ -555,7 +661,13 @@ pub fn calculate_cache_config(
             let available_mb = device_memory_cap(memory.available(), device)
                 .saturating_sub(future_reserved_bytes)
                 / SIZE_IN_MB;
-            mem_gpu_mb = fit_post_load_cache_budget(mem_gpu, mem_gpu_mb, available_mb)?;
+            mem_gpu_mb = fit_post_load_cache_budget(
+                mem_gpu,
+                mem_gpu_mb,
+                available_mb,
+                fit_ctx,
+                bytes_per_token,
+            )?;
         }
         min_mem_gpu = min_mem_gpu.min(mem_gpu_mb);
     }

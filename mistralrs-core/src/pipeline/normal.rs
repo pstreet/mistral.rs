@@ -242,6 +242,7 @@ pub(crate) fn build_normal_pipeline(
             silent,
             None,
             max_kv_tokens,
+            paged_attn_config.fit_ctx,
         )?;
         let layer_devices = (0..num_hidden_layers)
             .map(|layer| mapper.device_for(layer, false).cloned())

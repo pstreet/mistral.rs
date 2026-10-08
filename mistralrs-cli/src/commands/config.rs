@@ -71,6 +71,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         paged_cache_type,
         paged_k_cache_type,
         paged_v_cache_type,
+        paged_fit_ctx,
     ) = paged_attn.into_builder_flags();
 
     let (model_configs, cpu) = build_model_configs(&models, &runtime, &global.token_source).await?;
@@ -120,6 +121,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
         .with_paged_ctxt_len_optional(paged_ctxt_len)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
+        .with_fit_ctx(paged_fit_ctx)
         .with_mtp_config_optional(runtime.mtp_config())
         .with_mtp_config_fallback_optional(mtp_entry_fallback)
         .with_router_policy(router.into_policy())
@@ -270,6 +272,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         paged_cache_type,
         paged_k_cache_type,
         paged_v_cache_type,
+        paged_fit_ctx,
     ) = paged_attn.into_builder_flags();
 
     let (model_configs, cpu) = build_model_configs(&models, &runtime, &global.token_source).await?;
@@ -305,6 +308,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
         .with_paged_ctxt_len_optional(paged_ctxt_len)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
+        .with_fit_ctx(paged_fit_ctx)
         .with_mtp_config_optional(runtime.mtp_config())
         .with_paged_attn_cache_type(paged_cache_type)
         .with_paged_attn_kv_cache_types(paged_k_cache_type, paged_v_cache_type);
@@ -431,6 +435,15 @@ async fn build_model_configs(
         }
         if let Some(v_cache_type) = entry.v_cache_type {
             config = config.with_v_cache_type(v_cache_type);
+        }
+        if let Some(paged_ctxt_len) = entry.context_len {
+            config = config.with_paged_ctxt_len(paged_ctxt_len);
+        }
+        if let Some(paged_attn_gpu_mem) = entry.memory_mb {
+            config = config.with_paged_attn_gpu_mem(paged_attn_gpu_mem);
+        }
+        if let Some(fit_ctx) = entry.fit_ctx {
+            config = config.with_fit_ctx(fit_ctx);
         }
         if let Some(max_model_len) = entry.max_model_len {
             config = config.with_max_model_len(max_model_len);

@@ -1485,6 +1485,7 @@ impl Loader for MultimodalLoader {
                 silent,
                 None,
                 max_kv_tokens,
+                paged_attn_config.fit_ctx,
             )?;
             let cache_engine = CacheEngine::new(
                 model_metadata.as_ref(),

@@ -67,6 +67,18 @@ pub struct ModelConfig {
     /// Per-model V cache type. Same inheritance as `k_cache_type`.
     #[serde(default)]
     pub v_cache_type: Option<PagedCacheType>,
+    /// Per-model KV context length. `None` inherits the global
+    /// `[paged_attn] context_len`.
+    #[serde(default)]
+    pub paged_ctxt_len: Option<usize>,
+    /// Per-model KV pool size in MB. `None` inherits the global
+    /// `[paged_attn] memory_mb`. Mutually exclusive with
+    /// `paged_ctxt_len` (context wins, same as global).
+    #[serde(default)]
+    pub paged_attn_gpu_mem: Option<usize>,
+    /// Per-model shrink-to-fit. `None` inherits the global `fit_ctx`.
+    #[serde(default)]
+    pub fit_ctx: Option<bool>,
 }
 
 impl ModelConfig {
@@ -88,6 +100,9 @@ impl ModelConfig {
             cache_type: None,
             k_cache_type: None,
             v_cache_type: None,
+            paged_ctxt_len: None,
+            paged_attn_gpu_mem: None,
+            fit_ctx: None,
         }
     }
 
@@ -122,6 +137,21 @@ impl ModelConfig {
 
     pub fn with_v_cache_type(mut self, v_cache_type: PagedCacheType) -> Self {
         self.v_cache_type = Some(v_cache_type);
+        self
+    }
+
+    pub fn with_paged_ctxt_len(mut self, paged_ctxt_len: usize) -> Self {
+        self.paged_ctxt_len = Some(paged_ctxt_len);
+        self
+    }
+
+    pub fn with_paged_attn_gpu_mem(mut self, paged_attn_gpu_mem: usize) -> Self {
+        self.paged_attn_gpu_mem = Some(paged_attn_gpu_mem);
+        self
+    }
+
+    pub fn with_fit_ctx(mut self, fit_ctx: bool) -> Self {
+        self.fit_ctx = Some(fit_ctx);
         self
     }
 
@@ -334,6 +364,11 @@ pub struct MistralRsForServerBuilder {
     /// This is the default setting, and it defaults to the `max-seq-len` specified in after the model type.
     paged_ctxt_len: Option<usize>,
 
+    /// Shrink-to-fit: when the configured KV pool does not fit post-load
+    /// memory, cut it (loudly) instead of refusing to load. Off by default.
+    /// Per-model `fit_ctx` overrides this.
+    fit_ctx: bool,
+
     /// Block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA/ROCm, it will default to 32.
     /// PagedAttention is supported on CUDA, ROCm, and Metal. It is automatically activated on CUDA/ROCm but not on Metal.
     paged_attn_block_size: Option<usize>,
@@ -421,6 +456,7 @@ impl Default for MistralRsForServerBuilder {
             paged_attn_gpu_mem: defaults::PAGED_ATTN_GPU_MEM,
             paged_attn_gpu_mem_usage: defaults::PAGED_ATTN_GPU_MEM_USAGE,
             paged_ctxt_len: defaults::PAGED_CTXT_LEN,
+            fit_ctx: false,
             paged_attn_block_size: defaults::PAGED_ATTN_BLOCK_SIZE,
             paged_attn: defaults::PAGED_ATTN,
             cpu: defaults::CPU,
@@ -799,6 +835,12 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Shrink-to-fit for the KV pool (see `fit_ctx`).
+    pub fn with_fit_ctx(mut self, fit_ctx: bool) -> Self {
+        self.fit_ctx = fit_ctx;
+        self
+    }
+
     /// Sets the block size for PagedAttention.
     pub fn with_paged_attn_block_size(mut self, paged_attn_block_size: usize) -> Self {
         self.paged_attn_block_size = Some(paged_attn_block_size);
@@ -1025,7 +1067,8 @@ impl MistralRsForServerBuilder {
             )?
             .map(|config| config.with_serving_capacity(self.max_seqs))
             .transpose()?
-            .map(|config| config.with_recurrent_prefix_capacity(self.prefix_cache_n)),
+            .map(|config| config.with_recurrent_prefix_capacity(self.prefix_cache_n))
+            .map(|config| config.with_fit_ctx(self.fit_ctx)),
             self.mtp_config.as_ref(),
             mtp_runtime,
             &dtype,
@@ -1169,6 +1212,8 @@ impl MistralRsForServerBuilder {
     /// Resolve the effective paged cache config for one entry. A per-entry
     /// `cache_type` resets side inheritance to that base; a per-entry side
     /// falls back to the global side override, else the effective base.
+    /// Per-entry `paged_ctxt_len` / `paged_attn_gpu_mem` / `fit_ctx`
+    /// override the corresponding globals the same way.
     fn resolve_entry_cache_config(
         &self,
         model_config: &ModelConfig,
@@ -1184,9 +1229,9 @@ impl MistralRsForServerBuilder {
         };
         let Some(config) = init_cache_config(
             self.paged_attn_block_size,
-            self.paged_attn_gpu_mem,
+            model_config.paged_attn_gpu_mem.or(self.paged_attn_gpu_mem),
             self.paged_attn_gpu_mem_usage,
-            self.paged_ctxt_len,
+            model_config.paged_ctxt_len.or(self.paged_ctxt_len),
             base_type,
             model_config.k_cache_type.or(inherit_k),
             model_config.v_cache_type.or(inherit_v),
@@ -1198,7 +1243,8 @@ impl MistralRsForServerBuilder {
         Ok(Some(
             config
                 .with_serving_capacity(self.max_seqs)?
-                .with_recurrent_prefix_capacity(self.prefix_cache_n),
+                .with_recurrent_prefix_capacity(self.prefix_cache_n)
+                .with_fit_ctx(model_config.fit_ctx.unwrap_or(self.fit_ctx)),
         ))
     }
 

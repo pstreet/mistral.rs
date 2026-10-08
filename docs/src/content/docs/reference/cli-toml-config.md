@@ -104,9 +104,10 @@ The MCP *client* configuration (`mcp_config`) lives under `[runtime]`, not `[ser
 | `memory_mb` | `--pa-memory-mb` | not set | KV cache budget in MB. Conflicts with `context_len`. |
 | `memory_fraction` | `--pa-memory-fraction` | not set | KV cache budget as fraction of VRAM (0.0 to 1.0). Conflicts with `context_len` and `memory_mb`. |
 | `block_size` | `--pa-block-size` | not set | Tokens per block. |
-| `cache_type` | `--pa-cache-type` | `auto` | KV cache quantization type: `auto`, `bf16`, `f8e4m3`, `q8_0`, or `q4_0` (ROCm only, see [paged attention](/guides/perf/paged-attention/)). |
+| `cache_type` | `--pa-cache-type` | `auto` | KV cache quantization type: `auto`, `bf16`, `f8e4m3`, `q8_0`, or `q4_0` (quantized `q8_0`/`q4_0` need a GPU backend: CUDA/ROCm, see [paged attention](/guides/perf/paged-attention/)). |
 | `k_cache_type` | `--pa-k-cache-type` | not set | K cache type override (inherits `cache_type` when unset). |
 | `v_cache_type` | `--pa-v-cache-type` | not set | V cache type override (inherits `cache_type` when unset). Split K/V (e.g. K `q8_0` + V `q4_0`) needs the Standard paged layout on CUDA/ROCm. |
+| `fit_ctx` | `--fit-ctx` | `false` | Shrink-to-fit: when the configured pool does not fit post-load memory, cut it (loudly) instead of refusing to load. Per-model `fit_ctx` overrides this. |
 
 ## `[router]` section (`serve` only)
 
@@ -156,6 +157,9 @@ Each entry defines one loaded model.
 | `cache_type` | enum | no | Per-model KV cache type (same values as `[paged_attn] cache_type`). Unset inherits the global base. Setting it also resets inherited global `k_cache_type`/`v_cache_type` overrides for this model. |
 | `k_cache_type` | enum | no | Per-model K cache type. Unset inherits the global `[paged_attn] k_cache_type` override, else the effective base. |
 | `v_cache_type` | enum | no | Per-model V cache type. Same inheritance as `k_cache_type`. |
+| `context_len` | integer | no | Per-model KV context length. Unset inherits global `[paged_attn] context_len`. |
+| `memory_mb` | integer | no | Per-model KV pool size in MB. Unset inherits global `[paged_attn] memory_mb`. Mutually exclusive with `context_len` (context wins). |
+| `fit_ctx` | boolean | no | Per-model shrink-to-fit. Unset inherits global `[paged_attn] fit_ctx`. |
 
 Each `[[models]]` entry can carry nested sections whose field shapes mirror the corresponding CLI flags:
 

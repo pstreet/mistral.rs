@@ -131,7 +131,7 @@ only, FP16/BF16/FP32 activations, per-layer head dims divisible by 32 and at mos
 MLA layouts.
 
 `q4_0` quarters KV bytes with block-int4 nibbles plus an FP32 scale per 32 elements, sharing
-the `q8_0` sidecar scheme. ROCm only. K (and optionally V) is first rotated with a
+the `q8_0` sidecar scheme (CUDA/ROCm; proven on ROCm, CUDA coverage is newer). K (and optionally V) is first rotated with a
 Hadamard sign-flip transform to spread outliers, then quantized to a fitted 16-level
 Lloyd-Max grid (scale = block amax). Opt in to 1-bit quantization-residual sidecars with
 `MISTRALRS_Q4_QJL=1` (or `true`); off by default, ~25% extra KV memory.

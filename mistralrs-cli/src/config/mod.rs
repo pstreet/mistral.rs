@@ -226,6 +226,18 @@ pub struct ModelEntry {
     /// Per-entry V cache type. Same inheritance as `k_cache_type`.
     #[serde(default)]
     pub v_cache_type: Option<PagedCacheType>,
+    /// Per-entry KV context length. `None` inherits the global
+    /// `[paged_attn] context_len`.
+    #[serde(default)]
+    pub context_len: Option<usize>,
+    /// Per-entry KV pool size in MB. `None` inherits the global
+    /// `[paged_attn] memory_mb`. Mutually exclusive with `context_len`
+    /// (context wins, same as global).
+    #[serde(default)]
+    pub memory_mb: Option<usize>,
+    /// Per-entry shrink-to-fit. `None` inherits the global `fit_ctx`.
+    #[serde(default)]
+    pub fit_ctx: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]

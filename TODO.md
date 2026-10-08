@@ -533,9 +533,25 @@ facade today, so the MTP port gates the cutover):
 - [ ] ~L Split prefill/decode across the two GPUs (prefill-hungry on
       one device, latency decode on the other). Only if single-device
       saturates; most complex item here.
+- [x] ~M Per-model paged overrides + `--fit-ctx` (SHIPPED 2026-10-08,
+      matrix 0/0/0/0, hardware validation queued on the 3090).
+      `[[models]]` gains `context_len`, `memory_mb`, `fit_ctx` (same
+      names/semantics as `[paged_attn]`, entry wins; flows through the
+      existing precedence incl. eager multi-model entries). Global
+      `--fit-ctx` / `[paged_attn] fit_ctx`: post-load hard-budget
+      (`MbAmount`/`ContextSize`) misses shrink to available (floor 2048
+      tokens, WARN line with requested vs fitted) instead of refusing;
+      off by default, refusal path byte-identical (unit-tested both).
+      Motivation: 27B+262k-global cannot load on the 24GB 3090 and the
+      pool budget was global-only. Sizing audit result: no static
+      consumer explains it (activations log 0, base reservation 0,
+      MTP-builtin adds nothing, affine 0 in dual) - VRAM timeline
+      peaks 17.3GB vs 15.6 settled, so the post-load query reads pool
+      pressure (ISQ/upload transients) as permanent occupancy.
 - Policy (user-locked 2026-10-08): CPU serving capped at 4B. A CPU
-      mirror alias is wanted only for `qwen3.5-4b`; larger models stay
-      GPU-pinned (no such alias = loud absence, never silent crawl).
+      mirror alias is wanted only for `qwen3.5-4b`; everything larger
+      stays GPU-pinned (no such alias = loud absence, never
+      silent crawl).
 
 - [x] ~M attention projection follow-up (answered 2026-09-25, was §4). Fresh
       rocprofv3 decode-only profile of the 35B Q4_K_XL (attach mode needs

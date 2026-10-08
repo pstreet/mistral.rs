@@ -41,6 +41,12 @@ pub struct PagedAttentionOptions {
     #[arg(long = "pa-block-size")]
     pub block_size: Option<usize>,
 
+    /// Shrink-to-fit: when the configured KV pool does not fit post-load
+    /// memory, cut it (loudly) instead of refusing to load. Off by default.
+    #[arg(long = "fit-ctx")]
+    #[serde(default)]
+    pub fit_ctx: bool,
+
     /// KV cache quantization type
     #[arg(long = "pa-cache-type", default_value = "auto", value_parser = parse_cache_type)]
     #[serde(default)]
@@ -65,6 +71,7 @@ impl Default for PagedAttentionOptions {
             memory_mb: None,
             memory_fraction: None,
             block_size: None,
+            fit_ctx: false,
             cache_type: PagedCacheType::Auto,
             k_cache_type: None,
             v_cache_type: None,
@@ -103,6 +110,7 @@ impl PagedAttentionOptions {
             self.cache_type,
             self.k_cache_type,
             self.v_cache_type,
+            self.fit_ctx,
         )
     }
 }
@@ -121,4 +129,5 @@ pub type PagedAttnBuilderFlags = (
     PagedCacheType,         // cache_type
     Option<PagedCacheType>, // k_cache_type override
     Option<PagedCacheType>, // v_cache_type override
+    bool,                   // fit_ctx (shrink-to-fit)
 );

@@ -65,6 +65,7 @@ pub async fn run_interactive(
         paged_cache_type,
         paged_k_cache_type,
         paged_v_cache_type,
+        paged_fit_ctx,
     ) = extract_paged_attn_settings(&model_type);
     let (cpu, device_layers, device_str) = extract_device_settings(&model_type);
     let device_spec = device_str
@@ -110,6 +111,7 @@ pub async fn run_interactive(
         .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
         .with_paged_ctxt_len_optional(paged_ctxt_len)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
+        .with_fit_ctx(paged_fit_ctx)
         .with_mtp_config_optional(runtime.mtp_config())
         .with_max_model_len_optional(max_model_len)
         .with_hf_config_overrides_optional(hf_config_overrides)

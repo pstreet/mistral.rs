@@ -71,6 +71,7 @@ pub async fn run_server(
         paged_cache_type,
         paged_k_cache_type,
         paged_v_cache_type,
+        paged_fit_ctx,
     ) = extract_paged_attn_settings(&model_type);
 
     // Extract device settings
@@ -121,6 +122,7 @@ pub async fn run_server(
         .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
         .with_paged_ctxt_len_optional(paged_ctxt_len)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
+        .with_fit_ctx(paged_fit_ctx)
         .with_mtp_config_optional(runtime.mtp_config())
         .with_max_model_len_optional(max_model_len)
         .with_hf_config_overrides_optional(hf_config_overrides)
@@ -855,6 +857,7 @@ pub(crate) fn extract_paged_attn_settings(
                 PagedCacheType::Auto,
                 None,
                 None,
+                false,
             )
         }
     };
