@@ -391,6 +391,25 @@ facade today, so the MTP port gates the cutover):
       The 128k-native 30Bs (Llama3.2, Muse) will cap to ~half
       pool on their next demand-load. GTT steady state for the
       27B serving: 45.2GB.
+      DUAL-ROLE CONCURRENCY PROVEN IN PROD 2026-10-08 23:38 UTC:
+      TEMP max_seqs=2 set in [runtime] (tradeoff journaled in the
+      TOML: fleet concurrency capped at 2 seqs/engine until
+      per-model max_seqs lands; removing the line re-blocks the
+      cuda alias attach). Both roles demand-loaded and SERVED
+      SIMULTANEOUSLY - same 27B, same config (ISQ-Q4K, MTP n=2,
+      temp0.3, 300-tok essay): ROCm/hip 300tok/19.3s = 15.5 tok/s;
+      Cuda/3090 300tok/8.1s = 37.2 tok/s (2.4x the hip role, 
+      concurrent, zero interference). Engine logger shows both
+      engines interleaved; cuda MTP accept 48-70% (len 1.97-2.40)
+      - the ported top1/verify path accepting drafts at real rates
+      in prod at temp 0.3. GTT 15.6GB steady, 3090 19.7GB.
+      Side effect of max_seqs=2: hip serving GTT dropped
+      45.2 -> 15.6GB (recurrent checkpoint pool 14.6GB -> 1.3GB
+      plus smaller graph arena). The earlier "mystery unload"
+      was a misread: the 23:34:29 attach + graph capture belonged
+      to the HIP 27B (default alias, same model name); the cuda
+      load was one clean cycle 23:34:32 -> 23:35:28. First ever
+      dual-vendor concurrent serving on this box.
 
 - [x] ~M cuda-only 3x decode gap (CLOSED 2026-10-07, root-caused, not tuned).
       It was never host overhead: cuda-only ran the GDN recurrence on CPU
