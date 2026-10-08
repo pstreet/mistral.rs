@@ -98,7 +98,7 @@ impl BackendCaps {
             Err(candle_core::Error::msg(
                 "GGUF weights cannot load on this device in this build: hip-side quantized \
                  storage (QStorage::Hip) is the S2 slice of the multi-backend roadmap. Serve \
-                 GGUF from a single-vendor rocm build, or use unquantized weights here",
+                 GGUF from a rocm build (single-vendor or dual, hip role), or use unquantized weights here",
             ))
         }
     }

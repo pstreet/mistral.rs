@@ -90,7 +90,8 @@ long-lived:
 
 TOML serving is documented under [`from-config`](/reference/cli/from-config/)
 and the [TOML reference](/reference/cli-toml-config/). MTP speculative
-decoding works on ROCm with paged attention; see
+decoding works on ROCm with paged attention; dual `cuda,rocm` builds also
+serve MTP on the NVIDIA role (`cuda:<N>`, proven on RTX 3090); see
 [speculative decoding](/guides/perf/speculative-decoding/).
 
 ## Device selection

@@ -213,6 +213,23 @@ facade today, so the MTP port gates the cutover):
    extension point. No work yet.
 
 ### Graphs/MTP parity queue (opened 2026-10-06, from the 4B/27B benches)
+- [x] ~M MTP on the NVIDIA role (CLOSED 2026-10-08, port of Phase 2).
+      Kernels were already in the nvcc companion (both sparse_rejection
+      entries exported from libmistralrscuda_cuda.so); the Rust side
+      refused the role. Port: ffi_cuda declarations, dual cuda_fwd
+      through ffi_cuda (use-alias, no duplication), staging dual-bails
+      narrowed to solo-rocm, eligibility hip||cuda in dual, caps
+      mtp=true on the dual-NVIDIA row (commit 00203776e, matrix 0/0/0/0).
+      HARDWARE PROOF on prod (dual binary, RTX 3090 cuda:0 alias,
+      27B ISQ-Q4K + K=Q8_0/V=Q4_0, essay-600tok x3 + 270-tok prefill
+      x3, same methodology): "Speculative decoding enabled
+      (built-in, n_predict=2)"; MTP-ON decode 12.74/12.60/13.23
+      vs MTP-OFF 11.18/11.21/11.21 (+15%); acceptance 991/1718 (58%),
+      sparse_gpu_verify 838, ZERO fallbacks; sanity "1776" both arms;
+      prefill ~330 on vs ~337 off (draft overhead, expected). MTP now
+      serves on both roles. Uplift smaller than hip's published
+      +36-77%: follow-up work is graphs-capture proof + FA2 dispatch
+      audit on the NVIDIA role (backlog P1).
 
 - [x] ~M cuda-only 3x decode gap (CLOSED 2026-10-07, root-caused, not tuned).
       It was never host overhead: cuda-only ran the GDN recurrence on CPU
