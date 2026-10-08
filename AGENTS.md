@@ -64,6 +64,7 @@ Mistral.rs supports multiple model types and advanced features via dedicated cra
 5. Build profiles:
    - `--profile fast` for iteration: parallel codegen (`codegen-units = 32`), no LTO, line-table debug info - several times faster than `release`. Use it for correctness loops, test binaries, and link debugging.
    - `--release` (thin-LTO, `codegen-units = 1`) only for the performance bar and production artifacts. Never benchmark `fast` builds.
+   - Probe/debug lane (policy, 2026-10-08): diagnostic probes and load-experiments build `--profile fast` and run as a standalone server on a spare port (e.g. 1244) against a minimal TOML - never by restarting prod, never benchmarked. `release` is reserved for benches, prod swaps, and perf validation. Toolchain: mold links everything (`~/.cargo/config.toml` plus build.rs `.so` links), sccache (Rust + host C/C++, 100G) and ccache (hipcc/nvcc `-c` steps, 100G, opt-in `MISTRALRS_CCACHE_GPU=1`) cache compiles; nvcc must not go through sccache (phantom hits on failed compiles).
    - `sccache` is wired via `~/.cargo/config.toml`, so rebuilds after target-dir wipes and crates shared with the candle workspace come from cache.
 
 ## Models

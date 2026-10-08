@@ -2842,6 +2842,16 @@ most `mistralrs-quant` FP8 kernels, speculative dflash/FA3 paths.
 
 ## Appendix B. Build health (re-verified 2026-10-06; policy: all shapes supported)
 
+Toolchain (2026-10-08, measured): mold links everything (RUSTFLAGS
+`-fuse-ld=mold` + build.rs `.so` links, thin-LTO verified); sccache
+wraps rustc + host CC/CXX (100G); ccache wraps hipcc/nvcc `-c` steps
+(100G, opt-in `MISTRALRS_CCACHE_GPU=1`); nvcc must NOT go through
+sccache (phantom hits on failed compiles). One-crate release edit:
+17m -> 7m05s after the toolchain landed. Probe lane policy (same
+day): diagnostics build `--profile fast` + standalone server on a
+spare port (1244), never a prod restart, never benchmarked;
+`release` reserved for benches + prod swaps.
+
 | Configuration | Status |
 |---------------|--------|
 | CPU-only (`cargo check -p mistralrs-core -p mistralrs-quant`) | Pass (4B serves on cpu, benched) |
