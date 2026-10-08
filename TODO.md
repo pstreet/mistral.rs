@@ -194,6 +194,21 @@ facade today, so the MTP port gates the cutover):
    three prefills ahead; MTP (impossible in the alias era) live
    on hip kernels for the 27B AND prod's 35B. Prod cutover now
    awaits only the user's re-validation window.
+   CUTOVER EXECUTED 2026-10-08 ~07:00 UTC: fresh dual release
+   (cuda,rocm) built from the tip (bdb0f0169 + candle 77048535)
+   into the standard target mistral.rs/target/release/mistralrs
+   (36m build, doctor: revision bdb0f0169, hardware match PASS);
+   Oct-1 alias binary kept as target/release/mistralrs.pre-cutover-oct1
+   for instant rollback. Service restarted on the dual binary:
+   auto-selected Hip gfx1151 with graphs=on paged_attn=on gguf=on
+   mtp=on; sanity "1776" correct; MTP drafting live (315 drafts,
+   328/630 accepted); graphs replaying (317 replay vs 3 eager
+   population); single first-boot decode probe 13.64 tok/s on
+   model="default" (includes demand-load + graph capture - expect
+   it to settle; full 3-trial methodology on a quiet box is the
+   confirming measure). Healthcheck restored, prod serving.
+   Dual binary is now prod: cpu/hip/cuda all addressable
+   (device_spec "hip:N"/"cuda:N"/"cpu", auto = hip:0).
 4. Vulkan: future third shell; the include!-body pattern is the
    extension point. No work yet.
 
