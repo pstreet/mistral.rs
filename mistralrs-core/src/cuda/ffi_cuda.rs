@@ -572,4 +572,42 @@ cuda_kernel! {
         stream: i64,
     );
 
+    sparse_rejection_categorical_f32 = "sparse_rejection_categorical_f32"(
+        target_logits: *const f32,
+        draft_tokens: *const u32,
+        q_token_ids: *const u32,
+        q_probs: *const f32,
+        inverse_temperatures: *const f32,
+        target_top_k: *const u32,
+        top_p: *const f32,
+        min_p: *const f32,
+        accept_uniforms: *const f32,
+        sample_uniforms: *const f32,
+        outcomes: *mut u32,
+        batch: i32,
+        drafts: i32,
+        vocab: i32,
+        q_width: i32,
+        stream: i64,
+    );
+    sparse_rejection_topk_f32 = "sparse_rejection_topk_f32"(
+        packed_target: *const f32,
+        draft_tokens: *const u32,
+        q_token_ids: *const u32,
+        q_probs: *const f32,
+        inverse_temperatures: *const f32,
+        target_top_k: *const u32,
+        top_p: *const f32,
+        min_p: *const f32,
+        accept_uniforms: *const f32,
+        sample_uniforms: *const f32,
+        outcomes: *mut u32,
+        batch: i32,
+        drafts: i32,
+        vocab: i32,
+        q_width: i32,
+        packed_k: i32,
+        stream: i64,
+    );
+
 }

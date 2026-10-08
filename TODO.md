@@ -435,6 +435,54 @@ facade today, so the MTP port gates the cutover):
 
 ## P1. Do next — high impact, slightly more work (week)
 
+### Perf-opportunity backlog (opened 2026-10-08, ideas, none started)
+
+- [ ] ~M Expert-split MoE placement (llama.cpp `--cpu-moe` style):
+      attention/router/shared-experts on GPU, cold experts in RAM.
+      Unlocks the 35B on the 3090's 24GB. Requires new work: split
+      placement in the MoE experts backend + cross-device dispatch per
+      token (placement today is whole-layer only, verified: no
+      lru/offload/evict machinery in `mistralrs-core/src/moe/`).
+- [ ] ~S Solo-rocm loud fallbacks: fused FP8 GLU quantize (unfused
+      path today), gemv -> plain GEMM, HQQ CPU bitpack-at-load.
+      Pure wins, no architecture risk.
+- [ ] ~S UQFF vs GGUF shootout: same weights through the CLI
+      `quantize`/`uqff` path, bench load + decode on this box.
+      Unmeasured; native format may win both.
+- [ ] ~S Re-sweep MTP n on the cutover binary: n=2 was locked on the
+      old binary; verify is faster now and acceptance sits 63-67%,
+      so n=3 may win where it lost before. Include draft sampling
+      greedy-vs-auto recheck.
+- [ ] ~S MTP on the 4B: `Qwen3.5-4B-MTP-GGUF` carries the head but is
+      pinned `mtp=false` in prod. Small-model MTP is usually
+      high-acceptance; bench before pinning.
+- [ ] ~S Graph-capture audit on prod metrics: `graph_dispatch`
+      replay vs eager-population vs skipped in steady state. Tells
+      whether decode is actually graphed or re-capturing.
+- [ ] ~S KV precision on the 35B: 27B already runs split K=Q8_0/
+      V=Q4_0; try the same (or lower) on the 35B with a quality check.
+      Decode is bandwidth-bound; KV bytes are decode time.
+- [ ] ~S KV pool right-sizing: prod `context_len = 262144` reserves
+      ~7GB+ real traffic may never touch. Reclaim to a second resident
+      or a bigger graph pool; measure resident-set vs Evict behavior.
+- [ ] ~S Re-bench quants on the cutover binary: Q6_K vs Q4_K_M (27B),
+      Q5_K_XL vs Q4_K_XL (35B). The +54% came from kernels, not
+      weights, so the quant tradeoff curve moved.
+- [ ] ~M FA2 path proof on the cuda role (compute 8.6: FA v2 yes, v3
+      no): confirm the kernels actually dispatch there; try the
+      `cudnn` feature as challenger. Pairs with the cuda-MTP port.
+- [ ] ~M CUDA-graph capture proof on the NVIDIA role: caps claim
+      graphs=true but the capture-bug fixes were hip-side; needs its
+      own proof run on the 3090.
+- [ ] ~S Prefix-caching revisit: `prefix_cache_n` is off to match
+      llama-server; multi-turn traffic may win it back. Measure.
+- [ ] ~L Split prefill/decode across the two GPUs (prefill-hungry on
+      one device, latency decode on the other). Only if single-device
+      saturates; most complex item here.
+- Policy (user-locked 2026-10-08): CPU serving capped at 4B. A CPU
+      mirror alias is wanted only for `qwen3.5-4b`; larger models stay
+      GPU-pinned (no such alias = loud absence, never silent crawl).
+
 - [x] ~M attention projection follow-up (answered 2026-09-25, was §4). Fresh
       rocprofv3 decode-only profile of the 35B Q4_K_XL (attach mode needs
       `ROCP_TOOL_ATTACH=1` on the target + `ptrace_scope=0`): premise stale.

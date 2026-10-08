@@ -365,11 +365,15 @@ impl CudaSparseRejectionSubmission {
 }
 
 /// Role eligibility for the sparse-rejection device path. Every rocm
-/// build serves the hip role; the NVIDIA role (cuda builds) has no
-/// kernels here and is loudly refused at submit time, so gates send
-/// it to the CPU fallback instead.
+/// build serves the hip role; dual builds additionally serve the NVIDIA
+/// role (cuda kernels ship in the nvcc companion, launched via ffi_cuda).
+/// Solo-cuda keeps its original eligibility; solo-rocm has no NVIDIA role.
 pub(crate) fn sparse_rejection_role_eligible(device: &candle_core::Device) -> bool {
-    #[cfg(feature = "rocm")]
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    {
+        return device.is_hip() || device.is_cuda();
+    }
+    #[cfg(all(feature = "rocm", not(feature = "cuda")))]
     {
         return device.is_hip();
     }
@@ -735,12 +739,16 @@ impl InplaceOp1 for SparseRejectionKernelLaunch {
     }
 
     fn cuda_fwd(&self, storage: &mut CudaStorage, layout: &Layout) -> Result<()> {
-        // In dual builds these symbols resolve to the hip companion; the
-        // NVIDIA role would launch hip kernels on a CUDA stream.
-        #[cfg(feature = "rocm")]
+        // Dual builds resolve `ffi` to the hip companion, so the NVIDIA
+        // role launches through `ffi_cuda` (nvcc companion) instead.
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+        use super::ffi as ffi_role;
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        use super::ffi_cuda as ffi_role;
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
         {
             let _ = (storage, layout);
-            candle_core::bail!("{OP} needs the serving (hip) role in dual builds")
+            candle_core::bail!("{OP} has no NVIDIA role in rocm-only builds")
         }
         #[cfg(feature = "cuda")]
         {
@@ -750,7 +758,7 @@ impl InplaceOp1 for SparseRejectionKernelLaunch {
             let outcomes_ptr = unsafe { (outcomes_ptr as *mut u32).add(layout.start_offset()) };
             unsafe {
                 match self.mode {
-                    SparseRejectionMode::Categorical => ffi::sparse_rejection_categorical_f32(
+                    SparseRejectionMode::Categorical => ffi_role::sparse_rejection_categorical_f32(
                         self.target_ptr as *const f32,
                         self.draft_ptr as *const u32,
                         self.q_ids_ptr as *const u32,
@@ -768,7 +776,7 @@ impl InplaceOp1 for SparseRejectionKernelLaunch {
                         self.q_width,
                         stream.cu_stream() as i64,
                     ),
-                    SparseRejectionMode::BoundedTopK { .. } => ffi::sparse_rejection_topk_f32(
+                    SparseRejectionMode::BoundedTopK { .. } => ffi_role::sparse_rejection_topk_f32(
                         self.target_ptr as *const f32,
                         self.draft_ptr as *const u32,
                         self.q_ids_ptr as *const u32,
@@ -963,7 +971,7 @@ impl InplaceOp1 for PinnedU32HtoD<'_> {
     }
 
     fn cuda_fwd(&self, storage: &mut CudaStorage, layout: &Layout) -> Result<()> {
-        #[cfg(feature = "rocm")]
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
         {
             let _ = (storage, layout);
             candle_core::bail!(
@@ -1071,7 +1079,7 @@ impl InplaceOp1 for PinnedF32HtoD<'_> {
     }
 
     fn cuda_fwd(&self, storage: &mut CudaStorage, layout: &Layout) -> Result<()> {
-        #[cfg(feature = "rocm")]
+        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
         {
             let _ = (storage, layout);
             candle_core::bail!(

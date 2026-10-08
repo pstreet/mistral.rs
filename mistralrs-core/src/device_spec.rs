@@ -315,13 +315,15 @@ pub fn backend_caps(device: &Device) -> BackendCaps {
                 // through the nvcc companion. Decode graphs replay cleanly
                 // across requests (capture-time event records are gated on
                 // the fork's event-tracking state - see the journal).
+                // MTP verifies on the NVIDIA role through the nvcc
+                // companion's sparse-rejection kernels (ffi_cuda).
                 let arch = GpuArch::resolve(dev).ok();
                 BackendCaps {
                     arch,
                     graphs: true,
                     paged_attention: true,
                     quantized_gguf: true,
-                    mtp: false,
+                    mtp: true,
                 }
             }
             #[cfg(all(feature = "rocm", not(feature = "cuda")))]
