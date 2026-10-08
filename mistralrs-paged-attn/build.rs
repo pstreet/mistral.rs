@@ -20,12 +20,13 @@ const CUDA_BUILD_ROOT_ENV: &str = "MISTRALRS_CUDA_BUILD_ROOT";
 /// Route hipcc TU compiles (`-c` steps only) through ccache when opted
 /// in: identical invocations across target dirs are served from cache.
 /// Verified: ccache hits repeat `-c` compiles with identical objects.
-/// Deliberately excluded: nvcc (sccache corrupts its temp files, ccache
-/// declines it) and hipcc link steps (uncacheable driver links).
-/// Opt in: MISTRALRS_CCACHE_HIPCC=1 (set in ~/.cargo/config.toml).
+/// Verified ccache hits on repeat hipcc AND nvcc `-c` compiles.
+/// Deliberately excluded: all link steps (drivers decline them), and
+/// sccache for nvcc (reports phantom hits on failed compiles).
+/// Opt in: MISTRALRS_CCACHE_GPU=1 (set in ~/.cargo/config.toml).
 #[allow(dead_code)]
 fn compiler_command(program: impl AsRef<std::path::Path>) -> std::process::Command {
-    if std::env::var("MISTRALRS_CCACHE_HIPCC").as_deref() == Ok("1") {
+    if std::env::var("MISTRALRS_CCACHE_GPU").as_deref() == Ok("1") {
         let mut cmd = std::process::Command::new("ccache");
         cmd.arg(program.as_ref());
         cmd
@@ -446,7 +447,7 @@ fn build_cuda_companion() -> Result<()> {
         let object = build_dir
             .join(std::path::Path::new(kernel).file_stem().unwrap())
             .with_extension("o");
-        let mut cmd = Command::new(&nvcc);
+        let mut cmd = compiler_command(&nvcc);
         cmd.arg(kernel)
             .arg("-Isrc/cuda")
             .arg("-std=c++17")

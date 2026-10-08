@@ -11,10 +11,10 @@ const GDN_FP8_PRODUCER_MIN_CUDA: u32 = 1108;
 #[cfg(all(feature = "cuda", not(feature = "rocm")))]
 const CUDA_BUILD_ROOT_ENV: &str = "MISTRALRS_CUDA_BUILD_ROOT";
 
-/// Opt in: MISTRALRS_CCACHE_HIPCC=1 (set in ~/.cargo/config.toml).
+/// Opt in: MISTRALRS_CCACHE_GPU=1 (set in ~/.cargo/config.toml).
 #[allow(dead_code)]
 fn compiler_command(program: impl AsRef<std::path::Path>) -> std::process::Command {
-    if std::env::var("MISTRALRS_CCACHE_HIPCC").as_deref() == Ok("1") {
+    if std::env::var("MISTRALRS_CCACHE_GPU").as_deref() == Ok("1") {
         let mut cmd = std::process::Command::new("ccache");
         cmd.arg(program.as_ref());
         cmd
@@ -411,7 +411,7 @@ fn build_cuda_core_companion() {
                 .into_owned()
                 + ".o",
         );
-        let status = Command::new(&nvcc)
+        let status = compiler_command(&nvcc)
             .arg(src)
             .arg("-std=c++17")
             .arg("-O3")
