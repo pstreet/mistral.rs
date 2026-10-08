@@ -182,6 +182,11 @@ pub use gguf::cuda::{
 };
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 pub use gguf::cuda::{IndexedMoeLoraDecodeHip, IndexedMoeRoutingHip};
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+pub use gguf::cuda_hip::{
+    grouped_moe_gemm_prequantized_hip, moe_dispatch_build_hip, moe_weighted_reduce_flat_bf16_hip,
+    moe_weighted_reduce_flat_hip, moe_weighted_reduce_flat_same_dtype_hip, quantize_input_q8_1_hip,
+};
 #[cfg(feature = "cuda")]
 pub use gguf::cuda_role::indexed_moe_fused_decode_cuda;
 #[cfg(feature = "cuda")]
@@ -199,12 +204,12 @@ pub use gguf::fast_mmq::{
     grouped_from_glu_pair as grouped_moe_mmq_from_glu_pair, grouped_pair as grouped_moe_mmq_pair,
     grouped_pair_packed as grouped_moe_mmq_pair_packed, supports as supports_mmq,
 };
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 pub use gguf::fast_mmq::{
     grouped_from_glu_packed_hip, grouped_from_glu_pair_hip, grouped_from_glu_sorted_pair_hip,
     grouped_hip, grouped_pair_hip, grouped_pair_packed_hip,
 };
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "rocm")]
 pub use gguf::fast_mmq::{
     grouped_from_glu_packed_hip as grouped_moe_mmq_from_glu_packed_hip,
     grouped_from_glu_sorted_pair_hip as grouped_moe_mmq_from_glu_sorted_pair_hip,

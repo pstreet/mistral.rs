@@ -1,8 +1,16 @@
 pub mod archive;
 pub mod cpu;
-#[cfg(feature = "rocm")]
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+pub(crate) mod cuda;
+// Solo-rocm also compiles the hip twin for its real `_hip` grouped MoE
+// entries (the un-suffixed names there are dual-era stubs; the restored
+// real `cuda` module serves those).
+#[cfg(all(feature = "cuda", feature = "rocm"))]
 #[path = "cuda_hip.rs"]
 pub(crate) mod cuda;
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+#[path = "cuda_hip.rs"]
+pub(crate) mod cuda_hip;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda_role;
 #[cfg(feature = "rocm")]

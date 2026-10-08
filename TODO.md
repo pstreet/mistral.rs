@@ -161,6 +161,39 @@ facade today, so the MTP port gates the cutover):
      35B n=2 sweep).
    Phase 3 parity acceptance MET: the cutover binary is
    performance-positive vs the alias binary on both models.
+   35B PARITY SUITE 2026-10-08 (release builds, prod's own model,
+   Q5_K_XL MTP n=2 greedy, Q8_0 KV 2048MB, prod paused/restored
+   per arm): first arm FAILED on the new binary - every request
+   died with "moe experts forward". Root cause (probe-guided):
+   the 35B is the FIRST MoE model exercised on solo-rocm (the
+   4B/27B are dense hybrids that never touch the MoE experts
+   backend), and the Phase-3 re-point had made solo-rocm's
+   gguf::cuda module the dual hip twin, whose un-suffixed MoE
+   entries are stub bails ("stage 2 of the MoE port") - the real
+   implementation (which the alias binary served prod from) was
+   compiled in NO shape. Fixes:
+   (a) DECODE: restored the real cuda.rs for solo-rocm (mod re-
+       point + 19 Device/Storage matches re-keyed to Hip; file
+       only compiles solo-rocm where every GPU tensor IS Hip).
+   (b) GROUPED PREFILL: the un-suffixed fast_mmq grouped names
+       are dual-era stubs; routed solo-rocm through the proven
+       _hip twins instead - forward_grouped_hip widened from
+       dual-only to every rocm build, its dispatch arm likewise,
+       solo stub-block deleted, cuda_hip.rs compiled as a second
+       module for solo (real _hip grouped entries) + both lib.rs
+       export gates (own-name and grouped_moe_mmq_*_hip aliases)
+       widened to feature=rocm.
+   FINAL 35B NUMBERS (new binary ahead on both arms):
+   decode 32.97/34.80/34.49 (~34.1) vs OLD 21.68/22.73/21.92
+   (~22.1, +54% - the alias path apparently never armed
+   MTP+graphs together on the MoE model; the cutover hip path
+   does); prefill 627/635/634 vs ~593-604 (+5%); MTP 1046/1632
+   accepted (64%), sparse_gpu_verify 792, ZERO cpu fallbacks,
+   0 errors. All four shapes check clean post-fmt.
+   Phase 3 FULL parity: 4B +9%, 27B +7%, 35B +54% decode; all
+   three prefills ahead; MTP (impossible in the alias era) live
+   on hip kernels for the 27B AND prod's 35B. Prod cutover now
+   awaits only the user's re-validation window.
 4. Vulkan: future third shell; the include!-body pattern is the
    extension point. No work yet.
 

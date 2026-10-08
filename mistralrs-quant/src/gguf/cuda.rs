@@ -556,17 +556,17 @@ pub fn qtensor_indexed_moe_forward(qtensor: &QTensor, x: &Tensor, ids: &Tensor) 
     }
 
     // Ensure tensors are on CUDA
-    let Device::Cuda(dev) = qtensor.device() else {
+    let Device::Hip(dev) = qtensor.device() else {
         candle_core::bail!("indexed_moe_forward requires CUDA device for weights");
     };
 
     let (x_storage, _x_layout) = x.storage_and_layout();
-    let Storage::Cuda(_) = &*x_storage else {
+    let Storage::Hip(_) = &*x_storage else {
         candle_core::bail!("indexed_moe_forward requires CUDA device for input");
     };
 
     let (ids_storage, _ids_layout) = ids.storage_and_layout();
-    let Storage::Cuda(ids_cuda) = &*ids_storage else {
+    let Storage::Hip(ids_cuda) = &*ids_storage else {
         candle_core::bail!("indexed_moe_forward requires CUDA device for indices");
     };
 
@@ -586,7 +586,7 @@ pub fn qtensor_indexed_moe_forward(qtensor: &QTensor, x: &Tensor, ids: &Tensor) 
         &dev,
     )?;
 
-    Ok(Tensor::from((Storage::Cuda(storage), out_shape)))
+    Ok(Tensor::from((Storage::Hip(storage), out_shape)))
 }
 
 /// Perform indexed MoE forward pass on a QMatMul.
@@ -695,7 +695,7 @@ pub unsafe fn moe_weighted_reduce_flat(
 
     let inputs = inputs.contiguous()?;
     let (storage, layout) = inputs.storage_and_layout();
-    let Storage::Cuda(cuda) = &*storage else {
+    let Storage::Hip(cuda) = &*storage else {
         candle_core::bail!("moe_weighted_reduce_flat: input must live on CUDA");
     };
     let input_slice = cuda.as_cuda_slice::<f32>()?;
@@ -720,7 +720,7 @@ pub unsafe fn moe_weighted_reduce_flat(
     }
 
     Ok(Tensor::from((
-        Storage::Cuda(CudaStorage::wrap_cuda_slice(out, dev.clone())),
+        Storage::Hip(CudaStorage::wrap_cuda_slice(out, dev.clone())),
         Shape::from((num_tokens, hidden)),
     )))
 }
@@ -755,7 +755,7 @@ pub unsafe fn moe_weighted_reduce_flat_bf16(
 
     let inputs = inputs.contiguous()?;
     let (storage, layout) = inputs.storage_and_layout();
-    let Storage::Cuda(cuda) = &*storage else {
+    let Storage::Hip(cuda) = &*storage else {
         candle_core::bail!("moe_weighted_reduce_flat_bf16: input must live on CUDA");
     };
     let input_slice = cuda.as_cuda_slice::<f32>()?;
@@ -780,7 +780,7 @@ pub unsafe fn moe_weighted_reduce_flat_bf16(
     }
 
     Ok(Tensor::from((
-        Storage::Cuda(CudaStorage::wrap_cuda_slice(out, dev.clone())),
+        Storage::Hip(CudaStorage::wrap_cuda_slice(out, dev.clone())),
         Shape::from((num_tokens, hidden)),
     )))
 }
@@ -837,7 +837,7 @@ unsafe fn moe_weighted_reduce_same_dtype<T: CudaDType + DeviceRepr>(
     let topk_i32 = i32::try_from(topk)?;
     let inputs = inputs.contiguous()?;
     let (storage, layout) = inputs.storage_and_layout();
-    let Storage::Cuda(cuda) = &*storage else {
+    let Storage::Hip(cuda) = &*storage else {
         candle_core::bail!("{kernel}: input must live on CUDA");
     };
     if cuda.device.id() != dev.id() {
@@ -872,7 +872,7 @@ unsafe fn moe_weighted_reduce_same_dtype<T: CudaDType + DeviceRepr>(
     }
 
     Ok(Tensor::from((
-        Storage::Cuda(CudaStorage::wrap_cuda_slice(out, dev.clone())),
+        Storage::Hip(CudaStorage::wrap_cuda_slice(out, dev.clone())),
         Shape::from((num_tokens, hidden)),
     )))
 }
@@ -898,7 +898,7 @@ pub fn moe_weighted_reduce_flat_same_dtype(
         candle_core::bail!("typed MoE reduction weights do not match routing");
     }
     let (weights_storage, weights_layout) = topk_weights.storage_and_layout();
-    let Storage::Cuda(weights_cuda) = &*weights_storage else {
+    let Storage::Hip(weights_cuda) = &*weights_storage else {
         candle_core::bail!("typed MoE reduction weights must live on CUDA");
     };
     if weights_cuda.device.id() != dev.id() {
@@ -989,7 +989,7 @@ fn quantize_input_q8_1_into(
     {
         let (xs_storage, xs_layout) = xs_contig.storage_and_layout();
         let xs_cuda = match &*xs_storage {
-            Storage::Cuda(c) => c,
+            Storage::Hip(c) => c,
             _ => candle_core::bail!("expected CUDA tensor"),
         };
         assert!(xs_layout.start_offset() == 0);
@@ -1029,7 +1029,7 @@ fn quantize_input_q8_1_into(
         let xs_f32 = xs_contig.to_dtype(candle_core::DType::F32)?;
         let (xs_storage, xs_layout) = xs_f32.storage_and_layout();
         let xs_cuda = match &*xs_storage {
-            Storage::Cuda(c) => c,
+            Storage::Hip(c) => c,
             _ => candle_core::bail!("expected CUDA tensor"),
         };
         let xs_slice = xs_cuda.as_cuda_slice::<f32>()?;
@@ -1186,7 +1186,7 @@ impl<'a> IndexedMoeLoraDecode<'a> {
             candle_core::bail!("indexed MoE LoRA weight geometry does not match");
         }
         for tensor in [weights.gate, weights.up, weights.down] {
-            let Device::Cuda(weight_dev) = tensor.device() else {
+            let Device::Hip(weight_dev) = tensor.device() else {
                 candle_core::bail!("indexed MoE LoRA weights must live on CUDA");
             };
             if weight_dev.id() != routing.dev.id() {
@@ -1238,7 +1238,7 @@ impl<'a> IndexedMoeLoraDecode<'a> {
         if input.dims2()? != (rows, features) {
             candle_core::bail!("indexed MoE LoRA input shape does not match weights");
         }
-        let Device::Cuda(input_dev) = input.device() else {
+        let Device::Hip(input_dev) = input.device() else {
             candle_core::bail!("indexed MoE LoRA input must live on CUDA");
         };
         if input_dev.id() != self.routing.dev.id() {
@@ -1292,7 +1292,7 @@ impl<'a> IndexedMoeLoraDecode<'a> {
         }
 
         Ok(Tensor::from((
-            Storage::Cuda(CudaStorage::wrap_cuda_slice(
+            Storage::Hip(CudaStorage::wrap_cuda_slice(
                 output,
                 self.routing.dev.clone(),
             )),
@@ -1352,7 +1352,7 @@ impl<'a> IndexedMoeLoraDecode<'a> {
         }
 
         Ok(Tensor::from((
-            Storage::Cuda(CudaStorage::wrap_cuda_slice(
+            Storage::Hip(CudaStorage::wrap_cuda_slice(
                 output,
                 self.routing.dev.clone(),
             )),
@@ -1451,7 +1451,7 @@ pub fn grouped_moe_gemm_prequantized(
 
     let out_shape: Shape = vec![out_rows, n].into();
     Ok(Tensor::from((
-        Storage::Cuda(CudaStorage::wrap_cuda_slice(out, dev.clone())),
+        Storage::Hip(CudaStorage::wrap_cuda_slice(out, dev.clone())),
         out_shape,
     )))
 }
@@ -1646,7 +1646,7 @@ pub unsafe fn indexed_moe_fused_decode(
 
     let out_shape: Shape = vec![batch, hidden_size].into();
     Ok(Tensor::from((
-        Storage::Cuda(CudaStorage::wrap_cuda_slice(final_out, dev.clone())),
+        Storage::Hip(CudaStorage::wrap_cuda_slice(final_out, dev.clone())),
         out_shape,
     )))
 }
