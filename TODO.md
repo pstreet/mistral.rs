@@ -292,6 +292,34 @@ facade today, so the MTP port gates the cutover):
       continuation; probes still in the working tree (remove before
       commit). BACKLOG: per-model max_seqs + a loud log when
       recurrent-prefix reservations eat the KV budget.
+      TOPK PORT HARDWARE-PROVEN 2026-10-08 ~21:34 UTC (probe lane,
+      fast build + standalone :1244, graphs off, 3090):
+      (a) GREEDY PROOF (mtp=false): sanity "1776" correct + 600-tok
+      essay 28.8 tok/s, ZERO errors - greedy decode routes through
+      the twin's cuda_top1_logits_f32_cached -> workspace -> ring ->
+      pinned staging -> top1_large_f32 via ffi_cuda. 600 submissions
+      and completions through the ported machinery.
+      (b) FULL MTP LOOP PROOF (mtp=true, lazy, text-only load,
+      max_seqs=1, context 16k): "Speculative decoding enabled
+      (built-in, n_predict=2)" + sanity "1776" CORRECT through MTP +
+      metrics drafts_total 20 / accepted_total 32 - draft, verify,
+      and accept ALL on cuda kernels (top1 twin + ranked twin +
+      sparse rejection). Resident 19.6GB. First MTP tokens ever
+      generated on the NVIDIA role.
+      ATTACH-HEADROOM FINDINGS (probe series b-f): eager attach OOMs
+      (ISQ staging held at attach instant); lazy attach at
+      max_seqs=2/32k also OOM'd on the probe (23.9GB held vs
+      parity14's 19.6GB success in prod - the delta remains
+      unexplained; mmproj removal did NOT switch pipelines, the
+      GGUF metadata keeps it multimodal). max_seqs=1 + 16k cleared
+      it. BACKLOG: settle-then-attach (retry the attach after the
+      post-load settle), free ISQ staging pre-attach, and the
+      unexplained 4GB eager-vs-prod delta. The port itself is
+      exonerated: every failure was OOM at a specific allocation,
+      never a kernel or correctness fault.
+      PROBE-LANE VALIDATION: the fast+spare-port policy carried six
+      probe rounds with ZERO prod restarts; 4m22s fast build vs 17m
+      release; ccache 81% kernel hit rate across the rounds.
 
 - [x] ~M cuda-only 3x decode gap (CLOSED 2026-10-07, root-caused, not tuned).
       It was never host overhead: cuda-only ran the GDN recurrence on CPU
