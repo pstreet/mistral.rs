@@ -2975,6 +2975,14 @@ mistral.rs hot zones, then merge.
       warm-reset enumeration failure; cold boot pending, user-owned).
       Prod crash-loops meanwhile (dual binary, see gap below) and
       self-recovers when the card returns.
+      RECOVERY 2026-10-09: user updated Nvidia drivers + rebooted;
+      3090 back on the bus (95:00.0, driver 615.71.09), prod self-
+      recovered after 3 early-boot retries, iGPU latch STILL clear
+      (busy 0, sclk 600MHz), prefix re-verified live on :1235
+      (identical 3808-tok 9.84s -> 0.30s, hit/recurrent). PCI bus
+      renumbered across the reboot (AMD card0, NVIDIA 95:00.0).
+      NOTE: open-webui.service is disabled (preset enabled) - does
+      not survive reboots; started manually twice now.
 - [ ] ~S Dual binary must degrade to hip-only when NVIDIA is absent
       (found 2026-10-09, 3090 missing post-reboot): currently hard-
       aborts startup with CUDA_ERROR_NO_DEVICE instead of serving
