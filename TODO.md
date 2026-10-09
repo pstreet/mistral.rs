@@ -840,6 +840,22 @@ facade today, so the MTP port gates the cutover):
       0.61s, chat turn-2 9.9s -> 0.71s (~14x); hit/recurrent x3,
       first sustained nonzero hitrates (50-60%). MTP-compat is the
       remaining work before prod (MTP-on) gains.
+      PHASE 2 SHIPPED 2026-10-09 (1e808ef8f): non-flash drafter aux
+      capture/restore over ctx_cache (shallow clones safe: entries
+      only reassigned, never mutated in place) + supports()=true,
+      which flips replay_for to NotRequired and lights the whole
+      machine (splits, saves, validation). VALIDATED MTP-on, 27B hip:
+      identical 12.4s -> 0.29s, extend 0.63s, chat-t2 0.70s, essays
+      0.21s; acceptance 55-100% sustained over ~2000 decode tokens
+      (drafts intact); hitrate 50% -> 73% over the session; cache-full
+      line fires loud at 4 seqs/591MB as designed. Aux capture itself
+      never banked (captures=0; chunk-1 drafter append lands after the
+      inline snapshot) - drafts ride gap-fill, provably sufficient
+      here; aux restore path kept as designed extension point.
+      Output divergence cold-vs-hit is sampling noise (both essays
+      coherent; every emitted token target-verified by construction).
+      Remaining for prod value: release cut + prefix_cache_n=4 with
+      user-owned restart (MTP stays on).
       Config flips are dead ends (n=4 buys nothing; n=16 additionally re-blocks the 27B on the
       24GB 3090). KEEP prefix_cache_n = 0 until the recurrent snapshot
       save/restore path is built and proven. Payoff when it works is the
