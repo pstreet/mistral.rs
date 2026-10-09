@@ -107,8 +107,8 @@ async fn main() -> Result<()> {
             run_uqff(command, cli.global).await?;
         }
 
-        Command::FromConfig { file } => {
-            run_from_config(file).await?;
+        Command::FromConfig { file, dry_run } => {
+            run_from_config(file, dry_run).await?;
         }
 
         Command::Update { tag } => {

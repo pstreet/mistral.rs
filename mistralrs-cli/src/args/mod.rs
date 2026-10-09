@@ -227,6 +227,10 @@ pub enum Command {
         /// Path to configuration file (.toml)
         #[arg(short, long)]
         file: PathBuf,
+
+        /// Validate the file and print a summary without serving
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Update or migrate an install using the installer

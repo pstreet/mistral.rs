@@ -20,19 +20,60 @@ use crate::commands::serve::{
 };
 #[cfg(feature = "code-execution")]
 use crate::commands::serve::{build_code_exec_config, build_shell_config};
-use crate::config::{load_cli_config, CliConfig};
+use crate::config::{load_cli_config, CliConfig, ModelKind};
 use crate::ui::build_ui_router;
 
 /// Execute the CLI using a TOML configuration file.
-pub async fn run_from_config(path: std::path::PathBuf) -> Result<()> {
+pub async fn run_from_config(path: std::path::PathBuf, dry_run: bool) -> Result<()> {
     initialize_logging();
 
     let config = load_cli_config(&path)?;
+
+    if dry_run {
+        return print_config_summary(&config);
+    }
 
     match config {
         CliConfig::Serve(cfg) => run_serve_config(cfg).await,
         CliConfig::Run(cfg) => run_run_config(cfg).await,
     }
+}
+
+fn kind_name(kind: &ModelKind) -> &'static str {
+    match kind {
+        ModelKind::Auto => "auto",
+        ModelKind::Text => "text",
+        ModelKind::Multimodal => "multimodal",
+        ModelKind::Diffusion => "diffusion",
+        ModelKind::Speech => "speech",
+        ModelKind::Embedding => "embedding",
+    }
+}
+
+fn print_config_summary(config: &CliConfig) -> Result<()> {
+    match config {
+        CliConfig::Serve(cfg) => {
+            println!(
+                "serve {}:{} ({} models, default {:?}):",
+                cfg.server.host,
+                cfg.server.port,
+                cfg.models.len(),
+                cfg.default_model_id,
+            );
+            for m in &cfg.models {
+                println!(
+                    "  {} kind={} lazy={}",
+                    m.alias.as_deref().unwrap_or(&m.model_id),
+                    kind_name(&m.kind),
+                    m.lazy,
+                );
+            }
+        }
+        CliConfig::Run(_) => {
+            println!("run: config valid");
+        }
+    }
+    Ok(())
 }
 
 async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
