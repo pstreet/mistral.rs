@@ -790,12 +790,57 @@ facade today, so the MTP port gates the cutover):
       hitrate 0.00% and FULL re-prefill in every pattern: byte-identical
       prompt, shared prefix w/ different suffix, exact-stream extension,
       and a real 2-turn chat continuation (3852 -> 3916 tok, 9.6 -> 9.9s
-      prompt time; MTP+graphs on). Code read: the scheduler clamps every
-      block-KV hit through validate_prefix_cache_hit - hybrid GDN layers
-      have no KV, so a hit is only as long as a valid recurrent snapshot,
-      and the finished_recurrent_slots -> snapshot-save path apparently
-      never materializes one to validate against. Config flips are dead
-      ends (n=4 buys nothing; n=16 additionally re-blocks the 27B on the
+      prompt time; MTP+graphs on). Code read, TWO stacked gates found
+      2026-10-09 (either alone zeroes the hitrate):
+      (1) MTP Full-replay policy (dominant): validator asks the pipeline
+      for speculative_prefix_replay(); with the MTP drafter attached
+      that returns drafter.prefix_replay() = dflash_prefix_replay over
+      per-layer sliding windows, which is Full if ANY layer lacks one -
+      GDN recurrent layers have no window, so every validation dies at
+      no_replay_boundary before consulting the store. Prod /metrics
+      confirms: 12 validations, all miss/no_replay_boundary, 0
+      checkpoints, 0 owners. Prefix caching is structurally dead while
+      MTP is attached on hybrids.
+      (2) Save starvation: snapshots save only at block-aligned chunk
+      ends or when prompt len % 32 == 0 post-step - never on decode or
+      at finish (paged path) - so the store is ~always empty anyway.
+      (My 6 probe prompts: only one was 32-aligned.) FIX SHAPE: prove
+      the backbone path with MTP-off + aligned prompts; then (a) save
+      coverage (finish-time snapshots + floor-align the post-step
+      save), (b) MTP compat (auxiliary drafter snapshot/restore, or
+      prove Suffix suffices - drafter state is NOT in today's
+      snapshots, which is presumably why Full is forced). Note the
+      tradeoff this exposes: MTP (+29-70% decode) vs prefix reuse
+      (prefill) are mutually exclusive today.
+      ROOT CAUSE PINNED 2026-10-09 (probe lane, MTP off, aligned
+      3808-tok prompts, TEMP-DIAG tracing): a composition bug, not a
+      hashing bug. Save banks the FULL-prompt snapshot (n_blocks=119,
+      owner=O). Lookup computes identical hashes (last_q == O proves
+      it) but get_computed_blocks caps hits at num_tokens-1 for
+      logits, i.e. 3807/32 = 118 blocks - so max_blocks=118 rejects
+      the 119-key by ONE block, every time, for identical prompts.
+      Longer prompts pass (EXTEND 3816: cap 119, hit, 0.33s, first
+      nonzero hitrate ever: 20%). Restoring the 119-state for a
+      3776-reuse is unsound (double-applies 32 tokens of
+      recurrence), so the fix must bank state AT the addressable
+      boundary floor((L-1)/32)*32 - which recurrent_checkpoint_
+      boundary already computes, but only chunked prefill saves
+      there. FIX: force a chunk end at that boundary for hybrids
+      when the cacher accepts (existing inline-save path; +1 tiny
+      chunk round on cold prefill). Phase 2 remains MTP compat
+      (auxiliary drafter state); phase 1 changes nothing under MTP.
+      FIX REVISED 2026-10-09 (pipeline-invisible chunking breaks the
+      engine preflight: it budgets the unsplit shape with gather 0,
+      the prefix-attending tail chunk needs 183MB -> loud 500): the
+      split rides scheduler-VISIBLE chunks, which the preflight
+      budgets per-chunk. Fix = Engine flag scheduler_visible_prompt_
+      chunks widened to hip, n-gated (f25c21b45): prod at n=0 keeps
+      byte-identical scheduling. VALIDATED (probe :1244, MTP off,
+      27B hip): identical 3808-tok 9.4s -> 0.28s (~35x), extend
+      0.61s, chat turn-2 9.9s -> 0.71s (~14x); hit/recurrent x3,
+      first sustained nonzero hitrates (50-60%). MTP-compat is the
+      remaining work before prod (MTP-on) gains.
+      Config flips are dead ends (n=4 buys nothing; n=16 additionally re-blocks the 27B on the
       24GB 3090). KEEP prefix_cache_n = 0 until the recurrent snapshot
       save/restore path is built and proven. Payoff when it works is the
       biggest single TTFT lever left: multi-turn re-prefill is ~all of
