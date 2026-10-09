@@ -877,6 +877,16 @@ facade today, so the MTP port gates the cutover):
 - [ ] ~L Split prefill/decode across the two GPUs (prefill-hungry on
       one device, latency decode on the other). Only if single-device
       saturates; most complex item here.
+- [ ] ~M Utilization-aware device auto-select (opened 2026-10-09,
+      follow-up to bare cuda/hip first-available): resolve bare specs
+      (and eventually auto-select) to the least-loaded device instead
+      of lowest ordinal. Needs a live cross-device memory/load policy
+      consulted at resolve time (free VRAM/GTT per role? engine load?)
+      plus answers to what "utilized" means for a lazy entry that has
+      not loaded yet, and how it interacts with the demand-load
+      router's own placement. Deliberately deferred: first-available
+      is deterministic and debuggable; surprising placement is worse
+      than predictable placement until the policy questions are settled.
 - [x] ~M Per-model paged overrides + `--fit-ctx` (SHIPPED 2026-10-08,
       matrix 0/0/0/0, hardware validation queued on the 3090).
       `[[models]]` gains `context_len`, `memory_mb`, `fit_ctx` (same
