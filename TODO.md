@@ -430,6 +430,15 @@ facade today, so the MTP port gates the cutover):
       pre-logger snapshots are deleted; future swaps skip the
       backup step. The /mistralrs.pre-* gitignore entry stays as
       a tripwire.
+      PROD SWAP 3 2026-10-09 00:01 UTC (no backup per new policy):
+      labeled engine logging live (85b6517ff, release 7m07s).
+      Verified both roles concurrently - fully disambiguated
+      interleaved lines: [qwen3.8-27b @ Hip(CudaDevice(DeviceId(1)))]
+      MTP accept 72.2% (len 2.44); [qwen3.8-27b-cuda @
+      Cuda(CudaDevice(DeviceId(1)))] MTP accept 70.7% (len 2.41).
+      Both roles HTTP-ok, zero errors. Note: a decode fast enough
+      to finish between 5s logger ticks prints its window line on
+      the next tick - grep again rather than assuming silence.
 
 - [x] ~M cuda-only 3x decode gap (CLOSED 2026-10-07, root-caused, not tuned).
       It was never host overhead: cuda-only ran the GDN recurrence on CPU
