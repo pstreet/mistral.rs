@@ -73,6 +73,18 @@ Timing is measured at the engine's token steps, not at SSE frames, so keep-alive
 | `mistralrs_prefix_cache_lookups_total` | counter | - | New sequences that requested a prefix cache lookup. |
 | `mistralrs_prefix_cache_hits_total` | counter | - | New sequences that found a cached KV prefix. |
 | `mistralrs_prefix_cache_evictions_total` | counter | - | Prefix cache entries, logical recurrent owners, or paged KV hash keys evicted from cache. |
+| `mistralrs_paged_recurrent_prefix_validation_total` | counter | `outcome`, `reason` | Hybrid prefix-cache validations. `hit` reasons: `recurrent`, `recurrent_and_auxiliary`, `recurrent_without_auxiliary`, `attention_only`. `miss` reasons: `missing_slot`, `no_replay_boundary`, `unaligned_boundary`, `checkpoint_unavailable`. |
+| `mistralrs_paged_recurrent_prefix_owners_used` | gauge | - | Prefix-key owners resident in the recurrent snapshot store. |
+| `mistralrs_paged_recurrent_prefix_checkpoints_used` | gauge | - | Recurrent snapshot checkpoints resident. |
+| `mistralrs_paged_recurrent_prefix_bytes_used` | gauge | - | Snapshot tensor bytes resident. |
+| `mistralrs_paged_recurrent_prefix_owners_capacity` | gauge | - | Store capacity (`--prefix-cache-n`; 0 when disabled). |
+| `mistralrs_paged_recurrent_prefix_owner_evictions_total` | counter | `reason` | Owner evictions by `capacity` or `block_pressure`. |
+| `mistralrs_speculative_prefix_cache_hits_total` | counter | - | Validations that restored drafter auxiliary state. |
+| `mistralrs_speculative_prefix_cache_misses_total` | counter | - | Validations that fell back without auxiliary state. |
+| `mistralrs_speculative_prefix_replay_tokens_avoided_total` | counter | - | Prefill tokens skipped via auxiliary-backed hits. |
+| `mistralrs_speculative_prefix_cache_captures_total` | counter | - | Drafter auxiliary state snapshots banked. |
+| `mistralrs_speculative_prefix_cache_restore_copies_total` | counter | - | Drafter auxiliary state restores. |
+| `mistralrs_speculative_prefix_cache_restore_seconds` | histogram | - | Time spent restoring drafter auxiliary state. |
 | `mistralrs_encoder_cache_hits_total` | counter | - | Multimodal encoder cache hits (multimodal models only). |
 | `mistralrs_encoder_cache_misses_total` | counter | - | Multimodal encoder cache misses (multimodal models only). |
 | `mistralrs_encoder_cache_intra_batch_deduplications_total` | counter | - | Repeated media items coalesced within one encoder batch. |

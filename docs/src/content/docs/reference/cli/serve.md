@@ -54,6 +54,7 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA/ROCm) |
+| `--fit-ctx` | `false` | Shrink-to-fit: when the configured KV pool does not fit post-load memory, cut it (loudly) instead of refusing to load. Off by default |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
 | `--pa-k-cache-type <K_CACHE_TYPE>` |  | K cache quantization type override (`cache_type` when unset) |
 | `--pa-v-cache-type <V_CACHE_TYPE>` |  | V cache quantization type override (`cache_type` when unset) |
@@ -157,6 +158,7 @@ mistralrs serve auto [OPTIONS] --model-id <MODEL_ID>
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA/ROCm) |
+| `--fit-ctx` | `false` | Shrink-to-fit: when the configured KV pool does not fit post-load memory, cut it (loudly) instead of refusing to load. Off by default |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
 | `--pa-k-cache-type <K_CACHE_TYPE>` |  | K cache quantization type override (`cache_type` when unset) |
 | `--pa-v-cache-type <V_CACHE_TYPE>` |  | V cache quantization type override (`cache_type` when unset) |
@@ -214,6 +216,7 @@ mistralrs serve text [OPTIONS] --model-id <MODEL_ID>
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA/ROCm) |
+| `--fit-ctx` | `false` | Shrink-to-fit: when the configured KV pool does not fit post-load memory, cut it (loudly) instead of refusing to load. Off by default |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
 | `--pa-k-cache-type <K_CACHE_TYPE>` |  | K cache quantization type override (`cache_type` when unset) |
 | `--pa-v-cache-type <V_CACHE_TYPE>` |  | V cache quantization type override (`cache_type` when unset) |
@@ -262,6 +265,7 @@ mistralrs serve multimodal [OPTIONS] --model-id <MODEL_ID>
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA/ROCm) |
+| `--fit-ctx` | `false` | Shrink-to-fit: when the configured KV pool does not fit post-load memory, cut it (loudly) instead of refusing to load. Off by default |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
 | `--pa-k-cache-type <K_CACHE_TYPE>` |  | K cache quantization type override (`cache_type` when unset) |
 | `--pa-v-cache-type <V_CACHE_TYPE>` |  | V cache quantization type override (`cache_type` when unset) |
@@ -357,6 +361,7 @@ mistralrs serve embedding [OPTIONS] --model-id <MODEL_ID>
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA/ROCm) |
+| `--fit-ctx` | `false` | Shrink-to-fit: when the configured KV pool does not fit post-load memory, cut it (loudly) instead of refusing to load. Off by default |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
 | `--pa-k-cache-type <K_CACHE_TYPE>` |  | K cache quantization type override (`cache_type` when unset) |
 | `--pa-v-cache-type <V_CACHE_TYPE>` |  | V cache quantization type override (`cache_type` when unset) |

@@ -53,15 +53,14 @@ idle_ttl_secs = 1800
 # the 24GB 3090). Global cap until per-model max_seqs lands (backlog).
 # Removing this line restores the default 32 - and re-blocks the cuda alias.
 max_seqs = 2
-# Match llama-server's --no-warmup behavior: no prefix caching for this setup.
-# NOTE 2026-10-08: this line was commented out, so the default (16) silently
-# won and reserved ~2.5GB of hybrid recurrent prefix snapshots against the KV
-# budget (the reservation that blocked the 27B on the 24GB 3090). Restored.
-# 2026-10-09: recurrent snapshot path built + proven on the probe lane
-# (identical 3808-tok 12.4s -> 0.29s MTP-on, chat turn-2 0.70s, acceptance
-# intact). n=4 verified: 739MB reservation, KV hits addressable, MTP
-# compatible via drafter aux state. 3090 note: this is per-engine global,
-# so a cuda-alias demand-load also reserves it there (3090 idle now).
+# Prefix caching ON (prefix_cache_n = 4, 2026-10-09): the hybrid recurrent
+# snapshot path was built and probe-validated (identical 3.8k prompt
+# 12s -> 0.3s MTP-on, chat turn-2 0.7s, MTP acceptance intact).
+# Cost ~739MB reservation per resident engine. History: pre-2026-10-08
+# this line was commented out, so the default (16) silently won and
+# reserved ~2.5GB against the KV budget (blocked the 27B on the 3090);
+# n=16 default stays off. 3090 note: this is per-engine global, so a
+# cuda-alias demand-load also reserves it there.
 prefix_cache_n = 4
 # Decode test 2026-09-07: MTP n=3 stable (+19%). Q4 wall test done, restored.
 # MTP sweep 2026-09-11, essay 1500tok temp0.3 (short ctx goodput T/s):

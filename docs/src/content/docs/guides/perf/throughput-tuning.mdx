@@ -133,6 +133,8 @@ The mechanism depends on the attention mode:
 - Paged attention: sequences sharing a token prefix reuse the same reference-counted cache blocks; matching blocks of a new request are not recomputed.
 - Non-paged: completed sequences' caches are kept whole; a new request whose tokens extend a cached sequence resumes from it. Beyond `--prefix-cache-n` device entries, the oldest caches are evicted (dropped, not offloaded); a later matching request re-prefills.
 
+Hybrid (recurrent) models need one more piece: attention layers reuse KV blocks as above, but recurrent layers carry no KV, so a hit is only as long as a valid recurrent state snapshot. Snapshots are banked at block-aligned prefill boundaries, and the lookup always recomputes the last token for logits, so a prompt of exactly N full blocks reuses N-1 of them. With speculative (MTP) drafting attached, reuse additionally requires the drafter's replay policy to allow it — a `Full` replay policy disables hits entirely. Each increment of `--prefix-cache-n` reserves on the order of ~150 MB per resident engine for the snapshot pool; size it against the KV budget. `mistralrs_paged_recurrent_prefix_validation_total` (`hit` vs `miss` + reason) shows which side is starving.
+
 ## Memory planning for automatic device mapping
 
 Automatic device mapping reserves activation and KV memory for a worst case you declare: `--max-seq-len` (default 4096) and `--max-batch-size` (default 1). If you expect long prompts or large batches, raise these so layers are not placed too greedily; if memory is tight, the defaults already keep reservations small. See [distributed inference](/guides/perf/distributed-inference/) for manual placement.

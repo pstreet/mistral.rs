@@ -16,4 +16,5 @@ mistralrs from-config [OPTIONS] --file <FILE>
 | Option | Default | Description |
 |---|---|---|
 | `-f, --file <FILE>` | required | Path to configuration file (.toml) |
+| `--dry-run` | `false` | Validate the file and print a summary without serving |
 

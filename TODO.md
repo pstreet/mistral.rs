@@ -863,9 +863,14 @@ facade today, so the MTP port gates the cutover):
       healthy post-restart. First production prefix reuse on this
       fleet. Rollback: TOML 0 + restart, or binary
       target/release/mistralrs.pre-prefix-phase2.
-      Config flips are dead ends (n=4 buys nothing; n=16 additionally re-blocks the 27B on the
-      24GB 3090). KEEP prefix_cache_n = 0 until the recurrent snapshot
-      save/restore path is built and proven. Payoff when it works is the
+      CLOSED 2026-10-09: n=4 live in prod (see PROD LIVE above) - the
+      KEEP-0 guidance is retired; n=16 default stays off (2.5GB
+      reservation re-blocks the 27B on the 24GB 3090). Remaining
+      polish (not blockers): aux capture timing (captures bank only
+      when the drafter append lands first - currently 0, gap-fill
+      suffices), non-hybrid sliding-model validation, n-sizing for
+      very long chats (FIFO holds ~last-4 owners at n=4).
+      Payoff when it works is the
       biggest single TTFT lever left: multi-turn re-prefill is ~all of
       open-webui chat latency today (~400-800 T/s prefill x full history
       every turn).
@@ -915,8 +920,11 @@ facade today, so the MTP port gates the cutover):
       LOCALAI_ROOT unset - its guard prints to stderr and exit 1s the
       whole shell before the binary ever ran (a 2>/dev/null on the
       source swallowed the message). Export LOCALAI_ROOT before
-      sourcing; re-run the embedding probe with correct env before
-      wiring open-webui.
+      sourcing. SHIPPED 2026-10-09: probe re-ran clean with correct
+      env (1024-dim, deterministic, batched, cosine 0.68/0.24),
+      Engine::new unreachable!() fix cut to prod, RAG live in prod
+      (webui rows set, bypass flipped by user). Only the GGUF loader
+      arm above remains open.
 - [x] ~S Embedding pipelines crashed Engine::new at load (found + fixed
       2026-10-09, probe lane :1244, fast dual binary): EVERY embedding
       model aborted with `unreachable!()` - backtrace pinned
@@ -935,21 +943,15 @@ facade today, so the MTP port gates the cutover):
       Qwen3-Embedding-0.6B serves /v1/embeddings - load <0.5s,
       deterministic output, batch 3x1024 OK, cosine sanity 0.68
       near-pair vs 0.24 far-pair, usage fields correct. 4-shape check
-      matrix green + fmt clean. Remaining for open-webui RAG: prod
-      [[models]] embedding entry (pin mtp = false; lazy untested for
-      embedding pipelines - fall back to eager if the router balks),
-      then rag.engine=openai + 127.0.0.1:1235/v1 + alias in webui.db;
-      prod restart and rag.bypass_embedding_and_retrieval flip are
-      user-owned.
-      SHIPPED 2026-10-09: release dual binary (7m build,
-      doc rev 2cfc371e + fix, cuda+rocm, doctor clean) cut into prod;
-      pre-embedding-fix rollback kept at
-      target/release/mistralrs.pre-embedding-fix. Demand-load proven
-      live on :1235 (1024-dim OK, server survived - no abort), 27B
-      sanity "Paris." correct post-shuffle. webui.db RAG rows set
-      (engine openai, model alias, 127.0.0.1:1235/v1, key none;
-      originals at /tmp/opencode/rag-rows-backup.json). Remaining:
-      the bypass flip when RAG should go live.
+      matrix green + fmt clean. SHIPPED 2026-10-09, all closed:
+      release dual binary cut into prod (doctor clean; rollback at
+      target/release/mistralrs.pre-embedding-fix), prod [[models]]
+      entry (lazy, hip:0, mtp=false - demand-load proven live with
+      no eager fallback needed, server survived, 27B sanity "Paris."
+      post-shuffle), webui.db RAG rows set (engine openai, model
+      alias, 127.0.0.1:1235/v1, key none; originals at
+      /tmp/opencode/rag-rows-backup.json), bypass flipped by user
+      in the UI. RAG live on local embeddings end to end.
 
 - [x] ~M attention projection follow-up (answered 2026-09-25, was §4). Fresh
       rocprofv3 decode-only profile of the 35B Q4_K_XL (attach mode needs
