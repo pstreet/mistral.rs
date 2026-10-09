@@ -736,6 +736,22 @@ facade today, so the MTP port gates the cutover):
 
 ## P1. Do next — high impact, slightly more work (week)
 
+### Execution order (agreed 2026-10-09; state: prefix n=4 + MTP + RAG
+live in prod, both GPUs healthy). Phase A consolidates (each step's
+numbers steer the next): 1. graph-capture audit (read-only, with
+prefix-hit traffic), 2. KV pool right-sizing (with the 739MB
+reservation live), 3. MTP n re-sweep (acceptance-with-hits may have
+moved it), 4. prefix polish, 5. batch the one-line prod knobs into a
+SINGLE restart. Phase B throughput bets: UQFF/quant benches first
+(they can redirect), then expert-split MoE (35B on the 3090), MTP-on-4B
+and 35B KV precision as side quests. Phase C NVIDIA role in dependency
+order with batched 3090 windows: cuda-alone sanity, 27B parity,
+FA2/graph proofs, cuda-MTP fit, cuda-alias demand-load under n=4.
+Phase D/E deferred deliberately (split prefill/decode, multi-backend,
+GGUF embeddings, merge prep, polish). Operating rules: measure before
+cutting (every config change wants a probe number first); one prod
+restart per batch, never one per item.
+
 ### Perf-opportunity backlog (opened 2026-10-08, ideas, none started)
 
 - [ ] ~M Expert-split MoE placement (llama.cpp `--cpu-moe` style):
