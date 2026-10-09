@@ -486,6 +486,34 @@ facade today, so the MTP port gates the cutover):
       the PagedAttentionPlanned->DefaultScheduler degradation
       (lazy CPU entries), and the cuda-role forward device gate
       (CPU routed off the companion kernels).
+      EVICTION GAP FOUND VIA USER REPORT 2026-10-09 ~00:57 UTC:
+      requesting qwen3.8-27b-cuda with the 4B-cuda resident
+      (23.5GB incl its 16GB ContextSize pool) failed "cannot
+      fit ... within 354 MB" with NO eviction. TWO root causes:
+      (a) estimate_load_bytes returns None for ContextSize
+      pools, and the entire deploy is ContextSize-sized
+      (global context_len=262144), so "footprint unknown;
+      loading without eviction" fires for every first-load
+      after a restart - eviction effectively disabled
+      fleet-wide. Fixing the estimator is the wrong lever:
+      ISQ models read file size 22GB vs 15.7GB resident, which
+      overestimates past total capacity and blocks loads
+      outright. (b) The reload fit-retry loop matched only two
+      fit-rejection messages; the settle-aware check's
+      "cannot fit its fixed model components" variant failed
+      instantly, zero retries. FIX (architecture): the loader
+      fit check IS the precise capacity oracle, so it now
+      DRIVES eviction - on fit rejection,
+      evict_lru_idle_on_device unloads the LRU idle resident
+      on the target device (same-device via
+      EngineInstance.config.device.location()), 10s
+      reclaim-grace prevents over-eviction while teardown
+      settles, bounded by the evictable set, honest failure
+      when nothing is left. Estimate-based pre-eviction stays
+      as the fast path for estimable models. Device review:
+      cuda + hip run the same loader fit check (both covered);
+      CPU loads have no fit check (system RAM budget,
+      4B-capped policy) - acceptable.
 
 - [x] ~M cuda-only 3x decode gap (CLOSED 2026-10-07, root-caused, not tuned).
       It was never host overhead: cuda-only ran the GDN recurrence on CPU

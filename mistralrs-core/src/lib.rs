@@ -2164,6 +2164,53 @@ impl MistralRs {
         }
     }
 
+    /// Evict the LRU idle resident on `device` (excluding `for_model` and
+    /// `tried`) to make room for a fit-rejected demand-load. The loader's
+    /// fit check is the precise oracle, so this drives eviction for models
+    /// whose pre-load footprint estimate is unknown (ContextSize pools,
+    /// remote weights). `Ok(None)` when nothing evictable remains on the
+    /// device; unload failures move to `tried` and the next candidate is
+    /// attempted.
+    fn evict_lru_idle_on_device(
+        &self,
+        device: &Device,
+        for_model: &str,
+        tried: &mut HashSet<String>,
+    ) -> Result<Option<String>, MistralRsError> {
+        if !self.router_policy.auto_evict {
+            return Ok(None);
+        }
+        loop {
+            let candidate = {
+                let engines = self
+                    .engines
+                    .read()
+                    .map_err(|_| MistralRsError::EnginePoisoned)?;
+                let last_used = self
+                    .last_used
+                    .read()
+                    .map_err(|_| MistralRsError::EnginePoisoned)?;
+                engines
+                    .iter()
+                    .filter(|(id, _)| *id != for_model && !tried.contains(*id))
+                    .filter(|(_, inst)| inst.config.device.location() == device.location())
+                    .filter(|(_, inst)| inst.logger.num_running() == 0)
+                    .min_by_key(|(id, _)| last_used.get(*id).copied())
+                    .map(|(id, _)| id.clone())
+            };
+            let Some(candidate) = candidate else {
+                return Ok(None);
+            };
+            info!("Evicting LRU idle model {candidate} on {device:?} to make room for {for_model}");
+            if let Err(e) = self.unload_model(&candidate) {
+                warn!("Eviction of {candidate} failed ({e}); trying next candidate");
+                tried.insert(candidate);
+                continue;
+            }
+            return Ok(Some(candidate));
+        }
+    }
+
     /// Unload resident engines idle longer than the router TTL. Runs on
     /// demand-loads only, ahead of the fit-check loop; `ZERO` disables.
     /// Busy engines and the model being loaded are never TTL victims.
@@ -3196,8 +3243,16 @@ impl MistralRs {
 
         // Load the model. The loader runs its own fit check against current
         // free memory, which can lag async eviction teardown; retry that
-        // specific refusal until the demand-load wait budget lapses.
+        // specific refusal until the demand-load wait budget lapses. The
+        // fit check is the precise capacity oracle, so it also drives
+        // eviction: pre-load footprint estimates are unknown for
+        // ContextSize pools and ISQ-resized weights, and refusing to evict
+        // there strands residents (first load after a restart could never
+        // displace anyone).
         let fit_deadline = Instant::now() + self.router_policy.evict_busy_wait;
+        let mut evict_tried: HashSet<String> = HashSet::new();
+        let mut last_evicted: Option<Instant> = None;
+        let mut wait_logged = false;
         let pipeline = loop {
             match loader.load_model_from_hf(
                 loader_config.hf_revision.clone(),
@@ -3212,18 +3267,44 @@ impl MistralRs {
                 Ok(pipeline) => break pipeline,
                 Err(e) => {
                     let msg = e.to_string();
-                    let transient_fit = msg.contains("does not fit on the devices")
-                        || msg.contains("Num GPU blocks is 0");
-                    let reclaim_pending = Instant::now() < fit_deadline && transient_fit;
-                    if !reclaim_pending {
+                    let fit_rejected = msg.contains("does not fit on the devices")
+                        || msg.contains("Num GPU blocks is 0")
+                        || msg.contains("cannot fit its fixed model components");
+                    if !fit_rejected {
                         return Err(MistralRsError::ReloadFailed(format!(
                             "Failed to load model: {e}"
                         )));
                     }
-                    warn!(
-                        "Demand-load of {model_id}: loader fit check rejected (evicted memory still reclaiming), retrying in {RELOAD_FIT_POLL:?}"
-                    );
-                    tokio::time::sleep(RELOAD_FIT_POLL).await;
+                    let reclaiming =
+                        last_evicted.is_some_and(|t| t.elapsed() < EVICT_RECLAIM_GRACE);
+                    if !reclaiming {
+                        if let Some(evicted) = self.evict_lru_idle_on_device(
+                            &loader_config.device,
+                            model_id,
+                            &mut evict_tried,
+                        )? {
+                            info!(
+                                "Fit check rejected for {model_id}; evicted {evicted}, retrying load"
+                            );
+                            last_evicted = Some(Instant::now());
+                            wait_logged = false;
+                            continue;
+                        }
+                    }
+                    if Instant::now() < fit_deadline {
+                        if !wait_logged {
+                            warn!(
+                                "Demand-load of {model_id}: loader fit check rejected (evicted memory still reclaiming), retrying in {RELOAD_FIT_POLL:?}"
+                            );
+                            wait_logged = true;
+                        }
+                        tokio::time::sleep(RELOAD_FIT_POLL).await;
+                    } else {
+                        return Err(MistralRsError::ReloadFailed(format!(
+                            "Failed to load model: fit check rejected and no idle resident left to evict on {:?}",
+                            loader_config.device
+                        )));
+                    }
                 }
             }
         };
