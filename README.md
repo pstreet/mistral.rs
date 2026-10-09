@@ -23,7 +23,7 @@
   </a>
 </p>
 
-> **Deployment fork.** This checkout serves AMD ROCm (Strix Halo `gfx1151`) alongside upstream's CUDA/Metal/CPU paths. CPU works in every build; `rocm` is the production shape; supported shapes are CPU-only, `rocm`, `cuda`, and any comma combination (`cuda,rocm` builds a dual-vendor binary: AMD serves, NVIDIA access is probe-gated; every GPU build dlopens drivers and loads kernels from companion libraries). Device selection (`--device`, `[global] device`, per-model `device`) accepts `cpu`, `cuda:N`, `hip:N`, or omit it for probe-and-log auto-select. A `cuda`-only revival is queued (pre-existing candle/upstream-cudarc API drift); Vulkan is planned. Build shapes, device routing, and the verification bar are in [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md); the AMD guide is [Deploy on ROCm](docs/src/content/docs/guides/deploy/rocm.md).
+> **Deployment fork.** This checkout serves AMD ROCm (Strix Halo `gfx1151`) alongside upstream's CUDA/Metal/CPU paths. CPU works in every build; `rocm` is the production shape; supported shapes are CPU-only, `rocm`, `cuda`, and any comma combination (`cuda,rocm` builds a dual-vendor binary: AMD serves, NVIDIA access is probe-gated; every GPU build dlopens drivers and loads kernels from companion libraries). Device selection (`--device`, `[global] device`, per-model `device`) accepts `cpu`, `cuda:N`, `hip:N`, or omit it for probe-and-log auto-select. A `cuda`-only revival is in progress (all four shape checks green; release serve sanity + parity bench pending); Vulkan is planned. Build shapes, device routing, and the verification bar are in [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md); the AMD guide is [Deploy on ROCm](docs/src/content/docs/guides/deploy/rocm.md).
 
 ## Latest
 

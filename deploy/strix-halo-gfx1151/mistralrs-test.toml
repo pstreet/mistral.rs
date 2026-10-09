@@ -56,8 +56,9 @@ cache_type = "Q8_0"
 memory_mb = 512
 
 [runtime]
-# Match llama-server's --no-warmup behavior: no prefix caching for this setup.
-#prefix_cache_n = 0
+# Prefix caching follows prod posture (n=4, validated 2026-10-09); the old
+# llama-server --no-warmup parity (n=0) is retired. n=16 default stays off.
+prefix_cache_n = 4
 # Decode test 2026-09-07: MTP n=3 stable (+19%). Q4 wall test done, restored.
 # MTP sweep 2026-09-11, essay 1500tok temp0.3 (short ctx goodput T/s):
 # n=1 10.58, n=2 11.10 (LOCKED), n=3 10.50, n=5 8.27,
