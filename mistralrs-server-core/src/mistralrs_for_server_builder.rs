@@ -1672,8 +1672,21 @@ impl MistralRsForServerBuilder {
 
             // Per-model device: the entry's explicit spec wins over the
             // shared device (global spec or auto), with a caps log line.
+            // A lazy entry whose hardware is absent (e.g. a cuda:0 alias
+            // with no NVIDIA card) stays unregistered with a loud warn
+            // instead of aborting boot; requests to it fail ModelNotFound.
             let entry_device = match model_config.device_spec {
-                Some(spec) => mistralrs_core::device_spec::resolve_and_report(Some(&spec))?,
+                Some(spec) => match mistralrs_core::device_spec::resolve_and_report(Some(&spec)) {
+                    Ok(device) => device,
+                    Err(err) if model_config.lazy => {
+                        warn!(
+                                "Skipping lazy model '{}': device unavailable ({}); restart with the hardware present to serve it",
+                                model_config.model_id, err,
+                            );
+                        continue;
+                    }
+                    Err(err) => return Err(err.into()),
+                },
                 None => device.clone(),
             };
 
@@ -1933,8 +1946,19 @@ impl MistralRsForServerBuilder {
             // shared device (global spec or auto), with a caps log line.
             // Without this the all-lazy path silently drops per-model
             // `device` and serves everything on the global device.
+            // Absent hardware skips the entry loudly (see the seeded
+            // path); an explicit default pointing at it still fails.
             let entry_device = match model_config.device_spec {
-                Some(spec) => mistralrs_core::device_spec::resolve_and_report(Some(&spec))?,
+                Some(spec) => match mistralrs_core::device_spec::resolve_and_report(Some(&spec)) {
+                    Ok(device) => device,
+                    Err(err) => {
+                        warn!(
+                                "Skipping lazy model '{}': device unavailable ({}); restart with the hardware present to serve it",
+                                model_config.model_id, err,
+                            );
+                        continue;
+                    }
+                },
                 None => device.clone(),
             };
             let shared_entry = LazyRegisterShared {
