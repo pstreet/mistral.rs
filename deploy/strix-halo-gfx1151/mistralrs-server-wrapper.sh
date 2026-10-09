@@ -18,7 +18,9 @@ fi
 # retest 13.39 (third trials sag with heat soak). Verdict: ~+7-10% real; the
 # old +2.4% dated from when launches were silently zero. /metrics showed
 # 1183 replay vs 3 eager dispatches. Keep on.
-export RUST_LOG=mistralrs_core=info
+# Server-core logs (lazy-skip warns, registration) are operationally
+# relevant: keep its target enabled alongside core.
+export RUST_LOG=mistralrs_core=info,mistralrs_server_core=info
 export HIP_VISIBLE_DEVICES=0
 # mmap GGUF shards instead of heap buffers: with MANAGED_WEIGHTS the upload
 # still lands in a single host-visible allocation, DROP_HOST_AFTER_LOAD below

@@ -2984,12 +2984,17 @@ mistral.rs hot zones, then merge.
       NOTE: open-webui.service was disabled (preset enabled) - did
       not survive reboots; ENABLED 2026-10-09 (user-approved), both
       units now enabled.
-- [ ] ~S Dual binary must degrade to hip-only when NVIDIA is absent
-      (found 2026-10-09, 3090 missing post-reboot): currently hard-
-      aborts startup with CUDA_ERROR_NO_DEVICE instead of serving
-      the hip fleet. `is_culib_present()=false` should log + continue
-      hip-only (cuda:0 aliases stay lazy-unloaded), not exit(1) into
-      a 5s restart loop. Preboot-proof the fleet against GPU absence.
+- [x] ~S Dual binary degrades when a role's hardware is absent
+      (found 2026-10-09, 3090 missing post-reboot; SHIPPED same day):
+      lazy entries whose device resolve fails stay unregistered with
+      a loud warn (`Skipping lazy model ... device unavailable ...
+      restart with the hardware present`) instead of aborting boot;
+      requests to them fail ModelNotFound, eager entries still abort
+      loudly. Both builder loops (seeded + all-lazy). VALIDATED on
+      the probe lane: hidden-CUDA + lazy cuda:0 entry boots, alias
+      absent, hip serves, skipped alias 400s cleanly; symmetric
+      hidden-HIP + lazy hip:0 entry boots, CPU embedder serves
+      1024-dim, skipped alias 400s cleanly. 4-shape matrix green.
 
 - [x] ~S ExecStartPre TOML guard + `from-config --dry-run` (2026-10-09,
       from the 3000-line journal review: Oct 8 ~70 crash-loop restarts
