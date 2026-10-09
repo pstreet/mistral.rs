@@ -2965,6 +2965,14 @@ mistral.rs hot zones, then merge.
 
 ## Done (kept for context)
 
+- [x] Ops 2026-10-09 ~08:20 UTC: iGPU stuck at 100% busy / max clocks /
+      ~40W with zero attributable load (all GPU processes proven idle
+      via gdb + py-spy + frozen counters + empty nvtop list; likely
+      post-burst DPM/firmware latch). DPM toggle obeyed but auto
+      re-maximized. Resolved by reboot (user-approved). Post-boot
+      check: idle busy%/clocks normal, prod healthy, prefix metrics
+      intact.
+
 - [x] ~S ExecStartPre TOML guard + `from-config --dry-run` (2026-10-09,
       from the 3000-line journal review: Oct 8 ~70 crash-loop restarts
       on a duplicate `mtp` key, Oct 9 ~65 on lowercase `auto`
