@@ -802,10 +802,16 @@ facade today, so the MTP port gates the cutover):
       MTP-builtin adds nothing, affine 0 in dual) - VRAM timeline
       peaks 17.3GB vs 15.6 settled, so the post-load query reads pool
       pressure (ISQ/upload transients) as permanent occupancy.
-- Policy (user-locked 2026-10-08): CPU serving capped at 4B. A CPU
-      mirror alias is wanted only for `qwen3.5-4b`; everything larger
-      stays GPU-pinned (no such alias = loud absence, never
-      silent crawl).
+- Policy (user-revised 2026-10-09): NO size cap on CPU serving. Any
+      model may run on CPU (the three-backend fixes made CPU loads
+      mechanically sound: scheduler degradation, forward gate,
+      non-paged RAM-resident caches). Performance expectation, not a
+      rule: large models on CPU will be very slow (27B-class decodes
+      at ~1-2 tok/s - memory-bandwidth-bound on the shared APU bus,
+      and the dequant matmul path is core-limited). The default
+      fleet keeps large models GPU-pinned by choice, not by
+      enforcement; a CPU alias for any model is fine if the caller
+      accepts the pace. Supersedes the 2026-10-08 4B cap.
 
 - [x] ~M attention projection follow-up (answered 2026-09-25, was §4). Fresh
       rocprofv3 decode-only profile of the 35B Q4_K_XL (attach mode needs
