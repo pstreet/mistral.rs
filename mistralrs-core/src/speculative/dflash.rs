@@ -1331,6 +1331,29 @@ impl PagedAuxiliaryPrefixState for DFlashPagedPrefixState {
     }
 }
 
+// Non-flash builds have no windowed pool; snapshot the plain ctx_cache entry
+// instead. Entries are never mutated in place (appends and trims reassign the
+// handles), so shallow clones are stable snapshots.
+#[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
+struct DFlashCtxPrefixState {
+    k: Tensor,
+    v: Tensor,
+    start_pos: usize,
+    next_pos: usize,
+}
+
+#[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
+impl PagedAuxiliaryPrefixState for DFlashCtxPrefixState {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn bytes(&self) -> usize {
+        self.k.elem_count() * self.k.dtype().size_in_bytes()
+            + self.v.elem_count() * self.v.dtype().size_in_bytes()
+    }
+}
+
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
 impl DFlashCudaGraphBuffers {
     fn new(
@@ -2763,7 +2786,7 @@ impl DFlashDraftModel {
         }
         #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
         {
-            false
+            true
         }
     }
 
@@ -2800,8 +2823,22 @@ impl DFlashDraftModel {
         }
         #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
         {
-            let _ = (sequence_id, cached_tokens);
-            Ok(None)
+            // Soft-fail (keep the backbone snapshot): the drafter may not have
+            // observed this boundary yet, or a sliding window may have trimmed it.
+            let cache = self.ctx_cache.lock().expect("dflash cache poisoned");
+            let Some(entry) = cache.get(&sequence_id) else {
+                return Ok(None);
+            };
+            if entry.start_pos != 0 || entry.next_pos != cached_tokens {
+                return Ok(None);
+            }
+            metrics::counter!("mistralrs_speculative_prefix_cache_captures_total").increment(1);
+            Ok(Some(Arc::new(DFlashCtxPrefixState {
+                k: entry.k.clone(),
+                v: entry.v.clone(),
+                start_pos: entry.start_pos,
+                next_pos: entry.next_pos,
+            })))
         }
     }
 
@@ -2839,8 +2876,35 @@ impl DFlashDraftModel {
         }
         #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
         {
-            let _ = (sequence_id, cached_tokens, state);
-            candle_core::bail!("DFlash auxiliary prefix restore requires CUDA FlashAttention")
+            let state = state
+                .as_any()
+                .downcast_ref::<DFlashCtxPrefixState>()
+                .ok_or_else(|| candle_core::Error::msg("invalid DFlash prefix checkpoint type"))?;
+            if state.start_pos != 0 || state.next_pos != cached_tokens {
+                candle_core::bail!(
+                    "DFlash prefix checkpoint covers {}..{}, expected 0..{cached_tokens}",
+                    state.start_pos,
+                    state.next_pos,
+                );
+            }
+            let mut cache = self.ctx_cache.lock().expect("dflash cache poisoned");
+            cache.insert(
+                sequence_id,
+                SeqCtxCache {
+                    k: state.k.clone(),
+                    v: state.v.clone(),
+                    start_pos: state.start_pos,
+                    next_pos: state.next_pos,
+                },
+            );
+            drop(cache);
+            self.activate_seqs(&[sequence_id]);
+            let started = std::time::Instant::now();
+            metrics::counter!("mistralrs_speculative_prefix_cache_restore_copies_total")
+                .increment(1);
+            metrics::histogram!("mistralrs_speculative_prefix_cache_restore_seconds")
+                .record(started.elapsed().as_secs_f64());
+            Ok(())
         }
     }
 

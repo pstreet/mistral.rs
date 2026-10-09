@@ -605,11 +605,9 @@ impl Engine {
                 !pipeline_metadata.no_kv_cache && pipeline.cache().is_hybrid(),
                 // Visible chunks carry the reusable-boundary split the inline
                 // saves need; the engine preflight budgets them correctly.
-                // Hip included (is_cuda went dark on the serving role);
+                // Any GPU role (is_cuda went dark on hip post-cutover);
                 // n-gated so disabled prefix caching changes nothing.
-                (pipeline.device().is_cuda() || pipeline.device().is_hip())
-                    && !pipeline_metadata.is_xlora
-                    && !no_prefix_cache,
+                (!pipeline.device().is_cpu()) && !pipeline_metadata.is_xlora && !no_prefix_cache,
                 !pipeline_metadata.no_kv_cache && pipeline.cache().is_hybrid(),
                 pipeline.speculative_prefix_checkpoint_policy(),
             )
