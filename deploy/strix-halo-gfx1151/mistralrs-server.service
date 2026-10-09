@@ -6,6 +6,11 @@ Description=mistral.rs Server (Strix Halo gfx1151)
 [Service]
 Type=simple
 WorkingDirectory=%h/LocalAI
+# Validate the TOML with the real serde schema before every start: a bad
+# edit fails the job once, loudly, instead of crash-looping on Restart=
+# (Oct 8: ~70 restarts on a duplicate key; Oct 9: ~65 on a bad enum
+# variant). Pre-start failure does not trigger Restart=.
+ExecStartPre=%h/LocalAI/mistral.rs/target/release/mistralrs from-config -f %h/LocalAI/models/mistralrs.toml --dry-run
 ExecStart=%h/.config/mistralrs-server-wrapper.sh
 LimitMEMLOCK=infinity
 Restart=on-failure

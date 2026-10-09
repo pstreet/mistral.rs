@@ -782,8 +782,25 @@ facade today, so the MTP port gates the cutover):
 - [ ] ~M CUDA-graph capture proof on the NVIDIA role: caps claim
       graphs=true but the capture-bug fixes were hip-side; needs its
       own proof run on the 3090.
-- [ ] ~S Prefix-caching revisit: `prefix_cache_n` is off to match
-      llama-server; multi-turn traffic may win it back. Measure.
+- [ ] ~M Prefix caching on hybrids (revisit measured 2026-10-09, probe lane
+      :1244, 27B hip alias, n=4, git b3b315349): ENABLED but INERT. Boot
+      prints "Prefix caching enabled (block-level, PagedAttention)",
+      739MB reserved ((n+1) x ~148MB, consistent with the n=16 2511MB
+      history), retention code runs (cache_blocks on finish), yet
+      hitrate 0.00% and FULL re-prefill in every pattern: byte-identical
+      prompt, shared prefix w/ different suffix, exact-stream extension,
+      and a real 2-turn chat continuation (3852 -> 3916 tok, 9.6 -> 9.9s
+      prompt time; MTP+graphs on). Code read: the scheduler clamps every
+      block-KV hit through validate_prefix_cache_hit - hybrid GDN layers
+      have no KV, so a hit is only as long as a valid recurrent snapshot,
+      and the finished_recurrent_slots -> snapshot-save path apparently
+      never materializes one to validate against. Config flips are dead
+      ends (n=4 buys nothing; n=16 additionally re-blocks the 27B on the
+      24GB 3090). KEEP prefix_cache_n = 0 until the recurrent snapshot
+      save/restore path is built and proven. Payoff when it works is the
+      biggest single TTFT lever left: multi-turn re-prefill is ~all of
+      open-webui chat latency today (~400-800 T/s prefill x full history
+      every turn).
 - [ ] ~L Split prefill/decode across the two GPUs (prefill-hungry on
       one device, latency decode on the other). Only if single-device
       saturates; most complex item here.
@@ -812,6 +829,59 @@ facade today, so the MTP port gates the cutover):
       fleet keeps large models GPU-pinned by choice, not by
       enforcement; a CPU alias for any model is fine if the caller
       accepts the pace. Supersedes the 2026-10-08 4B cap.
+- [ ] ~M GGUF support for embedding models (opened 2026-10-09, found while
+      wiring open-webui RAG to mistral.rs): the embedding pipeline
+      (mistralrs-core/src/pipeline/embedding.rs, EmbeddingGemma +
+      Qwen3Embedding loaders) consumes safetensors only
+      (from_mmaped_safetensors/MmapedSafetensors), so the GGUF-centric
+      fleet cannot serve quantized embedders (unsloth
+      Qwen3-Embedding-0.6B-GGUF, nomic-embed, bge-m3 GGUF) that
+      llama-server --embeddings handles routinely. Needs a GGUF loader
+      arm (MmapedGguf + per-block dequant at forward or ISQ-at-load)
+      plus format plumbing so `[[models]] kind = "embedding"` accepts
+      `format.quantized_file`. Interim safetensors path staged:
+      Qwen/Qwen3-Embedding-0.6B pulled to models/Qwen/ (1.2GB, 1024-dim,
+      32k ctx, sentence_transformers layout auto-detector expects).
+      Probe-footgun resolved same night (not a mistral.rs bug): the
+      "silent exit 1" was the probe shell sourcing .rocm-env.sh with
+      LOCALAI_ROOT unset - its guard prints to stderr and exit 1s the
+      whole shell before the binary ever ran (a 2>/dev/null on the
+      source swallowed the message). Export LOCALAI_ROOT before
+      sourcing; re-run the embedding probe with correct env before
+      wiring open-webui.
+- [x] ~S Embedding pipelines crashed Engine::new at load (found + fixed
+      2026-10-09, probe lane :1244, fast dual binary): EVERY embedding
+      model aborted with `unreachable!()` - backtrace pinned
+      EmbeddingPipeline::cache() called from Engine::new, which invoked
+      `pipeline.cache().is_hybrid()` unguarded twice in the capability
+      tuple; the embedding pipeline has no EitherCache at all. Fixed by
+      gating both tuple calls with the file's own established idiom
+      (`!pipeline_metadata.no_kv_cache && ...`, same guard add_request.rs
+      already uses for recurrent-slot allocation; EmbeddingPipeline
+      metadata sets no_kv_cache: true). Behavior-neutral for every other
+      pipeline: the two derived flags
+      (prefill_has_per_sequence_state, prompt_chunks_require_block_
+      alignment) are PagedAttention-scheduler-only, and no_kv_cache
+      always downgrades the scheduler to Default first.
+      VALIDATED (rev 2cfc371e + this fix, hip gfx1151):
+      Qwen3-Embedding-0.6B serves /v1/embeddings - load <0.5s,
+      deterministic output, batch 3x1024 OK, cosine sanity 0.68
+      near-pair vs 0.24 far-pair, usage fields correct. 4-shape check
+      matrix green + fmt clean. Remaining for open-webui RAG: prod
+      [[models]] embedding entry (pin mtp = false; lazy untested for
+      embedding pipelines - fall back to eager if the router balks),
+      then rag.engine=openai + 127.0.0.1:1235/v1 + alias in webui.db;
+      prod restart and rag.bypass_embedding_and_retrieval flip are
+      user-owned.
+      SHIPPED 2026-10-09: release dual binary (7m build,
+      doc rev 2cfc371e + fix, cuda+rocm, doctor clean) cut into prod;
+      pre-embedding-fix rollback kept at
+      target/release/mistralrs.pre-embedding-fix. Demand-load proven
+      live on :1235 (1024-dim OK, server survived - no abort), 27B
+      sanity "Paris." correct post-shuffle. webui.db RAG rows set
+      (engine openai, model alias, 127.0.0.1:1235/v1, key none;
+      originals at /tmp/opencode/rag-rows-backup.json). Remaining:
+      the bypass flip when RAG should go live.
 
 - [x] ~M attention projection follow-up (answered 2026-09-25, was §4). Fresh
       rocprofv3 decode-only profile of the 35B Q4_K_XL (attach mode needs
@@ -2824,6 +2894,17 @@ mistral.rs hot zones, then merge.
   a DFlash draft model in hand.
 
 ## Done (kept for context)
+
+- [x] ~S ExecStartPre TOML guard + `from-config --dry-run` (2026-10-09,
+      from the 3000-line journal review: Oct 8 ~70 crash-loop restarts
+      on a duplicate `mtp` key, Oct 9 ~65 on lowercase `auto`
+      cache_type - Restart=on-failure turns any bad edit into a 5s
+      loop). `--dry-run` parses with the real serde schema and prints
+      a serve summary (host:port, per-model alias/kind/lazy), exits 0
+      without binding; both historical repros fail with their exact
+      original errors. Unit file (repo-side deploy copy, daemon-
+      reloaded, no restart) runs it pre-start; pre-start failure does
+      not trigger Restart=. Validated against the live 12-model TOML.
 
 - [x] ~L Role-identity Phase 1, acceptance battery (2026-10-06/07,
       continued): the cuda-only release binary links clean and is
