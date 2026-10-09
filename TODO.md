@@ -886,6 +886,13 @@ restart per batch, never one per item.
       when the drafter append lands first - currently 0, gap-fill
       suffices), non-hybrid sliding-model validation, n-sizing for
       very long chats (FIFO holds ~last-4 owners at n=4).
+      RELEASE CUT 2026-10-09 ~10:13 UTC: dual (cuda,rocm) release
+      rebuild (7m07s, sccache-warm) picking up bare cuda/hip specs
+      (f34c248de), lazy-skip degrade fix (88951db5f), and the
+      server-core log target in the wrapper. --dry-run green,
+      user-owned restart clean, all 13 aliases registered on :1235,
+      embedder 1024-dim + default completion sane post-restart.
+      No rollback backup kept per user (iterate-and-fix).
       Payoff when it works is the
       biggest single TTFT lever left: multi-turn re-prefill is ~all of
       open-webui chat latency today (~400-800 T/s prefill x full history
