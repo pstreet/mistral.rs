@@ -108,6 +108,14 @@ impl SchedulerConfig {
                 Ok(())
             }
             (Self::DefaultScheduler { .. }, None) => Ok(()),
+            // CPU pipelines realize no cache config; degrade planned-paged to
+            // the default scheduler instead of failing the demand-load.
+            (Self::PagedAttentionPlanned { max_num_seqs, .. }, None) => {
+                *self = Self::DefaultScheduler {
+                    method: DefaultSchedulerMethod::Fixed((*max_num_seqs).try_into().unwrap()),
+                };
+                Ok(())
+            }
             _ => anyhow::bail!(
                 "reloaded pipeline PagedAttention mode does not match its scheduler configuration"
             ),

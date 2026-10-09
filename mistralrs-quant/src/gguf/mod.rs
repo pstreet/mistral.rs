@@ -376,6 +376,11 @@ impl GgufMatMul {
     /// companion. Mirrors `try_fast_forward`'s branches.
     #[cfg(feature = "cuda")]
     fn try_fast_forward_cuda_role(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        // Non-Cuda devices (CPU in dual builds) have no companion kernels;
+        // fall through to the generic dequant path.
+        if !a.device().is_cuda() {
+            return Ok(None);
+        }
         let QMatMul::QTensor(q) = &self.w else {
             return Ok(None);
         };

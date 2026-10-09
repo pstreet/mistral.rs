@@ -439,6 +439,53 @@ facade today, so the MTP port gates the cutover):
       Both roles HTTP-ok, zero errors. Note: a decode fast enough
       to finish between 5s logger ticks prints its window line on
       the next tick - grep again rather than assuming silence.
+      THREE-BACKEND EXERCISE 2026-10-09 00:05-00:30 UTC (user test:
+      the 4B on hip + cuda + cpu concurrently). Aliases added:
+      qwen3.5-4b-cuda (cuda:0), qwen3.5-4b-cpu (cpu), mirroring
+      the hip 4B (per-model mtp=false - verify kernels are
+      GPU-only). HIP+CUDA CONCURRENCY: proven repeatedly (hip
+      10-40 tok/s, cuda 12-13 tok/s wall, labeled lines
+      interleaving correctly). CPU PATH, THREE FINDINGS:
+      (1) CRASH-LOOP INCIDENT (mine): the TOML PagedCacheType uses
+      serde PascalCase ("Auto") while the CLI FromStr uses
+      lowercase ("auto") - two parsers for one enum; I validated
+      against the CLI form and prod crash-looped ~7 min (61
+      restarts) until the file was fixed. Deploy-TOML edits use
+      the serde names.
+      (2) The GLOBAL [paged_attn] cache_type=Q8_0 hits CPU models
+      too - quantized block KV is GPU-only ("Quantized KV cache
+      is only supported on CUDA or Metal"). The per-model fix is
+      the BASE cache_type="Auto" (resolve_entry_cache_config:
+      Some(base) resets the k/v sides; k/v-only overrides leave
+      the invalid global base to be validated first).
+      (3) LAZY CPU entries need a scheduler degradation: boot
+      registration plans PagedAttentionPlanned (paged_attn_
+      supported() is binary-global), a CPU pipeline realizes
+      cache_config=None, and refresh_paged_cache_config bailed
+      on the mismatch. Fix: (PagedAttentionPlanned, None)
+      degrades to DefaultScheduler Fixed(max_num_seqs) - the
+      eager-path behavior - instead of failing the demand-load.
+      (4) THE FORWARD GATE (fixed): dual builds route every
+      non-fused-ops device - including CPU - into
+      try_fast_forward_cuda_role, which unconditionally reaches
+      for the nvcc companion and bails ("fast_mmq device_arch
+      requires a GPU device"). The hip path already gates via
+      device_has_fused_ops (uses_fast_mmvq); the cuda-role
+      route lacked the device gate. Fix: return Ok(None) for
+      non-Cuda devices - CPU falls through to the generic
+      dequant path, per the BackendCaps contract (CPU
+      quantized_gguf=true, gguf::cpu compiles unconditionally).
+      Solo-cuda unaffected (its Cuda devices pass the gate).
+      TAKE 6 RESULT - ALL THREE BACKENDS SERVED CONCURRENTLY,
+      2026-10-09 00:47 UTC: the same 100-tok prompt on hip 9.3,
+      cuda 11.5, cpu 8.5 tok/s wall, three labeled lines
+      interleaving in one journal window, zero errors. The CPU
+      4B on the dequant path is a usable fallback at the
+      policy-approved 4B cap. Three fixes shipped to get here:
+      per-model base cache_type="Auto" (config knowledge),
+      the PagedAttentionPlanned->DefaultScheduler degradation
+      (lazy CPU entries), and the cuda-role forward device gate
+      (CPU routed off the companion kernels).
 
 - [x] ~M cuda-only 3x decode gap (CLOSED 2026-10-07, root-caused, not tuned).
       It was never host overhead: cuda-only ran the GDN recurrence on CPU

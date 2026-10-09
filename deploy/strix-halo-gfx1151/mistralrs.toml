@@ -213,3 +213,31 @@ mtp = false
 
 [models.format]
 quantized_file = "Qwen3.5-4B-Q8_0.gguf"
+
+# Three-backend exercise 2026-10-09: same 4B on every device class.
+# mtp=false mirrors the hip entry (clean 3-way comparison, no CPU
+# attach risk - the verify kernels are GPU-only).
+[[models]]
+model_id = "models/unsloth/Qwen3.5-4B-MTP-GGUF"
+alias = "qwen3.5-4b-cuda"
+lazy = true
+mtp = false
+device = "cuda:0"
+
+[models.format]
+quantized_file = "Qwen3.5-4B-Q8_0.gguf"
+
+[[models]]
+model_id = "models/unsloth/Qwen3.5-4B-MTP-GGUF"
+alias = "qwen3.5-4b-cpu"
+lazy = true
+mtp = false
+device = "cpu"
+# CPU cannot use the global Q8_0 block KV (GPU-only kernels). The
+# per-model BASE cache_type is what clears the inherited global - it
+# resets the k/v sides too (resolve_entry_cache_config). TOML takes
+# PascalCase variants, unlike the CLI's lowercase strings.
+cache_type = "Auto"
+
+[models.format]
+quantized_file = "Qwen3.5-4B-Q8_0.gguf"
