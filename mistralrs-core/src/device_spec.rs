@@ -30,23 +30,37 @@ pub enum DeviceSpec {
     /// `"hip:N"` (alias `"rocm:N"`) - the HIP API (AMD role) in every
     /// build with the rocm feature. Bails in cuda-only builds.
     Hip(usize),
+    /// `"cuda"` - first available NVIDIA device (lowest ordinal that
+    /// constructs). Redirects like an explicit ordinal in rocm-only
+    /// builds.
+    CudaFirst,
+    /// `"hip"` (alias `"rocm"`) - first available AMD device.
+    HipFirst,
 }
 
 impl DeviceSpec {
-    /// Parse a device string: `cpu`, `cuda:<idx>`, `hip:<idx>`, `vulkan:<idx>`
-    /// (reserved, S4). Unknown forms list the valid ones.
+    /// Parse a device string: `cpu`, `cuda` / `cuda:<idx>`, `hip` /
+    /// `hip:<idx>`, `vulkan:<idx>` (reserved, S4). Bare `cuda` / `hip`
+    /// (alias `rocm`) resolve to the first available device of that
+    /// API. Unknown forms list the valid ones.
     pub fn parse(s: &str) -> Result<Self> {
         let s = s.trim();
         if s.eq_ignore_ascii_case("cpu") {
             return Ok(Self::Cpu);
+        }
+        if s.eq_ignore_ascii_case("cuda") {
+            return Ok(Self::CudaFirst);
+        }
+        if s.eq_ignore_ascii_case("hip") || s.eq_ignore_ascii_case("rocm") {
+            return Ok(Self::HipFirst);
         }
         let (api, idx) = s
             .rsplit_once(':')
             .and_then(|(api, idx)| Some((api, idx.parse::<usize>().ok()?)))
             .ok_or_else(|| {
                 candle_core::Error::msg(format!(
-                    "invalid device string {s:?}: expected \"cpu\", \"cuda:<idx>\", \
-                     \"hip:<idx>\", or \"vulkan:<idx>\""
+                    "invalid device string {s:?}: expected \"cpu\", \"cuda\" / \"cuda:<idx>\", \
+                     \"hip\" / \"hip:<idx>\", or \"vulkan:<idx>\""
                 ))
             })?;
         let spec = match api.to_ascii_lowercase().as_str() {
@@ -64,8 +78,8 @@ impl DeviceSpec {
             }
             _ => {
                 return Err(candle_core::Error::msg(format!(
-                    "unknown device API {api:?} in {s:?}: expected \"cpu\", \"cuda:<idx>\", \
-                     \"hip:<idx>\", or \"vulkan:<idx>\""
+                    "unknown device API {api:?} in {s:?}: expected \"cpu\", \"cuda\" / \
+                     \"cuda:<idx>\", \"hip\" / \"hip:<idx>\", or \"vulkan:<idx>\""
                 )));
             }
         };
@@ -215,7 +229,38 @@ pub fn resolve(spec: &DeviceSpec) -> Result<Device> {
                 );
             }
         }
+        DeviceSpec::CudaFirst => {
+            // Solo-rocm redirects like an explicit ordinal, landing on
+            // the first available hip device instead of probing NVIDIA.
+            #[cfg(all(feature = "rocm", not(feature = "cuda")))]
+            {
+                return resolve(&DeviceSpec::HipFirst);
+            }
+            first_available("cuda", |ord| resolve(&DeviceSpec::Cuda(ord)))
+        }
+        DeviceSpec::HipFirst => first_available("hip", |ord| resolve(&DeviceSpec::Hip(ord))),
     }
+}
+
+/// Ordinals probed for a bare `"cuda"` / `"hip"` spec. Dense from zero on
+/// real machines; the bound only matters when nothing is there.
+const MAX_FIRST_AVAILABLE_ORDINAL: usize = 32;
+
+/// First ordinal that constructs, or a named error carrying the last
+/// probe's cause (missing hardware reads differently from a wrong
+/// build, and the lazy-skip warn surfaces it).
+fn first_available(
+    api: &'static str,
+    mut construct: impl FnMut(usize) -> Result<Device>,
+) -> Result<Device> {
+    let mut last = candle_core::Error::msg(format!("device \"{api}\" matched no available device"));
+    for ord in 0..MAX_FIRST_AVAILABLE_ORDINAL {
+        match construct(ord) {
+            Ok(device) => return Ok(device),
+            Err(err) => last = err,
+        }
+    }
+    Err(last)
 }
 
 /// Automatic device selection when no explicit device is configured:
@@ -398,6 +443,8 @@ impl std::fmt::Display for DeviceSpec {
             Self::Cpu => write!(f, "cpu"),
             Self::Cuda(idx) => write!(f, "cuda:{idx}"),
             Self::Hip(idx) => write!(f, "hip:{idx}"),
+            Self::CudaFirst => write!(f, "cuda"),
+            Self::HipFirst => write!(f, "hip"),
         }
     }
 }
@@ -415,11 +462,17 @@ mod tests {
         // "rocm:N" aliases "hip:N" (users reach for the ecosystem name).
         assert_eq!(DeviceSpec::parse("rocm:0").unwrap(), DeviceSpec::Hip(0));
         assert_eq!(DeviceSpec::parse("ROCM:2").unwrap(), DeviceSpec::Hip(2));
+        // Bare APIs resolve to first-available at resolve() time.
+        assert_eq!(DeviceSpec::parse("cuda").unwrap(), DeviceSpec::CudaFirst);
+        assert_eq!(DeviceSpec::parse("HIP").unwrap(), DeviceSpec::HipFirst);
+        assert_eq!(DeviceSpec::parse("rocm").unwrap(), DeviceSpec::HipFirst);
+        assert_eq!(DeviceSpec::CudaFirst.to_string(), "cuda");
+        assert_eq!(DeviceSpec::HipFirst.to_string(), "hip");
         // Vulkan parses as a known API but reports the S4 status.
         let err = DeviceSpec::parse("vulkan:1").unwrap_err().to_string();
         assert!(err.contains("S4"), "{err}");
         // Malformed forms list the valid ones.
-        for bad in ["cuda:x", "cuda", "gpu:0", "", "cuda:0:1"] {
+        for bad in ["cuda:x", "gpu:0", "", "cuda:0:1"] {
             let err = DeviceSpec::parse(bad).unwrap_err().to_string();
             assert!(err.contains("cuda:<idx>"), "{bad}: {err}");
         }
