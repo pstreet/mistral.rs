@@ -856,6 +856,13 @@ facade today, so the MTP port gates the cutover):
       coherent; every emitted token target-verified by construction).
       Remaining for prod value: release cut + prefix_cache_n=4 with
       user-owned restart (MTP stays on).
+      PROD LIVE 2026-10-09 ~07:52 UTC: release cut (rev fe9b2cd0a),
+      n=4, MTP on. ExecStartPre guard validated the TOML in-journal.
+      Proof on :1235: identical 3808-tok 9.71s -> 0.29s,
+      hit/recurrent x1, owners 1; 27B sanity + embedder (1024-dim)
+      healthy post-restart. First production prefix reuse on this
+      fleet. Rollback: TOML 0 + restart, or binary
+      target/release/mistralrs.pre-prefix-phase2.
       Config flips are dead ends (n=4 buys nothing; n=16 additionally re-blocks the 27B on the
       24GB 3090). KEEP prefix_cache_n = 0 until the recurrent snapshot
       save/restore path is built and proven. Payoff when it works is the
