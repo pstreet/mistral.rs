@@ -2969,9 +2969,18 @@ mistral.rs hot zones, then merge.
       ~40W with zero attributable load (all GPU processes proven idle
       via gdb + py-spy + frozen counters + empty nvtop list; likely
       post-burst DPM/firmware latch). DPM toggle obeyed but auto
-      re-maximized. Resolved by reboot (user-approved). Post-boot
-      check: idle busy%/clocks normal, prod healthy, prefix metrics
-      intact.
+      re-maximized. Reboot CLEARED it (post-boot: busy 0, sclk 617MHz,
+      16.7W). BUT the same reboot dropped the RTX 3090 off the PCI
+      bus (lspci clean, NVRM No NVIDIA GPU found, rescan empty -
+      warm-reset enumeration failure; cold boot pending, user-owned).
+      Prod crash-loops meanwhile (dual binary, see gap below) and
+      self-recovers when the card returns.
+- [ ] ~S Dual binary must degrade to hip-only when NVIDIA is absent
+      (found 2026-10-09, 3090 missing post-reboot): currently hard-
+      aborts startup with CUDA_ERROR_NO_DEVICE instead of serving
+      the hip fleet. `is_culib_present()=false` should log + continue
+      hip-only (cuda:0 aliases stay lazy-unloaded), not exit(1) into
+      a 5s restart loop. Preboot-proof the fleet against GPU absence.
 
 - [x] ~S ExecStartPre TOML guard + `from-config --dry-run` (2026-10-09,
       from the 3000-line journal review: Oct 8 ~70 crash-loop restarts
