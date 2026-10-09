@@ -2981,8 +2981,9 @@ mistral.rs hot zones, then merge.
       (busy 0, sclk 600MHz), prefix re-verified live on :1235
       (identical 3808-tok 9.84s -> 0.30s, hit/recurrent). PCI bus
       renumbered across the reboot (AMD card0, NVIDIA 95:00.0).
-      NOTE: open-webui.service is disabled (preset enabled) - does
-      not survive reboots; started manually twice now.
+      NOTE: open-webui.service was disabled (preset enabled) - did
+      not survive reboots; ENABLED 2026-10-09 (user-approved), both
+      units now enabled.
 - [ ] ~S Dual binary must degrade to hip-only when NVIDIA is absent
       (found 2026-10-09, 3090 missing post-reboot): currently hard-
       aborts startup with CUDA_ERROR_NO_DEVICE instead of serving
