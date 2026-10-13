@@ -1,5 +1,12 @@
 use candle_core::{CpuStorage, CustomOp2, DType, Result, Tensor, WithDType};
 use float8::F8E4M3;
+
+// Dual: cuda_fwd resolves kernels from the nvcc companion; the hip
+// arms keep `super::ffi` (the hip companion).
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
+use super::ffi as role_ffi;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use super::ffi_cuda as role_ffi;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use super::VECTOR_SIZE;
@@ -91,7 +98,7 @@ impl CustomOp2 for Fp8VectorDequantize {
         }
     }
 
-    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
         scale_s: &candle_core::CudaStorage,
@@ -99,7 +106,6 @@ impl CustomOp2 for Fp8VectorDequantize {
         weight_s: &candle_core::CudaStorage,
         weight_l: &candle_core::Layout,
     ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
-        crate::dual_cuda_role_bail!("vector fp8 casts");
         use candle_core::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
 
@@ -129,7 +135,7 @@ impl CustomOp2 for Fp8VectorDequantize {
                 let output = dev.alloc_zeros::<f32>(num_elements)?;
                 let (output_ptr, output_guard) = slice_ptr(&output, 0);
                 unsafe {
-                    ffi::launch_dequant_fp8_vector_kernel_f32(
+                    role_ffi::launch_dequant_fp8_vector_kernel_f32(
                         weight as *const _,
                         scale as *const _,
                         output_ptr as *mut _,
@@ -144,7 +150,7 @@ impl CustomOp2 for Fp8VectorDequantize {
                 let output = dev.alloc_zeros::<f16>(num_elements)?;
                 let (output_ptr, output_guard) = slice_ptr(&output, 0);
                 unsafe {
-                    ffi::launch_dequant_fp8_vector_kernel_f16(
+                    role_ffi::launch_dequant_fp8_vector_kernel_f16(
                         weight as *const _,
                         scale as *const _,
                         output_ptr as *mut _,
@@ -159,7 +165,7 @@ impl CustomOp2 for Fp8VectorDequantize {
                 let output = dev.alloc_zeros::<bf16>(num_elements)?;
                 let (output_ptr, output_guard) = slice_ptr(&output, 0);
                 unsafe {
-                    ffi::launch_dequant_fp8_vector_kernel_bf16(
+                    role_ffi::launch_dequant_fp8_vector_kernel_bf16(
                         weight as *const _,
                         scale as *const _,
                         output_ptr as *mut _,
@@ -337,15 +343,15 @@ pub fn fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
         return cpu_fp8_vector_quantize(input);
     }
 
-    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    #[cfg(feature = "cuda")]
     {
         use candle_core::{CudaStorage, Device, Storage};
         use half::{bf16, f16};
 
-        use crate::{utils::slice_ptr, vector_fp8::ffi};
+        use crate::utils::slice_ptr;
 
         if matches!(input.device(), Device::Cuda(_)) {
-            if !ffi::HAVE_VECTOR_QUANT_KERNELS {
+            if !super::ffi::HAVE_VECTOR_QUANT_KERNELS {
                 candle_core::bail!("Do not have vector FP8 quant kernels.");
             }
 
@@ -377,7 +383,7 @@ pub fn fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
                     };
                     let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
                     unsafe {
-                        ffi::launch_quant_fp8_vector_kernel_f32(
+                        role_ffi::launch_quant_fp8_vector_kernel_f32(
                             input_ptr as *const _,
                             weight_ptr as *mut _,
                             scale_ptr as *mut _,
@@ -394,7 +400,7 @@ pub fn fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
                     };
                     let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
                     unsafe {
-                        ffi::launch_quant_fp8_vector_kernel_f16(
+                        role_ffi::launch_quant_fp8_vector_kernel_f16(
                             input_ptr as *const _,
                             weight_ptr as *mut _,
                             scale_ptr as *mut _,
@@ -411,7 +417,7 @@ pub fn fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
                     };
                     let (input_ptr, _input_guard) = slice_ptr(input_s, input_l.start_offset());
                     unsafe {
-                        ffi::launch_quant_fp8_vector_kernel_bf16(
+                        role_ffi::launch_quant_fp8_vector_kernel_bf16(
                             input_ptr as *const _,
                             weight_ptr as *mut _,
                             scale_ptr as *mut _,
@@ -451,7 +457,7 @@ pub fn fp8_vector_quantize(input: &Tensor) -> Result<(Tensor, Tensor)> {
         candle_core::bail!("FP8 vector quantization on non-CPU devices requires CUDA feature");
     }
 
-    #[cfg(any(not(feature = "cuda"), feature = "rocm"))]
+    #[cfg(not(feature = "cuda"))]
     {
         candle_core::bail!("vector FP8 quantization requires the CUDA kernels");
     }
@@ -517,6 +523,30 @@ mod tests {
         // FP8 E4M3 has limited precision, so we expect some error
         assert!(max_error < 0.27, "Max error {max_error} is too large");
 
+        Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[test]
+    fn test_fp8_vector_nvidia_role_roundtrip() -> Result<()> {
+        let dev = &Device::new_cuda(0)?;
+
+        let input = Tensor::randn(0f32, 2f32, 256, dev)?;
+        let (quantized, scales) = fp8_vector_quantize(&input)?;
+        assert_eq!(quantized.shape(), input.shape());
+        assert_eq!(scales.dims1()?, 2);
+
+        let dequantized = fp8_vector_dequantize(&quantized, &scales, DType::F32)?;
+        let input_vec = input.to_vec1::<f32>()?;
+        let dequant_vec = dequantized.to_vec1::<f32>()?;
+        let mut max_error = 0f32;
+        for (val_in, val_out) in input_vec.iter().zip(dequant_vec.iter()) {
+            max_error = max_error.max((val_in - val_out).abs());
+        }
+        assert!(
+            max_error < 0.24,
+            "NVIDIA-role roundtrip max error {max_error} too large"
+        );
         Ok(())
     }
 

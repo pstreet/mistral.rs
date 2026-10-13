@@ -1,6 +1,13 @@
 use candle_core::{CpuStorage, CustomOp1, DType, Result, Tensor};
 use float8::F8E4M3;
 
+// Dual: cuda_fwd resolves kernels from the nvcc companion; the hip
+// arms keep `super::ffi` (the hip companion).
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
+use super::ffi as role_ffi;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use super::ffi_cuda as role_ffi;
+
 #[allow(dead_code)]
 struct Fp8ToDtype {
     target_dtype: DType,
@@ -57,7 +64,6 @@ impl CustomOp1 for Fp8ToDtype {
         input_s: &candle_core::CudaStorage,
         input_l: &candle_core::Layout,
     ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
-        crate::dual_cuda_role_bail!("fp8 casts");
         use candle_core::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
 
@@ -82,7 +88,7 @@ impl CustomOp1 for Fp8ToDtype {
                 let output = dev.alloc_zeros::<f32>(num_elements)?;
                 let (output_ptr, output_guard) = slice_ptr(&output, 0);
                 unsafe {
-                    super::ffi::launch_fp8_to_f32_kernel(
+                    role_ffi::launch_fp8_to_f32_kernel(
                         input as *const _,
                         output_ptr as *mut _,
                         num_elements,
@@ -96,7 +102,7 @@ impl CustomOp1 for Fp8ToDtype {
                 let output = dev.alloc_zeros::<f16>(num_elements)?;
                 let (output_ptr, output_guard) = slice_ptr(&output, 0);
                 unsafe {
-                    super::ffi::launch_fp8_to_f16_kernel(
+                    role_ffi::launch_fp8_to_f16_kernel(
                         input as *const _,
                         output_ptr as *mut _,
                         num_elements,
@@ -110,7 +116,7 @@ impl CustomOp1 for Fp8ToDtype {
                 let output = dev.alloc_zeros::<bf16>(num_elements)?;
                 let (output_ptr, output_guard) = slice_ptr(&output, 0);
                 unsafe {
-                    super::ffi::launch_fp8_to_bf16_kernel(
+                    role_ffi::launch_fp8_to_bf16_kernel(
                         input as *const _,
                         output_ptr as *mut _,
                         num_elements,
@@ -298,7 +304,6 @@ impl CustomOp1 for DtypeToFp8 {
         input_s: &candle_core::CudaStorage,
         input_l: &candle_core::Layout,
     ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
-        crate::dual_cuda_role_bail!("fp8 casts");
         use candle_core::{backend::BackendStorage, CudaStorage};
         use half::{bf16, f16};
 
@@ -323,7 +328,7 @@ impl CustomOp1 for DtypeToFp8 {
                 let (input, _input_guard) =
                     slice_ptr(input_s.as_cuda_slice::<f32>()?, input_l.start_offset());
                 unsafe {
-                    super::ffi::launch_f32_to_fp8_kernel(
+                    role_ffi::launch_f32_to_fp8_kernel(
                         input as *const _,
                         output_ptr as *mut _,
                         num_elements,
@@ -335,7 +340,7 @@ impl CustomOp1 for DtypeToFp8 {
                 let (input, _input_guard) =
                     slice_ptr(input_s.as_cuda_slice::<f16>()?, input_l.start_offset());
                 unsafe {
-                    super::ffi::launch_f16_to_fp8_kernel(
+                    role_ffi::launch_f16_to_fp8_kernel(
                         input as *const _,
                         output_ptr as *mut _,
                         num_elements,
@@ -347,7 +352,7 @@ impl CustomOp1 for DtypeToFp8 {
                 let (input, _input_guard) =
                     slice_ptr(input_s.as_cuda_slice::<bf16>()?, input_l.start_offset());
                 unsafe {
-                    super::ffi::launch_bf16_to_fp8_kernel(
+                    role_ffi::launch_bf16_to_fp8_kernel(
                         input as *const _,
                         output_ptr as *mut _,
                         num_elements,
@@ -499,18 +504,22 @@ pub(crate) fn dtype_to_fp8(input: &Tensor) -> Result<Tensor> {
 mod tests {
     use super::*;
 
-    /// Dual-build contract: the NVIDIA role must degrade LOUDLY on fp8
-    /// casts (hipcc-built kernels cannot take a CUDA stream) - never
-    /// launch mismatched kernels.
+    /// Dual-build contract: the NVIDIA role serves fp8 casts through
+    /// the nvcc-companion twin and round-trips within fp8 precision
+    /// (the loud-bail era ended with the twin).
     #[cfg(all(feature = "cuda", feature = "rocm"))]
     #[test]
-    fn nvidia_role_fp8_casts_degrade_loudly() {
+    fn nvidia_role_fp8_casts_roundtrip() {
         let dev = candle_core::Device::new_cuda(0).expect("cuda:0");
-        let x = candle_core::Tensor::zeros((4,), DType::F8E4M3, &dev).unwrap();
-        let err = fp8_to_dtype(&x, DType::F32).unwrap_err();
-        assert!(
-            err.to_string().contains("AMD role"),
-            "expected the loud dual bail, got: {err}"
-        );
+        let x = candle_core::Tensor::randn(0f32, 1f32, (4, 64), &dev).unwrap();
+        let fp8 = dtype_to_fp8(&x).unwrap();
+        assert_eq!(fp8.dtype(), DType::F8E4M3);
+        let back = fp8_to_dtype(&fp8, DType::F32).unwrap();
+        let diff = ((&back - &x).unwrap().abs().unwrap())
+            .max_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(diff < 0.2, "fp8 roundtrip diverged: {diff}");
     }
 }

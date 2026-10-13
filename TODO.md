@@ -1220,8 +1220,43 @@ facade today, so the MTP port gates the cutover):
       GPU-test cfg debt, journaled below). The 27B GDN b/a gate
       class (unquantized F32/BF16 linears at decode) now takes the
       gemv fast path on the NVIDIA role instead of plain GEMM.
-- [ ] ~S fp8 NVIDIA-role parity (currently a loud dual bail; port the
+- [x] ~S fp8 NVIDIA-role parity (currently a loud dual bail; port the
       fp8 kernels to the nvcc companion).
+      CLOSED 2026-10-13 for the scalar + vector families (sweep slice
+      2); blockwise stays AMD-role-only with its loud bails (follow-up
+      below). The kernels were ALREADY in the nvcc companion's source
+      list - only the Rust side needed the twins. New shared macro
+      declare_cuda_role_kernel (kernel_decl.rs, dual-only): same
+      names/signatures as declare_kernel but resolves cuda_plugin in
+      dual. scalar_fp8: both cast handlers (Fp8ToDtype/DtypeToFp8)
+      now serve the NVIDIA role through scalar_fp8/ffi_cuda.rs (6
+      decls); the pinned-bail contract test flipped to a roundtrip
+      contract (nvidia_role_fp8_casts_roundtrip PASSES on the 3090).
+      vector_fp8: the module's dual gate turned out to be full
+      cfg-OUT (solo-cuda-only fns + ffi mod), not bails - the
+      dequant CustomOp2 + the quantize free fn + the ffi mod now
+      compile in dual and serve the role through vector_fp8/
+      ffi_cuda.rs (6 decls); the free fn's no-kernels fallback cfg
+      fixed (was dual-firing, now non-cuda-only); the family tests
+      stay solo-cuda-scoped (fp8_family_test_device is hip in dual,
+      where this fn has never served) + new dual
+      test_fp8_vector_nvidia_role_roundtrip PASSES on the 3090.
+      VALIDATION: dual suite 344/345 (the 1 = the pre-existing hqq
+      companion-symbol miss, verified on HEAD); solo-cuda fp8 shows
+      7 PRE-EXISTING failures, byte-identical on HEAD (environment
+      class: test-companion symbol resolution - same family as the
+      hqq miss and the default/solo-rocm test-build breakage; NOT
+      caused by this slice). All four shape checks green, fmt clean.
+      REMAINING (blockwise, precise plan): ~20 decls incl. the
+      cutlass blockwise-gemm family (mistralrs_cutlass_* x4,
+      deepgemm sm90 provider x6 - SM90-gated, N/A on the 3090,
+      plain launch_fp8_matmul/indexed_moe_gemm x4, activation
+      quantize x2, fused rms-norm x2, quant/dequant x6) + the
+      linear/moe call sites in ops.rs 882-1696 need the MMVQ-style
+      role twin; until then the CustomOp bails keep blockwise fp8
+      AMD-role-only in dual (they are the ISQ entry gate, so no
+      silent path exists). No fp8 models in the serving set - zero
+      urgency; do it when an fp8 model lands or for test parity.
 - [ ] ~M cuda-alone revival = role-identity Phase 1 (the NVIDIA
       shell's shape-keyed "present" arms promise APIs the bound
       crate lacks: stream arena alloc, managed htod clones, fork

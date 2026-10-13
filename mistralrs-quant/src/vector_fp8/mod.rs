@@ -6,8 +6,12 @@ use candle_nn::Linear;
 mod ops;
 pub use ops::{fp8_vector_dequantize, fp8_vector_quantize};
 
-#[cfg(all(feature = "cuda", not(feature = "rocm")))]
+#[cfg(feature = "cuda")]
 pub(crate) mod ffi;
+
+// NVIDIA-role twin of `ffi`: nvcc-companion entries for dual builds.
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) mod ffi_cuda;
 
 use crate::{
     generate_isq, generate_isq_imatrix, has_missing_required_tensors,
