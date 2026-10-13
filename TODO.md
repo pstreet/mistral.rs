@@ -553,7 +553,24 @@ facade today, so the MTP port gates the cutover):
       lever (+36-77% published) = Phase 2; graphs-on is the remaining
       efficiency follow-up (device sampling done 2026-10-07, see below).
       Phase 1 parity acceptance MET on both models.
-- [ ] ~M Hybrid graphs-on (was "restore hoist", theory superseded above).
+- [x] ~M Hybrid graphs-on (CLOSED 2026-10-11, root-caused via probe lane
+      + compute-sanitizer, not tuned). Sanitizer named it: `get_rows_q8_0`
+      (embedding gather) OOB-writes on the first replay of any
+      mid-sequence lazy-captured graph. Root cause: solo-cuda dropped
+      the capture arena - `CudaGraphHandle::cuda_arena_keepalive` was
+      dual-gated, so capture-carved tensors dangled at function end and
+      the replay wrote into recycled memory (striped freed/reused
+      signature; precaptured graphs survived by allocator luck). Fix:
+      keepalive re-keyed to every cuda build (field + setter + store).
+      Proof (solo-cuda fast binary, 4B Q8_0, NO bypass env): 2x600tok +
+      600tok essays, 1207 replays, zero eager-skips, zero errors,
+      125-127 tok/s, math sanity 391 correct. normal.rs hybrid
+      eager-skip gates removed (both forward + precapture); TEMP-DIAG
+      (pool-VA census, no-rollback gate) fully reverted. REMAINS:
+      multimodal.rs keeps its gate (27B multimodal path unproven on
+      the NVIDIA role - needs its own probe); precapture now stops
+      early holding arenas (3 graphs at 17GB free, lazy covers the
+      rest - heuristic may want a revisit).
       Hardening landed: missing `end_cuda_capture_discard` on the
       forward-Err arm (the pool-guard drop + checkpoint rollback then ran
       on the still-open poisoned stream) + `try_clone` in

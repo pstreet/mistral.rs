@@ -1384,8 +1384,10 @@ pub(crate) struct CudaGraphHandle {
     // outlive the exec.
     #[cfg(feature = "rocm")]
     arena_keepalive: Option<Arc<ArenaSlice<u8>>>,
-    // Dual NVIDIA role: same carve-out contract via the companion fork.
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    // Capture arenas on every role: allocations carved during capture
+    // must outlive the exec. Solo-cuda used to drop this (dual-only
+    // keepalive) and fault the first replay with a poisoned context.
+    #[cfg(feature = "cuda")]
     cuda_arena_keepalive: Option<Arc<crate::pipeline::graph_role::CuStreamSlice>>,
 }
 
@@ -1398,8 +1400,10 @@ impl CudaGraphHandle {
     pub(crate) fn arena_bytes(&self) -> usize {
         self.arena_keepalive.as_ref().map_or(0, |arena| arena.len())
     }
+}
 
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
+impl CudaGraphHandle {
     pub(crate) fn set_cuda_arena(
         &mut self,
         arena: Option<Arc<crate::pipeline::graph_role::CuStreamSlice>>,
@@ -1450,7 +1454,7 @@ impl CudaGraphHandle {
             stream: stream.clone(),
             #[cfg(feature = "rocm")]
             arena_keepalive: None,
-            #[cfg(all(feature = "cuda", feature = "rocm"))]
+            #[cfg(feature = "cuda")]
             cuda_arena_keepalive: None,
         }))
     }
@@ -3242,7 +3246,7 @@ where
 
     #[cfg(feature = "rocm")]
     graph.set_arena(arena_keepalive.take());
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    #[cfg(feature = "cuda")]
     if !use_hip_arena {
         graph.set_cuda_arena(cuda_arena_keepalive.take());
     }
