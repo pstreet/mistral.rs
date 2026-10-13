@@ -1189,6 +1189,20 @@ facade today, so the MTP port gates the cutover):
       no-ops in dual builds (pool_backend is the NVIDIA twin, so the
       Device::Cuda match rejects Hip; hip serving is healthy via
       allocator reuse) - fix when hip trim pressure is observed.
+      SOLO-CUDA ADDENDUM (2026-10-13, cuda-alone validation): the
+      27B attach OOMs on the SOLO-cuda shape even with the pool
+      pinned at 1024MB and no mmproj - the settle-then-attach trim
+      ran and the retry still failed. Root context: solo-cuda
+      genuinely claims FlashInfer, so block-quant KV is unavailable
+      (the slice-3 bail) and F16 KV doubles the pool bytes per
+      token, consuming exactly the margin the dual alias gets from
+      its Q8_0/Q4_0 pin. Open question folded into the retention
+      hunt: why the pre-attach settle trim released nothing (a
+      solo-shape trim no-op would be a sixth role-keying gap;
+      Arc-held ISQ staging would be the retention bug again). The
+      solo parity pair therefore ran mtp-off (see the cuda-alone
+      closure); solo MTP service needs either the Q8+FI item or
+      this attach-margin investigation.
 - [x] ~S 16B graph perf note: the twin's per-layer `final_out`
       `alloc_zeros` bypasses the capture arena (48 MEMALLOC + MEMSET +
       MEMFREE nodes in the captured graph; harmless under
@@ -1277,13 +1291,82 @@ facade today, so the MTP port gates the cutover):
       AMD-role-only in dual (they are the ISQ entry gate, so no
       silent path exists). No fp8 models in the serving set - zero
       urgency; do it when an fp8 model lands or for test parity.
-- [ ] ~M cuda-alone revival = role-identity Phase 1 (the NVIDIA
+- [ ] ~M/P0 unload + failed-load GPU memory retention (found
+      2026-10-13 during the cuda-alone validation; five instances,
+      one evening, all reproducible): `unload_model` releases
+      almost nothing to the driver - the 27B alias unload freed
+      1.4GB of ~21GB, the 4B unload freed 0 bytes - and FAILED
+      loads strand their debris the same way (two failed 4B loads
+      left ~21.9GB held; the failed 27B MTP-attach left ~23.6GB).
+      The retained memory is NOT pool cache: a fresh 4B load did
+      not reuse the freed alias blocks (grew +4GB on top), and no
+      trim path reclaims it (planner-time, attach-settle, and
+      maintenance trims all present but ineffective; the
+      maintenance point never fires because its `cached > warm
+      cache` pool query sees nothing). Process death releases
+      everything, so the tensors are process-held - suspected Arc
+      retention in the engine/pipeline/graph teardown path (same
+      blind-spot family as the default-404 bug: healthcheck pings
+      /health only and stays green while the lane is bricked).
+      Effect: ANY unload or failed load bricks the device lane
+      for subsequent big loads (router sees no free VRAM, nothing
+      evictable) until restart. Tonight it bricked the prod 27B
+      alias lane and forced the session's second prod restart
+      (graceful, remediation not probe convenience - journaled).
+      NEXT: instrument the teardown with the armed graph-ptr
+      census naming the retained allocations; check what holds
+      the weights post-unload (engine struct? graph pools?
+      prefix-cache entries?), and why load-failure cleanup leaks
+      the loaded weights + PA cache.
+- [ ] ~M router admission inconsistencies (found 2026-10-13, same
+      session): (a) the need ESTIMATOR uses the SOURCE checkpoint
+      size (Q6_K 21.5GB), not post-ISQ resident size (~16.5GB),
+      so any ISQ model with a pinned pool computes need ~25351MB >
+      the 24576MB device and is refused outright; with an auto
+      pool the footprint is "unknown" and the gate is SKIPPED
+      ("loading without eviction") - the prod alias loads only via
+      that skip. (b) `/v1/models/reload` bypasses the admission
+      gate entirely (loaded the 4B into 4.8GB free when the router
+      said need ~22828MB) - inconsistent admission paths between
+      demand-load and the admin op. (c) failed loads leave the
+      learned/estimated footprint in place for the next attempt.
+      Fix together with the retention item: an unload that
+      actually frees + an ISQ-aware estimator + one admission path.
+- [x] ~M cuda-alone revival = role-identity Phase 1 (the NVIDIA
       shell's shape-keyed "present" arms promise APIs the bound
       crate lacks: stream arena alloc, managed htod clones, fork
       cublasLt - the five errors of the 2026-10-06 cuda-only
       check; the fix is role-keying the shell, not porting APIs).
-      STATUS 2026-10-07: all four shapes check green post-fix;
-      release build + serve sanity + 27B parity bench pending.
+      CLOSED 2026-10-13 (validation tail, quiet box, fresh
+      processes, probe lane :1244):
+      (1) RELEASE BUILD: solo-cuda release binary in a separate
+      CARGO_TARGET_DIR (now LocalAI/scratch/cuda-solo/release/
+      mistralrs; the shared target/release is prod's live binary)
+      - rc=0, 119MB, no trace of the five API errors anywhere in
+      real serving.
+      (2) SERVE SANITY: 4B (Qwen3.5, F16 KV): 391 CORRECT (needs a
+      2k completion budget for its thinking trace) + essay 125.21
+      tok/s; 27B (Qwen3.8): 391 CORRECT.
+      (3) 27B PARITY BENCH, matched pair (same TOML, payloads,
+      device, mtp-off, Q6_K->ISQ-Q4K, F16 KV auto pool, 32k,
+      max_seqs=2): dual NVIDIA role 38.69/38.94/38.94 tok/s vs
+      SOLO-CUDA 41.63/41.89/41.84 - solo is +7.4%, parity holds
+      with margin; the delta is the dual arm's known per-token
+      HOST-sampling fallback ("one-token lookahead sampling needs
+      the serving (hip) role", absent from the solo log) vs
+      solo-cuda device sampling (the 2026-10-07 fix). The
+      host-sampling fallback cost is hereby MEASURED at ~7%.
+      FINDINGS during validation (all journaled separately below):
+      solo-cuda genuinely claims FlashInfer -> the fleet's global
+      Q8_0 KV config cannot serve on this shape (the slice-3
+      enriched bail fired live and its guidance worked); the 27B
+      MTP attach OOMs on solo-cuda (F16 KV doubles pool bytes,
+      killing the margin the dual alias gets from its Q8_0/Q4_0
+      pin); the admission estimator overestimates ISQ models; and
+      the unload/load-failure retention bug (new P0 below) forced
+      one prod restart mid-validation to restore the alias lane.
+      Solo-cuda joins the standing shape set: build + serve +
+      bench all green.
       TEST-BUILD HYGIENE NOTE (2026-10-12, found during the gemv
       slice): `cargo test -p mistralrs-quant` in the default and
       solo-rocm shapes fails to COMPILE on HEAD (11 / 9 errors:
@@ -1447,6 +1530,19 @@ parity queue) now outranks it on impact.
 - [ ] ~S MTP on the 4B: `Qwen3.5-4B-MTP-GGUF` carries the head but is
       pinned `mtp=false` in prod. Small-model MTP is usually
       high-acceptance; bench before pinning.
+      ANSWERED 2026-10-13 (cuda-alone probe, solo-cuda binary):
+      the pin is LOAD-BEARING, not a choice - the Qwen3.5 model
+      class never overrides `SpeculativeTargetMixin::attach_speculative`
+      (only Qwen3.6/3.8 classes do), and with the runtime
+      `[runtime] mtp = true` global, an unpinned 4B FAILS ITS LOAD
+      outright ("This model does not support speculative
+      decoding"). Whether this particular Q8_0 file even carries
+      the head tensors is moot until the class gets the wiring.
+      Re-scoped to ~M: port the attach mixin + drafter wiring to
+      the Qwen3.5 class (4B + 16B would both benefit), then bench.
+      Baseline recorded while probing: 4B solo-cuda no-MTP essay
+      125.21 tok/s (thinking-trace decode, F16 KV, 2k-budget
+      sanity 391 CORRECT).
 - [x] ~S Graph-capture audit on prod metrics (DONE 2026-10-11, read-only,
       no restart; counters read before/after controlled bursts incl.
       prefix-hit traffic). Verdict: steady state is REPLAY where the
