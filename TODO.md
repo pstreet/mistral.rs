@@ -1381,6 +1381,21 @@ facade today, so the MTP port gates the cutover):
       mistralrs.pre-copyfix-deploy. Ops note: verify the live
       process via systemctl MainPID, not pgrep head -1 (the
       ExecStartPre dry-run transient fooled one environ check).
+      PARAMS-SYNC FIX, FIRST VERSION BITES (2026-10-14, caught
+      on the deploy boot within minutes): the settle sync ran
+      unconditionally while untracked - including DURING graph
+      capture, where a stream sync is illegal. The precapture
+      drowned in dozens of "hip error 900: operation not
+      permitted when stream is capturing", the request 500d, and
+      the rollback path took collateral damage
+      (indexed_row_copy_bf16 status 401). Prod limped on with
+      graphs disabled until the fix. CORRECTED in candle
+      b8c46f97: settle only when untracked AND not capturing -
+      nothing executes while capturing, so no race is possible
+      there and the sync is pure liability. Lesson: any stream
+      op added to a launch path needs a capture-mode audit, not
+      just a tracking audit. Probe validation of the corrected
+      build: 391 CORRECT, 77.1 tok/s, zero 900s, zero bails.
       Soak round 2 in flight to test the fix under fire.
       HYGIENE FOUND EN ROUTE: mistralrs-core's lib TEST build
       fails on HEAD in the dual shape - ops.rs Top1Submission
