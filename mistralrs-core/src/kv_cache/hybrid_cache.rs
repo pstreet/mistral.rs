@@ -774,6 +774,19 @@ impl RecurrentStatePool {
                 state_indices,
             );
         }
+        // Dual builds: same device-scatter note as scatter_recurrent_state -
+        // without this arm dual-cuda falls through to the host-index
+        // readback, which is capture-illegal (named by the
+        // to_cpu_storage backtrace: scatter_conv_state via
+        // GdnLayerCache::commit).
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        if self.device.is_cuda() {
+            return crate::cuda::indexed_copy::copy_rows(
+                &values.contiguous()?,
+                &self.conv_state,
+                state_indices,
+            );
+        }
         let indices: Vec<u32> = state_indices.to_vec1()?;
         self.scatter_conv_state_for_indices(&indices, values)
     }
@@ -823,6 +836,20 @@ impl RecurrentStatePool {
         }
         // Solo NVIDIA role: same device-scatter note as conv above.
         #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+        if self.device.is_cuda() {
+            return crate::cuda::indexed_copy::copy_rows(
+                &values.contiguous()?,
+                &self.recurrent_state,
+                state_indices,
+            );
+        }
+        // Dual builds: the NVIDIA role scatters on-device via the nvcc
+        // companion twin (proven by the Oct-8 MTP loop). Without this arm
+        // dual-cuda falls through to the host-index readback below, which
+        // is capture-illegal (and a per-step D2H sync even eagerly).
+        // NOTE: device_has_fused_ops stays hip-only in dual (its fused
+        // matmul launchers are hipcc-built); this arm must not reuse it.
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
         if self.device.is_cuda() {
             return crate::cuda::indexed_copy::copy_rows(
                 &values.contiguous()?,

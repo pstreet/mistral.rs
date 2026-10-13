@@ -36,13 +36,14 @@ impl InplaceOp3 for IndexedRowCopy {
         #[cfg(feature = "cuda")]
         use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
 
-        // In dual builds these symbols resolve to the hip companion; the
-        // NVIDIA role would launch hip kernels on a CUDA stream.
+        // Dual builds: `cuda::ffi` resolves to the hip companion, whose
+        // kernels cannot launch on a CUDA stream - resolve through the
+        // nvcc companion instead (same pattern as the Oct-8 topk port;
+        // the indexed_row_copy_* symbols are in the companion).
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+        use crate::cuda::ffi as ffi_impl;
         #[cfg(all(feature = "cuda", feature = "rocm"))]
-        {
-            let _ = (dst, dst_layout, src, src_layout, rows, rows_layout);
-            candle_core::bail!("indexed row copy needs the serving (hip) role in dual builds")
-        }
+        use crate::cuda::ffi_cuda as ffi_impl;
         #[cfg(feature = "cuda")]
         {
             let dev = dst.device();
@@ -60,7 +61,7 @@ impl InplaceOp3 for IndexedRowCopy {
                     let (src_ptr, src_guard) = src_view.device_ptr(&stream);
                     let (dst_ptr, dst_guard) = dst_view.device_ptr_mut(&stream);
                     let status = unsafe {
-                        crate::cuda::ffi::$ffi(
+                        ffi_impl::$ffi(
                             src_ptr as *const core::ffi::c_void,
                             dst_ptr as *mut core::ffi::c_void,
                             rows_ptr as *const u32,
@@ -245,13 +246,12 @@ pub(crate) fn clamp_slot_table(slots: &Tensor, capacity: u32, replacement: u32) 
             use candle_core::backend::BackendStorage;
             #[cfg(feature = "cuda")]
             use candle_core::cuda_backend::cudarc::driver::DevicePtrMut;
+            // Dual builds: see IndexedRowCopy::cuda_fwd above - resolve
+            // through the nvcc companion, not the hip companion.
+            #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+            use crate::cuda::ffi as ffi_impl;
             #[cfg(all(feature = "cuda", feature = "rocm"))]
-            {
-                let _ = (storage, layout);
-                candle_core::bail!(
-                    "clamp-u32-index-table needs the serving (hip) role in dual builds"
-                )
-            }
+            use crate::cuda::ffi_cuda as ffi_impl;
             #[cfg(feature = "cuda")]
             {
                 if !layout.is_contiguous() {
@@ -263,7 +263,7 @@ pub(crate) fn clamp_slot_table(slots: &Tensor, capacity: u32, replacement: u32) 
                 let mut sub = slice.slice_mut(layout.start_offset()..);
                 let (ptr, _guard) = sub.device_ptr_mut(&stream);
                 let status = unsafe {
-                    crate::cuda::ffi::clamp_u32_index_table(
+                    ffi_impl::clamp_u32_index_table(
                         ptr as *mut u32,
                         self.len,
                         self.capacity,

@@ -2004,7 +2004,14 @@ impl PagedAttention {
         let kv_lens: Vec<usize> = match ctx.context_lens_cpu() {
             Some(lens) => lens.to_vec(),
             // Fallback costs a GPU->CPU sync per layer per decode step.
+            // TEMP (cuda-role capture hunt): name the missing staging.
             None => {
+                tracing::warn!(
+                    "paged gather decode falling back to D2H context_lens (use_full={}, paged_cpu={}, full_cpu={})",
+                    ctx.use_full,
+                    ctx.input_metadata.paged_context_lens_cpu.is_some(),
+                    ctx.input_metadata.full_paged_context_lens_cpu.is_some(),
+                );
                 let context_lens_t = ctx.context_lens(dev).unwrap();
                 match context_lens_t.dtype() {
                     DType::U32 => context_lens_t

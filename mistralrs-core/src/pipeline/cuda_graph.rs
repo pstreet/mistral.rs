@@ -219,7 +219,12 @@ const DECODE_GRAPH_MIN_ARENA_BYTES: usize = 32 * 1024 * 1024;
 
 /// Capture attempts per graph (1 initial + growth retries). Each overflow
 /// doubles the arena, so the budget bounds growth at 8x the first estimate.
-const DECODE_GRAPH_CAPTURE_ATTEMPTS: usize = 4;
+/// Six attempts (32x) because the cuda-role capture forward needs ~200MB+
+/// against a ~30MB warmup-seeded start: the bump allocator never reuses
+/// freed transients, so 62 layers of twin workspaces accumulate (measured:
+/// bucket-A converges at 204MB on attempt 3). Only triggers on genuine
+/// overflow; converged roles never notice the extra budget.
+const DECODE_GRAPH_CAPTURE_ATTEMPTS: usize = 6;
 
 /// Precapture stops taking new buckets once free device memory (as the
 /// device-memory query reports it) falls below this floor. Resident graphs
@@ -3381,7 +3386,7 @@ where
     // 2x current) per retry, bounded by the attempt budget.
     let mut current_arena_bytes = arena_bytes;
     for attempt in 0..DECODE_GRAPH_CAPTURE_ATTEMPTS {
-        tracing::debug!(target: "mistralrs", "[cudarc] CAPTURE forward attempt={attempt}");
+        tracing::info!("[cudarc] CAPTURE forward attempt={attempt}");
         // A panicking forward must still discard the in-flight capture; the caller falls back to eager.
         let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             forward(&graph_input_ids, &metadata)
@@ -3401,8 +3406,10 @@ where
         // non-fatal to the forward, so a successful forward can still leave a
         // corrupted graph; check the arena after the fact, not just on error.
         let overflowed = stream.capture_arena_overflowed();
-        tracing::debug!(
-            target: "mistralrs",
+        // info-level (not debug): attempts/retries are rare (only during
+        // captures) and this is the only record of which attempt failed
+        // and why when a capture dies mid-retry.
+        tracing::info!(
             "[cudarc] CAPTURE forward done attempt={attempt} ok={} overflowed={} consumed={} t={}",
             result.is_ok(),
             overflowed,
@@ -3424,19 +3431,28 @@ where
                     .context("CUDA graph captured forward failed"),
                 );
             }
-            tracing::debug!(
+            tracing::info!(
                 "CUDA decode graph arena grew {current_arena_bytes} -> {new_bytes} bytes (attempt {attempt}, consumed prefix {consumed})"
             );
             graph_input_ids.device().synchronize()?;
+            // Release the overflowed arena BEFORE allocating its 2x
+            // replacement: on a tight device the regrow cannot fit
+            // alongside the arena it replaces (observed: 71MB regrow
+            // against ~50MB free with the 32MB overflowed arena still
+            // held). The discard above detached it from the stream and
+            // the synchronize drained in-flight use, so the free is safe.
             #[cfg(feature = "cuda")]
             if !use_hip_arena {
-                let arena =
-                    begin_cuda_arena_capture(&stream, &graph_input_ids.device(), new_bytes)?;
+                cuda_arena_keepalive = None;
+                let arena = begin_cuda_arena_capture(&stream, &graph_input_ids.device(), new_bytes)
+                    .map_err(|err| err.context("CUDA graph capture arena regrow failed"))?;
                 cuda_arena_keepalive = Some(arena);
             }
             #[cfg(feature = "rocm")]
             if use_hip_arena {
-                let arena = begin_hip_arena_capture(&stream, &graph_input_ids.device(), new_bytes)?;
+                arena_keepalive = None;
+                let arena = begin_hip_arena_capture(&stream, &graph_input_ids.device(), new_bytes)
+                    .map_err(|err| err.context("CUDA graph capture arena regrow failed"))?;
                 arena_keepalive = Some(arena);
             }
             current_arena_bytes = new_bytes;

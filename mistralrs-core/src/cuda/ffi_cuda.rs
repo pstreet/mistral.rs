@@ -719,4 +719,39 @@ cuda_kernel! {
         stream: i64,
     );
 
+    indexed_row_copy_bf16 = "indexed_row_copy_bf16"(
+        src: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        dst_rows: *const u32,
+        rows: i32,
+        row_elements: i64,
+        dst_row_capacity: i64,
+        stream: i64,
+    ) -> i32;
+    indexed_row_copy_f16 = "indexed_row_copy_f16"(
+        src: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        dst_rows: *const u32,
+        rows: i32,
+        row_elements: i64,
+        dst_row_capacity: i64,
+        stream: i64,
+    ) -> i32;
+    indexed_row_copy_f32 = "indexed_row_copy_f32"(
+        src: *const std::ffi::c_void,
+        dst: *mut std::ffi::c_void,
+        dst_rows: *const u32,
+        rows: i32,
+        row_elements: i64,
+        dst_row_capacity: i64,
+        stream: i64,
+    ) -> i32;
+    clamp_u32_index_table = "clamp_u32_index_table"(
+        table: *mut u32,
+        len: i32,
+        capacity: u32,
+        replacement: u32,
+        stream: i64,
+    ) -> i32;
+
 }
