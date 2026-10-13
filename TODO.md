@@ -1334,6 +1334,17 @@ facade today, so the MTP port gates the cutover):
       onto a fresh boot, and the bail message stays readable for
       the post-mortem. Remove the arm (wrapper + the guard env)
       once the class closes.
+      COPYFIX DEPLOYED 2026-10-14 (~14:32 UTC, binary with candle
+      a88cbd28 + guard a1808ce37): the strided-copy fix joins the
+      armed window - footprint validation always on, params
+      readback under the existing guard flag. First boot CLEAN
+      (391 CORRECT), armed band 31.6-32.7 tok/s (no regression
+      from the candle change - the footprint check is host-side
+      arithmetic), zero fault/guard lines. Rollback backstop:
+      mistralrs.pre-copyfix-deploy. Ops note: verify the live
+      process via systemctl MainPID, not pgrep head -1 (the
+      ExecStartPre dry-run transient fooled one environ check).
+      Soak round 2 in flight to test the fix under fire.
       HYGIENE FOUND EN ROUTE: mistralrs-core's lib TEST build
       fails on HEAD in the dual shape - ops.rs Top1Submission
       tests reference a removed API (device_tokens / .token),
