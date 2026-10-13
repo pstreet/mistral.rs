@@ -184,7 +184,14 @@ where
             Ok(true)
         }
         StagedBatchState::Mixed => {
-            trim_mixed_staged_allocations(seqs, cache)?;
+            {
+                // Cross-engine capture window: the staged-allocation
+                // rollback is synchronous device work.
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
+                let _step_window =
+                    crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
+                trim_mixed_staged_allocations(seqs, cache)?;
+            }
             clear_staged_speculative_tokens(seqs);
             let Some(plan) = target.speculative_plan(seqs.len()) else {
                 return Ok(false);
@@ -370,6 +377,10 @@ where
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     let mut device_verifications = {
+        // Cross-engine capture window: the device verification block
+        // (batched verify kernels, sparse submission/completion, draft
+        // preparation) is synchronous device work.
+        let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
         let active_indices = prepared
             .iter()
             .enumerate()
@@ -530,6 +541,12 @@ where
         }));
         outcomes.push(Some(outcome));
     }
+    // Cross-engine capture window: the verification-batch finish and
+    // the speculative commit are synchronous device work. No awaits
+    // follow in this function, so the guard safely lives to its end
+    // (covering the commit and the propose-and-stage call below).
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
     cache.finish_verification_batch(&mut cache_guards, seqs, &cache_outcomes)?;
     let commit_rows = outcomes
         .iter()
@@ -652,6 +669,12 @@ where
     // In a batch, every participating sequence follows the same shape with the
     // same proposal width. Acceptance can still differ per sequence; only the
     // target forward shape is fixed.
+    //
+    // Cross-engine capture window: the whole body is synchronous device
+    // work (draft propose replays, target-hidden copies, staging) and
+    // must not race another engine's capture.
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
     if active_indices.is_empty() {
         return Ok(());
     }

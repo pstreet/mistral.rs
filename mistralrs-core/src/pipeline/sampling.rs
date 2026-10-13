@@ -814,10 +814,24 @@ async fn sample_and_add_toks_inner(
     let max_model_len = metadata.max_seq_len;
     let eos_toks = metadata.eos_tok.clone();
 
-    let sampled_vec = match try_sample_batch_cuda(&logits, seqs, &rng)? {
+    let sampled_vec = match {
+        // Cross-engine capture window: batched device sampling (stack,
+        // sampling kernels) and the CPU-row fallback's D2H copies are
+        // synchronous device work.
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
+        let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
+        try_sample_batch_cuda(&logits, seqs, &rng)?
+    } {
         Some(sampled) => sampled,
         None => {
-            let logits_seq = logits.into_cpu_rows()?;
+            let logits_seq = {
+                // Cross-engine capture window: the D2H row copies are
+                // synchronous device work.
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
+                let _step_window =
+                    crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
+                logits.into_cpu_rows()?
+            };
             let sampling_futures: Vec<_> = std::iter::zip(logits_seq, seqs.iter_mut())
                 .map(|(logits_per_seq, seq)| {
                     let return_logprobs = seq.return_logprobs();
@@ -1415,6 +1429,15 @@ pub async fn sample_sequence(
     activate_required_tool_call_grammar(seq, llg_factory.as_ref(), max_model_len, false);
     let rng = seq.sampling_rng(&rng);
 
+    // Cross-engine capture window: the dtype conversion launches a device
+    // kernel when logits are resident; the sampler's device kernels below
+    // are guarded at their own call sites.
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    let logits = {
+        let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
+        logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?
+    };
+    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
     let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
 
     let sampler = seq.sampler();
@@ -1424,6 +1447,11 @@ pub async fn sample_sequence(
     let logits_clone = logits.clone();
     let first_lobprobs_response = if use_async_pool {
         tokio_rayon::spawn(move || {
+            // Cross-engine capture window: device sampling kernels must
+            // not race another engine's capture. The guard lives inside
+            // the worker closure (sync, no await) so it never spans one.
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
+            let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
             sampler.sample(
                 logits_clone,
                 &ctx_clone,
@@ -1436,6 +1464,9 @@ pub async fn sample_sequence(
         })
         .await?
     } else {
+        // Cross-engine capture window: synchronous device sampling.
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
+        let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
         sampler.sample(
             logits_clone,
             &ctx_clone,
@@ -1497,6 +1528,14 @@ pub async fn sample_sequence(
     };
     let second_logprobs_response = match bias_if_not_allowed {
         Some(acc) => {
+            // Cross-engine capture window: the bias-add launches a device
+            // kernel when logits are resident.
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
+            let new_logits = {
+                let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
+                (&logits + Tensor::from_slice(&acc, acc.len(), logits.device())?)?
+            };
+            #[cfg(not(any(feature = "cuda", feature = "rocm")))]
             let new_logits = (&logits + Tensor::from_slice(&acc, acc.len(), logits.device())?)?;
 
             let ctx_clone = seq.get_toks().to_vec();
@@ -1504,6 +1543,11 @@ pub async fn sample_sequence(
             let sampler = seq.sampler();
             if use_async_pool {
                 tokio_rayon::spawn(move || {
+                    // Cross-engine capture window: see the first sample
+                    // above - the guard stays inside the worker closure.
+                    #[cfg(any(feature = "cuda", feature = "rocm"))]
+                    let _step_window =
+                        crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
                     sampler.sample(
                         new_logits,
                         &ctx_clone,
@@ -1516,6 +1560,9 @@ pub async fn sample_sequence(
                 })
                 .await?
             } else {
+                // Cross-engine capture window: synchronous device sampling.
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
+                let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
                 sampler.sample(
                     new_logits,
                     &ctx_clone,
