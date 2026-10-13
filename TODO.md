@@ -710,6 +710,21 @@ facade today, so the MTP port gates the cutover):
       writing through freed storage, not a restore or leak path.
       Hybrid capture demonstrably works on both pipelines now
       (2515d5e0a + f7848fc98 proofs); gates dropped.
+- [ ] ~M 35B graphs on the normal pipeline (opened 2026-10-11 from the
+      graph-capture audit): prod's default model runs eager decode
+      while the same binary replays the 27B on the same hip device.
+      (a) qwen3_next.rs: add the supports_cuda_decode_graphs override
+      (mirror qwen3_5/qwen3_moe); alone this only un-gates MTP-off
+      runs, since normal.rs skips proposers (SpeculativeConflict).
+      (b) port the mm.rs speculative-graph machinery to normal.rs -
+      multimodal.rs:2197 (speculative_graph_plans consumption) is the
+      reference; it is what lets MTP and graphs coexist (27B proof:
+      126 replays with n=2 attached). House order: probe lane first
+      (fast hip build; 35B MTP-off replays + math sanity + tok/s vs
+      the ~35 tok/s eager baseline, then the port, MTP-on replays),
+      release rebuild, ONE prod restart, essay re-bench. Upside
+      unmeasured - measure before cutting; MTP-off graphs vs MTP-on
+      eager is a legitimate A/B if the port stalls.
       of the capture window (post-`end_capture`) so hybrid models (27B/4B)
       can capture on the NVIDIA role; then drop the multimodal eager-skip
       gates. SUPERSEDED 2026-10-07 by backtrace evidence: the pipeline
@@ -851,6 +866,12 @@ Phase D/E deferred deliberately (split prefill/decode, multi-backend,
 GGUF embeddings, merge prep, polish). Operating rules: measure before
 cutting (every config change wants a probe number first); one prod
 restart per batch, never one per item.
+STATUS 2026-10-11: Phase A resolved - (1) audit DONE (major finding:
+the 35B never graphed, see its close), (2) right-sizing landed via
+the native cap, (3) MTP re-sweep DONE (n=2 kept, a001d0ca9), (5)
+knobs landed (draft-head Q4K + n=2 fleet-wide, bc7aa7280). (4) prefix
+polish remains open. Phase B startable; the 35B-graphs item (P0
+parity queue) now outranks it on impact.
 
 ### Perf-opportunity backlog (opened 2026-10-08, ideas, none started)
 
@@ -881,13 +902,31 @@ restart per batch, never one per item.
 - [ ] ~S MTP on the 4B: `Qwen3.5-4B-MTP-GGUF` carries the head but is
       pinned `mtp=false` in prod. Small-model MTP is usually
       high-acceptance; bench before pinning.
-- [ ] ~S Graph-capture audit on prod metrics: `graph_dispatch`
-      replay vs eager-population vs skipped in steady state. Tells
-      whether decode is actually graphed or re-capturing.
+- [x] ~S Graph-capture audit on prod metrics (DONE 2026-10-11, read-only,
+      no restart; counters read before/after controlled bursts incl.
+      prefix-hit traffic). Verdict: steady state is REPLAY where the
+      model is eligible - no re-capture churn. 27B-mm (hip role, MTP
+      n=2 attached, dual release): 126x mode=replay reason=cache_hit
+      over one 300tok essay, 2 eager cache_population passes, nothing
+      else - hip graphs + MTP + prefix hits coexist live in prod via
+      the multimodal.rs speculative_graph_plans path. THE FINDING: the
+      DEFAULT 35B (qwen3_next, normal pipeline) has never graphed -
+      every decode step since boot is mode=skipped
+      reason=model_unsupported (762/762, zero replays). Two gates
+      stack: (1) qwen3_next.rs is the only hybrid without the
+      supports_cuda_decode_graphs override (trait default false;
+      text-only qwen35 loads the Qwen3_5 normal model, which overrides
+      true - that is why the 4B/27B graphs probes passed and the 35B
+      did not); (2) normal.rs has no speculative-graph machinery
+      (only multimodal.rs consumes speculative_graph_plans; normal.rs
+      hard-skips proposers as SpeculativeConflict), so 35B+MTP could
+      not graph even with the override. The proofs were solo-cuda, so
+      these prod counters are the first hip-side replay proof.
+      Spawned: "35B graphs on the normal pipeline" (P0 parity queue).
 - [ ] ~S KV precision on the 35B: 27B already runs split K=Q8_0/
       V=Q4_0; try the same (or lower) on the 35B with a quality check.
       Decode is bandwidth-bound; KV bytes are decode time.
-- [ ] ~S KV pool right-sizing: prod `context_len = 262144` reserves
+- [x] ~S KV pool right-sizing: prod `context_len = 262144` reserves
       ~7GB+ real traffic may never touch. Reclaim to a second resident
       or a bigger graph pool; measure resident-set vs Evict behavior.
       Extends to per-model paged budget (or spill-aware KV fitting):
@@ -916,7 +955,10 @@ restart per batch, never one per item.
       Proof (4B, global 32/16 vs entry 2/2): scheduler logs
       max_num_seqs=2, serves clean. This closes the per-model max_seqs
       backlog: the 27B-cuda alias can pin max_seqs=2 instead of the
-      global TEMP. Prod TOML left dirty (user-owned experiment).
+      global TEMP. Prod TOML committed (e6cc6441e, then n=2 a001d0ca9).
+      CLOSED 2026-10-11: the prod half is live (restart verified the
+      caps line + 64GB GTT reclaim); the small-GPU per-model budget
+      half is tracked by the 27B-cuda attach item in the P0 queue.
 - [ ] ~S Re-bench quants on the cutover binary: Q6_K vs Q4_K_M (27B),
       Q5_K_XL vs Q4_K_XL (35B). The +54% came from kernels, not
       weights, so the quant tradeoff curve moved.
