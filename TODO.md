@@ -985,6 +985,55 @@ facade today, so the MTP port gates the cutover):
       open with diagnostics armed; v2 script ready for the next
       recurrence. Code-reading lead (no restarts): Top1-workspace
       lifecycle audit.
+      TOP1 WORKSPACE LIFECYCLE AUDIT 2026-10-12 (code-read, zero prod
+      impact; names the #7/#8 spin site and a hardening path):
+      - The top-1 sampling workspace is PER-SAMPLER, not
+        process-global: Sampler::new runs per request
+        (add_request.rs:572; sequence.rs:2649 is a test helper) and
+        each Sampler starts with an empty top1_cache. The step's
+        batched sampling uses the FIRST seq's sampler for the whole
+        batch (sampling.rs:979); the MTP proposer keeps its own
+        long-lived sampler (proposer.rs:643).
+      - So EVERY request: fresh workspace at first decode submit (2
+        ring slots x [4 events + token_ids_host pinned u32 +
+        owned_token_ids device] + 2 slots x [packed_host pinned f32 +
+        block_values/block_indices/packed device]), then the FULL
+        FREE at request end: 4 hipHostFree + 8 device frees + 8
+        event destroys.
+      - PLUS mid-request resize frees: cuda_top1_logits_submit_inner
+        (ops.rs:3226-3240) reallocs when capacity_rows < nrows and
+        drops the old workspace at `*cache = Some(...)`. The MTP
+        verify path grows 1 -> 3 rows, so a fresh process pays this
+        drop MID-REQUEST on request 1. Workspace bytes are tiny
+        (rows x nblocks f32, 35B vocab ~9.5KB device/slot + pinned
+        rows); the resize exists only because capacity starts at the
+        first nrows.
+      - Rust-side drop safety is CORRECT on paper: complete() and
+        cancel() both synchronize host_complete before clearing
+        pending (ops.rs:3071-3103); resize bails while any slot is
+        pending (has_pending, ops.rs:3233); the packed D2H
+        (ops.rs:3353) is a stream-synced copy. Every hipHostFree
+        therefore runs with that workspace quiesced - matching the
+        #7/#8 forensics (GPU 0% busy, no pending, dmesg clean).
+      - VERDICT on #7/#8: the spin is INSIDE hipHostFree (driver
+        wait that never wakes) on an early-in-process pinned free,
+        with our bookkeeping provably clean. Same family as #5
+        (hsa_executable_freeze spin on first-ever launch): an
+        early driver op on a fresh HSA context loses its wakeup.
+        KILL-residue stays the confounder for the 08:05/08:13 pair;
+        the class predates it (#1-6). Epidemiology fits this site
+        best of any so far: pinned alloc/free sits on EVERY request
+        boundary - "request 1 serves clean, request 2 dies on first
+        decode" is a request-boundary event, and request 1's
+        mid-request resize is the process's first-ever pinned free.
+      - Proposed hardening (NOT landed; needs go): (a) pre-size
+        capacity_rows to the max decode batch on first alloc - kills
+        ALL mid-request resize frees for ~KBs; (b) sync the stream
+        before the resize drop (one line, belt-and-braces); (c) the
+        real candidate: process-global workspace cache keyed by
+        device - removes the per-request alloc/free churn (and the
+        request-boundary epidemiology) but changes cross-engine
+        sharing semantics; needs the capture-window review.
       SOAK v1 2026-10-12 (6 unload->reload cycles, same process):
       6/6 clean, ~49-50 tok/s, full recaptures (98 attempts) + MTP
       re-attaches every cycle. At face value 1.6%-likely under
@@ -1259,9 +1308,23 @@ parity queue) now outranks it on impact.
       not graph even with the override. The proofs were solo-cuda, so
       these prod counters are the first hip-side replay proof.
       Spawned: "35B graphs on the normal pipeline" (P0 parity queue).
-- [ ] ~S KV precision on the 35B: 27B already runs split K=Q8_0/
+- [x] ~S KV precision on the 35B: 27B already runs split K=Q8_0/
       V=Q4_0; try the same (or lower) on the 35B with a quality check.
       Decode is bandwidth-bound; KV bytes are decode time.
+      CLOSED 2026-10-12 (benched + KEPT in prod): per-model
+      k_cache_type=Q8_0/v_cache_type=Q4_0 on the q5 entry. Quality
+      PASS (math 391 exact, essay coherent; the "thinking thinking"
+      duplication appears at BOTH KV levels - a temp-0.3 thinking-
+      model quirk, not a KV artifact). Decode NEUTRAL at the essay
+      shape (600tok temp0.3, q5 no-split 48.85/49.53 vs q5 split
+      49.43/48.16/46.68 - inside the day's +-2 tok/s noise band):
+      at batch-1/short-context, per-token traffic is active-expert
+      weights (A3B ~2GB), not KV. The real win is CAPACITY: pool
+      10496MB -> 7872MB at equal 262144-token headroom = 2.6GB GTT
+      freed (measured cap lines). Watchpoint for later: long-context
+      decode (>32k) is where V bytes start to matter - re-visit if a
+      long-context regression shows up. Revert = delete two TOML
+      keys + one restart.
 - [x] ~S KV pool right-sizing: prod `context_len = 262144` reserves
       ~7GB+ real traffic may never touch. Reclaim to a second resident
       or a bigger graph pool; measure resident-set vs Evict behavior.
@@ -1295,9 +1358,25 @@ parity queue) now outranks it on impact.
       CLOSED 2026-10-11: the prod half is live (restart verified the
       caps line + 64GB GTT reclaim); the small-GPU per-model budget
       half is tracked by the 27B-cuda attach item in the P0 queue.
-- [ ] ~S Re-bench quants on the cutover binary: Q6_K vs Q4_K_M (27B),
+- [x] ~S Re-bench quants on the cutover binary: Q6_K vs Q4_K_M (27B),
       Q5_K_XL vs Q4_K_XL (35B). The +54% came from kernels, not
       weights, so the quant tradeoff curve moved.
+      35B ARM CLOSED 2026-10-12 (Q5_K_XL vs Q4_K_XL at equal
+      K=Q8_0/V=Q4_0 KV, MTP n=2 + graphs, essay-600tok temp0.3 x3
+      per arm): NO decode difference - q5 49.43/48.16/46.68 vs q4
+      50.76/47.52/47.90, means 48.09 vs 48.73, both inside the
+      day's +-2 tok/s noise band. Expected in hindsight: A3B reads
+      only active experts per token (~2GB either way), so file size
+      barely moves per-token bandwidth; Q4_K dequant compute eats
+      what bytes it saves. Quality PASS on q4 (math 391 correct via
+      a chattier path, essay coherent) - the UD Q4_K_XL is
+      usable-if-needed. The qwen3.6-35b-q4 alias stays registered
+      (lazy, inert) for capacity-constrained days: 22GB vs 26GB
+      weights + the 2.6GB pool saving would matter under
+      dual-resident pressure. Bench-by-alias via demand-load worked
+      cleanly (auto_evict swap, zero extra restarts).
+      27B ARM BLOCKED: the Q4_K_M 27B file is not on disk (only
+      Q6_K); needs a ~16GB download decision (715GB free).
 - [ ] ~M FA2 path proof on the cuda role (compute 8.6: FA v2 yes, v3
       no): confirm the kernels actually dispatch there; try the
       `cudnn` feature as challenger. Pairs with the cuda-MTP port.

@@ -48,9 +48,32 @@ alias = "qwen3.6-35b-q5"
 mtp = true
 lazy = true
 mtp_n_predict = 2
+# Split KV (2026-10-12 bench batch): K stays Q8_0, V drops Q8_0 -> Q4_0
+# (the 27B's split, proven in prod). Decode is bandwidth-bound: fewer
+# V bytes per token = less read traffic if quality holds.
+k_cache_type = "Q8_0"
+v_cache_type = "Q4_0"
 
 [models.format]
 quantized_file = "Qwen3.6-35B-A3B-UD-Q5_K_XL.gguf"
+
+# Q4_K_XL bench arm (2026-10-12): same model, same KV split so the
+# Q5-vs-Q4 comparison is at equal KV. Duplicate model_id is legal:
+# the config key registers its FIRST entry (the q5 above, so the
+# default model is unchanged); this entry is reachable by alias.
+# Benched by demand-load with auto_evict swapping it against q5.
+
+[[models]]
+model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
+alias = "qwen3.6-35b-q4"
+mtp = true
+lazy = true
+mtp_n_predict = 2
+k_cache_type = "Q8_0"
+v_cache_type = "Q4_0"
+
+[models.format]
+quantized_file = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
 
 # ============================================================
 # Qwen3.8 27B (lazy, demand-loaded)
