@@ -911,6 +911,11 @@ facade today, so the MTP port gates the cutover):
       first-decode class remains OPEN - tracked by the fault hunt
       with diagnostics armed; it is this item's only surviving
       thread and lives in its own records below.
+      UPDATE 2026-10-13: the class went HOT (~2-in-4 boots fault on
+      the first recurrent commit) and was FULLY CAPTURED as fault
+      #9 - kernel named (index_select u32->f32 at the commit
+      gather), no-ledger-cover stale-pointer mechanism, first
+      precise lead. See the FAULT #9 record below.
       RECURRENCE 2026-10-12 ~02:51 UTC (honestly recorded): the
       sporadic first-decode fault fired a THIRD time - same where_u8_bf16
       host-pinned signature, same census-pass-then-fault, same wedge
@@ -1389,6 +1394,27 @@ facade today, so the MTP port gates the cutover):
       learned/estimated footprint in place for the next attempt.
       Fix together with the retention item: an unload that
       actually frees + an ISQ-aware estimator + one admission path.
+- [ ] ~S Model-level healthcheck (ops; three incidents on record,
+      two in one night): the healthcheck pings /health only, so it
+      stayed green through (1) the default-404 eviction bug (every
+      model:default request 404s), (2) the retention-bricked cuda
+      lane (all demand-loads refused, healthcheck green), and (3)
+      fault #9's poisoned hip context (every request 500s
+      instantly for ~40 min while /health served 200). Add a
+      healthcheck arm that exercises a real generation path on the
+      default model periodically (or at minimum a
+      default-model-mapped probe request), and alert on its
+      failure. The stderr-capture fix (fault #9 record) covers
+      post-hoc evidence; this covers live detection.
+- [ ] _S SEGV core capture is broken on this box (found 2026-10-13,
+      fault #9's idle-SEGV): kernel.core_pattern pipes to apport,
+      which REFUSES user-session crashes from separate mount
+      namespaces ("host pid ... crashed in a separate mount
+      namespace, ignoring") - the 02:17 SEGV core (87.8G-growth
+      idle crash) was discarded with no backtrace. Either point
+      core_pattern at a file spool for this host, or teach the
+      unit out of the private mount namespace, so the next host
+      crash keeps its core.
 - [x] ~M cuda-alone revival = role-identity Phase 1 (the NVIDIA
       shell's shape-keyed "present" arms promise APIs the bound
       crate lacks: stream arena alloc, managed htod clones, fork
@@ -1406,7 +1432,8 @@ facade today, so the MTP port gates the cutover):
       tok/s; 27B (Qwen3.8): 391 CORRECT.
       (3) 27B PARITY BENCH, matched pair (same TOML, payloads,
       device, mtp-off, Q6_K->ISQ-Q4K, F16 KV auto pool, 32k,
-      max_seqs=2): dual NVIDIA role 38.69/38.94/38.94 tok/s vs
+      max_seqs=2; probe TOMLs preserved at LocalAI/scratch/
+      probe-cuda-solo-{4b,27b}.toml + probe-27b-parity.toml): dual NVIDIA role 38.69/38.94/38.94 tok/s vs
       SOLO-CUDA 41.63/41.89/41.84 - solo is +7.4%, parity holds
       with margin; the delta is the dual arm's known per-token
       HOST-sampling fallback ("one-token lookahead sampling needs
@@ -1569,6 +1596,19 @@ parity queue) now outranks it on impact.
 - [ ] ~S Solo-rocm loud fallbacks: fused FP8 GLU quantize (unfused
       path today), gemv -> plain GEMM, HQQ CPU bitpack-at-load.
       Pure wins, no architecture risk.
+- [ ] ~M Dual NVIDIA-role device sampling + one-token lookahead
+      (measured 2026-10-13, the cuda-alone parity pair): the dual
+      arm warns per token "one-token lookahead sampling needs the
+      serving (hip) role; falling back to graph replay with host
+      sampling" - the matched-pair bench put its decode cost at
+      ~7% (38.9 dual vs 41.8 solo tok/s, identical config/payloads/
+      device). Solo-cuda already has device sampling (the
+      2026-10-07 device_sampling_supported fix); the DUAL
+      NVIDIA role still samples on the host and skips the
+      lookahead. Port both to the role: extend
+      device_sampling_supported to the dual Cuda role + extract
+      the hip-only lookahead arm in execution.rs. The 27B-cuda
+      alias lane gains the measured delta directly.
 - [ ] ~S UQFF vs GGUF shootout: same weights through the CLI
       `quantize`/`uqff` path, bench load + decode on this box.
       Unmeasured; native format may win both.
