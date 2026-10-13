@@ -942,6 +942,34 @@ facade today, so the MTP port gates the cutover):
       no-trim gate + trim-off soak as discriminator. Evidence:
       /tmp/opencode/fault6-journal.txt, GPU HANG ANALYSIS queue
       line + hip-700 cascade in-journal.
+      SEVENTH+EIGHTH OCCURRENCES 2026-10-12 ~08:05+08:13 UTC, back
+      to back on fresh boots: SILENT hang (no fault lines, dmesg
+      clean), request 1 hung, GPU 0% busy, host thread 99.9% in
+      sched_yield inside hipHostFree <- PinnedHostSlice<f32> drop
+      <- Vec<CudaAsyncTokenSlot> <- CudaTop1LogitsWorkspace
+      (identical libamdhip64 offsets both times; stacks at
+      /tmp/opencode/wedge3-stacks.txt). Reads as a wait that never
+      resolves (event on dead work, or runtime lock held by a dead
+      thread) - GPU idle, not wedged. Both healed by graceful
+      restart (9/9 heal record intact); trimlog binary then served
+      sanity + 2x600tok at 52.5/48.7, exonerating the trim-gate
+      delta (which cannot execute on the hip path anyway).
+      CONFOUNDER (honest): the only SIGKILLs in days (bisect
+      probes + crash-loop kills) landed just before this streak;
+      graceful SIGTERM teardowns precede every heal. Hypothesis:
+      KILL-residue in GPU/HSA state persists across restarts where
+      TERM-teardown cleans. RULE: never SIGKILL HIP processes
+      (extends the pkill lesson); gdb-attach pauses are fine.
+      TRIM EXONERATED FOR HIP (inspection + live proof): in dual
+      builds trim_cuda_memory_pool matches Device::Cuda only, so it
+      is a no-op for Hip (the recorded trim-dual-hip gap) - and the
+      pool-trim ledger has logged ZERO lines across all boots.
+      Six faults with trims inert = trims did not cause them. The
+      no-trim-gate experiment is VOID for hip (keep the gate: it
+      still governs the cuda role, and documents the switch for
+      when hip trim lands). Next lead: the Top1-workspace
+      pinned-drop lifecycle vs event tracking (fresh-process first
+      sizing fits all manifestations).
       SOAK v1 2026-10-12 (6 unload->reload cycles, same process):
       6/6 clean, ~49-50 tok/s, full recaptures (98 attempts) + MTP
       re-attaches every cycle. At face value 1.6%-likely under

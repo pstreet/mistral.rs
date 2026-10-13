@@ -294,6 +294,13 @@ impl MemoryUsage {
         use pool_backend::cudarc::driver::sys;
         use pool_backend::WrapErr;
 
+        // Fault-hunt discriminator (first-decode sporadic class): env-gated
+        // off switch for every pool trim in the process. Inert unless set.
+        static NO_TRIM: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *NO_TRIM.get_or_init(|| std::env::var("MISTRALRS_NO_POOL_TRIM").as_deref() == Ok("1")) {
+            return Ok(false);
+        }
+
         #[cfg(feature = "cuda")]
         let Device::Cuda(device) = device
         else {
@@ -315,6 +322,15 @@ impl MemoryUsage {
             unsafe { sys::cuDeviceGetMemPool(&mut pool, stream.context().cu_device()) },
             "CUDA memory pool lookup",
         )?;
+        // Fault-hunt ledger: trims unmap pool backing, so every trim is
+        // timestamped for correlation against fault windows.
+        eprintln!(
+            "[pool-trim] pool={pool:p} min_bytes={min_bytes} t={}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
         cuda_result(
             unsafe { sys::cuMemPoolTrimTo(pool, min_bytes) },
             "CUDA memory pool trim",
