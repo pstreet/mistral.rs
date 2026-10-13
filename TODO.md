@@ -1178,9 +1178,13 @@ facade today, so the MTP port gates the cutover):
       a storage pointer outlives its buffer); (b) extend the
       graph-ptr census to the commit-path buffers; (c) the
       every-other-boot repro + the stderr file = the iteration
-      harness the soak lacked; (d) fix the core path (apport
-      namespace refusal loses SEGV cores - change core_pattern or
-      capture policy for this box).
+      harness the soak lacked; (d) CLOSED - core spool + LimitCORE
+      landed and live-tested (see the core-capture item);
+      (e) PID-tag every ledger/census/trace eprintln line (or
+      rotate the stderr file per boot): cross-boot VA reuse makes
+      unattributed multi-boot analysis actively misleading - it
+      produced one retracted claim already. Until then, lifetime
+      forensics must scope to a single boot's line window.
       AUDIT ADDENDUM 2026-10-13 (late session; (d) CLOSED, see the
       core-capture item; both ops hardenings live):
       CODE TRACE (the full commit -> replay chain, every explicit
@@ -1206,18 +1210,23 @@ facade today, so the MTP port gates the cutover):
       positions all len=3 (contexts 20/21/22, PA slots 51/52/53),
       state_indices len=1 head=[1] - internally consistent for
       one recurrent state shared across 3 verify rows.
-      THE GROWTH LOOP (the biggest new find): six recurrent-
-      checkpoint storage allocations DURING the request window,
-      ledger lines 57089/59695/62301/65229/68157/71083: 646MB ->
-      748MB -> 850MB -> 1.88GB -> 2.81GB -> 3.73GB (first two
-      deltas exactly +102,057,270 bytes, then ~+1GB steps), ALL
-      STILL LIVE at the fault - 10.66GB accumulated in one request,
-      zero frees. Same-process retention captured with exact
-      VAs/sizes; likely the 02:17 boot's idle 87.8G host-growth
-      sibling. Suspected holder: captured graph entries retaining
-      old pool storage Arcs across lane growths (the
-      storage_generation watch exists - its invalidation path is
-      unaudited).
+      THE GROWTH LOOP - CLAIM WITHDRAWN 2026-10-14 (methodology
+      error found during the follow-up audit): the six
+      allocations (ledger lines 57089/59695/62301/65229/68157/
+      71083, VA prefix 0x706x) sit BEFORE the soak's 3.3M-line
+      start marker and in a different process address space from
+      cycle 3 (0x763x) - they belong to an early boot's load
+      (likely the 03:46 boot), NOT cycle 3's request window, and
+      cycle 3's own journal shows exactly ONE pool reserve. The
+      "six reserves in one request, all live at fault" claim is
+      retracted. What stands: six large pool-size allocations
+      from a dead boot were never freed - consistent with
+      load-time lane growth leaking, but UNATTRIBUTED (cross-boot
+      VA reuse + no PID tags in the ledger make holder and boot
+      unnameable from this file). Lesson recorded below: the
+      ledger needs per-line PID tags before any cross-boot
+      lifetime claim. The retention P0 stands on its original
+      five instances, unaffected.
       REMAINING SUSPECTS (short list): (i) the MTP drafter's own
       recurrent gather sites - the speculative module's
       index_select callers, the last unaudited gather family;
@@ -1531,20 +1540,15 @@ facade today, so the MTP port gates the cutover):
       the weights post-unload (engine struct? graph pools?
       prefix-cache entries?), and why load-failure cleanup leaks
       the loaded weights + PA cache.
-      GROWTH-LOOP LIVE CAPTURE (2026-10-13 late, from the fault #9
-      ledger): a same-process, no-unload manifestation - six
-      recurrent-checkpoint storage allocations during ONE request
-      (646MB -> 3.73GB, 10.66GB total, scratch/prod-stderr.log
-      lines 57089/59695/62301/65229/68157/71083), NONE freed by
-      fault time. First retention instance on record with exact
-      VAs, sizes, and line numbers. The growth comes from the
-      lane planner (automatic_recurrent_checkpoint_lanes)
-      reallocating ever-larger checkpoint storage; prime suspect
-      for the holder of the old storage: captured CUDA graph
-      entries keeping pool Arcs alive (the storage_generation
-      invalidation path is unaudited). If the same loop mirrors
-      host-side staging, it also explains the 02:17 boot's idle
-      87.8G host growth + SEGV.
+      GROWTH-LOOP OBSERVATION - WITHDRAWN 2026-10-14 (same
+      methodology error as the audit addendum): the six
+      allocations cited here predate the soak and live in a
+      different process address space - unattributed, not a
+      same-process capture. The retention P0 stands on its
+      original five instances. Follow-up: PID-tag the ledger
+      lines (or rotate per boot) before any cross-boot lifetime
+      claim; until then, lifetime forensics must scope to a
+      single boot's line window.
 - [ ] ~M router admission inconsistencies (found 2026-10-13, same
       session): (a) the need ESTIMATOR uses the SOURCE checkpoint
       size (Q6_K 21.5GB), not post-ISQ resident size (~16.5GB),
