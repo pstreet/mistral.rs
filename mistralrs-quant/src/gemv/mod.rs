@@ -13,59 +13,67 @@
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 mod ffi;
 
+// Dual: the `ffi` decls resolve through the hip companion, so the
+// NVIDIA role gets its own entries from the nvcc companion.
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+mod ffi_cuda;
+
+// The launcher runs on the Cuda role of dual builds and all of
+// solo-cuda; both resolve `launch_gemv_*` from the right companion.
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
+use crate::gemv::ffi as role_ffi;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use crate::gemv::ffi_cuda as role_ffi;
+
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 use candle_core::cuda::DeviceId as GemvDeviceId;
-#[cfg(all(
-    any(feature = "cuda", feature = "rocm"),
-    not(all(feature = "cuda", feature = "rocm"))
-))]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 use candle_core::role::backend::DeviceId as GemvDeviceId;
-#[cfg(all(
-    any(feature = "cuda", feature = "rocm"),
-    not(all(feature = "cuda", feature = "rocm"))
-))]
-use candle_core::role::{RoleDevice as CudaDevice, RoleStorage as CudaStorage};
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
+use candle_core::role::RoleDevice as CudaDevice;
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
+use candle_core::role::RoleStorage as CudaStorage;
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 use candle_core::{
     cuda::cudarc::driver::DevicePtrMut, CudaDevice, CudaStorage, DType, Result, Shape, Storage,
     Tensor,
 };
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
+use candle_core::{role::backend::cudarc::driver::DevicePtrMut, DType, Shape, Storage};
 #[cfg(all(
     any(feature = "cuda", feature = "rocm"),
     not(all(feature = "cuda", feature = "rocm"))
 ))]
-use candle_core::{
-    role::backend::cudarc::driver::DevicePtrMut, DType, Result, Shape, Storage, Tensor,
-};
+use candle_core::{Result, Tensor};
 
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
 use crate::utils::{get_cuda_device, slice_ptr};
 
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
 use half::{bf16, f16};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
 use std::{collections::HashMap, sync::Mutex};
 
 /// Maximum batch size supported by the GEMV kernel
 pub const MAX_GEMV_BATCH_SIZE: usize = 8;
-#[cfg(any(feature = "cuda", feature = "rocm", test))]
+#[cfg(any(feature = "cuda", test))]
 const MAX_GEMV_OUTPUT_ELEMENTS: usize = 4_096;
-#[cfg(any(feature = "cuda", feature = "rocm", test))]
+#[cfg(any(feature = "cuda", test))]
 const SM90_SPLIT_K_MIN_BATCH_REDUCTION: usize = 32_768;
-#[cfg(any(feature = "cuda", feature = "rocm", test))]
+#[cfg(any(feature = "cuda", test))]
 const SM90_SPLIT_K_MAX_GEMV_CTA_WAVES: usize = 4;
 
-#[cfg(any(feature = "cuda", feature = "rocm", test))]
+#[cfg(any(feature = "cuda", test))]
 #[derive(Clone, Copy)]
 struct GemvDeviceInfo {
     compute_major: i32,
     multiprocessor_count: usize,
 }
 
-#[cfg(any(feature = "cuda", feature = "rocm", test))]
+#[cfg(any(feature = "cuda", test))]
 fn should_use_gemv_shape(
     batch_size: usize,
     output_dim: usize,
@@ -90,11 +98,11 @@ fn should_use_gemv_shape(
     !sm90_split_k
 }
 
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
 static GEMV_DEVICE_INFO: LazyLock<Mutex<HashMap<GemvDeviceId, GemvDeviceInfo>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-#[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(feature = "cuda")]
 fn gemv_device_info(device: &CudaDevice) -> Option<GemvDeviceInfo> {
     #[cfg(all(feature = "cuda", feature = "rocm"))]
     use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
@@ -153,25 +161,18 @@ pub static GEMV_CONTROLLER: LazyLock<GemvController> = LazyLock::new(|| GemvCont
 /// - The shape and device favor GEMV over a split-K GEMM
 /// - Data type is supported (BF16, F16, F32)
 /// - K dimension is even (required for vectorized loads)
-#[cfg(feature = "rocm")]
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
-    // Dual builds: the gemv kernels are hipcc-built and `gemv` is a hard
-    // bail (see below), so never route unquantized linear here - plain
-    // GEMM is the fallback on both roles. The `Device::Cuda` match below
-    // would otherwise claim the NVIDIA role and crash on the bail.
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
-    {
-        let _ = (x, w);
-        return false;
-    }
-    // Hip has no gemv kernels (plain GEMM serves unquantized linear);
-    // never route here, mirroring the dual bail.
+    // Solo-rocm: no gemv route on the hip role - plain GEMM serves
+    // unquantized linear there.
     #[cfg(all(feature = "rocm", not(feature = "cuda")))]
     {
         let _ = (x, w);
         return false;
     }
-    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    // In dual builds the Device::Cuda match below is the role filter:
+    // hip tensors fall through to plain GEMM on the AMD role.
+    #[cfg(feature = "cuda")]
     {
         // Check if enabled
         if !GEMV_CONTROLLER.is_enabled() {
@@ -226,8 +227,8 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
     }
 }
 
-/// Fallback for non-CUDA builds
-#[cfg(not(feature = "rocm"))]
+/// Fallback for non-GPU builds
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
 pub fn should_use_gemv(_x: &candle_core::Tensor, _w: &candle_core::Tensor) -> bool {
     false
 }
@@ -247,12 +248,263 @@ pub fn gemv(_x: &Tensor, _w: &Tensor, _bias: Option<&Tensor>) -> Result<Tensor> 
         "gemv on the Hip backend needs S2; unquantized linear falls back to plain GEMM"
     )
 }
-#[cfg(all(feature = "cuda", feature = "rocm"))]
-pub fn gemv(_x: &Tensor, _w: &Tensor, _bias: Option<&Tensor>) -> Result<Tensor> {
-    candle_core::bail!(
-        "gemv on the Hip backend needs S2; unquantized linear falls back to plain GEMM"
-    )
+#[cfg(feature = "cuda")]
+pub fn gemv(x: &Tensor, w: &Tensor, bias: Option<&Tensor>) -> Result<Tensor> {
+    let dev = get_cuda_device(x)?;
+
+    // Get dimensions
+    let (m, k) = w.dims2()?;
+
+    // Calculate batch size from input shape
+    let x_dims = x.dims();
+    let batch_size: usize = x_dims[..x_dims.len().saturating_sub(1)]
+        .iter()
+        .product::<usize>()
+        .max(1);
+
+    if batch_size > MAX_GEMV_BATCH_SIZE {
+        candle_core::bail!(
+            "GEMV batch size {} exceeds maximum {}",
+            batch_size,
+            MAX_GEMV_BATCH_SIZE
+        );
+    }
+
+    // Check K dimension
+    let x_k = x.dim(x.rank() - 1)?;
+    if x_k != k {
+        candle_core::bail!("GEMV dimension mismatch: x has K={} but W has K={}", x_k, k);
+    }
+
+    // Validate bias if present
+    if let Some(b) = bias {
+        let b_len = b.elem_count();
+        if b_len != m {
+            candle_core::bail!(
+                "GEMV bias dimension mismatch: bias has {} elements but M={}",
+                b_len,
+                m
+            );
+        }
+    }
+
+    // Output shape matches input batch dims with last dim = M
+    let output_shape = {
+        let mut shape = x.dims().to_vec();
+        *shape.last_mut().unwrap() = m;
+        shape
+    };
+
+    // Dispatch based on dtype
+    match x.dtype() {
+        DType::BF16 => gemv_bf16(dev, x, w, bias, batch_size, m, k, &output_shape),
+        DType::F16 => gemv_f16(dev, x, w, bias, batch_size, m, k, &output_shape),
+        DType::F32 => gemv_f32(dev, x, w, bias, batch_size, m, k, &output_shape),
+        dt => candle_core::bail!("GEMV unsupported dtype: {:?}", dt),
+    }
 }
+
+#[cfg(feature = "cuda")]
+fn gemv_bf16(
+    dev: &CudaDevice,
+    x: &Tensor,
+    w: &Tensor,
+    bias: Option<&Tensor>,
+    batch_size: usize,
+    m: usize,
+    k: usize,
+    output_shape: &[usize],
+) -> Result<Tensor> {
+    let mut y_buf = unsafe { dev.alloc::<bf16>(batch_size * m)? };
+
+    let (w_s, w_l) = w.storage_and_layout();
+    let Storage::Cuda(w_s) = &*w_s else {
+        candle_core::bail!("Expected CUDA storage for weights");
+    };
+    let (w_ptr, _w_guard) = slice_ptr(w_s.as_cuda_slice::<bf16>()?, w_l.start_offset());
+
+    let x_contig;
+    let (x_s, x_l) = if batch_size == 1 && x.layout().stride()[x.rank() - 1] == 1 {
+        x.storage_and_layout()
+    } else {
+        x_contig = x.contiguous()?;
+        x_contig.storage_and_layout()
+    };
+    let Storage::Cuda(x_s) = &*x_s else {
+        candle_core::bail!("Expected CUDA storage for input");
+    };
+    let (x_ptr, _x_guard) = slice_ptr(x_s.as_cuda_slice::<bf16>()?, x_l.start_offset());
+
+    let stream = dev.cuda_stream();
+    let (y_ptr, y_guard) = y_buf.device_ptr_mut(&stream);
+
+    let bias_storage = bias.map(|b| b.storage_and_layout());
+    let (bias_ptr, has_bias, _bias_guard) = if let Some((ref b_arc, b_l)) = bias_storage {
+        let Storage::Cuda(b_s) = &**b_arc else {
+            candle_core::bail!("Expected CUDA storage for bias");
+        };
+        let (b_ptr, b_guard) = slice_ptr(b_s.as_cuda_slice::<bf16>()?, b_l.start_offset());
+        (b_ptr, true, Some(b_guard))
+    } else {
+        (0u64, false, None)
+    };
+
+    unsafe {
+        role_ffi::launch_gemv_bf16(
+            w_ptr as *const bf16,
+            x_ptr as *const bf16,
+            bias_ptr as *const bf16,
+            y_ptr as *mut bf16,
+            m as i32,
+            k as i32,
+            batch_size as i32,
+            has_bias,
+            stream.cu_stream() as *mut std::ffi::c_void,
+        );
+    }
+
+    drop(y_guard);
+
+    let y_storage = CudaStorage::wrap_cuda_slice(y_buf, dev.clone());
+    let y = Tensor::from((Storage::Cuda(y_storage), Shape::from(output_shape)));
+
+    Ok(y)
+}
+
+#[cfg(feature = "cuda")]
+fn gemv_f16(
+    dev: &CudaDevice,
+    x: &Tensor,
+    w: &Tensor,
+    bias: Option<&Tensor>,
+    batch_size: usize,
+    m: usize,
+    k: usize,
+    output_shape: &[usize],
+) -> Result<Tensor> {
+    let mut y_buf = unsafe { dev.alloc::<f16>(batch_size * m)? };
+
+    let (w_s, w_l) = w.storage_and_layout();
+    let Storage::Cuda(w_s) = &*w_s else {
+        candle_core::bail!("Expected CUDA storage for weights");
+    };
+    let (w_ptr, _w_guard) = slice_ptr(w_s.as_cuda_slice::<f16>()?, w_l.start_offset());
+
+    let x_contig;
+    let (x_s, x_l) = if batch_size == 1 && x.layout().stride()[x.rank() - 1] == 1 {
+        x.storage_and_layout()
+    } else {
+        x_contig = x.contiguous()?;
+        x_contig.storage_and_layout()
+    };
+    let Storage::Cuda(x_s) = &*x_s else {
+        candle_core::bail!("Expected CUDA storage for input");
+    };
+    let (x_ptr, _x_guard) = slice_ptr(x_s.as_cuda_slice::<f16>()?, x_l.start_offset());
+
+    let stream = dev.cuda_stream();
+    let (y_ptr, y_guard) = y_buf.device_ptr_mut(&stream);
+
+    let bias_storage = bias.map(|b| b.storage_and_layout());
+    let (bias_ptr, has_bias, _bias_guard) = if let Some((ref b_arc, b_l)) = bias_storage {
+        let Storage::Cuda(b_s) = &**b_arc else {
+            candle_core::bail!("Expected CUDA storage for bias");
+        };
+        let (b_ptr, b_guard) = slice_ptr(b_s.as_cuda_slice::<f16>()?, b_l.start_offset());
+        (b_ptr, true, Some(b_guard))
+    } else {
+        (0u64, false, None)
+    };
+
+    unsafe {
+        role_ffi::launch_gemv_f16(
+            w_ptr as *const f16,
+            x_ptr as *const f16,
+            bias_ptr as *const f16,
+            y_ptr as *mut f16,
+            m as i32,
+            k as i32,
+            batch_size as i32,
+            has_bias,
+            stream.cu_stream() as *mut std::ffi::c_void,
+        );
+    }
+
+    drop(y_guard);
+
+    let y_storage = CudaStorage::wrap_cuda_slice(y_buf, dev.clone());
+    let y = Tensor::from((Storage::Cuda(y_storage), Shape::from(output_shape)));
+
+    Ok(y)
+}
+
+#[cfg(feature = "cuda")]
+fn gemv_f32(
+    dev: &CudaDevice,
+    x: &Tensor,
+    w: &Tensor,
+    bias: Option<&Tensor>,
+    batch_size: usize,
+    m: usize,
+    k: usize,
+    output_shape: &[usize],
+) -> Result<Tensor> {
+    let mut y_buf = unsafe { dev.alloc::<f32>(batch_size * m)? };
+
+    let (w_s, w_l) = w.storage_and_layout();
+    let Storage::Cuda(w_s) = &*w_s else {
+        candle_core::bail!("Expected CUDA storage for weights");
+    };
+    let (w_ptr, _w_guard) = slice_ptr(w_s.as_cuda_slice::<f32>()?, w_l.start_offset());
+
+    let x_contig;
+    let (x_s, x_l) = if batch_size == 1 && x.layout().stride()[x.rank() - 1] == 1 {
+        x.storage_and_layout()
+    } else {
+        x_contig = x.contiguous()?;
+        x_contig.storage_and_layout()
+    };
+    let Storage::Cuda(x_s) = &*x_s else {
+        candle_core::bail!("Expected CUDA storage for input");
+    };
+    let (x_ptr, _x_guard) = slice_ptr(x_s.as_cuda_slice::<f32>()?, x_l.start_offset());
+
+    let stream = dev.cuda_stream();
+    let (y_ptr, y_guard) = y_buf.device_ptr_mut(&stream);
+
+    let bias_storage = bias.map(|b| b.storage_and_layout());
+    let (bias_ptr, has_bias, _bias_guard) = if let Some((ref b_arc, b_l)) = bias_storage {
+        let Storage::Cuda(b_s) = &**b_arc else {
+            candle_core::bail!("Expected CUDA storage for bias");
+        };
+        let (b_ptr, b_guard) = slice_ptr(b_s.as_cuda_slice::<f32>()?, b_l.start_offset());
+        (b_ptr, true, Some(b_guard))
+    } else {
+        (0u64, false, None)
+    };
+
+    unsafe {
+        role_ffi::launch_gemv_f32(
+            w_ptr as *const f32,
+            x_ptr as *const f32,
+            bias_ptr as *const f32,
+            y_ptr as *mut f32,
+            m as i32,
+            k as i32,
+            batch_size as i32,
+            has_bias,
+            stream.cu_stream() as *mut std::ffi::c_void,
+        );
+    }
+
+    drop(y_guard);
+
+    let y_storage = CudaStorage::wrap_cuda_slice(y_buf, dev.clone());
+    let y = Tensor::from((Storage::Cuda(y_storage), Shape::from(output_shape)));
+
+    Ok(y)
+}
+
 #[cfg(not(any(feature = "cuda", feature = "rocm")))]
 pub fn gemv(
     _x: &candle_core::Tensor,
@@ -336,6 +588,41 @@ mod tests {
     use super::*;
     use candle_core::{cuda::cudarc::driver::sys, Device};
     use std::hint::black_box;
+
+    #[test]
+    fn gemv_matches_cpu_reference() -> Result<()> {
+        let dev = Device::new_cuda(0)?;
+        let x = Tensor::randn(0f32, 1f32, (2, 128), &dev)?.to_dtype(DType::BF16)?;
+        let w = Tensor::randn(0f32, 1f32, (96, 128), &dev)?.to_dtype(DType::BF16)?;
+        let bias = Tensor::randn(0f32, 1f32, (96,), &dev)?.to_dtype(DType::BF16)?;
+        assert!(should_use_gemv(&x, &w));
+
+        let y = gemv(&x, &w, Some(&bias))?.to_dtype(DType::F32)?;
+
+        let cpu = Device::Cpu;
+        let x_ref = x.to_device(&cpu)?.to_dtype(DType::F32)?;
+        let w_ref = w.to_device(&cpu)?.to_dtype(DType::F32)?;
+        let bias_ref = bias.to_device(&cpu)?.to_dtype(DType::F32)?;
+        let expected = x_ref.matmul(&w_ref.t()?)?.broadcast_add(&bias_ref);
+
+        let diff = (y.to_device(&cpu)? - expected)?.abs()?;
+        let max_diff = diff.max_all()?.to_scalar::<f32>()?;
+        assert!(
+            max_diff <= 0.1,
+            "gemv output diverged from CPU reference: max abs diff {max_diff}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    fn gemv_gate_rejects_hip_role() -> Result<()> {
+        let dev = Device::new_hip(0)?;
+        let x = Tensor::randn(0f32, 1f32, (2, 128), &dev)?.to_dtype(DType::BF16)?;
+        let w = Tensor::randn(0f32, 1f32, (96, 128), &dev)?.to_dtype(DType::BF16)?;
+        assert!(!should_use_gemv(&x, &w));
+        Ok(())
+    }
 
     const BENCH_BATCH_SIZES: &[usize] = &[1, 2, 4, 8, 16];
     const BENCH_OUTPUT_DIMS: &[usize] = &[

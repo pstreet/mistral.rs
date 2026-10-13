@@ -1192,9 +1192,34 @@ facade today, so the MTP port gates the cutover):
       verdict by code-path identity. If an arena ever overflows
       mid-capture the fallback allocs return (and the regrow+retry
       machinery re-captures clean before install).
-- [ ] ~S gemv companion twin (the gemv landmine fix is gated dual-wide
+- [x] ~S gemv companion twin (the gemv landmine fix is gated dual-wide
       false; the NVIDIA role takes the plain GEMM in dual builds -
       journal entry at the 2026-10-05 MMVQ work).
+      CLOSED 2026-10-12 (sweep slice 1): bigger than a gate flip -
+      the 587be98d2 solo-rocm cutover had DELETED the real gemv()
+      launcher entirely (301 lines; only bails remained) and left
+      the solo-cuda gate logic as unreachable cfg, so gemv was dead
+      in EVERY shape. Restored it role-aware: the launcher is back
+      (transplanted from 8c0c5d6ef) with a per-shape FFI alias -
+      dual resolves launch_gemv_* through a new gemv/ffi_cuda.rs
+      (nvcc companion via cuda_plugin; gemv.cu was already in BOTH
+      companion source lists), solo-cuda through the existing ffi
+      (cuda_plugin there), solo-rocm stays inert (no hip route, by
+      the original S2 decision). should_use_gemv's Device::Cuda
+      match is now the natural dual role filter (hip tensors fall
+      to GEMM). Solo-rocm dangling imports/consts retargeted to
+      cuda(+test). VALIDATION: new end-to-end correctness test
+      (gemv_matches_cpu_reference, bf16 batch2 x M96 x K128 vs CPU
+      matmul+bias, max-abs-diff <= 0.1) PASSES on the NVIDIA role
+      in dual (real kernels on the 3090) and in solo-cuda; new
+      gemv_gate_rejects_hip_role contract pins the dual hip
+      rejection. All four shape checks green, fmt clean, no gemv
+      warnings in any shape. Dual suite: 341/342 with the 1 failure
+      PRE-EXISTING (hqq symbol miss, verified on HEAD); solo-rocm
+      quant test build also pre-existing-broken (rotary/cpu.rs
+      GPU-test cfg debt, journaled below). The 27B GDN b/a gate
+      class (unquantized F32/BF16 linears at decode) now takes the
+      gemv fast path on the NVIDIA role instead of plain GEMM.
 - [ ] ~S fp8 NVIDIA-role parity (currently a loud dual bail; port the
       fp8 kernels to the nvcc companion).
 - [ ] ~M cuda-alone revival = role-identity Phase 1 (the NVIDIA
@@ -1204,6 +1229,14 @@ facade today, so the MTP port gates the cutover):
       check; the fix is role-keying the shell, not porting APIs).
       STATUS 2026-10-07: all four shapes check green post-fix;
       release build + serve sanity + 27B parity bench pending.
+      TEST-BUILD HYGIENE NOTE (2026-10-12, found during the gemv
+      slice): `cargo test -p mistralrs-quant` in the default and
+      solo-rocm shapes fails to COMPILE on HEAD (11 / 9 errors:
+      rotary/mod.rs test code references candle_core::cuda_backend,
+      gguf/cpu.rs tests call test_gpu_device unconditionally) -
+      pre-existing, unrelated to the gemv change (verified by
+      stash). The dual + solo-cuda test shapes are the working
+      bars. Not fixed in this slice; candidate P3 hygiene item.
 - [x] ~S optional prod knob (DONE 2026-10-11): `mtp_draft_lm_head_isq
       = "Q4K"` live in prod mistralrs.toml. The RuntimeOptions serde
       key already existed (CLI-hidden, TOML-exposed), so no code
