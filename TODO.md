@@ -1181,6 +1181,58 @@ facade today, so the MTP port gates the cutover):
       harness the soak lacked; (d) fix the core path (apport
       namespace refusal loses SEGV cores - change core_pattern or
       capture policy for this box).
+      AUDIT ADDENDUM 2026-10-13 (late session; (d) CLOSED, see the
+      core-capture item; both ops hardenings live):
+      CODE TRACE (the full commit -> replay chain, every explicit
+      index joint audited CLEAN): PagedPrefixCacheValidation stages
+      reset_seq / restore_recurrent_state; the hybrid cache's
+      physical_slot/reset_slot are bounds-checked with loud bails;
+      install_batch_mapping refuses out-of-range mappings by
+      design ("the kernels do no bounds checks"); the capture path
+      pads state_indices to the bucket (CudaGraphDecodeStep::
+      padded with pad_slot = a valid aliased row); the replay path
+      copies the PADDED step into the captured entry var
+      (copy_state_indices). The faulting gather is none of these.
+      LEDGER RE-ANALYSIS (methodology corrected: range containment,
+      not exact-VA match): the fault VA 0x7083866ce000 lies inside
+      NO traced allocation range, live or freed - the address was
+      never part of any buffer. Verdict: a far-OOB COMPUTED read
+      (a garbage index fed to the unguarded index_select), not a
+      stale-freed-buffer read. Boot-to-boot allocator residue
+      decides the garbage value -> the 2-in-4 split and the
+      historical dormancy.
+      FULL FAULT-TIME CENSUS CONTEXT: the replay was MTP verify of
+      ONE sequence - input_ids/slot_mappings/context_lens/rope_
+      positions all len=3 (contexts 20/21/22, PA slots 51/52/53),
+      state_indices len=1 head=[1] - internally consistent for
+      one recurrent state shared across 3 verify rows.
+      THE GROWTH LOOP (the biggest new find): six recurrent-
+      checkpoint storage allocations DURING the request window,
+      ledger lines 57089/59695/62301/65229/68157/71083: 646MB ->
+      748MB -> 850MB -> 1.88GB -> 2.81GB -> 3.73GB (first two
+      deltas exactly +102,057,270 bytes, then ~+1GB steps), ALL
+      STILL LIVE at the fault - 10.66GB accumulated in one request,
+      zero frees. Same-process retention captured with exact
+      VAs/sizes; likely the 02:17 boot's idle 87.8G host-growth
+      sibling. Suspected holder: captured graph entries retaining
+      old pool storage Arcs across lane growths (the
+      storage_generation watch exists - its invalidation path is
+      unaudited).
+      REMAINING SUSPECTS (short list): (i) the MTP drafter's own
+      recurrent gather sites - the speculative module's
+      index_select callers, the last unaudited gather family;
+      (ii) copy_from_u32_slice's length-mismatch behavior (partial
+      copy leaving stale indices vs loud bail); (iii) the lane
+      growth loop: who calls automatic_recurrent_checkpoint_lanes
+      six times in one request and why old storage stays
+      referenced.
+      NEXT INSTRUMENTATION (cheap, high-yield): census records
+      gain TENSOR LENGTHS + a first-launch check that entry
+      state_indices length == captured batch (the census verifies
+      VAs only - a shape mismatch is exactly its blind spot), and
+      a launch-site inventory of every index_select in the MTP
+      path so the next HSA kernel line maps to a call site
+      immediately.
       Probe-lane findings (2026-10-11):
       - A second 35B cannot load beside a resident prod: GTT is
         RAM-backed (Strix Halo APU) and /v1/models/unload frees into
@@ -1380,6 +1432,20 @@ facade today, so the MTP port gates the cutover):
       the weights post-unload (engine struct? graph pools?
       prefix-cache entries?), and why load-failure cleanup leaks
       the loaded weights + PA cache.
+      GROWTH-LOOP LIVE CAPTURE (2026-10-13 late, from the fault #9
+      ledger): a same-process, no-unload manifestation - six
+      recurrent-checkpoint storage allocations during ONE request
+      (646MB -> 3.73GB, 10.66GB total, scratch/prod-stderr.log
+      lines 57089/59695/62301/65229/68157/71083), NONE freed by
+      fault time. First retention instance on record with exact
+      VAs, sizes, and line numbers. The growth comes from the
+      lane planner (automatic_recurrent_checkpoint_lanes)
+      reallocating ever-larger checkpoint storage; prime suspect
+      for the holder of the old storage: captured CUDA graph
+      entries keeping pool Arcs alive (the storage_generation
+      invalidation path is unaudited). If the same loop mirrors
+      host-side staging, it also explains the 02:17 boot's idle
+      87.8G host growth + SEGV.
 - [ ] ~M router admission inconsistencies (found 2026-10-13, same
       session): (a) the need ESTIMATOR uses the SOURCE checkpoint
       size (Q6_K 21.5GB), not post-ISQ resident size (~16.5GB),
@@ -1394,27 +1460,43 @@ facade today, so the MTP port gates the cutover):
       learned/estimated footprint in place for the next attempt.
       Fix together with the retention item: an unload that
       actually frees + an ISQ-aware estimator + one admission path.
-- [ ] ~S Model-level healthcheck (ops; three incidents on record,
+- [x] ~S Model-level healthcheck (ops; three incidents on record,
       two in one night): the healthcheck pings /health only, so it
       stayed green through (1) the default-404 eviction bug (every
       model:default request 404s), (2) the retention-bricked cuda
       lane (all demand-loads refused, healthcheck green), and (3)
       fault #9's poisoned hip context (every request 500s
-      instantly for ~40 min while /health served 200). Add a
-      healthcheck arm that exercises a real generation path on the
-      default model periodically (or at minimum a
-      default-model-mapped probe request), and alert on its
-      failure. The stderr-capture fix (fault #9 record) covers
-      post-hoc evidence; this covers live detection.
-- [ ] _S SEGV core capture is broken on this box (found 2026-10-13,
+      instantly for ~40 min while /health served 200).
+      CLOSED 2026-10-13 (landed + live-validated): probe arm added
+      to mistralrs-server-healthcheck.sh - every 300s, when the
+      default model is loaded (jq gate on /v1/models status, so
+      the idle-TTL RAM relief still works), run a 1-token real
+      generation (45ms on a healthy resident 35B). Probe failure
+      feeds the existing 2-strike counter. ROOT CAUSE of the 40-min
+      silent outage found while landing this: the journal-sweep
+      arm is EDGE-triggered - a poisoned context only emits
+      hip-700 lines when requests arrive, so with zero traffic the
+      fail counter reset every check (the log PROVES it fired
+      1/2 at 02:36:57, then went silent). The probe is the missing
+      level-trigger: its own failed request writes the wedge lines
+      the next sweep finds, so the two arms interlock and MAX_FAILS
+      is reached within ~2 checks regardless of traffic.
+- [x] _S SEGV core capture is broken on this box (found 2026-10-13,
       fault #9's idle-SEGV): kernel.core_pattern pipes to apport,
       which REFUSES user-session crashes from separate mount
       namespaces ("host pid ... crashed in a separate mount
       namespace, ignoring") - the 02:17 SEGV core (87.8G-growth
-      idle crash) was discarded with no backtrace. Either point
-      core_pattern at a file spool for this host, or teach the
-      unit out of the private mount namespace, so the next host
-      crash keeps its core.
+      idle crash) was discarded with no backtrace.
+      CLOSED 2026-10-13 (landed + live-tested): core_pattern now
+      writes directly to /home/pstreet/LocalAI/scratch/cores/
+      core.%e.%p.%t via /etc/sysctl.d/99-mistralrs-core-capture.conf
+      (701G free - even a 90G-RSS core fits), bypassing apport
+      entirely; the second half of the bug was LimitCORE: the
+      service ran with soft core limit 0, so the unit now sets
+      LimitCORE=infinity (picked up on the next restart). Verified
+      by crashing a live process - core.python3.<pid> landed in
+      the spool. Caveat: nothing prunes the spool; a crash-looping
+      process could fill the disk - revisit if cores accumulate.
 - [x] ~M cuda-alone revival = role-identity Phase 1 (the NVIDIA
       shell's shape-keyed "present" arms promise APIs the bound
       crate lacks: stream arena alloc, managed htod clones, fork
