@@ -188,8 +188,7 @@ where
                 // Cross-engine capture window: the staged-allocation
                 // rollback is synchronous device work.
                 #[cfg(any(feature = "cuda", feature = "rocm"))]
-                let _step_window =
-                    crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
+                let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
                 trim_mixed_staged_allocations(seqs, cache)?;
             }
             clear_staged_speculative_tokens(seqs);

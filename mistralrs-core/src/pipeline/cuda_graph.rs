@@ -3950,14 +3950,20 @@ pub(crate) fn restore_event_tracking_after_capture(stream: &GraphStream, restore
 }
 
 pub(crate) fn end_cuda_capture_discard(stream: &GraphStream) {
-    if !stream.capture_status_none().unwrap_or(true) {
-        let mut graph = std::ptr::null_mut();
-        let _ = graph_end_capture(stream, &mut graph);
-        if !graph.is_null() {
-            let _ = graph_destroy(stream, graph);
-        }
-        stream.reset_capture_bookkeeping();
+    if stream.capture_status_none().unwrap_or(true) {
+        return;
     }
+    let mut graph = std::ptr::null_mut();
+    if graph_end_capture(stream, &mut graph).is_err() {
+        // a failed abort leaves the capture half-open: drain in-flight
+        // work, retry once, then force-reset the bookkeeping either way
+        let _ = stream.synchronize();
+        let _ = graph_end_capture(stream, &mut graph);
+    }
+    if !graph.is_null() {
+        let _ = graph_destroy(stream, graph);
+    }
+    stream.reset_capture_bookkeeping();
 }
 
 fn device_location_sort_key(location: &DeviceLocation) -> (u8, usize) {

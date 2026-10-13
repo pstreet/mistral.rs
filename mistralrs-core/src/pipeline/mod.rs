@@ -2771,8 +2771,7 @@ pub trait Pipeline:
                         let submission = {
                             // Cross-engine capture window: the lookahead
                             // submission is synchronous device work.
-                            let _step_window =
-                                cuda_graph::enter_cuda_graph_step_window();
+                            let _step_window = cuda_graph::enter_cuda_graph_step_window();
                             execution::submit_forward_lookahead(
                                 self,
                                 input_seqs,

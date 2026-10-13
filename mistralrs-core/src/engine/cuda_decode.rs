@@ -67,8 +67,7 @@ impl<S: CompletionSubmission> CompletionWorker<S> {
                     // event syncs), and must not race another engine's
                     // capture.
                     #[cfg(any(feature = "cuda", feature = "rocm"))]
-                    let _step_window =
-                        crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
+                    let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
                     let result = job.submission.complete();
                     let _ = job.result_tx.send(result);
                 }

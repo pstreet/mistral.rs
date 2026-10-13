@@ -710,7 +710,7 @@ facade today, so the MTP port gates the cutover):
       writing through freed storage, not a restore or leak path.
       Hybrid capture demonstrably works on both pipelines now
       (2515d5e0a + f7848fc98 proofs); gates dropped.
-- [ ] ~M 35B graphs on the normal pipeline (opened 2026-10-11 from the
+- [x] ~M 35B graphs on the normal pipeline (opened 2026-10-11 from the
       graph-capture audit): prod's default model runs eager decode
       while the same binary replays the 27B on the same hip device.
       (a) DONE (dc20c5254): qwen3_next.rs supports_cuda_decode_graphs
@@ -874,6 +874,23 @@ facade today, so the MTP port gates the cutover):
       the abort path should no longer see poisoned streams, but
       a quiesce+retry on rollback failure is still cheap
       insurance if it ever recurs).
+      RESIDUALS DISPOSITIONED + ITEM CLOSED 2026-10-12 (aborted-
+      rollback hardening landed): end_cuda_capture_discard now
+      quiesces (stream sync) and retries the abort once when
+      graph_end_capture fails, before the bookkeeping force-reset -
+      previously a failed abort was silently swallowed and could
+      leave the capture half-open against cleared flags (the one
+      rollback-failure mode with no recovery). All 8 abort sites
+      funnel through the helper (attempt loop x5, FA3 prep, DFlash
+      draft x2), both roles; all shapes + fmt + 1387 unit tests
+      green; prod captures revalidated on the deployed binary.
+      The dual-resident capture slowness under GTT pressure stays
+      ACCEPTED as a capacity cost (the per-bucket lazy fallback
+      serves through it; expert-split MoE would relieve the
+      pressure if it ever matters). The sporadic fresh-process
+      first-decode class remains OPEN - tracked by the fault hunt
+      with diagnostics armed; it is this item's only surviving
+      thread and lives in its own records below.
       RECURRENCE 2026-10-12 ~02:51 UTC (honestly recorded): the
       sporadic first-decode fault fired a THIRD time - same where_u8_bf16
       host-pinned signature, same census-pass-then-fault, same wedge

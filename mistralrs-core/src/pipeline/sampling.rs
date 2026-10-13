@@ -828,8 +828,7 @@ async fn sample_and_add_toks_inner(
                 // Cross-engine capture window: the D2H row copies are
                 // synchronous device work.
                 #[cfg(any(feature = "cuda", feature = "rocm"))]
-                let _step_window =
-                    crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
+                let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
                 logits.into_cpu_rows()?
             };
             let sampling_futures: Vec<_> = std::iter::zip(logits_seq, seqs.iter_mut())
@@ -1546,8 +1545,7 @@ pub async fn sample_sequence(
                     // Cross-engine capture window: see the first sample
                     // above - the guard stays inside the worker closure.
                     #[cfg(any(feature = "cuda", feature = "rocm"))]
-                    let _step_window =
-                        crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
+                    let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
                     sampler.sample(
                         new_logits,
                         &ctx_clone,
