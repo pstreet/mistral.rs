@@ -44,6 +44,33 @@ export MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD=1
 export MISTRALRS_MANAGED_WEIGHTS=1
 export CANDLE_MANAGED_WEIGHTS=1
 export MISTRALRS_CUDA_GRAPHS=1
+# TEMP (35B graphs validation window): verify entry-held VAs before first
+# launch; a moved/freed pointer becomes a loud named-buffer bail + eager
+# fallback instead of an HSA fault. Remove after the graphs deployment is
+# confirmed stable.
+export MISTRALRS_GRAPH_PTR_CENSUS=1
+# TEMP (fault hunt): driver shim interposing pool trims, VMM
+# reserve/map/unmap, and HSA executable freezes into a private log.
+# Guarded: without the .so the process starts normally (no preload).
+# Remove with the census/ledger diagnostics.
+# driver shim retired 2026-10-12: works standalone, SEGVs under the
+# service (HSA-init-thread reentrancy suspected, unproven); trim and
+# freeze evidence now comes from the Rust-side pool-trim ledger.
+# export LD_PRELOAD="$LOCALAI_ROOT/scratch/hip_shim.so"
+# export SHIM_LOG=/tmp/opencode/shim-ledger.log
+# TEMP (fault hunt): off switch for every pool trim in the process
+# (trim-vs-graph discriminator). Unset = trims behave as before.
+# export MISTRALRS_NO_POOL_TRIM=1
+# TEMP (fault hunt): host-visible alloc/free ledger; the HSA fault line names
+# a VA, this log names the buffer that lived there. Remove with the census.
+export MRS_ALLOC_TRACE=1
+# TEMP (fault hunt, armed window 2026-10-14): bounds-check every u32 index
+# tensor on the GDN gather/scatter surface before the unguarded launches; a
+# bail names the buffer + max index + rows instead of a poisoned hip context
+# (the request fails, the server keeps serving). Costs ~1/3 of decode band
+# while armed (per-gather D2H sync, measured 83.5 vs 125.2 tok/s on the 4B).
+# Remove with the census/ledger diagnostics once the fault class closes.
+export MISTRALRS_GATHER_GUARD=1
 # Decode-graph speculative-state budget: the default (largest-entry x10,
 # capped at 8% of device total) keeps only ~2 shapes resident on the 27B
 # (per-shape spec state is ~4.5GB with FullCheckpoints). 16GiB keeps the
@@ -92,4 +119,9 @@ fi
 # Model paths in the toml are relative: resolve them from $LOCALAI_ROOT.
 cd "$LOCALAI_ROOT"
 
-exec "$MISTRALRS" from-config -f "$CONFIG"
+# TEMP (fault hunt, 2026-10-13): stderr carries the alloc-trace/pool-trim/
+# census eprintln diagnostics; journald's rate limiter swallowed the whole
+# boot flood tonight (fault #9's ledger + even the INFO lines were dropped),
+# so stderr goes to a file instead. stdout (tracing INFO) stays on journald.
+# Remove with the census/ledger diagnostics.
+exec "$MISTRALRS" from-config -f "$CONFIG" 2>> "$LOCALAI_ROOT/scratch/prod-stderr.log"
