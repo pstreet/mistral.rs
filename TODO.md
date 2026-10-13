@@ -815,16 +815,67 @@ facade today, so the MTP port gates the cutover):
       engines serving. Diagnostics stay armed in the wrapper
       (MISTRALRS_GRAPH_PTR_CENSUS + MRS_ALLOC_TRACE) for the
       observation window.
-      FOLLOW-UP (opened from this fix): cross-engine capture quiesce -
-      a device-wide capture window (RwLock: captures take write,
-      engine steps take read, or an active-capture counter the step
-      loops respect) so captures run uncontended. Evidence: the 118s
-      degraded capture + 900/901 storm when a load overlaps another
-      engine's background ops. Also harden the capture-abort path:
-      the recurrent-checkpoint rollback itself 901-fails once the
-      stream is poisoned (indexed_row_copy_bf16), so a failed
-      capture should quiesce+retry the rollback instead of
-      cascading the error into the engine step.
+      FOLLOW-UP LANDED (2026-10-11 late, 7496a82da): cross-engine
+      capture window. Captures take a process-wide write
+      (parking_lot, write-preferring); every engine device-work
+      segment registers a read: both step arms' synchronous spans
+      (pre-op cache, forward, post-op cache), the leased-decode
+      submit/drain/synchronize blocks, sequence-state releases,
+      graph-memory reclaims, memory-pool maintenance (the idle
+      trims and preflight barriers - the 118s capture's culprit
+      class), the token-batch completion worker, and the DFlash
+      draft capture. Guards never span an await; a capture waits at
+      most the bounded remainder of another engine's segment.
+      Lazy captures run inside a step's read segment; the dance
+      DROPS this thread's registered guards (keeping ids),
+      takes the write, and re-acquires fresh reads for the same
+      ids after. New counter
+      mistralrs_cuda_graph_capture_window_waits_total marks write
+      contention (fired once at boot: the capture queued behind
+      the idle engine's maintenance tick - the window working as
+      intended).
+      INCIDENT (first deploy, honestly recorded): the first cut of
+      the dance RELOCATED the read guards via mem::take instead of
+      dropping them - the read stayed alive inside `saved`, so the
+      engine's write deadlocked on its own read. Prod wedged at
+      the first mid-serving lazy re-capture (~750 decode tokens
+      into an essay: the spec-state budget evicts a width, the
+      next step re-captures - lazy captures are ROUTINE here).
+      The live stack dump named it (lock_exclusive_slow inside
+      enter_cuda_graph_capture_window from
+      capture_cuda_decode_graph_step <- forward_step), rolled
+      back to the threadlocal binary, fixed drop-and-reacquire.
+      Also learned: this box runs the non-leased step path
+      (pipeline.step -> paged arm); the cuda-decode completion
+      worker thread does not exist here (cuda_decode_enabled
+      off), so the worker guard is inert on this box but kept for
+      leased-path deployments.
+      VALIDATION (prod test bed, dual engines):
+      - Boot + demand-load captures: clean, normal speed
+        (29 graphs in 2.6s).
+      - Mid-serving lazy re-capture: exercised (1 census capture
+        + cache_population=1) and clean across 2400+ decode
+        tokens - the previous binary's exact wedge point.
+      - The interleave acid test (27B demand-load during 35B
+        decode): the 35B serves THROUGH the load at 47 tok/s
+        (was: both engines dead), the 27B loads + captures 28
+        graphs with designed per-bucket lazy fallback, the
+        900/901 storm is GONE (~70 error lines -> 2, an unrelated
+        per-bucket OOM WARN under dual-resident pressure), zero
+        faults, zero 500s.
+      - Both engines decode concurrently: 35B 17.6 + 27B 11.0
+        tok/s, zero errors.
+      RESIDUALS (not concurrency bugs): dual-resident captures
+      are slow under GTT memory pressure (27B capture 138s with
+      both models resident, one bucket OOM -> lazy fallback) -
+      a capacity cost; the async sampling tails
+      (try_sample_causal_gen_batched / finish_cuda_token_batch)
+      and engine-drop frees stay outside the window; the
+      capture-abort rollback retry hardening from the original
+      follow-up is NOT yet done (with the window + THREAD_LOCAL
+      the abort path should no longer see poisoned streams, but
+      a quiesce+retry on rollback failure is still cheap
+      insurance if it ever recurs).
       Probe-lane findings (2026-10-11):
       - A second 35B cannot load beside a resident prod: GTT is
         RAM-backed (Strix Halo APU) and /v1/models/unload frees into
