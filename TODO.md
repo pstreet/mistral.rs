@@ -1226,6 +1226,40 @@ facade today, so the MTP port gates the cutover):
       growth loop: who calls automatic_recurrent_checkpoint_lanes
       six times in one request and why old storage stays
       referenced.
+      RESOLVED 2026-10-14 (soak cycle 3 caught the fault LIVE
+      with cores + ledger - candle 64f2bd73):
+      THE FAULTING LAUNCH: plain unary copy ucopy_bf16 (dst[i] =
+      src[i], NO indices) over 12,288 bf16 elements, 4-D
+      noncontiguous source - i.e. a `.contiguous()`/cat of a
+      strided view, NOT an index_select. The HSA hang analysis
+      preserved the full dispatch (grid 12288x1024, kernargs) and
+      the fault VA never sat inside any traced range: a wild
+      SOURCE read, page-not-present.
+      THE PARAMS VECTOR WAS CORRUPT: the dims/stride device
+      vector at the launch's recorded pointer read back as
+      garbage (two independent reads: rocgdb + file-offset dd),
+      while the ledger shows that exact allocation (len=64, one
+      ALLOC, zero FREEs) - corruption in place, or a stale
+      pointer to a reused VA. Garbage dims turn the strided read
+      into a wild address: mechanism confirmed end to end.
+      THE REQUEST THREAD WAS MID-CAPTURE: the host core's thread
+      12 sat in DecoderLayer::forward_attention inside
+      capture_cuda_decode_graph_step, dropping a bf16 tensor
+      (drop -> hipFreeAsync, dst VA on its stack 6x) with event
+      tracking disabled - the capture-time lifetime hazard is
+      real and adjacent, but the faulting read was the params
+      vector, not the freed dst.
+      THE FIX (candle 64f2bd73, both layers in copy_strided_src):
+      (1) ALWAYS-ON host-side footprint validation - refuse
+      layouts whose strided footprint escapes the source storage
+      (zero sync cost); (2) ARMED params readback under the
+      existing MISTRALRS_GATHER_GUARD flag - compare the device
+      dims/stride vector against the host layout before launch,
+      bail with attribution on mismatch (skipped during capture
+      where DTOH is banned). Pure-function unit tests green;
+      four shape checks green; live probe with both guards armed:
+      391 CORRECT, 83.4 tok/s (== gather-only band: the always-on
+      check costs nothing), zero spurious bails.
       NEXT INSTRUMENTATION (cheap, high-yield): census records
       gain TENSOR LENGTHS + a first-launch check that entry
       state_indices length == captured batch (the census verifies
