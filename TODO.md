@@ -733,19 +733,29 @@ facade today, so the MTP port gates the cutover):
       = +69% decode from graphs alone. Graphs-only (48.6) already
       beats prod's MTP-on eager (~35.0) by +39%. The 4B bisect also
       proved the hip normal-pipeline path (299 replays, zero eager).
-      REMAINS (deploy): release rebuild with the port DONE + verified
-      (2026-10-11, release binary, mtp n=2, essay x3): 50.02/48.95/
-      50.70 tok/s (mean 49.9 = +43% over prod's ~35.0), Captured 4
-      graphs in 376ms, 820 replays / 1 population, sanity 391,
-      acceptance 62% (1013/1632) - quality held. Full A/B (all
-      release, same bench): eager-MTP-off 28.8, graphs-MTP-off 48.6,
-      graphs+MTP-n2 49.9, prod-today (MTP eager) ~35.0. The stack
-      beats graphs-alone: MTP contributes ~+2.7% on top of graphs.
-      NO config change needed for the swap (the port is code-only;
-      prod TOML already runs mtp n=2; the Utilization pool captures
-      fine - the pinned 32k pool was a probe-lane memory constraint
-      only). Rollback = restore target/release/mistralrs.pre-
-      35bgraphs + restart. AWAITING USER GO: ONE prod restart.
+      DEPLOY ATTEMPTED AND ROLLED BACK (2026-10-11 ~18:30): the release
+      swap booted clean and the demand-load captured 29 graphs through
+      batch bucket 32 in 2.78s (prod max_seqs=32 vs the probe's 2) -
+      then the FIRST decode step faulted: rocdevice.cpp "kernel:
+      where_u8_bf16, faulting addr 0x70ad66ea4000" (host-pinned
+      range), "Queue error - HSA_STATUS_ERROR_MEMORY_FAULT", and the
+      request WEDGED (no completion in 9+ min; the follow-on requests
+      returned empty). Same signature class as the old dangling-arena
+      residue (post-capture op reading freed pinned memory - the
+      2026-10-07 "INVALID_VALUE on sampling DTOH" shape). The probe
+      never hit it because it captured only 4 graphs at bucket 2.
+      Rollback executed (stop -> restore mistralrs.pre-35bgraphs ->
+      start; first cp attempt failed with Text file busy - stop the
+      unit before swapping) and verified: sanity 391, essays 33.8/32.9
+      tok/s eager band, zero faults. NEXT: reproduce on the probe lane
+      with max_seqs=32 (bucket-32 capture set, fast build), then
+      compute-sanitizer for the dangling pointer - suspects: the htod
+      input cache at 29-entry scale (its eviction/rebuild path),
+      spec-state admission at bucket 32, or an arena keepalive gap
+      for a width/bucket combo the 4-graph probe never exercised.
+      The port itself stays committed (32dab2f6f) - the bug is in the
+      shared capture machinery's behavior at capture-set scale, not
+      in the ported plumbing, which the bucket-2 probe validated.
       Probe-lane findings (2026-10-11):
       - A second 35B cannot load beside a resident prod: GTT is
         RAM-backed (Strix Halo APU) and /v1/models/unload frees into
