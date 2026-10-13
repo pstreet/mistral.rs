@@ -3,26 +3,10 @@
 # Loaded by: mistralrs from-config -f <this file> (see ~/.config/mistralrs-server-wrapper.sh)
 # Model paths below are relative to $LOCALAI_ROOT (the service sets
 # WorkingDirectory there and the wrapper cds there; cd there for manual runs).
-#
-# Differences vs models.ini:
-#   - ACTIVE default: Qwen3.8-27B (orcarouter); Qwen3.6-35B is now lazy.
-#   - Only the first [[models]] entry loads at boot (it seeds the instance);
-#     the rest use `lazy = true` (registered, demand-loaded on first request).
-#     Demand-loads LRU-evict idle residents to fit (plus headroom) and evict
-#     engines idle past the router TTL; concurrent demand-loads for the same
-#     model wait on the in-flight load. See [router] below.
-#   - Per-model `alias` gives short API names (llama.cpp-style); the full
-#     model_id path also resolves. Clients can still just use model="default".
-#   - Per-model `alias` gives short API names (llama.cpp-style); the full
-#     model_id path also resolves. With one eager model, clients can still
-#     just use model="default".
-#   - Sampling knobs from models.ini (top-k, top-p, temp, repeat/presence
-#     penalty) are per-request in the OpenAI API, not set here.
-#   - spec-type = draft-mtp is a global runtime flag in mistral.rs, not per-model.
 
 command = "serve"
 # Single active model -> clients address it as "default".
-default_model_id = "models/orcarouter/Qwen3.8-27B-Uncensored-GGUF"
+default_model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
 
 [server]
 host = "127.0.0.1"
@@ -31,12 +15,6 @@ no_ui = true
 
 [paged_attn]
 cache_type = "Q8_0"
-# Size the KV pool by the fleet's maximum native context (256k; GGUF
-# context_length metadata) instead of 90% of free VRAM/GTT: the old default
-# grabbed ~78GB (3.1M-token capacity nobody can use) and starved decode
-# graphs + any second resident. ~26.1 KB/token on the 27B -> ~6.9GB for
-# full 256k context; models with smaller native maxes allocate less.
-context_len = 262144
 
 # Demand-load policy for lazy models (router commits 7ba9f430f-1ea83644c).
 # Values below are the code defaults, pinned explicitly.
@@ -48,50 +26,16 @@ evict_busy_wait_secs = 300
 idle_ttl_secs = 1800
 
 [runtime]
-# TEMP 2026-10-08 (dual-role exercise): the 27B-cuda MTP attach needs the
-# recurrent checkpoint pool at capacity 3 (~1.3GB), not 33 (~14.5GB OOM on
-# the 24GB 3090). Global cap until per-model max_seqs lands (backlog).
-# Removing this line restores the default 32 - and re-blocks the cuda alias.
-max_seqs = 2
-# Prefix caching ON (prefix_cache_n = 4, 2026-10-09): the hybrid recurrent
-# snapshot path was built and probe-validated (identical 3.8k prompt
-# 12s -> 0.3s MTP-on, chat turn-2 0.7s, MTP acceptance intact).
-# Cost ~739MB reservation per resident engine. History: pre-2026-10-08
-# this line was commented out, so the default (16) silently won and
-# reserved ~2.5GB against the KV budget (blocked the 27B on the 3090);
-# n=16 default stays off. 3090 note: this is per-engine global, so a
-# cuda-alias demand-load also reserves it there.
-prefix_cache_n = 4
-# Decode test 2026-09-07: MTP n=3 stable (+19%). Q4 wall test done, restored.
-# MTP sweep 2026-09-11, essay 1500tok temp0.3 (short ctx goodput T/s):
-# n=1 10.58, n=2 11.10 (LOCKED), n=3 10.50, n=5 8.27,
-# off+graphs 9.12, off+nographs 8.91 (graphs +2.4%, keep on).
-# 47k ctx: n=2 5.29 > n=3 4.75 > off 4.50. greedy == auto (sampling
-# not the constraint; draft-head quality is).
-# A/B recheck 2026-09-11 (machine, /v1/completions 1500tok temp0.3,
-# avg_compl_tok_per_sec; harness /tmp/opencode/mtp_bench.py):
-# n=1 10.18/10.29, n=2 10.53/10.58/11.05 (best 11.05), n=3 10.47/10.52,
-# n=5 8.11. Confirms narrow 1-2 plateau; n=3 does NOT beat n=2 (within
-# noise, never above). Run-to-run var ~+/-0.3 (thermal). Keep n=2.
-# 35B MTP sweep 2026-09-18, essay 220tok temp0.3 (decode T/s, 3 runs each):
-# n=1 48.3/48.4/47.5, n=2 50.8/49.4/50.7, n=3 47.8/45.5/48.4 -> n=2 wins.
-# Draft sampling at n=2: auto 51.2/52.5/51.3 vs greedy 50.6/52.4/51.8 retest
-# (plus earlier greedy 50.8/49.4/50.7) — identical within noise, keep greedy.
-# MTP n=2 vs off on 35B: ~54 vs ~42 (+29%), in line with 27B +36%.
 mtp = true
-mtp_n_predict = 2
+mtp_n_predict = 3
 mtp_draft_sampling = "greedy"
-# Larger prefill chunk: long prompts run as fewer, bigger prefill chunks,
-# which amortizes per-chunk overhead. With the per-dtype MMQ dispatch
-# (Q6K > 256 rows routes to dequantize-to-F16 + hipBLASLt) cold 18k prefill
-# measures 419-426 tok/s on the 27B (2026-09-25, gfx1151). Capped at the
-# 4096 batch-token budget; lower this if concurrent prefill latency matters
-# more than single-prompt throughput.
-max_prefill_chunk_tokens = 4096
-# Prefill batch token quantum: larger chunks amortize per-chunk overhead for long prompts.
+max_prefill_chunk_tokens = 2048
+# Prefix cache depth (probe-validated 2026-10-09: identical 3.8k prompt
+# 12s -> 0.3s MTP-on). Per-entry `prefix_cache_n` overrides this.
+prefix_cache_n = 4
 
 # ============================================================
-# Qwen3.6 35B MoE (lazy; the orcarouter 27B is the entry default)
+# Qwen3.6 35B MoE (lazy; the entry default)
 # ============================================================
 
 [[models]]
@@ -114,6 +58,8 @@ lazy = true
 # Per-model split KV: K=Q8_0 V=Q4_0 while the global default stays Q8_0.
 k_cache_type = "Q8_0"
 v_cache_type = "Q4_0"
+# MTP n=2 locked by sweep (global n=3 is for the 35B).
+mtp_n_predict = 2
 
 [models.format]
 quantized_file = "Qwen3.8-27B-Uncensored-Q6_K.gguf"
@@ -131,6 +77,11 @@ alias = "qwen3.8-27b-cuda"
 device = "cuda:0"
 lazy = true
 context_len = 32768
+# Per-model fit for the 24GB 3090 (replaces the old global max_seqs=2
+# TEMP): capacity-33 checkpoint pool OOMs the MTP attach here.
+max_seqs = 2
+# MTP n=2 locked by sweep (global n=3 is for the 35B).
+mtp_n_predict = 2
 k_cache_type = "Q8_0"
 v_cache_type = "Q4_0"
 
@@ -145,7 +96,7 @@ isq = "Q4K"
 # Everything below is lazy: registered at boot, loaded on first request.
 # NOTE: lazy models inherit the global MTP flag unless pinned `mtp = false`
 # (all entries below are pinned: two residents at once must fit VRAM, and
-# the MTP draft head adds footprint; the eager default keeps MTP n=2).
+# the MTP draft head adds footprint).
 # ============================================================
 
 # ------------------------------------------------------------
