@@ -1270,6 +1270,17 @@ facade today, so the MTP port gates the cutover):
       391 CORRECT, 83.4 tok/s (== gather-only band: the always-on
       check costs nothing), zero spurious bails.
       SOAK ROUNDS 2-4 + THE PARAMS-SYNC FIX (2026-10-14):
+      SOAK ROUND 5 (2026-10-14): 4/4 CLEAN, band steady ~48.5.
+      Combined post-sync-fix: 8/8 clean boots (rounds 4+5). At
+      the hot 50/50 rate that is ~0.4% by luck - the statistical
+      close. Tally since the hunt went hot: 15 clean against 3
+      faults, with all 3 faults predating the sync fix and none
+      in the 8 boots since. VERDICT: the params-upload race was
+      the fault class's mechanism; the class is CLOSED pending
+      only organic confirmation over the coming days. The armed
+      window stays (zero measurable cost) until a week of clean
+      serving confirms it, then disarm stepwise (guard flag
+      first, diagnostics last).
       SOAK ROUND 4 (first test of the params-sync fix under
       fire): 4/4 CLEAN, band 47.9-48.4 tok/s, zero fault/guard
       lines. Tally since the hunt went hot: 11 clean boots
