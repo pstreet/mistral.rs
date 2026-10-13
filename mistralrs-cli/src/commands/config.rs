@@ -486,6 +486,15 @@ async fn build_model_configs(
         if let Some(fit_ctx) = entry.fit_ctx {
             config = config.with_fit_ctx(fit_ctx);
         }
+        if let Some(max_seqs) = entry.max_seqs {
+            config = config.with_max_seqs(max_seqs);
+        }
+        if let Some(prefix_cache_n) = entry.prefix_cache_n {
+            config = config.with_prefix_cache_n(prefix_cache_n);
+        }
+        if let Some(mtp_n_predict) = entry.mtp_n_predict {
+            config = config.with_mtp_n_predict(mtp_n_predict);
+        }
         if let Some(max_model_len) = entry.max_model_len {
             config = config.with_max_model_len(max_model_len);
         }

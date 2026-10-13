@@ -79,6 +79,18 @@ pub struct ModelConfig {
     /// Per-model shrink-to-fit. `None` inherits the global `fit_ctx`.
     #[serde(default)]
     pub fit_ctx: Option<bool>,
+    /// Per-model serving concurrency cap. `None` inherits the global
+    /// `[runtime] max_seqs`.
+    #[serde(default)]
+    pub max_seqs: Option<usize>,
+    /// Per-model recurrent prefix-cache depth. `None` inherits the global
+    /// `[runtime] prefix_cache_n`.
+    #[serde(default)]
+    pub prefix_cache_n: Option<usize>,
+    /// Per-model MTP draft length. `None` inherits the global
+    /// `[runtime] mtp_n_predict`. Applies when this entry attaches MTP.
+    #[serde(default)]
+    pub mtp_n_predict: Option<usize>,
 }
 
 impl ModelConfig {
@@ -103,6 +115,9 @@ impl ModelConfig {
             paged_ctxt_len: None,
             paged_attn_gpu_mem: None,
             fit_ctx: None,
+            max_seqs: None,
+            prefix_cache_n: None,
+            mtp_n_predict: None,
         }
     }
 
@@ -152,6 +167,21 @@ impl ModelConfig {
 
     pub fn with_fit_ctx(mut self, fit_ctx: bool) -> Self {
         self.fit_ctx = Some(fit_ctx);
+        self
+    }
+
+    pub fn with_max_seqs(mut self, max_seqs: usize) -> Self {
+        self.max_seqs = Some(max_seqs);
+        self
+    }
+
+    pub fn with_prefix_cache_n(mut self, prefix_cache_n: usize) -> Self {
+        self.prefix_cache_n = Some(prefix_cache_n);
+        self
+    }
+
+    pub fn with_mtp_n_predict(mut self, mtp_n_predict: usize) -> Self {
+        self.mtp_n_predict = Some(mtp_n_predict);
         self
     }
 
@@ -488,10 +518,11 @@ fn resolve_entry_mtp_config(
     global: &Option<MtpConfig>,
     fallback: &Option<MtpConfig>,
     entry_mtp: Option<bool>,
+    entry_mtp_n_predict: Option<usize>,
     config_key: &str,
 ) -> Result<Option<MtpConfig>> {
     if entry_mtp.unwrap_or(global.is_some()) {
-        global
+        let mut base = global
             .clone()
             .or_else(|| fallback.clone())
             .map(Some)
@@ -499,7 +530,11 @@ fn resolve_entry_mtp_config(
                 anyhow::anyhow!(
                     "Model '{config_key}' requests MTP but no MTP configuration is available (global [runtime] mtp is off and no fallback was provided)."
                 )
-            })
+            })?;
+        if let (Some(config), Some(n_predict)) = (base.as_mut(), entry_mtp_n_predict) {
+            config.n_predict = Some(n_predict);
+        }
+        Ok(base)
     } else {
         Ok(None)
     }
@@ -1199,14 +1234,28 @@ impl MistralRsForServerBuilder {
     fn resolve_entry_mtp(
         &self,
         entry_mtp: Option<bool>,
+        entry_mtp_n_predict: Option<usize>,
         config_key: &str,
     ) -> Result<Option<MtpConfig>> {
         resolve_entry_mtp_config(
             &self.mtp_config,
             &self.mtp_entry_fallback,
             entry_mtp,
+            entry_mtp_n_predict,
             config_key,
         )
+    }
+
+    /// Resolve the effective serving concurrency for one entry. `None`
+    /// inherits the global `[runtime] max_seqs`.
+    fn resolve_entry_max_seqs(&self, model_config: &ModelConfig) -> usize {
+        model_config.max_seqs.unwrap_or(self.max_seqs)
+    }
+
+    /// Resolve the effective recurrent prefix-cache depth for one entry.
+    /// `None` inherits the global `[runtime] prefix_cache_n`.
+    fn resolve_entry_prefix_cache_n(&self, model_config: &ModelConfig) -> usize {
+        model_config.prefix_cache_n.unwrap_or(self.prefix_cache_n)
     }
 
     /// Resolve the effective paged cache config for one entry. A per-entry
@@ -1242,8 +1291,8 @@ impl MistralRsForServerBuilder {
         };
         Ok(Some(
             config
-                .with_serving_capacity(self.max_seqs)?
-                .with_recurrent_prefix_capacity(self.prefix_cache_n)
+                .with_serving_capacity(self.resolve_entry_max_seqs(model_config))?
+                .with_recurrent_prefix_capacity(self.resolve_entry_prefix_cache_n(model_config))
                 .with_fit_ctx(model_config.fit_ctx.unwrap_or(self.fit_ctx)),
         ))
     }
@@ -1312,22 +1361,23 @@ impl MistralRsForServerBuilder {
         // reserved above). Reload swaps in the realized config.
         let entry_cache_config =
             self.resolve_entry_cache_config(model_config, shared.no_paged_attn)?;
+        let entry_max_seqs = self.resolve_entry_max_seqs(model_config);
         let scheduler_config = match entry_cache_config {
             Some(config) => SchedulerConfig::PagedAttentionPlanned {
-                max_num_seqs: self.max_seqs,
+                max_num_seqs: entry_max_seqs,
                 max_num_batched_tokens: self.max_num_batched_tokens.get(),
                 max_prefill_chunk_tokens: self.max_prefill_chunk_tokens.get(),
                 max_decode_steps_before_prefill: self.max_decode_steps_before_prefill.get(),
                 config,
             },
             None => SchedulerConfig::DefaultScheduler {
-                method: DefaultSchedulerMethod::Fixed(self.max_seqs.try_into().unwrap()),
+                method: DefaultSchedulerMethod::Fixed(entry_max_seqs.try_into().unwrap()),
             },
         };
         let engine_config = mistralrs_core::EngineConfig {
             no_kv_cache: self.no_kv_cache,
             no_prefix_cache: false,
-            prefix_cache_n: self.prefix_cache_n,
+            prefix_cache_n: self.resolve_entry_prefix_cache_n(model_config),
             prefill_chunk_size: if self.prefill_chunk_size == 0 {
                 None
             } else {
@@ -1343,6 +1393,7 @@ impl MistralRsForServerBuilder {
             &self.mtp_config,
             &self.mtp_entry_fallback,
             model_config.mtp,
+            model_config.mtp_n_predict,
             &model_config.model_id,
         )?;
         let loader_config = ModelLoaderConfig {
@@ -1417,8 +1468,6 @@ impl MistralRsForServerBuilder {
         if self.models.iter().all(|m| m.lazy) {
             return self.build_all_lazy().await;
         }
-
-        let mtp_runtime = MtpRuntimeConfig::new(self.prefix_cache_n);
         mistralrs_core::distributed::begin_tensor_parallel_session(self.models.len())?;
 
         // Use the first model as the base configuration
@@ -1430,7 +1479,14 @@ impl MistralRsForServerBuilder {
             );
         }
         // Resolve before `self.device` is moved out below.
-        let first_mtp_config = self.resolve_entry_mtp(first_model.mtp, &first_model.model_id)?;
+        let first_mtp_config = self.resolve_entry_mtp(
+            first_model.mtp,
+            first_model.mtp_n_predict,
+            &first_model.model_id,
+        )?;
+        let first_max_seqs = self.resolve_entry_max_seqs(first_model);
+        let first_mtp_runtime =
+            MtpRuntimeConfig::new(self.resolve_entry_prefix_cache_n(first_model));
         let model = first_model.model.clone();
         let model_for_config = model.clone();
         let first_chat_template = first_model
@@ -1515,7 +1571,7 @@ impl MistralRsForServerBuilder {
                 // fair-share slice would shrink every eager model's budget.
                 .map(|(m, config)| PagedKvModelRequest {
                     paged_attn: if m.lazy { None } else { *config },
-                    max_num_seqs: self.max_seqs,
+                    max_num_seqs: self.resolve_entry_max_seqs(m),
                 })
                 .collect::<Vec<_>>(),
             Default::default(),
@@ -1524,7 +1580,7 @@ impl MistralRsForServerBuilder {
             *first = reserve_external_mtp_memory_with_runtime(
                 *first,
                 first_mtp_config.as_ref(),
-                mtp_runtime,
+                first_mtp_runtime,
                 &dtype,
                 &device,
             )?;
@@ -1562,7 +1618,7 @@ impl MistralRsForServerBuilder {
                 mistralrs_core::SpeculativeConfig::Mtp(
                     mtp_config.with_draft_lm_head_isq(draft_head_isq),
                 ),
-                mtp_runtime,
+                first_mtp_runtime,
             )?;
         }
         let first_pipeline_name = pipeline.lock().await.name();
@@ -1595,7 +1651,7 @@ impl MistralRsForServerBuilder {
         let scheduler_config = init_scheduler_config(
             &first_cache_config,
             &pipeline,
-            self.max_seqs,
+            first_max_seqs,
             self.max_num_batched_tokens.get(),
             self.max_prefill_chunk_tokens.get(),
             self.max_decode_steps_before_prefill.get(),
@@ -1630,7 +1686,7 @@ impl MistralRsForServerBuilder {
         )
         .with_opt_log(self.log.clone())
         .with_no_kv_cache(self.no_kv_cache)
-        .with_prefix_cache_n(self.prefix_cache_n)
+        .with_prefix_cache_n(self.resolve_entry_prefix_cache_n(first_model))
         .with_disable_eos_stop(self.disable_eos_stop)
         .with_deferred_daemon_start(true)
         .with_router_policy(self.router_policy)
@@ -1781,7 +1837,7 @@ impl MistralRsForServerBuilder {
             let scheduler_config = init_scheduler_config(
                 &paged_kv_plan.paged_attn[model_index],
                 &pipeline,
-                self.max_seqs,
+                self.resolve_entry_max_seqs(model_config),
                 self.max_num_batched_tokens.get(),
                 self.max_prefill_chunk_tokens.get(),
                 self.max_decode_steps_before_prefill.get(),
@@ -1808,7 +1864,7 @@ impl MistralRsForServerBuilder {
             let engine_config = mistralrs_core::EngineConfig {
                 no_kv_cache: self.no_kv_cache,
                 no_prefix_cache: false,
-                prefix_cache_n: self.prefix_cache_n,
+                prefix_cache_n: self.resolve_entry_prefix_cache_n(model_config),
                 prefill_chunk_size: if self.prefill_chunk_size == 0 {
                     None
                 } else {
@@ -2304,5 +2360,37 @@ mod tests {
     #[test]
     fn paged_attn_disabled_yields_none() {
         assert!(resolve(entry(), true).is_none());
+    }
+
+    #[test]
+    fn entry_capacity_knobs_inherit_global_by_default() {
+        let builder = MistralRsForServerBuilder::new();
+        let entry = entry();
+        assert_eq!(builder.resolve_entry_max_seqs(&entry), defaults::MAX_SEQS);
+        assert_eq!(
+            builder.resolve_entry_prefix_cache_n(&entry),
+            defaults::PREFIX_CACHE_N
+        );
+    }
+
+    #[test]
+    fn entry_capacity_knobs_override_global() {
+        let builder = MistralRsForServerBuilder::new();
+        let entry = entry().with_max_seqs(2).with_prefix_cache_n(4);
+        assert_eq!(builder.resolve_entry_max_seqs(&entry), 2);
+        assert_eq!(builder.resolve_entry_prefix_cache_n(&entry), 4);
+    }
+
+    #[test]
+    fn entry_mtp_n_predict_overrides_global() {
+        let global = Some(mistralrs_core::MtpConfig::builtin(Some(2)));
+        let resolved = resolve_entry_mtp_config(&global, &None, Some(true), Some(3), "test")
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.n_predict, Some(3));
+        let inherited = resolve_entry_mtp_config(&global, &None, Some(true), None, "test")
+            .unwrap()
+            .unwrap();
+        assert_eq!(inherited.n_predict, Some(2));
     }
 }

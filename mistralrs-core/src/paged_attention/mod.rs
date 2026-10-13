@@ -543,9 +543,10 @@ fn fit_post_load_cache_budget(
 /// remain after the weights are loaded. Post-loading callers should pass `None` since
 /// `get_memory_available()` already reflects the loaded model.
 ///
-/// `max_num_tokens`: on unified-memory devices (Metal, integrated GPUs), caps the KV cache
-/// to this many tokens. A value of 0 or `None` falls back to `config.max_seq_len()`.
-/// On dedicated-VRAM devices this is ignored.
+/// `max_num_tokens`: caps the KV cache to this many tokens (clamped to the
+/// model's native context) for heuristic Utilization budgets. A value of 0
+/// or `None` uses the native context. Exact specs (ContextSize, MbAmount,
+/// BestEffort) are honored as written, so YaRN models can opt past native.
 #[allow(clippy::too_many_arguments)]
 pub fn calculate_cache_config(
     mem_gpu: MemoryGpuConfig,
@@ -720,24 +721,36 @@ pub fn calculate_cache_config(
         );
     }
 
-    // Unified-memory devices share RAM with the OS and CPU, so cap the cache to what the model can use.
+    // Cap the pool at the model's native context: capacity past native is
+    // unusable for attention on any device role.
     #[allow(unused_mut, unused_variables)]
+    let cap_utilization_budget = matches!(mem_gpu, MemoryGpuConfig::Utilization(_));
     let mut mem_gpu = min_mem_gpu;
+    // Cap the pool at the model's native context on every device role, not
+    // just unified memory: KV capacity past native is unusable for attention
+    // (a 40k-native model on a 24GB card must not reserve a 256k pool).
     // Hip role devices are unified-memory in every rocm shape; is_integrated_gpu
-    // has no dual arm, so gate on the role helper to keep the model-context cap
-    // live in cuda,rocm builds too.
-    let cap_to_model_context = device.is_metal()
-        || crate::utils::normal::is_integrated_gpu(device)
-        || crate::paged_attention::cache_engine::is_hip_role(device);
+    // has no dual arm, so the hip check goes through the role helper to keep
+    // the cap live in cuda,rocm builds too. The gate below stays as the
+    // (now always-true) record of which roles were audited for the cap.
+    //
+    // Only heuristic Utilization budgets clamp: exact specs (ContextSize,
+    // MbAmount, BestEffort) are honored as written, so YaRN-extended models
+    // (rope_scaling widens usable context past declared native, which
+    // max_seq_len does not reflect) can still opt into a bigger pool via
+    // an explicit per-model context_len.
+    let cap_to_model_context = cap_utilization_budget;
     if cap_to_model_context {
+        let native = config.max_seq_len();
         let max_tokens = max_num_tokens
             .filter(|&n| n > 0)
-            .unwrap_or(config.max_seq_len());
+            .map(|n| n.min(native))
+            .unwrap_or(native);
         let mem_for_tokens = ctxt_to_blocks!(max_tokens, bytes_per_token) / SIZE_IN_MB;
         if mem_for_tokens < mem_gpu {
             if !silent {
                 info!(
-                    "Unified memory: capping KV cache from {} MB to {} MB ({} tokens).",
+                    "Capping KV cache to model context from {} MB to {} MB ({} tokens).",
                     mem_gpu, mem_for_tokens, max_tokens
                 );
             }

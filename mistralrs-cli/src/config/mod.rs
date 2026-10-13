@@ -238,6 +238,19 @@ pub struct ModelEntry {
     /// Per-entry shrink-to-fit. `None` inherits the global `fit_ctx`.
     #[serde(default)]
     pub fit_ctx: Option<bool>,
+    /// Per-entry serving concurrency cap. `None` inherits the global
+    /// `[runtime] max_seqs`. Lower it on VRAM-tight entries so the MTP
+    /// checkpoint pool and scheduler fit (e.g. the 27B on 24GB).
+    #[serde(default)]
+    pub max_seqs: Option<usize>,
+    /// Per-entry recurrent prefix-cache depth. `None` inherits the global
+    /// `[runtime] prefix_cache_n`.
+    #[serde(default)]
+    pub prefix_cache_n: Option<usize>,
+    /// Per-entry MTP draft length. `None` inherits the global
+    /// `[runtime] mtp_n_predict`. Applies when this entry attaches MTP.
+    #[serde(default)]
+    pub mtp_n_predict: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]

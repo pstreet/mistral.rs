@@ -866,6 +866,26 @@ restart per batch, never one per item.
       max_model_len does not shrink the pool, graphs-off changes
       nothing). Small GPUs need either per-model `context_len`/budget
       or a mapper that spills more layers to make KV room.
+      CAPACITY LANDED 2026-10-11 (uncommitted prod TOML experiment
+      reviewed; code carries it so the TOML need not):
+      (a) universal native cap: the hip ctx-cap now applies on every
+      role for heuristic Utilization budgets - pool = min(computed,
+      native), loud log. Proof (3090, 16B native 40960, no sizing
+      keys): "Capping KV cache to model context from 12063 MB to
+      3840 MB (40960 tokens)". The 90%-of-free fallback can no longer
+      reserve unusable capacity. Exact specs (ContextSize, MbAmount,
+      BestEffort) are honored as written: RoPE/YaRN support is intact,
+      and a rope_scaling model needing past-native pool opts in via an
+      explicit per-model context_len (max_seq_len does not reflect the
+      extension, so the clamp deliberately does not try).
+      (b) per-model `max_seqs`, `prefix_cache_n`, `mtp_n_predict`
+      (global inherits when unset): capacities resolve per entry at
+      registration (cache plan, scheduler, engine, MTP runtime +
+      n_predict override), so demand-load reloads inherit them too.
+      Proof (4B, global 32/16 vs entry 2/2): scheduler logs
+      max_num_seqs=2, serves clean. This closes the per-model max_seqs
+      backlog: the 27B-cuda alias can pin max_seqs=2 instead of the
+      global TEMP. Prod TOML left dirty (user-owned experiment).
 - [ ] ~S Re-bench quants on the cutover binary: Q6_K vs Q4_K_M (27B),
       Q5_K_XL vs Q4_K_XL (35B). The +54% came from kernels, not
       weights, so the quant tradeoff curve moved.
