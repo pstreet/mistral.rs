@@ -44,6 +44,11 @@ fn gguf_no_mmap_enabled() -> bool {
     std::env::var(ENV_GGUF_NO_MMAP).is_ok_and(|x| x == "1")
 }
 
+fn alloc_trace_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("MRS_ALLOC_TRACE").as_deref() == Ok("1"))
+}
+
 // Tell the kernel the shard file pages are no longer needed. Weights live in
 // device/managed memory by the time this runs, so dropping clean file pages
 // only frees reclaimable cache. Errors are ignored by design.
@@ -348,11 +353,30 @@ fn load_shard_storage(mut file: File, path: &Path) -> Result<ShardStorage> {
         let mut data = Vec::with_capacity(len as usize);
         file.read_to_end(&mut data)
             .map_err(|err| Error::wrap(err).with_path(path))?;
-        return Ok(ShardStorage::Owned(data.into_boxed_slice()));
+        let storage = ShardStorage::Owned(data.into_boxed_slice());
+        if alloc_trace_enabled() {
+            if let ShardStorage::Owned(bytes) = &storage {
+                eprintln!(
+                    "[alloc-trace] ALLOC gguf-heap va=0x{:x} len={} path={}",
+                    bytes.as_ptr() as usize,
+                    bytes.len(),
+                    path.display()
+                );
+            }
+        }
+        return Ok(storage);
     }
     // The mapping is read-only and remains owned by the archive.
     let mmap =
         unsafe { MmapOptions::new().map(&file) }.map_err(|err| Error::wrap(err).with_path(path))?;
+    if alloc_trace_enabled() {
+        eprintln!(
+            "[alloc-trace] ALLOC gguf-mmap va=0x{:x} len={} path={}",
+            mmap.as_ptr() as usize,
+            mmap.len(),
+            path.display()
+        );
+    }
     Ok(ShardStorage::Mmap(mmap))
 }
 
@@ -645,7 +669,23 @@ impl GgufArchive {
 
     pub fn release_host_shard(&self, shard_index: usize) {
         if let Some(storage) = self.shard_storage.get(shard_index) {
-            *storage.write().unwrap() = ShardStorage::Released;
+            let mut guard = storage.write().unwrap();
+            if alloc_trace_enabled() {
+                match &*guard {
+                    ShardStorage::Mmap(mmap) => eprintln!(
+                        "[alloc-trace] FREE gguf-mmap va=0x{:x} len={}",
+                        mmap.as_ptr() as usize,
+                        mmap.len()
+                    ),
+                    ShardStorage::Owned(bytes) => eprintln!(
+                        "[alloc-trace] FREE gguf-heap va=0x{:x} len={}",
+                        bytes.as_ptr() as usize,
+                        bytes.len()
+                    ),
+                    ShardStorage::Released => {}
+                }
+            }
+            *guard = ShardStorage::Released;
         }
     }
 

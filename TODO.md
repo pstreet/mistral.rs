@@ -894,6 +894,35 @@ facade today, so the MTP port gates the cutover):
       (the fault VA sits just below the managed-weights region,
       suggesting GGUF-mmap/host-registered pages outside current
       coverage). Diagnostics stay armed.
+      LEDGER EXTENSION 2026-10-12 (in flight): device allocs
+      (hipMalloc/Async + Free/Async VA+len) + GGUF shard ranges
+      (mmap base+len at map, FREE at release_host_shard, heap path
+      too) now in the MRS_ALLOC_TRACE ledger; va_match.py handles
+      the new kinds. Discriminator: a recurrence naming a gguf-mmap
+      range points at use-after-release_host_shards; a device range
+      points at pool/allocator reuse; still-no-cover keeps the
+      host-register/mmap hunt open.
+      FIFTH OCCURRENCE 2026-10-12 ~06:31 UTC, NEW MANIFESTATION
+      (honestly recorded): no memory fault this time - the SECOND
+      request after a clean boot hung the GPU (100% busy, zero
+      throughput, zero log output, dmesg clean; first sanity 391
+      served). gdb named it: the engine thread spins in
+      hsa_executable_freeze <- hipLaunchKernel(sparse_rejection_
+      categorical_f32, first-ever launch in the process) - the
+      freeze's blit never completes because the CUs never drain.
+      Same-binary restart healed (5/5); the exact trigger essay
+      then served 2x600tok at 49.2-49.3 with 550 replays. Reading:
+      the sporadic class can present as fault OR hang; the hang
+      downstream (loader freeze) implies the GPU was already wedged
+      by request-1's capture/replay before the freeze submitted -
+      i.e. a poisoned first-capture installed cleanly again, census
+      passing as before. Ledger exonerated as cause (identical
+      binary serves; eprintln cannot wedge CUs) and validated live
+      (17k device lines + gguf-mmap lines flowing). Stacks at
+      /tmp/opencode/wedge2-stacks.txt, journal at
+      /tmp/opencode/wedge2-journal.txt. Next: pre-warm companion
+      kernels at load (move freezes off the serving path) as cheap
+      hardening; the poisoned-capture root cause stays open.
       TAILS LANDED 2026-10-12 (5da184dfe, validated same night): the
       async sampling tails are inside the window - sample_sequence's
       dtype conversion, both sampler.sample sites (direct) plus a guard
