@@ -1654,6 +1654,36 @@ facade today, so the MTP port gates the cutover):
       AMD-role-only in dual (they are the ISQ entry gate, so no
       silent path exists). No fp8 models in the serving set - zero
       urgency; do it when an fp8 model lands or for test parity.
+- [ ] ~S/P1 Prefix-cache checkpoint poisoning on NaN states (found
+      2026-10-14 via an openwebui outage; PRE-EXISTING - the
+      02:22:03 occurrence predates every candle/mistralrs change
+      of the hunt week). MECHANISM (evidence chain): the model
+      occasionally produces all-NaN logits on a long cold prefill
+      - a rare numerical event (observed ~1-in-a-dozen on a 25KB
+      chat; 10/10 clean hammer after), likely bf16 GDN state
+      blowup on long/repetitive contexts. When it strikes
+      mid-conversation, the prefix cache CAPTURES the poisoned
+      recurrent state as a checkpoint, and every later request
+      sharing that prefix RESTORES it: instant all-NaN logits,
+      the conversation fails permanently (user saw 2/2 identical
+      failures; retries cannot heal because failed sequences
+      don't commit clean blocks either). Other chats and raw
+      completions keep working. Two observed error faces: the
+      sampling-probability NaN check ("n=248320 nan=248320"),
+      including a 311ms instant failure (pure restore, no
+      prefill), and the fused-categorical "invalid batched CUDA
+      categorical output". Mitigation delivered: restart clears
+      the cache (user's conversation works again; cold-prefill
+      the first send is slow). THE FIX to land: on a seq-level
+      NaN/invalid-sampling error, INVALIDATE that sequence's
+      prefix-cache blocks + recurrent checkpoints (engine's
+      seq-error catch site) so the poison cannot persist - one
+      failed message instead of a bricked conversation. Optional
+      hardening: finite-check at checkpoint capture. Open
+      question: the numerics origin (bf16 GDN long-context
+      accumulation) - possible follow-up: fp32 state or clamped
+      state norm, decided after the invalidation fix makes the
+      event visible-but-harmless.
 - [ ] ~M/P0 unload + failed-load GPU memory retention (found
       2026-10-13 during the cuda-alone validation; five instances,
       one evening, all reproducible): `unload_model` releases
