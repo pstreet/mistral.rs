@@ -868,14 +868,44 @@ facade today, so the MTP port gates the cutover):
       RESIDUALS (not concurrency bugs): dual-resident captures
       are slow under GTT memory pressure (27B capture 138s with
       both models resident, one bucket OOM -> lazy fallback) -
-      a capacity cost; the async sampling tails
-      (try_sample_causal_gen_batched / finish_cuda_token_batch)
-      and engine-drop frees stay outside the window; the
-      capture-abort rollback retry hardening from the original
+      a capacity cost; engine-drop frees stay outside the window;
+      the capture-abort rollback retry hardening from the original
       follow-up is NOT yet done (with the window + THREAD_LOCAL
       the abort path should no longer see poisoned streams, but
       a quiesce+retry on rollback failure is still cheap
       insurance if it ever recurs).
+      RECURRENCE 2026-10-12 ~02:51 UTC (honestly recorded): the
+      sporadic first-decode fault fired a THIRD time - same where_u8_bf16
+      host-pinned signature, same census-pass-then-fault, same wedge
+      (request never completes, follow-ons empty), on the FIRST
+      demand-load after a restart, this time on the tails+settle binary.
+      Discrimination: (a) the window machinery is host-side locking and
+      cannot cause GPU faults; the settle's trim only releases UNUSED
+      pool blocks and cannot free the faulting host page (the ledger
+      covers no alloc at the fault VA 0x72735f66b000); (b) the
+      same-binary restart re-ran the IDENTICAL load (settle included)
+      and came up clean (sanity 391, 3 essays ~48-52 tok/s, zero new
+      faults) - a settle-caused deterministic fault would have recurred.
+      VERDICT: settle exonerated; the original sporadic single-engine
+      class survives THREAD_LOCAL + window at low rate (~3 in ~9
+      first-loads). No 900/901/905 lines around the capture, so the
+      poison path (if any) is silent - the residual race is still open
+      and needs the ledger extended to the mmap/host-register paths
+      (the fault VA sits just below the managed-weights region,
+      suggesting GGUF-mmap/host-registered pages outside current
+      coverage). Diagnostics stay armed.
+      TAILS LANDED 2026-10-12 (5da184dfe, validated same night): the
+      async sampling tails are inside the window - sample_sequence's
+      dtype conversion, both sampler.sample sites (direct) plus a guard
+      INSIDE the tokio_rayon worker closure (the multi-sequence path's
+      extra thread of device kernels), the grammar-bias device add,
+      the batched-sampling call + D2H fallback, the verify block
+      (batched/sparse/submit/complete/prepare), the mixed-stage
+      rollback, the verify-finish + commit section, and the whole
+      propose_and_stage_batch. finish_or_add_toks_to_seq is CPU-only;
+      logit_row is metadata-only. Validation: 4 essays ~48-53 tok/s,
+      1050 replays + lazy population, MTP 65% through the guarded
+      paths, interleave serves through, zero faults.
       Probe-lane findings (2026-10-11):
       - A second 35B cannot load beside a resident prod: GTT is
         RAM-backed (Strix Halo APU) and /v1/models/unload frees into
@@ -917,6 +947,15 @@ facade today, so the MTP port gates the cutover):
       blocks" at BOTH 2048MB and 1024MB KV (mtp-off fits at 21.4GB/24GB);
       try smaller KV + `mtp_draft_lm_head_isq = "Q4K"` before anything
       else; (b) speculative kernels are hip-side (role caps mtp=false).
+      UPDATE 2026-10-12 (1a5d866ff + prod proof): attach CLOSED -
+      settle-then-attach (sync+trim every CUDA device pre-attach, one
+      OOM-signature retry) + the alias's max_seqs=2/32k/Q4K/Q8-Q4KV pins;
+      the alias attached first-try (n_predict=2) and served 300 toks at
+      40 tok/s on the 3090. REMAINING: cuda-role GRAPH capture with MTP
+      state fails ("speculative state expected GPU tensors" ->
+      pad_decode_input_u32 status 1 -> graphs disabled, serves eager);
+      the alias runs MTP-eager until the capture path is ported. This
+      pairs with the cuda-graph-capture-proof backlog item below.
 - [ ] ~S 16B graph perf note: the twin's per-layer `final_out`
       `alloc_zeros` bypasses the capture arena (48 MEMALLOC + MEMSET +
       MEMFREE nodes in the captured graph; harmless under
