@@ -667,7 +667,15 @@ facade today, so the MTP port gates the cutover):
       token removed). Suspect list in the external check updated
       accordingly; CPU sampling struck.
 
-- [ ] ~M 27B/4B cuda-only capture abort (correctness, open):
+- [x] ~M 27B/4B cuda-only capture abort (CLOSED 2026-10-11 via the
+      arena-keepalive fix, 2515d5e0a; see the Hybrid graphs-on item
+      for the sanitizer-named root cause and proofs). The 2026-10-07
+      symptoms (STREAM_CAPTURE_UNSUPPORTED abort, INVALID_VALUE on
+      post-capture sampling) were all the dropped solo-cuda capture
+      arena - capture-carved tensors dangled and replays wrote into
+      recycled memory. The 2026-10-07 eager-skip gates that papered
+      over it are now REMOVED in both pipelines (f7848fc98); the
+      MISTRALRS_DEBUG_HYBRID_GRAPHS bypass has no remaining users.
       CORRECTION 2026-10-07: the 4B IS hybrid (NormalPipeline, text-only
       GGUF path; "Recurrent state pool reserved" in the serve log) - the
       earlier "non-hybrid" label was wrong. So this item and the hoist
@@ -694,7 +702,14 @@ facade today, so the MTP port gates the cutover):
       pipeline::normal, clean serve, 0 panic/abort lines. (Empty short-
       budget content is the known thinking-model quirk, not a
       regression.)
-- [ ] ~M Hybrid restore hoist: move the recurrent checkpoint restore out
+- [x] ~M Hybrid restore hoist (CLOSED 2026-10-11, same arena fix):
+      the hoist theory was superseded twice - first by backtrace
+      evidence (2026-10-07, restore already ran post-capture), then
+      by the sanitizer run (2026-10-11): the "INVALID_VALUE on
+      sampling DTOH" residue below was the dangling-arena replay
+      writing through freed storage, not a restore or leak path.
+      Hybrid capture demonstrably works on both pipelines now
+      (2515d5e0a + f7848fc98 proofs); gates dropped.
       of the capture window (post-`end_capture`) so hybrid models (27B/4B)
       can capture on the NVIDIA role; then drop the multimodal eager-skip
       gates. SUPERSEDED 2026-10-07 by backtrace evidence: the pipeline
@@ -740,9 +755,12 @@ facade today, so the MTP port gates the cutover):
       check; the fix is role-keying the shell, not porting APIs).
       STATUS 2026-10-07: all four shapes check green post-fix;
       release build + serve sanity + 27B parity bench pending.
-- [ ] ~S optional prod knob: `mtp_draft_lm_head_isq = "Q4K"` in prod
-      mistralrs.toml (measured +2.6% decode on the 35B; harmless to
-      quality).
+- [x] ~S optional prod knob (DONE 2026-10-11): `mtp_draft_lm_head_isq
+      = "Q4K"` live in prod mistralrs.toml. The RuntimeOptions serde
+      key already existed (CLI-hidden, TOML-exposed), so no code
+      change. Verified live on the 35B: decode 36.9/36.0 tok/s (vs
+      ~35.0 pre-knob, in line with the measured +2.6%), acceptance
+      69% vs 65% - the smaller draft head holds quality.
 
 - [x] ~M 35B trio quant A/B: Q4_K_XL vs Q5_K_XL vs Q8_0 (done 2026-09-25, was §4). Retargeted: no Q4_K_XL
       exists for the orcarouter 27B serving default, so ran the on-disk 35B trio

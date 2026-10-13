@@ -29,6 +29,10 @@ idle_ttl_secs = 1800
 mtp = true
 mtp_n_predict = 3
 mtp_draft_sampling = "greedy"
+# Draft-only Q4K lm_head copy: smaller draft reads cut proposer latency,
+# the target still verifies with the checkpoint head (+2.6% decode
+# measured on the 35B, quality-neutral). Applies to every MTP attach.
+mtp_draft_lm_head_isq = "Q4K"
 max_prefill_chunk_tokens = 2048
 # Prefix cache depth (probe-validated 2026-10-09: identical 3.8k prompt
 # 12s -> 0.3s MTP-on). Per-entry `prefix_cache_n` overrides this.
