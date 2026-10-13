@@ -764,17 +764,67 @@ facade today, so the MTP port gates the cutover):
       cgroup identity, port 1235 ambient traffic, boot-sequence
       residue (ExecStartPre dry-run), or a rare timing race that the
       prod context reliably wins.
-      NEXT HUNT (in order): (a) compute-sanitizer on the systemd-run
-      replica (the tool that named get_rows_q8_0 in the original
-      arena hunt) while hammering demand-load cycles + concurrent
-      requests; (b) extend the ptr census to arena intermediates and
-      the htod host staging (the fault is in that uncovered set);
-      (c) if the mechanism stays hidden, MITIGATION: cap the startup
-      capture set (only small buckets per width; the lazy path -
-      proven clean everywhere - covers the rest) and redeploy with
-      the census armed; (d) re-attempt the swap only with the census
-      on. The port stays committed (32dab2f6f); prod runs the
-      rollback binary at the ~35 tok/s eager band.
+      ROOT CAUSE FOUND (2026-10-11 ~20:30, via the prod test bed): the
+      deterministic repro is the TWO-ENGINE INTERLEAVE - demand-load
+      the 27B while the 35B decodes: the 27B's mm capture logs "Captured
+      25 graphs ... reloaded successfully" while a storm of
+      "hip error 905: dependency created on uncaptured work in another
+      stream" + "hip error 1: invalid argument" fires, and BOTH engines
+      die (every request 500s permanently; 3-171ms fast-fails). The
+      capture ran with CU_STREAM_CAPTURE_MODE_GLOBAL (cudarc-hip
+      begin_capture_common, mirrored in cudarc-nvidia) - the strictest
+      isolation: ANY concurrent device work by ANY thread invalidates
+      the capture AND poisons the other stream's in-flight ops. In a
+      multi-engine server that is simply wrong: eager boot captures
+      have the box to themselves (all clean probes), lazy demand-load
+      captures race the load path's own other-stream work (the
+      sporadic 2/3 first-decode faults: 905-poisoned capture installed
+      despite "reloaded successfully", first replay memory-faults with
+      the permission-stripped-page signature), and a second engine
+      decoding during capture is the deterministic extreme. The census
+      passed because the poisoned graph's entry-held buffers were all
+      fine - the graph itself was invalid.
+      FIX (2026-10-11, both roles): capture mode GLOBAL ->
+      CU_STREAM_CAPTURE_MODE_THREAD_LOCAL in cudarc-hip
+      (begin_capture_common) and cudarc-nvidia (begin_capture).
+      THREAD_LOCAL forbids only the capturing thread's unsafe ops -
+      the actual invariant - while other engines' streams proceed;
+      real cross-stream dependency violations still error loudly.
+      FIX LANDED + VALIDATED (candle 8db3d1c3; both roles): capture mode
+      GLOBAL -> CU_STREAM_CAPTURE_MODE_THREAD_LOCAL. Validation on the
+      prod test bed (2026-10-11 ~20:43-56):
+      - Single-engine demand-load (the sporadic-fault path, was 2/3
+        fatal): boot capture + unload/reload capture both CLEAN, 51.08
+        tok/s on the reload's first essay, zero 900/901/905, zero
+        memory faults.
+      - The deterministic two-engine interleave (was 100% fatal,
+        both engines dead): now degrades GRACEFULLY - the colliding
+        load fails its request cleanly (500, retryable), the other
+        engine's in-flight request may fail once, its graphs fall
+        back to eager (engine survives, keeps serving), and the
+        failed load self-heals on the next request once the box
+        quiets. No HSA faults, no wedges, no permanent engine death.
+      - Residual (new follow-up item below): captures still CONTENT
+        with other engines' activity - an idle engine's background
+        ops (scheduler housekeeping/event timers) trip the
+        capture-unsafe op class, so a capture under contention runs
+        8s -> 118s through retry/fallback and logs 900/901 noise,
+        but completes. Needs the cross-engine capture window lock.
+      Final prod state after validation: 35B graphs+MTP n=2 live at
+      ~48-51 tok/s (+43%), 27B graphs+MTP live at ~15.6 tok/s, both
+      engines serving. Diagnostics stay armed in the wrapper
+      (MISTRALRS_GRAPH_PTR_CENSUS + MRS_ALLOC_TRACE) for the
+      observation window.
+      FOLLOW-UP (opened from this fix): cross-engine capture quiesce -
+      a device-wide capture window (RwLock: captures take write,
+      engine steps take read, or an active-capture counter the step
+      loops respect) so captures run uncontended. Evidence: the 118s
+      degraded capture + 900/901 storm when a load overlaps another
+      engine's background ops. Also harden the capture-abort path:
+      the recurrent-checkpoint rollback itself 901-fails once the
+      stream is poisoned (indexed_row_copy_bf16), so a failed
+      capture should quiesce+retry the rollback instead of
+      cascading the error into the engine step.
       Probe-lane findings (2026-10-11):
       - A second 35B cannot load beside a resident prod: GTT is
         RAM-backed (Strix Halo APU) and /v1/models/unload frees into
