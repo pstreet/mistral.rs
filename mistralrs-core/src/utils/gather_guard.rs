@@ -34,7 +34,37 @@ pub(crate) fn guard_u32_gather(
     if indices.dtype() != DType::U32 {
         return Ok(());
     }
+    // No DTOH while capturing: nothing executes under capture, so there is
+    // nothing to attribute - and the readback itself trips the capture ban
+    // (observed: an armed precapture failing buckets with to_cpu_storage
+    // errors it otherwise kept). The guard still covers every real
+    // execution, including the per-step eager commit/scatter around replays.
+    if is_capturing(indices.device()) {
+        return Ok(());
+    }
     check_indices(name, &indices.to_vec1::<u32>()?, source_rows)
+}
+
+/// True while the tensor's stream is inside a graph capture (any status
+/// other than none). Non-GPU devices never capture: fail open.
+fn is_capturing(device: &candle_core::Device) -> bool {
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    {
+        use crate::pipeline::graph_role::GraphStream;
+        // Single-role builds serve these through the GraphStreamExt trait;
+        // the dual build defines them as inherent methods on its enum.
+        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        use crate::pipeline::graph_role::GraphStreamExt;
+        return GraphStream::from_graph_device(device)
+            .and_then(|stream| stream.capture_status_none())
+            .map(|none| !none)
+            .unwrap_or(false);
+    }
+    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
+    {
+        let _ = device;
+        false
+    }
 }
 
 #[cfg(test)]
