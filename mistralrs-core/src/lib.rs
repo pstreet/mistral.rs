@@ -305,6 +305,45 @@ pub fn set_hf_cache_path(path: impl Into<PathBuf>) {
     GLOBAL_HF_CACHE.get_or_init(|| Cache::new(path.into()));
 }
 
+/// Synchronize every CUDA execution device and trim its async-pool cache
+/// so a speculative attach finds contiguous room. Called between model
+/// load and MTP attach (the load's ISQ/weight transients otherwise sit
+/// in the cache and fragment it), and again before a settle-retry.
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+fn settle_cuda_allocator_for_speculative_attach(pipeline: &dyn Pipeline) {
+    for device in pipeline.execution_devices() {
+        if !device.is_cuda() {
+            continue;
+        }
+        if let Err(err) = device.synchronize() {
+            warn!("MTP attach settle: device synchronize failed: {err}");
+            continue;
+        }
+        match MemoryUsage.trim_cuda_memory_pool(&device, 0) {
+            Ok(true) => debug!("MTP attach settle: trimmed device memory pool"),
+            Ok(false) => (),
+            Err(err) => warn!("MTP attach settle: pool trim failed: {err}"),
+        }
+    }
+}
+
+/// True when an attach error looks like transient capacity pressure
+/// (worth one settle-then-retry) rather than a genuine failure.
+fn is_oom_attach_error(err: &candle_core::Error) -> bool {
+    let msg = err.to_string().to_lowercase();
+    [
+        "out of memory",
+        "num gpu blocks is 0",
+        "0 gpu blocks",
+        "hip error 2",
+        "cuda error 2",
+        "memory allocation failed",
+        "failed to allocate",
+    ]
+    .iter()
+    .any(|sig| msg.contains(sig))
+}
+
 /// Configuration for creating an engine instance
 #[derive(Clone)]
 pub struct EngineConfig {
@@ -3317,18 +3356,45 @@ impl MistralRs {
                 } else {
                     unloaded_state.engine_config.prefix_cache_n
                 };
-                pipeline
-                    .attach_speculative_with_runtime(
-                        SpeculativeConfig::Mtp(
-                            mtp_config.with_draft_lm_head_isq(loader_config.isq),
-                        ),
-                        MtpRuntimeConfig::new(prefix_cache_capacity),
-                    )
-                    .map_err(|e| {
-                        MistralRsError::ReloadFailed(format!(
-                            "Failed to attach MTP speculative decoding: {e}"
-                        ))
-                    })?;
+                // Settle-then-attach: the load's ISQ/weight transients
+                // still sit in the device allocator's cache at attach
+                // instant, fragmenting the contiguous room the draft
+                // head and checkpoint lanes need (the known 24GB-3090
+                // attach-OOM mode). Synchronize + trim before the first
+                // attempt, and retry once after a second settle when the
+                // first attempt dies with an OOM signature. Genuine
+                // errors fail fast, as before.
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
+                settle_cuda_allocator_for_speculative_attach(&*pipeline);
+                if let Err(first_err) = pipeline.attach_speculative_with_runtime(
+                    SpeculativeConfig::Mtp(
+                        mtp_config.clone().with_draft_lm_head_isq(loader_config.isq),
+                    ),
+                    MtpRuntimeConfig::new(prefix_cache_capacity),
+                ) {
+                    if !is_oom_attach_error(&first_err) {
+                        return Err(MistralRsError::ReloadFailed(format!(
+                            "Failed to attach MTP speculative decoding: {first_err}"
+                        )));
+                    }
+                    warn!(
+                        "MTP attach for {model_id} OOM'd at load instant ({first_err}); settling allocator and retrying once"
+                    );
+                    #[cfg(any(feature = "cuda", feature = "rocm"))]
+                    settle_cuda_allocator_for_speculative_attach(&*pipeline);
+                    pipeline
+                        .attach_speculative_with_runtime(
+                            SpeculativeConfig::Mtp(
+                                mtp_config.with_draft_lm_head_isq(loader_config.isq),
+                            ),
+                            MtpRuntimeConfig::new(prefix_cache_capacity),
+                        )
+                        .map_err(|e| {
+                            MistralRsError::ReloadFailed(format!(
+                                "Failed to attach MTP speculative decoding (after settle retry): {e}"
+                            ))
+                        })?;
+                }
             }
             pipeline.get_metadata().cache_config.clone()
         };
