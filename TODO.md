@@ -688,13 +688,13 @@ facade today, so the MTP port gates the cutover):
       accordingly; CPU sampling struck.
 
 - [x] ~M 27B/4B cuda-only capture abort (CLOSED 2026-10-11 via the
-      arena-keepalive fix, 2515d5e0a; see the Hybrid graphs-on item
+      arena-keepalive fix, 0a2d6323b; see the Hybrid graphs-on item
       for the sanitizer-named root cause and proofs). The 2026-10-07
       symptoms (STREAM_CAPTURE_UNSUPPORTED abort, INVALID_VALUE on
       post-capture sampling) were all the dropped solo-cuda capture
       arena - capture-carved tensors dangled and replays wrote into
       recycled memory. The 2026-10-07 eager-skip gates that papered
-      over it are now REMOVED in both pipelines (f7848fc98); the
+      over it are now REMOVED in both pipelines (8a07e2196); the
       MISTRALRS_DEBUG_HYBRID_GRAPHS bypass has no remaining users.
       CORRECTION 2026-10-07: the 4B IS hybrid (NormalPipeline, text-only
       GGUF path; "Recurrent state pool reserved" in the serve log) - the
@@ -729,13 +729,13 @@ facade today, so the MTP port gates the cutover):
       sampling DTOH" residue below was the dangling-arena replay
       writing through freed storage, not a restore or leak path.
       Hybrid capture demonstrably works on both pipelines now
-      (2515d5e0a + f7848fc98 proofs); gates dropped.
+      (0a2d6323b + 8a07e2196 proofs); gates dropped.
 - [x] ~M 35B graphs on the normal pipeline (opened 2026-10-11 from the
       graph-capture audit): prod's default model runs eager decode
       while the same binary replays the 27B on the same hip device.
-      (a) DONE (dc20c5254): qwen3_next.rs supports_cuda_decode_graphs
+      (a) DONE (b646d598d): qwen3_next.rs supports_cuda_decode_graphs
       override, all four shapes check green.
-      (b) DONE (32dab2f6f): the mm.rs speculative-graph machinery is
+      (b) DONE (47b67f564): the mm.rs speculative-graph machinery is
       ported to normal.rs (eligibility proposer flag + q_len>1 verify
       relax + spec-state gates; capture warm/admission/validate/
       restore; precapture widths [1, 1+n] from speculative_graph_plans;
@@ -810,7 +810,7 @@ facade today, so the MTP port gates the cutover):
       THREAD_LOCAL forbids only the capturing thread's unsafe ops -
       the actual invariant - while other engines' streams proceed;
       real cross-stream dependency violations still error loudly.
-      FIX LANDED + VALIDATED (candle 8db3d1c3; both roles): capture mode
+      FIX LANDED + VALIDATED (candle e9149d367; both roles): capture mode
       GLOBAL -> CU_STREAM_CAPTURE_MODE_THREAD_LOCAL. Validation on the
       prod test bed (2026-10-11 ~20:43-56):
       - Single-engine demand-load (the sporadic-fault path, was 2/3
@@ -835,7 +835,7 @@ facade today, so the MTP port gates the cutover):
       engines serving. Diagnostics stay armed in the wrapper
       (MISTRALRS_GRAPH_PTR_CENSUS + MRS_ALLOC_TRACE) for the
       observation window.
-      FOLLOW-UP LANDED (2026-10-11 late, 7496a82da): cross-engine
+      FOLLOW-UP LANDED (2026-10-11 late, a581c21c9): cross-engine
       capture window. Captures take a process-wide write
       (parking_lot, write-preferring); every engine device-work
       segment registers a read: both step arms' synchronous spans
@@ -1112,7 +1112,7 @@ facade today, so the MTP port gates the cutover):
       window re-flagged the pre-soak 07:12 fault lines as
       UNEXPECTED on clean cycles - v2 must scope matches to the
       current boot pid.
-      TAILS LANDED 2026-10-12 (5da184dfe, validated same night): the
+      TAILS LANDED 2026-10-12 (616442961, validated same night): the
       async sampling tails are inside the window - sample_sequence's
       dtype conversion, both sampler.sample sites (direct) plus a guard
       INSIDE the tokio_rayon worker closure (the multi-sequence path's
@@ -1236,7 +1236,7 @@ facade today, so the MTP port gates the cutover):
       six times in one request and why old storage stays
       referenced.
       RESOLVED 2026-10-14 (soak cycle 3 caught the fault LIVE
-      with cores + ledger - candle 64f2bd73):
+      with cores + ledger - candle a88cbd286):
       THE FAULTING LAUNCH: plain unary copy ucopy_bf16 (dst[i] =
       src[i], NO indices) over 12,288 bf16 elements, 4-D
       noncontiguous source - i.e. a `.contiguous()`/cat of a
@@ -1258,7 +1258,7 @@ facade today, so the MTP port gates the cutover):
       tracking disabled - the capture-time lifetime hazard is
       real and adjacent, but the faulting read was the params
       vector, not the freed dst.
-      THE FIX (candle 64f2bd73, both layers in copy_strided_src):
+      THE FIX (candle a88cbd286, both layers in copy_strided_src):
       (1) ALWAYS-ON host-side footprint validation - refuse
       layouts whose strided footprint escapes the source storage
       (zero sync cost); (2) ARMED params readback under the
@@ -1319,8 +1319,8 @@ facade today, so the MTP port gates the cutover):
       attribution; at ~2-in-4 boots faulting, the expected catch
       window is short. The guard needs the next deploy restart to
       reach prod either way.
-      ARMED WINDOW LIVE (deployed 2026-10-14, binary 8c3a41c37 +
-      wrapper 1144a6a3e): the guard runs in prod. First boot
+      ARMED WINDOW LIVE (deployed 2026-10-14, binary a1808ce37 +
+      wrapper 4b3b83ff0): the guard runs in prod. First boot
       CLEAN - 391 CORRECT, zero bails, zero hip errors. Armed
       band measured on the 35B: 31.4-32.7 tok/s vs the 50.99
       unarmed record (-36%, consistent with the 4B probe's
@@ -1382,7 +1382,7 @@ facade today, so the MTP port gates the cutover):
       blocks" at BOTH 2048MB and 1024MB KV (mtp-off fits at 21.4GB/24GB);
       try smaller KV + `mtp_draft_lm_head_isq = "Q4K"` before anything
       else; (b) speculative kernels are hip-side (role caps mtp=false).
-      UPDATE 2026-10-12 (1a5d866ff + prod proof): attach CLOSED -
+      UPDATE 2026-10-12 (288c61abd + prod proof): attach CLOSED -
       settle-then-attach (sync+trim every CUDA device pre-attach, one
       OOM-signature retry) + the alias's max_seqs=2/32k/Q4K/Q8-Q4KV pins;
       the alias attached first-try (n_predict=2) and served 300 toks at
@@ -1391,7 +1391,7 @@ facade today, so the MTP port gates the cutover):
       pad_decode_input_u32 status 1 -> graphs disabled, serves eager);
       the alias runs MTP-eager until the capture path is ported. This
       pairs with the cuda-graph-capture-proof backlog item below.
-      CLOSED 2026-10-12 late (7728e2193 + candle 7dd8cdcc, prod proof):
+      CLOSED 2026-10-12 late (cdd270cbb + candle 3f566282f, prod proof):
       graphs LIVE on the NVIDIA role - 51.7 tok/s (+28% over MTP-eager),
       135 replays/essay, MTP accept ~55%. The chain, in order: (a) the
       two cfg-arm fixes (spec budget + arena free); (b) the D2H bail
@@ -1765,8 +1765,8 @@ cutting (every config change wants a probe number first); one prod
 restart per batch, never one per item.
 STATUS 2026-10-11: Phase A resolved - (1) audit DONE (major finding:
 the 35B never graphed, see its close), (2) right-sizing landed via
-the native cap, (3) MTP re-sweep DONE (n=2 kept, a001d0ca9), (5)
-knobs landed (draft-head Q4K + n=2 fleet-wide, bc7aa7280). (4) prefix
+the native cap, (3) MTP re-sweep DONE (n=2 kept, fe8e6ea1d), (5)
+knobs landed (draft-head Q4K + n=2 fleet-wide, 740d92c5b). (4) prefix
 polish remains open. Phase B startable; the 35B-graphs item (P0
 parity queue) now outranks it on impact.
 
@@ -1804,7 +1804,7 @@ parity queue) now outranks it on impact.
       and proposes 44% fewer draft tokens (1566 vs 2790) for the same
       output. Matches the old-binary verdict (n=2 won there too);
       the cutover's faster verify did NOT move n=3 ahead. Fleet
-      unified at n=2 (a001d0ca9); n=3 hypothesis retired. The
+      unified at n=2 (fe8e6ea1d); n=3 hypothesis retired. The
       greedy-vs-auto recheck was already answered 2026-09-18
       (identical within noise, keep greedy). Note: absolute ~35 tok/s
       vs the old ~50 is not comparable (thinking-trace decode at
@@ -1892,7 +1892,7 @@ parity queue) now outranks it on impact.
       Proof (4B, global 32/16 vs entry 2/2): scheduler logs
       max_num_seqs=2, serves clean. This closes the per-model max_seqs
       backlog: the 27B-cuda alias can pin max_seqs=2 instead of the
-      global TEMP. Prod TOML committed (e6cc6441e, then n=2 a001d0ca9).
+      global TEMP. Prod TOML committed (70981ca53, then n=2 fe8e6ea1d).
       CLOSED 2026-10-11: the prod half is live (restart verified the
       caps line + 64GB GTT reclaim); the small-GPU per-model budget
       half is tracked by the 27B-cuda attach item in the P0 queue.
@@ -1938,7 +1938,7 @@ parity queue) now outranks it on impact.
       graphs=true but the capture-bug fixes were hip-side; needs its
       own proof run on the 3090.
       CLOSED 2026-10-12 as SUPERSEDED by the NVIDIA-role MTP graphs
-      landing (7728e2193 + candle 7dd8cdcc): the premise aged out -
+      landing (cdd270cbb + candle 3f566282f): the premise aged out -
       the capture fixes were ported both-roles (THREAD_LOCAL capture
       mode in cudarc-hip AND cudarc-nvidia; the cfg-arm fixes; the
       capture arena + attempts/regrow machinery) and the 3090 proof
