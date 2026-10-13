@@ -1152,11 +1152,29 @@ facade today, so the MTP port gates the cutover):
       no-ops in dual builds (pool_backend is the NVIDIA twin, so the
       Device::Cuda match rejects Hip; hip serving is healthy via
       allocator reuse) - fix when hip trim pressure is observed.
-- [ ] ~S 16B graph perf note: the twin's per-layer `final_out`
+- [x] ~S 16B graph perf note: the twin's per-layer `final_out`
       `alloc_zeros` bypasses the capture arena (48 MEMALLOC + MEMSET +
       MEMFREE nodes in the captured graph; harmless under
       AUTO_FREE_ON_LAUNCH but re-allocates per launch). Find the bypass
       or accept-and-document.
+      CLOSED 2026-10-12 as STALE - superseded by the capture-arena
+      landing (2026-10-11): the note predates the arena; the
+      "bypass" was just how every capture-time alloc worked back
+      then. Current evidence (hip 16B, prod, release binary, lazy
+      demand-load + essay): 16 captures ok=true overflowed=false
+      first-attempt with the arena feeding them (consumed ladder
+      3.3 -> 53.3MB, no overflow lines); pool fallback only fires
+      on overflow, so final_out carved like everything else and NO
+      MEMALLOC/MEMFREE nodes bake anymore. The 48 MEMSET nodes do
+      remain (alloc_zeros' async memset is a capture-visible stream
+      op, now writing arena addresses) - accept-and-document:
+      sub-us nodes on a ~20ms step, well under noise. NVIDIA-role
+      twin: same alloc -> carve -> overflow-fallback structure
+      (cudarc-nvidia mirror) + the 3090 capture records from the
+      graphs-MTP landing (attempts/regrow, ok=true) - same
+      verdict by code-path identity. If an arena ever overflows
+      mid-capture the fallback allocs return (and the regrow+retry
+      machinery re-captures clean before install).
 - [ ] ~S gemv companion twin (the gemv landmine fix is gated dual-wide
       false; the NVIDIA role takes the plain GEMM in dual builds -
       journal entry at the 2026-10-05 MMVQ work).
@@ -1410,9 +1428,17 @@ parity queue) now outranks it on impact.
 - [ ] ~M FA2 path proof on the cuda role (compute 8.6: FA v2 yes, v3
       no): confirm the kernels actually dispatch there; try the
       `cudnn` feature as challenger. Pairs with the cuda-MTP port.
-- [ ] ~M CUDA-graph capture proof on the NVIDIA role: caps claim
+- [x] ~M CUDA-graph capture proof on the NVIDIA role: caps claim
       graphs=true but the capture-bug fixes were hip-side; needs its
       own proof run on the 3090.
+      CLOSED 2026-10-12 as SUPERSEDED by the NVIDIA-role MTP graphs
+      landing (7728e2193 + candle 7dd8cdcc): the premise aged out -
+      the capture fixes were ported both-roles (THREAD_LOCAL capture
+      mode in cudarc-hip AND cudarc-nvidia; the cfg-arm fixes; the
+      capture arena + attempts/regrow machinery) and the 3090 proof
+      ran as the MTP graphs work: graphs LIVE on the NVIDIA role,
+      51.7 tok/s (+28% over MTP-eager), 135 replays/essay, MTP
+      accept ~55%, zero faults. No separate proof run remains to do.
 - [x] ~M Prefix caching on hybrids (CLOSED 2026-10-11; revisit measured 2026-10-09, probe lane
       :1244, 27B hip alias, n=4, git b3b315349): ENABLED but INERT. Boot
       prints "Prefix caching enabled (block-level, PagedAttention)",
