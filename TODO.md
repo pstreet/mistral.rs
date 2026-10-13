@@ -1269,6 +1269,43 @@ facade today, so the MTP port gates the cutover):
       four shape checks green; live probe with both guards armed:
       391 CORRECT, 83.4 tok/s (== gather-only band: the always-on
       check costs nothing), zero spurious bails.
+      SOAK ROUNDS 2-3 + THE PARAMS-SYNC FIX (2026-10-14):
+      Round 2 (post-copyfix deploy): 4/4 CLEAN, band 32.6-33.3 -
+      weak evidence for the fix (~6% by luck at 50/50), banked as
+      healthy cycles. Round 3: 3/4 CLEAN + cycle-2 WEDGE with full
+      capture (host core 29.5GB + .gpu core 14.9GB, both spooled
+      by the fixed pipeline) - a THIRD fault face: bmul_bf16 over
+      6,144 elements, 3 dims, page-not-present, during model load.
+      The request thread (core thread 13) was inside the NEW
+      guard's own D2H readback (guard_u32_gather -> to_vec1 ->
+      hipMemcpyAsync) in Model::forward during a capture step -
+      a bystander parked mid-readback when the async fault
+      aborted the process, not the cause. Decisive repeat finding:
+      the bmul's dims/stride vector reads back as GARBAGE too
+      (rocksdb + file-offset agreement), with its own ALLOC and
+      no FREE - two unrelated kernels, same corrupted-params
+      mechanism, now a pattern.
+      ROOT-CAUSE MECHANISM (readonly audit, no new speculation):
+      params vectors upload async; with event tracking disabled
+      (capture windows - and the codebase's own
+      disable_event_tracking docs name exactly this hazard) a
+      consumer on another stream (loader threads, capture fork)
+      can read the vector before the copy lands. The global
+      CUDA_PARAM_CACHE widens it to an insertion race: a second
+      thread can hit a cache entry whose upload is still in
+      flight. Fresh-boot-only fits (load-time multithreading;
+      steady-state serving is single-stream).
+      THE FIX (candle fd330b1f, in params_from_vec): settle-sync
+      the upload wherever the safety net is off - before
+      publishing a cache entry, on cache hits while untracked,
+      and on the uncached path. With tracking on, ordering +
+      event edges already hold, so normal serving pays nothing;
+      the sync runs at most once per unique layout (cache hits
+      while tracked skip it). Live probe: 391 CORRECT, zero
+      spurious bails; band isolation experiment shows the whole
+      copy-fix family costs nothing measurable (fast-build band
+      clusters ~83 with guard on/off/without the fix - the 125
+      baseline was the release profile, not a regression).
       NEXT INSTRUMENTATION (cheap, high-yield): census records
       gain TENSOR LENGTHS + a first-launch check that entry
       state_indices length == captured batch (the census verifies
