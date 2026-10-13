@@ -1375,8 +1375,24 @@ parity queue) now outranks it on impact.
       weights + the 2.6GB pool saving would matter under
       dual-resident pressure. Bench-by-alias via demand-load worked
       cleanly (auto_evict swap, zero extra restarts).
-      27B ARM BLOCKED: the Q4_K_M 27B file is not on disk (only
-      Q6_K); needs a ~16GB download decision (715GB free).
+      27B ARM CLOSED 2026-10-12 via ISQ (zero download, user call):
+      lazy alias qwen3.8-27b-q4 = same Q6_K file + isq="Q4K" (mistral
+      ISQ keeps sensitive tensors at q6k, so the result is a
+      Q4_K_M-like mix), equal KV split + MTP n=2, benched by
+      demand-load. VERDICT: STAY ON Q6_K - Q6_K 15.34/14.85/14.85
+      (mean 15.01) vs ISQ-Q4K 11.91/12.24/12.20 (mean 12.12) =
+      -19% decode, ~12x the noise band. Decode is NOT
+      bandwidth-bound for the dense 27B on this binary: Q4K's
+      dequant/kernel path costs more than the bytes it saves (same
+      reason the 35B MoE showed no gain, only without the loss -
+      its expert reads are A3B-small either way). A native Q4_K_M
+      file would land in the same speed class (same Q4K kernels
+      dominate decode), so the download is pointless for this
+      question; its only edge would be quality (single-quant +
+      imatrix) - irrelevant while Q4 is 19% slower. Quality note:
+      the double-quant ISQ arm's essay was coherent with mild
+      chronological softness - a lower bound, not the deciding
+      factor. The qwen3.8-27b-q4 alias stays registered (inert).
 - [ ] ~M FA2 path proof on the cuda role (compute 8.6: FA v2 yes, v3
       no): confirm the kernels actually dispatch there; try the
       `cudnn` feature as challenger. Pairs with the cuda-MTP port.

@@ -120,6 +120,28 @@ mmproj = "mmproj-Qwen3.8-27B-Uncensored-f16.gguf"
 [models.quantization]
 isq = "Q4K"
 
+# ISQ bench arm (2026-10-12): same Q6_K file, quantized to Q4K
+# in-flight at load - zero download. Mirrors the 27B's KV split and
+# MTP n=2 so the Q6_K vs Q4 comparison is at equal config.
+# Quality caveat: fp16 -> Q6_K -> Q4K double-quantizes (no imatrix),
+# so quality here is a LOWER bound vs a native Q4_K_M file; the
+# decode-speed arm is exact (same Q4K kernels and bytes).
+
+[[models]]
+model_id = "models/orcarouter/Qwen3.8-27B-Uncensored-GGUF"
+alias = "qwen3.8-27b-q4"
+lazy = true
+k_cache_type = "Q8_0"
+v_cache_type = "Q4_0"
+mtp_n_predict = 2
+
+[models.quantization]
+isq = "Q4K"
+
+[models.format]
+quantized_file = "Qwen3.8-27B-Uncensored-Q6_K.gguf"
+mmproj = "mmproj-Qwen3.8-27B-Uncensored-f16.gguf"
+
 # ============================================================
 # Everything below is lazy: registered at boot, loaded on first request.
 # NOTE: lazy models inherit the global MTP flag unless pinned `mtp = false`
