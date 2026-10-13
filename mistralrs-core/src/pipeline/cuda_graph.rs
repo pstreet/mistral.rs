@@ -2370,7 +2370,10 @@ impl CudaGraphSpecStateUsage {
                 usage.device_totals.entry(location)
             {
                 let (info, total) = match tensor.device() {
-                    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+                    // Dual builds serve both roles; the (cuda,not-rocm) gate
+                    // below used to leave dual-build Cuda tensors unmatched
+                    // (same class as the Oct-8 topk port gap).
+                    #[cfg(feature = "cuda")]
                     Device::Cuda(device) => device
                         .cuda_stream()
                         .context()
@@ -3166,7 +3169,10 @@ fn release_cuda_graph_entries(entries: Vec<CudaDecodeGraphEntry>) {
 /// heap free for the hip role, the VRAM free for the cuda role.
 pub(crate) fn graph_arena_device_free(device: &Device) -> candle_core::Result<usize> {
     match device {
-        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+        // Dual builds serve both roles; the (cuda,not-rocm) gate used to
+        // leave dual-build Cuda devices on the usize::MAX fallthrough,
+        // sizing arenas without any budget (same class as the topk port).
+        #[cfg(feature = "cuda")]
         Device::Cuda(dev) => {
             let (free, _total) = dev
                 .cuda_stream()

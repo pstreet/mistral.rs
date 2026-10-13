@@ -36,6 +36,16 @@ pub struct MemoryUsage;
 
 // Pool-query backend: the NVIDIA role in cuda builds (dual included),
 // the hip role in rocm-only builds.
+// FOLLOW-UP (found 2026-10-12 via the cuda-role graph fix): in DUAL
+// builds the hip pool query/trim arms below are dead (the Device::Cuda
+// match under cfg(feature="cuda") rejects Hip with Ok(None)/Ok(false),
+// and pool_backend is the NVIDIA twin). Hip serving is healthy anyway
+// (allocator reuse covers it; the 49.3->10.5GB GTT drops prove reuse,
+// not trim), and settle-then-attach's hip leg degrades to sync-only.
+// Fixing it needs the query/trim bodies parameterized over both driver
+// twins (the hip sys API has identical cuDeviceGetMemPool/
+// cuMemPoolTrimTo) - do it when hip-side trim pressure is observed,
+// not before.
 #[cfg(feature = "cuda")]
 use candle_core::cuda_backend as pool_backend;
 #[cfg(all(feature = "rocm", not(feature = "cuda")))]
