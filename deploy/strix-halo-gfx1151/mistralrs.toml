@@ -43,6 +43,7 @@ model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
 alias = "qwen3.6-35b-q5"
 mtp = true
 lazy = true
+mtp_n_predict = 2
 
 [models.format]
 quantized_file = "Qwen3.6-35B-A3B-UD-Q5_K_XL.gguf"
