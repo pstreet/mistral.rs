@@ -1362,6 +1362,14 @@ facade today, so the MTP port gates the cutover):
       band measured on the 35B: 31.4-32.7 tok/s vs the 50.99
       unarmed record (-36%, consistent with the 4B probe's
       -33%). Rollback backstop: mistralrs.pre-guard-deploy.
+      CORRECTION 2026-10-14: the -36% was POLLUTED - the guard's
+      own DTOH readback trips the capture ban, failing precapture
+      buckets and once ending with graphs disabled, so part of
+      the measured cost was graph-disablement, not guard syncs.
+      Fixed in 22a4fc509 (guard skips while capturing - nothing
+      executes there, so nothing to attribute); armed probe now
+      serves at 125.2 tok/s graph speed with zero to_cpu
+      failures. True armed cost re-measures on the next deploy.
       CATCH PROTOCOL on the next fault: the request 500s with
       "guarded gather '<name>': index N >= M rows" in the
       journal - the buffer name + wild index IS the root-cause
