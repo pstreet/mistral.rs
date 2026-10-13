@@ -1276,6 +1276,21 @@ facade today, so the MTP port gates the cutover):
       attribution; at ~2-in-4 boots faulting, the expected catch
       window is short. The guard needs the next deploy restart to
       reach prod either way.
+      ARMED WINDOW LIVE (deployed 2026-10-14, binary 8c3a41c37 +
+      wrapper 1144a6a3e): the guard runs in prod. First boot
+      CLEAN - 391 CORRECT, zero bails, zero hip errors. Armed
+      band measured on the 35B: 31.4-32.7 tok/s vs the 50.99
+      unarmed record (-36%, consistent with the 4B probe's
+      -33%). Rollback backstop: mistralrs.pre-guard-deploy.
+      CATCH PROTOCOL on the next fault: the request 500s with
+      "guarded gather '<name>': index N >= M rows" in the
+      journal - the buffer name + wild index IS the root-cause
+      attribution. The context survives (no hip-700, no wedge
+      signature, no journald-flood loss), the healthcheck probe
+      arm catches the failing lane within ~2 checks and restarts
+      onto a fresh boot, and the bail message stays readable for
+      the post-mortem. Remove the arm (wrapper + the guard env)
+      once the class closes.
       HYGIENE FOUND EN ROUTE: mistralrs-core's lib TEST build
       fails on HEAD in the dual shape - ops.rs Top1Submission
       tests reference a removed API (device_tokens / .token),
