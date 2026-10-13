@@ -566,11 +566,16 @@ facade today, so the MTP port gates the cutover):
       600tok essays, 1207 replays, zero eager-skips, zero errors,
       125-127 tok/s, math sanity 391 correct. normal.rs hybrid
       eager-skip gates removed (both forward + precapture); TEMP-DIAG
-      (pool-VA census, no-rollback gate) fully reverted. REMAINS:
-      multimodal.rs keeps its gate (27B multimodal path unproven on
-      the NVIDIA role - needs its own probe); precapture now stops
-      early holding arenas (3 graphs at 17GB free, lazy covers the
-      rest - heuristic may want a revisit).
+      (pool-VA census, no-rollback gate) fully reverted.
+      MULTIMODAL CLOSED 2026-10-11: the same arena fix heals the 27B
+      mmproj path (shared capture fn). Proof (solo-cuda fast binary,
+      27B ISQ-Q4K text-only through the multimodal pipeline, NO bypass
+      env): 2x600 essays, 1207 replays across the 512 rollover, zero
+      eager-skips, zero errors, ~42 tok/s. multimodal.rs gates removed
+      (both); the bypass env has no remaining users. Hybrid graphs-on
+      is done on both pipelines. Note: precapture now stops early
+      holding arenas (3 graphs at 17GB free, lazy covers the rest -
+      heuristic may want a revisit).
       Hardening landed: missing `end_cuda_capture_discard` on the
       forward-Err arm (the pool-guard drop + checkpoint rollback then ran
       on the still-open poisoned stream) + `try_clone` in
