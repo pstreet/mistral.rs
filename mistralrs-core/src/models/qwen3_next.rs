@@ -938,6 +938,7 @@ struct GdnCommitIndices {
 }
 
 fn index_select_replay_rows(source: &Tensor, indices: &Tensor) -> Result<Tensor> {
+    crate::utils::gather_guard::guard_u32_gather("gdn_replay_rows", indices, source.dim(0)?)?;
     if source.is_contiguous() {
         source.index_select(indices, 0)
     } else {
@@ -3116,6 +3117,11 @@ impl Model {
             last_row_idx.iter().map(|i| *i as u32).collect::<Vec<_>>(),
             (batch,),
             normed.device(),
+        )?;
+        crate::utils::gather_guard::guard_u32_gather(
+            "drafter_last_hidden",
+            &last_idx,
+            normed.dim(1)?,
         )?;
         let mut hidden = normed.index_select(&last_idx, 1)?;
         let mut cursor = last_row_idx

@@ -744,16 +744,31 @@ impl RecurrentStatePool {
 
     /// Gather conv states for the given slot indices
     pub fn gather_conv_state(&self, state_indices: &Tensor) -> Result<Tensor> {
+        crate::utils::gather_guard::guard_u32_gather(
+            "gather_conv_state",
+            state_indices,
+            self.conv_state.dim(0)?,
+        )?;
         self.conv_state.index_select(state_indices, 0)
     }
 
     /// Gather recurrent states for the given slot indices
     pub fn gather_recurrent_state(&self, state_indices: &Tensor) -> Result<Tensor> {
+        crate::utils::gather_guard::guard_u32_gather(
+            "gather_recurrent_state",
+            state_indices,
+            self.recurrent_state.dim(0)?,
+        )?;
         self.recurrent_state.index_select(state_indices, 0)
     }
 
     /// Scatter conv states back to the pool for the given slot indices
     pub fn scatter_conv_state(&mut self, state_indices: &Tensor, values: &Tensor) -> Result<()> {
+        crate::utils::gather_guard::guard_u32_gather(
+            "scatter_conv_state",
+            state_indices,
+            self.conv_state.dim(0)?,
+        )?;
         #[cfg(feature = "cuda")]
         if mistralrs_quant::device_has_fused_ops(&self.device) {
             return crate::cuda::indexed_copy::copy_rows(
@@ -826,6 +841,11 @@ impl RecurrentStatePool {
         state_indices: &Tensor,
         values: &Tensor,
     ) -> Result<()> {
+        crate::utils::gather_guard::guard_u32_gather(
+            "scatter_recurrent_state",
+            state_indices,
+            self.recurrent_state.dim(0)?,
+        )?;
         #[cfg(feature = "cuda")]
         if mistralrs_quant::device_has_fused_ops(&self.device) {
             return crate::cuda::indexed_copy::copy_rows(
