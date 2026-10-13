@@ -848,10 +848,18 @@ restart per batch, never one per item.
 - [ ] ~S UQFF vs GGUF shootout: same weights through the CLI
       `quantize`/`uqff` path, bench load + decode on this box.
       Unmeasured; native format may win both.
-- [ ] ~S Re-sweep MTP n on the cutover binary: n=2 was locked on the
-      old binary; verify is faster now and acceptance sits 63-67%,
-      so n=3 may win where it lost before. Include draft sampling
-      greedy-vs-auto recheck.
+- [x] ~S Re-sweep MTP n on the cutover binary (CLOSED 2026-10-11, prod
+      35B, quiet box, essay-600tok temp0.3 x3 per arm, n pinned
+      per-model): n=3 34.9 tok/s vs n=2 35.0 - dead heat within the
+      documented +/-0.3 thermal noise, but n=2 accepts 65% vs 41%
+      and proposes 44% fewer draft tokens (1566 vs 2790) for the same
+      output. Matches the old-binary verdict (n=2 won there too);
+      the cutover's faster verify did NOT move n=3 ahead. Fleet
+      unified at n=2 (a001d0ca9); n=3 hypothesis retired. The
+      greedy-vs-auto recheck was already answered 2026-09-18
+      (identical within noise, keep greedy). Note: absolute ~35 tok/s
+      vs the old ~50 is not comparable (thinking-trace decode at
+      600tok + cutover binary era); only the n=2-vs-n=3 delta counts.
 - [ ] ~S MTP on the 4B: `Qwen3.5-4B-MTP-GGUF` carries the head but is
       pinned `mtp=false` in prod. Small-model MTP is usually
       high-acceptance; bench before pinning.
