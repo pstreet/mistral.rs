@@ -1350,6 +1350,13 @@ facade today, so the MTP port gates the cutover):
       Top1 submit on first decode - same window, now with three
       launch families guarded at the source. Probe: 391 CORRECT,
       125.21 tok/s, zero bails of any kind.
+      WIDENED NET DEPLOYED 2026-10-14 (~17:30 UTC): first boot
+      CLEAN (391 CORRECT), essays 49.1/49.1/46.0 tok/s, 29
+      graphs captured, zero fault/guard/disable lines. Rollback
+      backstop: mistralrs.pre-widen-deploy. Soak round 6 in
+      flight - first test of the complete net (footprint on
+      copy/where/binary + params settle/readback + gather guard
+      + census + ledger + cores).
       NEXT INSTRUMENTATION (cheap, high-yield): census records
       gain TENSOR LENGTHS + a first-launch check that entry
       state_indices length == captured batch (the census verifies
