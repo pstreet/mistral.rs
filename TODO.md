@@ -714,9 +714,17 @@ facade today, so the MTP port gates the cutover):
       graph-capture audit): prod's default model runs eager decode
       while the same binary replays the 27B on the same hip device.
       (a) DONE (dc20c5254): qwen3_next.rs supports_cuda_decode_graphs
-      override, all four shapes check green. With MTP attached it is
-      behavior-neutral (normal.rs still skips proposers as
-      SpeculativeConflict), so prod is unaffected until (b) lands.
+      override, all four shapes check green.
+      (b) DONE (32dab2f6f): the mm.rs speculative-graph machinery is
+      ported to normal.rs (eligibility proposer flag + q_len>1 verify
+      relax + spec-state gates; capture warm/admission/validate/
+      restore; precapture widths [1, 1+n] from speculative_graph_plans;
+      metadata validators moved to shared cuda_graph.rs). Fast-probe
+      proof (hip:0, 35B, mtp n=2): Captured 4 graphs through bucket 2
+      (width-1 + width-3 verify), 558 replays / 1 population over two
+      essays, sanity 391 correct, acceptance 61% (pos0 73% / pos1
+      49%), zero errors, 48.9-53.6 tok/s on the FAST build - i.e.
+      MTP+graphs already matches the release MTP-off graphs number.
       PROBE VERDICT (2026-10-11, release binary, hip:0, MTP off,
       essay-600tok temp0.3 x3 per arm, GTT trimmed clean first):
       graphs 48.44/48.71/48.70 tok/s (Captured 2 graphs bucket 2 in
@@ -725,14 +733,19 @@ facade today, so the MTP port gates the cutover):
       = +69% decode from graphs alone. Graphs-only (48.6) already
       beats prod's MTP-on eager (~35.0) by +39%. The 4B bisect also
       proved the hip normal-pipeline path (299 replays, zero eager).
-      (b) REMAINS, now clearly worth it: port the mm.rs speculative-
-      graph machinery to normal.rs (multimodal.rs:2197 is the
-      reference; the 27B replays in prod with MTP n=2 attached, so
-      MTP+graphs coexistence is proven on the mm side). After the
-      port: release rebuild, ONE prod restart, essay re-bench with
-      MTP n=2 + graphs; expected floor ~48.6, upside if MTP still
-      stacks on top. MTP-off graphs vs MTP-on eager is the fallback
-      A/B if the port stalls.
+      REMAINS (deploy): release rebuild with the port DONE + verified
+      (2026-10-11, release binary, mtp n=2, essay x3): 50.02/48.95/
+      50.70 tok/s (mean 49.9 = +43% over prod's ~35.0), Captured 4
+      graphs in 376ms, 820 replays / 1 population, sanity 391,
+      acceptance 62% (1013/1632) - quality held. Full A/B (all
+      release, same bench): eager-MTP-off 28.8, graphs-MTP-off 48.6,
+      graphs+MTP-n2 49.9, prod-today (MTP eager) ~35.0. The stack
+      beats graphs-alone: MTP contributes ~+2.7% on top of graphs.
+      NO config change needed for the swap (the port is code-only;
+      prod TOML already runs mtp n=2; the Utilization pool captures
+      fine - the pinned 32k pool was a probe-lane memory constraint
+      only). Rollback = restore target/release/mistralrs.pre-
+      35bgraphs + restart. AWAITING USER GO: ONE prod restart.
       Probe-lane findings (2026-10-11):
       - A second 35B cannot load beside a resident prod: GTT is
         RAM-backed (Strix Halo APU) and /v1/models/unload frees into
