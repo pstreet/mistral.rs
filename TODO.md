@@ -733,29 +733,48 @@ facade today, so the MTP port gates the cutover):
       = +69% decode from graphs alone. Graphs-only (48.6) already
       beats prod's MTP-on eager (~35.0) by +39%. The 4B bisect also
       proved the hip normal-pipeline path (299 replays, zero eager).
-      DEPLOY ATTEMPTED AND ROLLED BACK (2026-10-11 ~18:30): the release
-      swap booted clean and the demand-load captured 29 graphs through
-      batch bucket 32 in 2.78s (prod max_seqs=32 vs the probe's 2) -
-      then the FIRST decode step faulted: rocdevice.cpp "kernel:
-      where_u8_bf16, faulting addr 0x70ad66ea4000" (host-pinned
-      range), "Queue error - HSA_STATUS_ERROR_MEMORY_FAULT", and the
-      request WEDGED (no completion in 9+ min; the follow-on requests
-      returned empty). Same signature class as the old dangling-arena
-      residue (post-capture op reading freed pinned memory - the
-      2026-10-07 "INVALID_VALUE on sampling DTOH" shape). The probe
-      never hit it because it captured only 4 graphs at bucket 2.
-      Rollback executed (stop -> restore mistralrs.pre-35bgraphs ->
-      start; first cp attempt failed with Text file busy - stop the
-      unit before swapping) and verified: sanity 391, essays 33.8/32.9
-      tok/s eager band, zero faults. NEXT: reproduce on the probe lane
-      with max_seqs=32 (bucket-32 capture set, fast build), then
-      compute-sanitizer for the dangling pointer - suspects: the htod
-      input cache at 29-entry scale (its eviction/rebuild path),
-      spec-state admission at bucket 32, or an arena keepalive gap
-      for a width/bucket combo the 4-graph probe never exercised.
-      The port itself stays committed (32dab2f6f) - the bug is in the
-      shared capture machinery's behavior at capture-set scale, not
-      in the ported plumbing, which the bucket-2 probe validated.
+      DEPLOY ATTEMPTED AND ROLLED BACK TWICE (2026-10-11 ~18:30 and
+      ~19:30): both swaps booted clean, captured 29 graphs through
+      batch bucket 32, then the FIRST decode step faulted - rocdevice
+      "kernel: where_u8_bf16", faulting addr HOST-PINNED (0x70ad... /
+      0x7a6b...), HSA_STATUS_ERROR_MEMORY_FAULT queue error, request
+      WEDGED (no completion; follow-ons returned empty). Attempt 2 ran
+      with MISTRALRS_GRAPH_PTR_CENSUS=1 armed: the census VERIFIED
+      every entry-held VA (input_ids, metadata buffers, state_indices,
+      logits - contents logged sane, q_len=3 verify inputs correct)
+      immediately before launch, and the kernel faulted anyway -> the
+      dangling read is NOT an entry-held buffer; it is inside the
+      captured graph (arena intermediate / htod host staging) where
+      the census does not reach. Rollbacks executed cleanly (stop ->
+      restore mistralrs.pre-35bgraphs -> start; a live cp fails with
+      Text file busy - always stop the unit first) and verified (391,
+      eager band, zero faults). The census export stays in the
+      wrapper (inert on the rolled-back binary) for the next hunt.
+      REPRO MATRIX - all CLEAN (zero faults, correct output):
+      fast/release x bucket-2/18/29-graph captures x F16 and
+      Q8_0/Q4_0 KV x Q4K draft head on/off x spec-state budget env
+      (16GiB) x eager and lazy demand-load x single-model and the
+      full prod TOML x the full wrapper env (managed weights, host
+      drop, HIP_VISIBLE_DEVICES) x systemd-run with the unit's exact
+      sandbox properties (ProtectSystem=full, PrivateTmp,
+      NoNewPrivileges, LimitMEMLOCK=infinity). The lane is 0-for-6;
+      prod is 2-for-2 at the same point (first decode after
+      demand-load capture) on the SAME binary/config/env/sandbox the
+      lane runs clean. Remaining deltas are not config-shaped:
+      cgroup identity, port 1235 ambient traffic, boot-sequence
+      residue (ExecStartPre dry-run), or a rare timing race that the
+      prod context reliably wins.
+      NEXT HUNT (in order): (a) compute-sanitizer on the systemd-run
+      replica (the tool that named get_rows_q8_0 in the original
+      arena hunt) while hammering demand-load cycles + concurrent
+      requests; (b) extend the ptr census to arena intermediates and
+      the htod host staging (the fault is in that uncovered set);
+      (c) if the mechanism stays hidden, MITIGATION: cap the startup
+      capture set (only small buckets per width; the lazy path -
+      proven clean everywhere - covers the rest) and redeploy with
+      the census armed; (d) re-attempt the swap only with the census
+      on. The port stays committed (32dab2f6f); prod runs the
+      rollback binary at the ~35 tok/s eager band.
       Probe-lane findings (2026-10-11):
       - A second 35B cannot load beside a resident prod: GTT is
         RAM-backed (Strix Halo APU) and /v1/models/unload frees into
