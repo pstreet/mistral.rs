@@ -1233,6 +1233,56 @@ facade today, so the MTP port gates the cutover):
       a launch-site inventory of every index_select in the MTP
       path so the next HSA kernel line maps to a call site
       immediately.
+      AUDIT ROUND 2 (2026-10-13/14, the three suspects RESOLVED
+      and the instrumentation LANDED):
+      - copy_from_u32_slice: EXONERATED - it hard-bails on any
+      dtype or length mismatch at the replay copy, so partial-copy
+      stale indices are impossible; the faulting replay's entry
+      genuinely matched.
+      - The storage_generation watch: SOUND - advanced at every
+      pool mutation (7 sites in hybrid_cache.rs), observed at
+      every target decode step, and a mismatch clears ALL graph
+      entries. The lane reserve is load-time only, so the six
+      growing allocs REFRAME as the load-time lane reservations
+      (seed -> capture -> MTP depth), not request churn; still
+      never freed, so the retention instance stands.
+      - The spec module holds NO state indices (the drafter
+      consumes staged states; dflash.rs's gathers are a different
+      proposer flavor). The model's mixed-stage rollback stash:
+      BOUNDED - group_gdn_replay_batches bails on any batch_idx
+      past the slot table, and the stash tensors are narrowed in
+      lockstep with the slots.
+      VERDICT: every guarded family is clean, yet the fault fired
+      with a wild index - it entered an UNGUARDED eager gather in
+      the verify/propose window. The remaining candidate class is
+      the sampler/verify index ops, where the pre-#9 Top1
+      workspace evidence already pointed.
+      INSTRUMENTATION LANDED (MISTRALRS_GATHER_GUARD=1, env-gated,
+      zero cost unset): bounds checks at the fault-window
+      gather/scatter surface - gather_conv_state,
+      gather_recurrent_state, scatter_conv_state,
+      scatter_recurrent_state, gdn_replay_rows, and
+      drafter_last_hidden. The bail names the buffer, the max
+      index, the row count, and the index head - and because it
+      fires BEFORE the wild launch it also PREVENTS the context
+      poisoning (the request fails, the server keeps serving).
+      VALIDATION: four shape checks green; guard unit tests green
+      (default bar); live probe (solo-cuda fast build, 4B, guard
+      armed): 391 CORRECT, zero spurious bails across three
+      essays, band cost MEASURED at 83.5 vs 125.2 tok/s (-33%,
+      the per-gather D2H sync across ~70 GDN gathers/step).
+      ARM DECISION (user): an armed prod window trades a third of
+      the decode band for wedge immunity + first-fault
+      attribution; at ~2-in-4 boots faulting, the expected catch
+      window is short. The guard needs the next deploy restart to
+      reach prod either way.
+      HYGIENE FOUND EN ROUTE: mistralrs-core's lib TEST build
+      fails on HEAD in the dual shape - ops.rs Top1Submission
+      tests reference a removed API (device_tokens / .token),
+      left behind by the Top1 hardening; verified pre-existing by
+      stash (8 errors on clean HEAD). The core dual test bar is
+      broken until those tests are rewritten; joins the quant
+      test rot as P3 hygiene.
       Probe-lane findings (2026-10-11):
       - A second 35B cannot load beside a resident prod: GTT is
         RAM-backed (Strix Halo APU) and /v1/models/unload frees into
