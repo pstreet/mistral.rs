@@ -13,6 +13,11 @@ WorkingDirectory=%h/LocalAI
 ExecStartPre=%h/LocalAI/mistral.rs/target/release/mistralrs from-config -f %h/LocalAI/models/mistralrs.toml --dry-run
 ExecStart=%h/.config/mistralrs-server-wrapper.sh
 LimitMEMLOCK=infinity
+# SEGV cores for the fault hunt: the default soft limit is 0 (writes
+# nothing), and core_pattern used to pipe to apport, which refuses
+# user-session cores from private mount namespaces (lost the 2026-10-13
+# idle-SEGV core). Pattern now points at LocalAI/scratch/cores.
+LimitCORE=infinity
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=300

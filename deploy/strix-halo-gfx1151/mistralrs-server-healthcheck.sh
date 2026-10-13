@@ -4,13 +4,23 @@
 # Restarts the server when it is wedged but not crashed (which
 # Restart=on-failure never catches): the known signature is a poisoned
 # ROCm context after an HSA memory fault (hip error 700), where every
-# request 500s forever. Three signals are checked:
+# request 500s forever. Four signals are checked:
 #   1. GET /health fails (process down or socket hung). Note /health is a
 #      static handler, so a 200 here does NOT prove the GPU works.
 #   2. New GPU-wedge lines in this service's journal since the last check.
+#      A poisoned context only emits them when requests arrive, so signal
+#      4 exists to manufacture traffic; without it an idle wedge resets
+#      the fail counter every check (found live 2026-10-13: detected 1/2,
+#      then silent for 40 min because no request came to fault).
 #   3. The service being inactive/failed at all. A SIGTERM kill looks
 #      identical to a deliberate stop (Result=success, status 15), so
 #      systemd restarts nothing and the old check exited silently here.
+#   4. A 1-token real generation against the default model every
+#      PROBE_INTERVAL seconds while it is loaded (skipped when idle-
+#      evicted, so the RAM-relief TTL still works). Probe failure feeds
+#      the same fail counter, and its 500/hip-700 journal lines land in
+#      the next check's window, so the two arms interlock: a poisoned
+#      context is detected within ~2 checks even with zero real traffic.
 # A wedge restart needs 2 consecutive failing checks (~2 min) and never
 # fires within 4 min of a (re)start, so normal model loading can't trip
 # it. An unexpected stop restarts immediately; use mistralrs-server-stop.sh
@@ -21,7 +31,8 @@
 set -uo pipefail
 
 SVC="mistralrs-server"
-URL="http://127.0.0.1:1235/health" # must match [server] port in mistralrs.toml
+BASE_URL="http://127.0.0.1:1235" # must match [server] port in mistralrs.toml
+URL="$BASE_URL/health"
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}"
 CURSOR_FILE="$CACHE_DIR/$SVC-health.cursor"
 FAIL_FILE="$CACHE_DIR/$SVC-health.fails"
@@ -33,6 +44,9 @@ ALERT_COOLDOWN=1800
 MARKER_TTL=14400
 ALERT_MAIL="${MISTRALRS_ALERT_MAIL:-$USER}"
 NTFY_TOPIC="${MISTRALRS_NTFY_TOPIC:-mistralrs-strix-halo}"
+PROBE_MODEL="${MISTRALRS_PROBE_MODEL:-qwen3.6-35b-q5}"
+PROBE_INTERVAL=300
+PROBE_TS_FILE="$CACHE_DIR/$SVC-health.probe"
 
 mkdir -p "$CACHE_DIR"
 exec 9>"$CACHE_DIR/$SVC-health.lock"
@@ -114,6 +128,29 @@ fi
 cursor=$(journalctl --user -u "$SVC" --no-pager --show-cursor -n0 2>/dev/null \
     | tail -n1 | sed 's/^-- cursor: //')
 [ -n "$cursor" ] && echo "$cursor" > "$CURSOR_FILE"
+
+# Signal 4: real-generation probe, after the cursor save so its failure
+# evidence lands in the next check's journal window (the interlock: a probe
+# 500 from a poisoned context emits hip-700 lines the next journal sweep
+# finds, so MAX_FAILS is reached even with zero real traffic).
+if [ -z "$bad" ]; then
+    last_probe=0
+    [ -f "$PROBE_TS_FILE" ] && last_probe=$(cat "$PROBE_TS_FILE" 2>/dev/null || echo 0)
+    now=$(date +%s)
+    if [ $(( now - last_probe )) -ge "$PROBE_INTERVAL" ]; then
+        echo "$now" > "$PROBE_TS_FILE"
+        if curl -sf -m 10 "$BASE_URL/v1/models" 2>/dev/null \
+            | jq -e --arg m "$PROBE_MODEL" \
+                '.data[] | select(.id == $m and .status == "loaded")' >/dev/null 2>&1; then
+            if ! curl -sf -m 60 "$BASE_URL/v1/completions" \
+                -H 'Content-Type: application/json' \
+                -d "{\"model\":\"$PROBE_MODEL\",\"prompt\":\"ok\",\"max_tokens\":1}" \
+                >/dev/null 2>&1; then
+                bad="model probe failed"
+            fi
+        fi
+    fi
+fi
 
 if [ -n "$bad" ]; then
     fails=$((fails + 1))
