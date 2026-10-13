@@ -900,7 +900,7 @@ restart per batch, never one per item.
 - [ ] ~M CUDA-graph capture proof on the NVIDIA role: caps claim
       graphs=true but the capture-bug fixes were hip-side; needs its
       own proof run on the 3090.
-- [ ] ~M Prefix caching on hybrids (revisit measured 2026-10-09, probe lane
+- [x] ~M Prefix caching on hybrids (CLOSED 2026-10-11; revisit measured 2026-10-09, probe lane
       :1244, 27B hip alias, n=4, git b3b315349): ENABLED but INERT. Boot
       prints "Prefix caching enabled (block-level, PagedAttention)",
       739MB reserved ((n+1) x ~148MB, consistent with the n=16 2511MB
@@ -930,6 +930,33 @@ restart per batch, never one per item.
       snapshots, which is presumably why Full is forced). Note the
       tradeoff this exposes: MTP (+29-70% decode) vs prefix reuse
       (prefill) are mutually exclusive today.
+      CLOSED 2026-10-11 (probe lane, :1244, 27B hip:0, dual fast
+      binary from tip, MTP n=2 greedy + prefix_cache_n=4, ISQ none,
+      K=Q8_0/V=Q4_0): THE COMPOSE WORKS ON THE CURRENT TREE. The
+      Oct-9 "structurally dead" verdict was true at b3b315349 and
+      fixed by the boundary/chunk-alignment + recurrent-checkpoint
+      machinery that landed since. Proof: (1) identical 3781-tok
+      prompt, 2nd run cached_tokens 3776/3781, prefill 12.2s ->
+      0.256s (48x), hit/recurrent, checkpoints_used 1; (2) MTP
+      acceptance 70/72 proposed (97%), both draft positions live
+      across the hit; (3) correctness pair (~45-tok math prompt,
+      temp 0, 2nd run cached 32): BYTE-IDENTICAL output. No code
+      change needed. Why no drafter-aux state is required: the
+      built-in MTP head's KV lives in the TARGET paged cache
+      (head.kv_layer_idx), so block-level prefix reuse covers the
+      drafter layer; the recurrent checkpoint covers GDN; the anchor
+      hidden comes from the short hit-path prefill. The aux
+      machinery (capture_paged_auxiliary_prefix_state) is for the
+      EXTERNAL DFlash drafter only (its ctx_cache/windowed pool sit
+      outside the paged cache); Qwen3_5Model's mixin methods read
+      the external dflash field, so built-in attach correctly yields
+      NotRequired/backbone-only. The "mutually exclusive" tradeoff
+      note above is OBSOLETE. Residuals: save coverage is
+      prefill-boundary only (no decode/finish snapshots - multi-
+      turn chat extending PAST the last prompt boundary still
+      re-prefills the delta; fine for the common same-prefix case),
+      and the aux ctx-cache capture still soft-fails on exact-
+      boundary mismatch (external-dflash-only concern, untested).
       PROBE UPDATE 2026-10-11 (solo-cuda fast binary, 4B, port 1244):
       (a) BACKBONE PROVEN: MTP-off + prefix_cache_n=4, second
       identical 3781-tok prompt (NOT 32-aligned) -> validation
