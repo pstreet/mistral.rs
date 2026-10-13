@@ -972,7 +972,10 @@ facade today, so the MTP port gates the cutover):
       captures its demanded buckets (1-2 big pinned arenas, affordable
       on 24GB); precapture correctly stops early on tight devices.
       Deep fix deferred: arena free-lists / twin transient discipline
-      to shrink the 200MB+ need.
+      to shrink the 200MB+ need. Also deferred: hip pool query/trim
+      no-ops in dual builds (pool_backend is the NVIDIA twin, so the
+      Device::Cuda match rejects Hip; hip serving is healthy via
+      allocator reuse) - fix when hip trim pressure is observed.
 - [ ] ~S 16B graph perf note: the twin's per-layer `final_out`
       `alloc_zeros` bypasses the capture arena (48 MEMALLOC + MEMSET +
       MEMFREE nodes in the captured graph; harmless under
