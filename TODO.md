@@ -560,6 +560,53 @@ facade today, so the MTP port gates the cutover):
       `cached_htod_slice` (was `Clone::unwrap`). Abort -> loud eager
       verified. Debug aid kept: `MISTRALRS_DEBUG_HYBRID_GRAPHS=1`
       bypasses the eager gates (default off). Re-entry as noted above.
+      PROBE 2026-10-11 (solo-cuda fast binary, 4B Q8_0 cuda:0, :1244,
+      bypass on): graphs capture AND replay fine up to 512 total
+      context (494 decode replays, correct "17*23=391", ~125 tok/s
+      graphed vs 91 eager). At the 512->1024 context-bucket rollover
+      the lazy re-capture faults: CUDA_ERROR_ILLEGAL_ADDRESS on the
+      capturing/next step, context destroyed, all later requests 500.
+      Deterministic across 4 runs (fresh server, same prompt: 494
+      replays then dead; 450-tok sequences pass, 500-tok die).
+      EXONERATED (identical fault each way): FlashInfer on/off,
+      4GB MISTRALRS_DECODE_ARENA_OVERRIDE (not arena under-sizing),
+      the old restore-in-window theory (snapshot/restore already
+      brackets the capture), sampling DTOH (Oct-7 symptom, now a
+      re-capture fault). Hip role crosses 512 routinely in prod, so
+      this is NVIDIA-role-specific. Prime suspect: warmup-then-capture
+      double-advance of hybrid recurrent checkpoint lanes mid-sequence
+      (rollback restores values but maybe not lane counters) or a
+      cuda-arena/htod-cache path that corrupts cross-bucket captures.
+      GATES STAY until the re-capture is fixed. Next: review
+      snapshot/restore lane-counter symmetry, or compute-sanitizer on
+      the :1244 probe at the boundary. Side note: non-hybrid 16B MoE
+      on the same probe faults ILLEGAL_ADDRESS after 1 replay + 1
+      capture (100ms, possibly memory-pressure: precapture stopped
+      early at 14GB free) - needs its own run, do not conflate.
+      FOLLOW-UP 2026-10-11: snapshot/restore code-reviewed symmetric
+      (committed_lane saved+restored, pending slots cleared, mapping
+      refreshed) - the double-advance theory needs epoch-counter audit
+      (applied_epochs untouched by restore) or sanitizer, not more
+      reading. Batch-2 discriminator BLOCKED by a separate bug: two
+      concurrent decodes die in 46ms with
+      "cuda_categorical_logits_f32_packed_batched requires F32 tensors"
+      (BF16 logits into the device topk twin - the MTP port assumed
+      F32; NVIDIA-role batch sampling is broken regardless of graphs).
+      So the 512 rollover is currently the only reachable lazy
+      re-capture on the probe; "all lazy captures fault" vs
+      "512-specific" still open. Fix batch sampling first, then the
+      batch-2 discriminator is one probe run.
+      FIXED 2026-10-11: `final_batched_logits` (Batched path) kept BF16
+      while `stack_final_logits` (PerSequence) upcast to F32, so every
+      F32-only batched device kernel bailed on batch>=2. Now upcasts to
+      F32 (plus test update); 4-shape checks green. Default-shape
+      `cargo test --lib` still red on pre-existing breakage
+      (engine/logger.rs ctor tests stale since 85b6517ff,
+      windowed_pool.rs copy_blocks import) - untouched, out of scope.
+      HARDWARE PROOF (solo-cuda fast binary, :1244): two concurrent
+      200-tok temp-0.3 decodes complete at 130 tok/s, 200 replays for
+      400 tokens (lockstep batch-2), zero errors. Batch sampling on
+      the NVIDIA role is live. Uncommitted: sampling.rs + this file.
 - [x] ~S FlashInfer on/off A/B on cuda-only (done 2026-10-07, 4B
       release, graphs-off): ON decode 77.7/77.4 tok/s, OFF 75.5/75.0
       (~+3% for FI); warm prefill identical ~11.3k both arms; 0 errors
@@ -2997,6 +3044,59 @@ mistral.rs hot zones, then merge.
   a DFlash draft model in hand.
 
 ## Done (kept for context)
+
+- [x] Ops 2026-10-11 ~01:20 UTC: iGPU 100%-busy/max-clocks wedge revisited
+      (see 2026-10-09 entry below). New evidence overturns the "firmware
+      latch, reboot-only" verdict: the wedge is INTERMITTENT and
+      PROCESS-ATTRIBUTABLE, not stuck firmware. Provenance: mistral.rs
+      load/inference bursts wedge 4/5 times, Chatterbox TTS startup load
+      2/2, plain-torch bursts and idle never; `systemctl --user stop`
+      of the owning service clears it every time (0% verified), no
+      reboot needed. While wedged, SERVING IS UNAFFECTED (correct
+      embeddings @200, 67 tok/s chat) - cost is ~40W + heat soak only.
+      Signature while wedged: sysfs gpu_busy 100%, sclk pinned 2.9GHz,
+      radeontop shows all shader blocks 0% with `cr` 100% (NB radeontop
+      prints "Unknown Radeon card" on Strix Halo, block attribution
+      suspect), owner CPU ~idle, VRAM modest. Ruled out: CUDA graphs
+      (pegs with MISTRALRS_CUDA_GRAPHS=0 too), new mistral.rs binary
+      specifically (torch/Chatterbox bursts wedge identically; Oct 9
+      entry predates those builds), external pollers (journal shows only
+      manual requests; healthcheck timer inactive). Leftover hypothesis:
+      KFD queue/CP race on bursty weight uploads on this APU (TheRock
+      10.1/HIP 7.16), occasionally wedged per burst. Follow-ups, all
+      open: (a) watchdog tripwire "100% busy + zero requests ->
+      restart offender" (current watchdog only watches 500s, and wedged
+      requests still 200); (b) gdb stacks while wedged to pin the spin
+      site; (c) note the Oct-09 "reboot cleared it" may just have been
+      the process teardown that came with it - stopping the server was
+      never tried then.
+      ROOT-CAUSED 2026-10-11 ~02:10 UTC (same night, debug session):
+      trigger matrix fully bisected with /tmp/opencode/bisect{1,2,3}.py
+      (fresh-proc torch steps + 4-5s-settled sysfs gpu_busy reads).
+      Findings: (1) `torch.cuda.init()` clean, `torch.empty(cuda)`
+      malloc clean, but ANY real GPU work - 4-byte H2D, `fill_` kernel
+      launch, tiny matmul - pegs 100%/41W; results always CORRECT.
+      (2) Solo torch process: CLEAN (0%). torch + idle-ComfyUI: clean.
+      torch + fresh-mistralrs (models lazy): clean. torch-new-work +
+      mistralrs-MODEL-RESIDENT: WEDGES deterministically (embedding AND
+      chat models, graphs on AND off). torch+torch+torch (chatterbox
+      resident + comfyui + bisect): clean - mistralrs/candle-HIP is the
+      required party. (3) SIGSTOP of any/all GPU procs does NOT clear
+      (fully GPU-autonomous, no host thread driving it); SIGTERM/exit
+      of EITHER party clears within ~30s (incl. mistralrs restart while
+      chatterbox stays loaded). (4) Power 41W + sclk pinned max + zero
+      shader-block activity + zero owner CPU = stuck amdgpu activity
+      counter pinning DPM at max clocks, not real CU execution; serving
+      unaffected throughout. Verdict: KFD/amdgpu multi-process activity-
+      counter bug on gfx1151 (kernel 7.2.6-070206-generic, vbios
+      113-STRXLGEN-001, TheRock 10.1/HIP 7.16, custom rocm-install/):
+      a resident candle-HIP context + foreign-process dispatch latches
+      the busy counter until either queue set is destroyed. No app-level
+      fix (any H2D/kernel triggers it; can't serialize serving bursts).
+      Mitigation: watchdog tripwire "100% busy + zero in-flight ->
+      restart mistralrs" (45s, verified to clear); upstream report to
+      TheRock/amdgpu with this matrix. Production wrapper untouched
+      (MISTRALRS_CUDA_GRAPHS=1 restored after A/B).
 
 - [x] Ops 2026-10-09 ~08:20 UTC: iGPU stuck at 100% busy / max clocks /
       ~40W with zero attributable load (all GPU processes proven idle

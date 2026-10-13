@@ -1232,7 +1232,10 @@ fn final_batched_logits(logits: &Tensor) -> Result<Tensor> {
     }
     logits
         .contiguous()?
-        .reshape((dims[0], dims[dims.len() - 1]))
+        .reshape((dims[0], dims[dims.len() - 1]))?
+        // The batched device-sampling kernels only accept F32 logits;
+        // mirror stack_final_logits so a BF16 model decodes identically.
+        .to_dtype(DType::F32)
 }
 
 fn coalesce_batch_logits_to_cpu(logits: Vec<Tensor>) -> Result<Vec<Tensor>> {
@@ -1863,12 +1866,12 @@ mod tests {
     }
 
     #[test]
-    fn final_batched_logits_preserves_dtype() {
+    fn final_batched_logits_upcasts_to_f32() {
         let logits = Tensor::zeros((2, 1, 1, 4), DType::BF16, &candle_core::Device::Cpu).unwrap();
 
         let packed = final_batched_logits(&logits).unwrap();
 
-        assert_eq!(packed.dtype(), DType::BF16);
+        assert_eq!(packed.dtype(), DType::F32);
     }
 
     #[test]
