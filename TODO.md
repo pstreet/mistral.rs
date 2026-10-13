@@ -930,6 +930,35 @@ restart per batch, never one per item.
       snapshots, which is presumably why Full is forced). Note the
       tradeoff this exposes: MTP (+29-70% decode) vs prefix reuse
       (prefill) are mutually exclusive today.
+      PROBE UPDATE 2026-10-11 (solo-cuda fast binary, 4B, port 1244):
+      (a) BACKBONE PROVEN: MTP-off + prefix_cache_n=4, second
+      identical 3781-tok prompt (NOT 32-aligned) -> validation
+      hit/recurrent, 3776 tokens reused (prompt 1.0s -> 0.03s),
+      checkpoints_used=1. The chunk planner caps the final prefill
+      chunk at the reusable boundary (3776), so the snapshot saves
+      there even for unaligned prompts - the "save starvation" arm is
+      softer than journaled for the prefill case. (b) TEST-BED MAP:
+      the 4B text-only (qwen35 -> Qwen3_5 loader) has NO MTP attach
+      ("This model does not support speculative decoding") - matches
+      the prod mtp=false pins; the 27B-cuda MTP attach OOMs on the
+      24GB 3090 at boot even at max_seqs=1/16k ctx (capacity
+      backlog, settle-then-attach) - so the ONLY on-box MTP+prefix
+      test bed is the 27B on hip (the Oct-9 config). (c) ROOT-CAUSE
+      REFINEMENT for the no_replay_boundary gate: dual builds have no
+      flash-attn, so supports_paged_auxiliary_prefix_state takes the
+      CTX-CACHE arm (returns true unconditionally) -> policy says
+      NotRequired for text -> the boundary EXISTS -> the validation
+      peeks for auxiliary... and dies because the checkpoint was
+      saved WITHOUT aux: the ctx-cache capture requires a drafter
+      entry with start_pos==0 AND next_pos==boundary and soft-fails
+      (Ok(None)) otherwise. The windowed-pool arm can NEVER serve a
+      hybrid drafter (enable_windowed_kv bails if any layer lacks a
+      sliding window; GDN layers have none). REMAINING FIX (one
+      shape): make the ctx-cache capture not soft-fail at the
+      aligned boundary - either flush/snap the drafter ctx entry to
+      the boundary at snapshot time or force the drafter to observe
+      block-aligned chunk ends. Then MTP+prefix compose through the
+      existing aux save/restore machinery.
       ROOT CAUSE PINNED 2026-10-09 (probe lane, MTP off, aligned
       3808-tok prompts, TEMP-DIAG tracing): a composition bug, not a
       hashing bug. Save banks the FULL-prompt snapshot (n_blocks=119,
