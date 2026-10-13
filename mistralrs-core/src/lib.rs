@@ -3395,6 +3395,23 @@ impl MistralRs {
                             ))
                         })?;
                 }
+                // Pre-warm the sparse kernels now, while the GPU is idle:
+                // their first launch freezes the HSA executable, which
+                // hung mid-serve behind a busy GPU once. Non-fatal;
+                // serving continues if it fails. Solo-rocm serves via
+                // the workspace path (no direct fn), so only cuda builds.
+                #[cfg(feature = "cuda")]
+                for device in pipeline.execution_devices() {
+                    if let Err(err) =
+                        crate::cuda::speculative_rejection::prewarm_sparse_rejection_kernels(
+                            &device,
+                        )
+                    {
+                        warn!(
+                            "MTP sparse-kernel pre-warm on {device:?} failed (serving continues): {err}"
+                        );
+                    }
+                }
             }
             pipeline.get_metadata().cache_config.clone()
         };

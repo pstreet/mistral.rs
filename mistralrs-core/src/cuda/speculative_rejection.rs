@@ -383,6 +383,77 @@ pub(crate) fn sparse_rejection_role_eligible(device: &candle_core::Device) -> bo
     }
 }
 
+/// Launch both sparse kernels once with tiny valid inputs so the HSA
+/// loader freezes their executable at load, not mid-serve (a first
+/// launch mid-serve hung in hsa_executable_freeze behind a busy GPU).
+/// Values audited against the .cu bounds: every OOB class bails
+/// safely, zeros + a uniform q row take the OK path. Non-fatal by
+/// contract: the caller warns and serves on.
+#[cfg(feature = "cuda")]
+pub(crate) fn prewarm_sparse_rejection_kernels(device: &candle_core::Device) -> Result<()> {
+    if !sparse_rejection_role_eligible(device) {
+        return Ok(());
+    }
+    const BATCH: usize = 1;
+    const DRAFTS: usize = 2;
+    const VOCAB: usize = 256;
+    const QW: usize = 8;
+    let target_logits = Tensor::from_vec(
+        vec![0f32; BATCH * (DRAFTS + 1) * VOCAB],
+        (BATCH, DRAFTS + 1, VOCAB),
+        device,
+    )?;
+    let draft_tokens = Tensor::from_vec(vec![0u32; BATCH * DRAFTS], (BATCH, DRAFTS), device)?;
+    let q_token_ids =
+        Tensor::from_vec(vec![0u32; BATCH * DRAFTS * QW], (BATCH, DRAFTS, QW), device)?;
+    let q_probs = Tensor::from_vec(
+        vec![0.125f32; BATCH * DRAFTS * QW],
+        (BATCH, DRAFTS, QW),
+        device,
+    )?;
+    let temps = Tensor::from_vec(vec![1f32; BATCH], BATCH, device)?;
+    let top_p = Tensor::from_vec(vec![0f32; BATCH], BATCH, device)?;
+    let min_p = Tensor::from_vec(vec![0f32; BATCH], BATCH, device)?;
+    let accept = Tensor::from_vec(vec![0.5f32; BATCH * DRAFTS], (BATCH, DRAFTS), device)?;
+    let sample = Tensor::from_vec(vec![0.5f32; BATCH], BATCH, device)?;
+    let draft = SparseRejectionDeviceTensor::from_tensor(&draft_tokens);
+    let q_ids = SparseRejectionDeviceTensor::from_tensor(&q_token_ids);
+    let q_probs_t = SparseRejectionDeviceTensor::from_tensor(&q_probs);
+    let modes = [
+        (
+            Tensor::from_vec(vec![0u32; BATCH], BATCH, device)?,
+            SparseRejectionMode::Categorical,
+        ),
+        (
+            Tensor::from_vec(vec![4u32; BATCH], BATCH, device)?,
+            SparseRejectionMode::BoundedTopK { max_top_k: 4 },
+        ),
+    ];
+    for (top_k, mode) in &modes {
+        let input = SparseRejectionDeviceInput {
+            target_logits: &target_logits,
+            draft_tokens: &draft,
+            q_token_ids: &q_ids,
+            q_probs: &q_probs_t,
+            inverse_temperatures: &temps,
+            target_top_k: top_k,
+            top_p: &top_p,
+            min_p: &min_p,
+            accept_uniforms: &accept,
+            sample_uniforms: &sample,
+            mode: *mode,
+        };
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        if device.is_hip() {
+            sparse_rejection_hip_device_with_outcomes(input, None, None)?;
+            continue;
+        }
+        sparse_rejection_cuda_device_with_outcomes(input, None, None)?;
+    }
+    device.synchronize()?;
+    Ok(())
+}
+
 #[cfg(feature = "rocm")]
 struct HipSparseRejectionPinned<T> {
     allocation: HipPinnedHostSlice<T>,

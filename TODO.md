@@ -920,9 +920,28 @@ facade today, so the MTP port gates the cutover):
       binary serves; eprintln cannot wedge CUs) and validated live
       (17k device lines + gguf-mmap lines flowing). Stacks at
       /tmp/opencode/wedge2-stacks.txt, journal at
-      /tmp/opencode/wedge2-journal.txt. Next: pre-warm companion
-      kernels at load (move freezes off the serving path) as cheap
-      hardening; the poisoned-capture root cause stays open.
+      /tmp/opencode/wedge2-journal.txt.
+      SIXTH OCCURRENCE 2026-10-12 ~07:12 UTC, fully instrumented:
+      where_u8_bf16 fault at 0x72b7c5e75000 with device+mmap ledger
+      + census + pre-warm ALL in. Matcher: NO ledger allocation ever
+      covered the fault page (35k lines). /proc/maps on the live
+      wedged process: the VA sits in an 896MB ---p unbacked
+      reservation in the driver VA zone (neighbors: census logits
+      buckets below, freed managed transients above). Census
+      passed; pre-warm ran clean (no warn) and did NOT prevent it -
+      the freeze race is exonerated as load-bearing. PATTERN (twice
+      now): request 1 serves clean, request 2 dies on its first
+      decode - not "first decode after load". Reads as silent
+      corruption during request 1's replays (stale-but-mapped page)
+      turning into a fault after an unmap between requests. Prime
+      suspect: pool trim vs graph-referenced VA (settle trim at
+      attach + idle maintenance; graph-interior refs are not
+      pool-tracked live allocations). Driver-guarantee doubt noted
+      (graph-owned pool memory should be trim-safe) - settle it
+      empirically: soak trims-on for pattern confirmation, then a
+      no-trim gate + trim-off soak as discriminator. Evidence:
+      /tmp/opencode/fault6-journal.txt, GPU HANG ANALYSIS queue
+      line + hip-700 cascade in-journal.
       TAILS LANDED 2026-10-12 (5da184dfe, validated same night): the
       async sampling tails are inside the window - sample_sequence's
       dtype conversion, both sampler.sample sites (direct) plus a guard
