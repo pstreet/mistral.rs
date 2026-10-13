@@ -1328,6 +1328,17 @@ facade today, so the MTP port gates the cutover):
       copy-fix family costs nothing measurable (fast-build band
       clusters ~83 with guard on/off/without the fix - the 125
       baseline was the release profile, not a regression).
+      HARDENED 2026-10-14 (candle 1f8d798e): a fourth fault face
+      (where_u8_bf16, page-not-present, MTP verify path) fired
+      WITH the gated fix live - the token ring carries an
+      explicit cross-stream consumer, so the race needs no
+      tracking state at all. Settle is now UNCONDITIONAL before
+      cache publication (once per unique layout; hits safe by
+      construction after). The uncached tail keeps its gate:
+      same-stream ordering covers it when tracked, and per-launch
+      syncs there would serialize serving. Probe: 391 CORRECT,
+      125.2 tok/s, zero 900s/bails - the unconditional miss-sync
+      costs nothing measurable.
       NEXT INSTRUMENTATION (cheap, high-yield): census records
       gain TENSOR LENGTHS + a first-launch check that entry
       state_indices length == captured batch (the census verifies
