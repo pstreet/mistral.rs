@@ -3542,6 +3542,11 @@ impl NormalModel for Model {
     fn supports_packed_prefill(&self) -> bool {
         true
     }
+
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        true
+    }
 }
 
 impl AnyMoeBaseModelMixin for Model {}
