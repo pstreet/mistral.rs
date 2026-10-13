@@ -1269,7 +1269,18 @@ facade today, so the MTP port gates the cutover):
       four shape checks green; live probe with both guards armed:
       391 CORRECT, 83.4 tok/s (== gather-only band: the always-on
       check costs nothing), zero spurious bails.
-      SOAK ROUNDS 2-3 + THE PARAMS-SYNC FIX (2026-10-14):
+      SOAK ROUNDS 2-4 + THE PARAMS-SYNC FIX (2026-10-14):
+      SOAK ROUND 4 (first test of the params-sync fix under
+      fire): 4/4 CLEAN, band 47.9-48.4 tok/s, zero fault/guard
+      lines. Tally since the hunt went hot: 11 clean boots
+      against 3 faults (ucopy params, bmul params, idle SEGV) -
+      and zero faults in the 4 boots since the sync fix landed.
+      At the hot 50/50 rate, 4 straight clean is ~6% by luck:
+      consistent with the race being closed, not yet conclusive.
+      The round also validated the steady state: armed band holds
+      across restarts, captures stay healthy (29 graphs), the
+      watchdog cycled the healthcheck cleanly around every
+      restart.
       Round 2 (post-copyfix deploy): 4/4 CLEAN, band 32.6-33.3 -
       weak evidence for the fix (~6% by luck at 50/50), banked as
       healthy cycles. Round 3: 3/4 CLEAN + cycle-2 WEDGE with full
