@@ -1034,6 +1034,20 @@ facade today, so the MTP port gates the cutover):
         device - removes the per-request alloc/free churn (and the
         request-boundary epidemiology) but changes cross-engine
         sharing semantics; needs the capture-window review.
+      HARDENING a+b LANDED 2026-10-12 (user go; all shapes green,
+      one restart, prod proof): CUDA_WORKSPACE_MIN_ROWS=64 floor in
+      all five pinned-staging workspace constructors (hip Top1 +
+      TopK-sampling, NVIDIA-role Top1 twin, both sparse-rejection
+      workspaces' batch dim) so batch growth never realloc-frees
+      pinned buffers mid-request (bucket max is 32; larger batches
+      still resize, now synced). Sync-before-drop added at all five
+      resize sites. Scope: device-only workspaces (TopKLogitsPacked,
+      RankedTopK) untouched - their drops cannot hit the hipHostFree
+      wait class. PROOF: alloc-trace pinned lens now 256/512/768B
+      (capacity-64) instead of the old nrows-3 sizes; sanity 391,
+      essay 49.90 tok/s (healthy band, floor costs nothing). The
+      request-END frees remain (per-sampler workspaces) - (c) is the
+      candidate that removes them; designed, not landed.
       SOAK v1 2026-10-12 (6 unload->reload cycles, same process):
       6/6 clean, ~49-50 tok/s, full recaptures (98 attempts) + MTP
       re-attaches every cycle. At face value 1.6%-likely under

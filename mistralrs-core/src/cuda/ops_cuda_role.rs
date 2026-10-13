@@ -13,7 +13,7 @@ use crate::ops::{
     final_logits_row, CudaTop1Completion, RankedTopKPackedOutput, CUDA_ASYNC_TOKEN_RING_SLOTS,
     CUDA_TOP1_INVALID_TOKEN, CUDA_TOP1_PACKED_WIDTH, CUDA_TOPK_CHUNK_SIZE,
     CUDA_TOPK_MAX_EXACT_PACKED_VOCAB, CUDA_TOPK_MAX_GRID_Y, CUDA_TOPK_MAX_K,
-    CUDA_TOPK_MAX_STAGE2_CANDIDATES,
+    CUDA_TOPK_MAX_STAGE2_CANDIDATES, CUDA_WORKSPACE_MIN_ROWS,
 };
 use candle_core::Shape;
 
@@ -886,6 +886,7 @@ fn new_cuda_top1_workspace(
 ) -> Result<CudaTop1LogitsWorkspace> {
     use candle_core::backend::BackendDevice;
 
+    let nrows = nrows.max(CUDA_WORKSPACE_MIN_ROWS);
     let workspace_elems = nrows
         .checked_mul(nblocks)
         .ok_or_else(|| candle_core::Error::Msg("CUDA top-1 workspace overflow".to_string()))?;
@@ -987,6 +988,12 @@ fn cuda_top1_logits_submit_inner(
             .is_some_and(|workspace| workspace.token_ring.has_pending())
         {
             candle_core::bail!("{op} cannot resize while submissions are pending");
+        }
+        if cache.is_some() {
+            // quiesce before the old workspace's pinned buffers free below
+            dev.cuda_stream()
+                .synchronize()
+                .map_err(candle_core::Error::wrap)?;
         }
         *cache = Some(new_cuda_top1_workspace(dev, nrows, ncols, nblocks)?);
     }

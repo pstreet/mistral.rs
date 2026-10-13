@@ -27,6 +27,9 @@ pub(crate) const CUDA_TOP1_INVALID_TOKEN: u32 = u32::MAX;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) const CUDA_ASYNC_TOKEN_RING_SLOTS: usize = 2;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+// pinned-staging workspaces pre-size rows to this floor so batch growth never reallocs mid-request
+pub(crate) const CUDA_WORKSPACE_MIN_ROWS: usize = 64;
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 const CUDA_TOPK_SAMPLING_PARAM_WIDTH: usize = 5;
 #[cfg(feature = "cuda")]
 pub(crate) const CUDA_DFLASH_SELECTOR_MAX_K: usize = 128;
@@ -3131,6 +3134,7 @@ fn new_cuda_top1_workspace(
 ) -> Result<CudaTop1LogitsWorkspace> {
     use candle_core::backend::BackendDevice;
 
+    let nrows = nrows.max(CUDA_WORKSPACE_MIN_ROWS);
     let workspace_elems = nrows
         .checked_mul(nblocks)
         .ok_or_else(|| candle_core::Error::Msg("CUDA top-1 workspace overflow".to_string()))?;
@@ -3235,6 +3239,12 @@ fn cuda_top1_logits_submit_inner(
             .is_some_and(|workspace| workspace.token_ring.has_pending())
         {
             candle_core::bail!("{op} cannot resize while submissions are pending");
+        }
+        if cache.is_some() {
+            // quiesce before the old workspace's pinned buffers free below
+            dev.cuda_stream()
+                .synchronize()
+                .map_err(candle_core::Error::wrap)?;
         }
         *cache = Some(new_cuda_top1_workspace(dev, nrows, ncols, nblocks)?);
     }
@@ -3668,6 +3678,7 @@ fn new_cuda_topk_sampling_workspace(
 ) -> Result<CudaTopKSamplingWorkspace> {
     use candle_core::backend::BackendDevice;
 
+    let rows = rows.max(CUDA_WORKSPACE_MIN_ROWS);
     let capacity_rows = rows
         .checked_next_power_of_two()
         .ok_or_else(|| candle_core::Error::msg("CUDA top-k sampling row capacity overflow"))?;
@@ -3787,6 +3798,12 @@ fn cuda_topk_sampling_submit_inner(
             .is_some_and(|workspace| workspace.token_ring.has_pending())
         {
             candle_core::bail!("{op} cannot resize while submissions are pending");
+        }
+        if cache.is_some() {
+            // quiesce before the old workspace's pinned buffers free below
+            dev.cuda_stream()
+                .synchronize()
+                .map_err(candle_core::Error::wrap)?;
         }
         *cache = Some(new_cuda_topk_sampling_workspace(dev, *rows, *vocab, max_k)?);
     }

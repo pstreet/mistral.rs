@@ -28,7 +28,7 @@ use candle_core::HipStorage;
 
 use crate::ops::{
     cuda_topk_ranked_packed_batched, cuda_topk_ranked_packed_batched_with_workspace,
-    RankedTopKPackedOutput, RankedTopKPackedWorkspace, CUDA_TOPK_MAX_K,
+    RankedTopKPackedOutput, RankedTopKPackedWorkspace, CUDA_TOPK_MAX_K, CUDA_WORKSPACE_MIN_ROWS,
 };
 
 use super::ffi;
@@ -565,6 +565,7 @@ impl HipSparseRejectionWorkspace {
 
         let hip_device = device.as_hip_device()?;
         let stream = hip_device.cuda_stream();
+        let batch = batch.max(CUDA_WORKSPACE_MIN_ROWS);
         let capacity_batch = workspace_capacity(batch, "batch")?;
         let capacity_drafts = workspace_capacity(drafts, "draft")?;
         let draft_elems = capacity_batch
@@ -955,6 +956,7 @@ impl CudaSparseRejectionWorkspace {
     fn new(device: &candle_core::Device, batch: usize, drafts: usize) -> Result<Self> {
         let cuda_device = device.as_cuda_device()?;
         let stream = cuda_device.cuda_stream();
+        let batch = batch.max(CUDA_WORKSPACE_MIN_ROWS);
         let capacity_batch = workspace_capacity(batch, "batch")?;
         let capacity_drafts = workspace_capacity(drafts, "draft")?;
         let draft_elems = capacity_batch
@@ -1552,6 +1554,10 @@ pub(crate) fn sparse_rejection_cuda_submit(
             .is_some_and(|workspace| workspace.pending.is_some())
         {
             candle_core::bail!("{OP} cannot resize while a submission is pending");
+        }
+        if cache.is_some() {
+            // quiesce before the old workspace's pinned buffers free below
+            stream.synchronize().map_err(candle_core::Error::wrap)?;
         }
         *cache = Some(CudaSparseRejectionWorkspace::new(
             input.target_logits.device(),
@@ -2635,6 +2641,10 @@ pub(crate) fn sparse_rejection_hip_submit(
             .is_some_and(|workspace| workspace.pending.is_some())
         {
             candle_core::bail!("{OP} cannot resize while a submission is pending");
+        }
+        if cache.is_some() {
+            // quiesce before the old workspace's pinned buffers free below
+            stream.synchronize().map_err(candle_core::Error::wrap)?;
         }
         *cache = Some(HipSparseRejectionWorkspace::new(
             input.target_logits.device(),
