@@ -1370,6 +1370,13 @@ facade today, so the MTP port gates the cutover):
       executes there, so nothing to attribute); armed probe now
       serves at 125.2 tok/s graph speed with zero to_cpu
       failures. True armed cost re-measures on the next deploy.
+      RE-MEASURED 2026-10-14 (~15:32 UTC, binary with the
+      capture-skip + params-sync fixes): 391 CORRECT, essays
+      45.6/52.1/46.4 tok/s - the top end is AT the unarmed record
+      band, and 29 graphs captured (vs 18 before) with zero
+      disable/fault/900 lines. True armed cost: ~NOTHING. The
+      armed window stays indefinitely; disarm only removes the
+      per-gather D2H syncs nobody can now measure.
       CATCH PROTOCOL on the next fault: the request 500s with
       "guarded gather '<name>': index N >= M rows" in the
       journal - the buffer name + wild index IS the root-cause
