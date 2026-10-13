@@ -1293,7 +1293,7 @@ facade today, so the MTP port gates the cutover):
       a bystander parked mid-readback when the async fault
       aborted the process, not the cause. Decisive repeat finding:
       the bmul's dims/stride vector reads back as GARBAGE too
-      (rocksdb + file-offset agreement), with its own ALLOC and
+      (rocgdb + file-offset agreement), with its own ALLOC and
       no FREE - two unrelated kernels, same corrupted-params
       mechanism, now a pattern.
       ROOT-CAUSE MECHANISM (readonly audit, no new speculation):
