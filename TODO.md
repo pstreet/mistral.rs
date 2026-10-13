@@ -1357,6 +1357,18 @@ facade today, so the MTP port gates the cutover):
       flight - first test of the complete net (footprint on
       copy/where/binary + params settle/readback + gather guard
       + census + ledger + cores).
+      SOAK ROUND 6 VERDICT (2026-10-14): 4/4 CLEAN, band 45-48.4.
+      Combined post-sync-fix: TWELVE straight clean boots
+      (rounds 4+5+6) - ~0.02% by luck at the hot rate. Full
+      tally: 19 clean against 4 faults, every fault predating
+      the complete net, none in the 12 boots since. CLASS
+      CLOSED: the params-upload race plus the unguarded strided
+      launches were the mechanism; the net stays armed (zero
+      measurable cost) until a week of clean serving, then
+      stepwise disarm. Remaining audit items (sampler/verify
+      index ops, retention holder, census shape check) stand
+      down to standby - they re-arm automatically if any fault
+      ever recurs.
       NEXT INSTRUMENTATION (cheap, high-yield): census records
       gain TENSOR LENGTHS + a first-launch check that entry
       state_indices length == captured batch (the census verifies
