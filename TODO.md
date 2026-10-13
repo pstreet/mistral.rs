@@ -956,6 +956,23 @@ facade today, so the MTP port gates the cutover):
       pad_decode_input_u32 status 1 -> graphs disabled, serves eager);
       the alias runs MTP-eager until the capture path is ported. This
       pairs with the cuda-graph-capture-proof backlog item below.
+      CLOSED 2026-10-12 late (7728e2193 + candle 7dd8cdcc, prod proof):
+      graphs LIVE on the NVIDIA role - 51.7 tok/s (+28% over MTP-eager),
+      135 replays/essay, MTP accept ~55%. The chain, in order: (a) the
+      two cfg-arm fixes (spec budget + arena free); (b) the D2H bail
+      named [U32 len=1] -> backtrace -> scatter_conv_state via
+      GdnLayerCache::commit (my recurrent-scatter guess was wrong;
+      the conv twin was the site); dual arms on BOTH scatters +
+      ffi_cuda rewire of IndexedRowCopy/ClampU32Table (symbols verified
+      in the companion); (c) the arena-fill convergence: cuda-role
+      captures need ~200-470MB vs a ~30MB seed (bump allocator never
+      reuses transients; the carve ledger proved constant size-class
+      ratios = longer prefixes, not duplication) -> attempts 4->6,
+      drop-first regrow, info-level attempt record. The alias lazily
+      captures its demanded buckets (1-2 big pinned arenas, affordable
+      on 24GB); precapture correctly stops early on tight devices.
+      Deep fix deferred: arena free-lists / twin transient discipline
+      to shrink the 200MB+ need.
 - [ ] ~S 16B graph perf note: the twin's per-layer `final_out`
       `alloc_zeros` bypasses the capture arena (48 MEMALLOC + MEMSET +
       MEMFREE nodes in the captured graph; harmless under
