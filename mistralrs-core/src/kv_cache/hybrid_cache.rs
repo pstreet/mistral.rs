@@ -1402,6 +1402,10 @@ impl HybridCache {
             .map(|pool| pool.conv_state.dim(0).unwrap_or(usize::MAX))
             .unwrap_or(usize::MAX);
         for &slot in &host {
+            // u32::MAX is the graph pad sentinel, not a pool row.
+            if slot == u32::MAX {
+                continue;
+            }
             assert!(
                 (slot as usize) < physical_rows,
                 "graph state slot {slot} exceeds recurrent pool rows {physical_rows}"

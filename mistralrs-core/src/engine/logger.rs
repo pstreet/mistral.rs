@@ -357,7 +357,7 @@ mod tests {
 
     #[test]
     fn sequence_capacity_is_retained_for_recurring_publication() {
-        let logger = IntervalLogger::new(INACTIVE_LOGGER_INTERVAL, None);
+        let logger = IntervalLogger::new(INACTIVE_LOGGER_INTERVAL, None, String::new());
 
         logger.set_sequence_capacity(TEST_SEQUENCE_CAPACITY);
 
@@ -369,7 +369,7 @@ mod tests {
 
     #[test]
     fn cumulative_tokens_survive_interval_and_reset() {
-        let logger = IntervalLogger::new(INACTIVE_LOGGER_INTERVAL, None);
+        let logger = IntervalLogger::new(INACTIVE_LOGGER_INTERVAL, None, String::new());
 
         logger.add_prefill_tokens_processed(100);
         logger.add_decode_tokens_processed(7);
@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn drop_wakes_and_joins_worker() {
-        let logger = IntervalLogger::new(INACTIVE_LOGGER_INTERVAL, None);
+        let logger = IntervalLogger::new(INACTIVE_LOGGER_INTERVAL, None, String::new());
         let worker_exited = logger.worker_exited.clone();
 
         drop(logger);

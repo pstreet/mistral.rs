@@ -7,9 +7,19 @@ use std::{
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 
 use super::SUPPORTED_BLOCK_SIZE;
-#[cfg(not(all(feature = "cuda", feature = "rocm")))]
+#[cfg(all(
+    feature = "cuda",
+    feature = "flash-attn",
+    target_family = "unix",
+    not(all(feature = "cuda", feature = "rocm"))
+))]
 use mistralrs_paged_attn::copy_blocks;
-#[cfg(all(feature = "cuda", feature = "rocm"))]
+#[cfg(all(
+    feature = "cuda",
+    feature = "rocm",
+    feature = "flash-attn",
+    target_family = "unix"
+))]
 use mistralrs_paged_attn::copy_blocks_auto as copy_blocks;
 
 const KV_CACHE_TENSOR_COUNT: usize = 2;
