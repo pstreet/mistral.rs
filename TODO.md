@@ -1339,6 +1339,17 @@ facade today, so the MTP port gates the cutover):
       syncs there would serialize serving. Probe: 391 CORRECT,
       125.2 tok/s, zero 900s/bails - the unconditional miss-sync
       costs nothing measurable.
+      WIDENED 2026-10-14 (candle f94e7999): the where fault's
+      params were unrecoverable (kernargs recycled), so
+      readback attribution is impossible there - but the host
+      layouts need no device access. WhereCond + both binary
+      Map2 impls now get the always-on footprint check via a
+      shared helper (zero sync cost): any strided operand whose
+      footprint escapes its storage bails loudly instead of
+      launching. The death stack puts the fault in MTP verify ->
+      Top1 submit on first decode - same window, now with three
+      launch families guarded at the source. Probe: 391 CORRECT,
+      125.21 tok/s, zero bails of any kind.
       NEXT INSTRUMENTATION (cheap, high-yield): census records
       gain TENSOR LENGTHS + a first-launch check that entry
       state_indices length == captured batch (the census verifies
