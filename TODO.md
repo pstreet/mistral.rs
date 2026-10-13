@@ -1119,6 +1119,63 @@ facade today, so the MTP port gates the cutover):
       logit_row is metadata-only. Validation: 4 essays ~48-53 tok/s,
       1050 replays + lazy population, MTP 65% through the guarded
       paths, interleave serves through, zero faults.
+      FAULT #9 (+ SEGV + load-time burst) 2026-10-13, THE CLASS WENT
+      HOT WITH FULL CAPTURE - the breakthrough record:
+      TIMELINE (5 service cycles this night, each forced: 00:27
+      sweep deploy; 01:40 retention remediation; 02:17 auto-restart
+      after a SEGV; 03:46 + 03:55 fault-heal attempts):
+      - Boot 00:27 healthy (alias essays 51.5/52.4, 35B 47.8).
+      - Boot 01:40 healthy (391 sanity 01:41), then IDLE 36min ->
+      SEGV 02:17:31 (code=dumped status=11; process grew 56.2G ->
+      87.8G peak while idle). CORE LOST: core_pattern pipes to
+      apport, which refused it ("crashed in a separate mount
+      namespace, ignoring"). NEW SIGNATURE: idle-time host growth +
+      segfault - the host-side twin candidate.
+      - Boot 02:17: GPUVM FAULT BURST 02:23:42 (dmesg, during the
+      boot 35B load): 6+ VAs (0x77b828f6d000 / 0x77b85e820000 /
+      0x77b943bc7000 / 0x77b8b0fef000 / 0x77b83e61b000 /
+      0x77b8a6498000), UTCL2 client TCP, PERMISSION_FAULTS 0x3,
+      read - context poisoned; the first traffic after (an external
+      30KB chat request to the lazy 35b-q4 alias, 02:36:26) got
+      hip error 700 at the recurrent-state commit; every request
+      after 500s instantly. Healthcheck green throughout (the
+      /health blind spot again).
+      - Boot 03:46 (first boot with the stderr-capture fix below):
+      fault ON REQUEST 1 (03:50:27, seq 1 = the sanity, 30s then
+      500 at the commit). THE DIAGNOSTICS DELIVERED:
+      [graph-ptr-census] verified the replay entries sane
+      (state_indices U32 len=1 sum=1 head=[1]), then "Queue error -
+      HSA_STATUS_ERROR_MEMORY_FAULT ... faulting addr:
+      0x7083866ce000, kernel: is_u32_f32", and the VA has NO
+      LEDGER COVER in 73k trace lines (fault-6 signature: never an
+      ALLOC/FREE through device, managed, pinned, or GGUF-mmap
+      paths).
+      - Boot 03:55 healthy: 391 CORRECT, essay 50.99 tok/s. Boots
+      tonight: clean/clean/FAULT/FAULT/clean - the class went from
+      0-in-5 sporadic to ~2-in-4.
+      INTERPRETATION (first precise lead of the hunt): is_u32_f32 =
+      candle index_select(u32 indices -> f32 data) = the
+      recurrent-state COMMIT gather. The census covers the REPLAY
+      entry buffers, not the commit's gather source. A VA in host
+      territory with zero allocation history means the kernel was
+      handed a STALE pointer - a tensor whose storage was freed +
+      unmapped and whose VA got reused by unrelated host mappings
+      -> PERMISSION fault on read. Sporadic-ness = VA-reuse
+      (unmapped-but-unreused VAs read without fault; matches
+      fault-6's unbacked ---p reservation). The 02:23:42 load-time
+      burst is the same class hitting the capture/attach window.
+      CAPTURE FIX LANDED (wrapper): stderr now appends to
+      LocalAI/scratch/prod-stderr.log - journald's rate limiter had
+      eaten fault #9's entire ledger AND the 02:17 boot's INFO
+      lines. Verified capturing (73k/333k lines per boot).
+      NEXT: (a) audit the commit gather's source-tensor lifecycle
+      (the retention bug's twin: there tensors outlive unload, here
+      a storage pointer outlives its buffer); (b) extend the
+      graph-ptr census to the commit-path buffers; (c) the
+      every-other-boot repro + the stderr file = the iteration
+      harness the soak lacked; (d) fix the core path (apport
+      namespace refusal loses SEGV cores - change core_pattern or
+      capture policy for this box).
       Probe-lane findings (2026-10-11):
       - A second 35B cannot load beside a resident prod: GTT is
         RAM-backed (Strix Halo APU) and /v1/models/unload frees into
