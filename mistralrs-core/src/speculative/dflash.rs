@@ -1778,6 +1778,10 @@ impl DFlashCudaGraphState {
         token_embedding: &Arc<dyn QuantMethod>,
         lm_head: &Arc<dyn QuantMethod>,
     ) -> Result<DFlashCudaGraphEntry> {
+        // Cross-engine capture window: the DFlash draft capture is a stream
+        // capture like the target's and must not race another engine's
+        // registered device segments.
+        let _capture_window = crate::pipeline::cuda_graph::enter_cuda_graph_capture_window();
         let graph_event =
             CudaGraphEventGuard::new(CudaGraphComponent::DFlash, CudaGraphEvent::Capture);
         let buffers = DFlashCudaGraphBuffers::new(key, &host_rows, attention_batch, model)?;

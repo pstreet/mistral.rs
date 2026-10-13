@@ -763,6 +763,10 @@ impl Engine {
         let recurrent_slots = scheduler.get_finished_recurrent_slots();
         if !finished_sequence_ids.is_empty() || !recurrent_slots.is_empty() {
             let mut pipeline = get_mut_arcmutex!(self.pipeline);
+            // Cross-engine capture window: recurrent/spec-state releases
+            // are synchronous device work (row copies and state frees).
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
+            let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
             let mut recurrent_release_errors = Vec::new();
             if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
                 let mut hybrid_cache = pipeline.cache().hybrid();
@@ -937,7 +941,12 @@ impl Engine {
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn drain_cuda_decode_batch(&self, lease: CudaDecodeBatchLease) -> candle_core::Result<()> {
         let CudaDecodeBatchLease { rows, tail, .. } = lease;
-        tail.drain()?;
+        {
+            // Cross-engine capture window: the tail drain is synchronous
+            // device work.
+            let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
+            tail.drain()?;
+        }
         self.account_cuda_decode_rows(&rows);
         Ok(())
     }
@@ -1003,7 +1012,12 @@ impl Engine {
             .map(|seq| !get_mut_arcmutex!(seq).is_finished_paged_attn())
             .collect::<Vec<_>>();
         if !commit_rows.iter().any(|commit| *commit) {
-            tail.drain()?;
+            {
+                // Cross-engine capture window: the tail drain is
+                // synchronous device work.
+                let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
+                tail.drain()?;
+            }
             self.account_cuda_decode_rows(&rows);
             return Ok(None);
         }
@@ -1015,6 +1029,12 @@ impl Engine {
         }
 
         let submission = {
+            // Cross-engine capture window: the leased decode step (replay,
+            // sampling submission, and the unsupported-tail synchronize
+            // below) is synchronous device work; the completion worker is
+            // awaited only after this scope ends, so the guard never spans
+            // an await.
+            let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
             let mut guards = rows
                 .iter()
                 .map(|seq| seq.lock().unwrap())
@@ -1064,14 +1084,20 @@ impl Engine {
             self.logger.add_decode_tokens_processed(guards_mut.len());
 
             let pipeline = get_mut_arcmutex!(self.pipeline);
-            if crate::pipeline::sampling::cuda_token_batch_will_finish(
-                &*pipeline,
-                &guards_mut,
-                completion.token_ids(),
-                &commit_rows,
-                self.disable_eos_stop,
-            )? {
-                completion.synchronize_tail()?;
+            {
+                // Cross-engine capture window: the tail synchronize is
+                // synchronous device work; the token-batch finish below
+                // awaits and stays outside the guard.
+                let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
+                if crate::pipeline::sampling::cuda_token_batch_will_finish(
+                    &*pipeline,
+                    &guards_mut,
+                    completion.token_ids(),
+                    &commit_rows,
+                    self.disable_eos_stop,
+                )? {
+                    completion.synchronize_tail()?;
+                }
             }
             let completion = completion
                 .finish(
@@ -1097,7 +1123,12 @@ impl Engine {
             .iter()
             .any(|seq| !get_mut_arcmutex!(seq).is_finished_paged_attn());
         if !any_live {
-            next_tail.synchronize()?;
+            {
+                // Cross-engine capture window: the tail synchronize is
+                // synchronous device work.
+                let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
+                next_tail.synchronize()?;
+            }
             self.account_cuda_decode_rows(&rows);
             return Ok(None);
         }

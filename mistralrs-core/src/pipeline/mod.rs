@@ -2004,6 +2004,12 @@ pub trait Pipeline:
     ) -> Result<StepSubmission, candle_core::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
+                // Cross-engine capture window: registration spans the
+                // synchronous forward segment (pre-op cache, forward,
+                // post-op cache) and is released before the response
+                // sends below await.
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
+                let cuda_graph_step_window = cuda_graph::enter_cuda_graph_step_window();
                 if !is_prompt && !return_raw_logits {
                     crate::speculative::driver::clear_staged_speculative_tokens(input_seqs);
                 }
@@ -2092,6 +2098,8 @@ pub trait Pipeline:
                     )?,
                     _ => unreachable!("Unreachable POST cache op."),
                 }
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
+                drop(cuda_graph_step_window);
 
                 if raw_out_logits[0][0].is_some() {
                     let start = Instant::now();
@@ -2280,6 +2288,11 @@ pub trait Pipeline:
                 Ok(StepSubmission::ready(exec_duration))
             }
             CacheBackendMetadata::PagedAttention { mut metadata } => {
+                // Cross-engine capture window: this arm's device work
+                // (cache resets, forwards, snapshots) is synchronous end to
+                // end, so a pending capture waits at most one segment.
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
+                let cuda_graph_step_window = cuda_graph::enter_cuda_graph_step_window();
                 let block_size = metadata.block_size;
                 let speculative_metadata = metadata.clone();
                 let scheduled_prompt_chunks = metadata.scheduled_prompt_chunks.take();
@@ -2695,6 +2708,8 @@ pub trait Pipeline:
                         exec_duration,
                     )
                 };
+                #[cfg(any(feature = "cuda", feature = "rocm"))]
+                drop(cuda_graph_step_window);
 
                 if raw_out_logits[0][0].is_some() {
                     let start = Instant::now();
@@ -2753,13 +2768,20 @@ pub trait Pipeline:
                             },
                             batched_cuda_decode.take(),
                         );
-                        match execution::submit_forward_lookahead(
-                            self,
-                            input_seqs,
-                            forward,
-                            exec_duration,
-                            &rng,
-                        )? {
+                        let submission = {
+                            // Cross-engine capture window: the lookahead
+                            // submission is synchronous device work.
+                            let _step_window =
+                                cuda_graph::enter_cuda_graph_step_window();
+                            execution::submit_forward_lookahead(
+                                self,
+                                input_seqs,
+                                forward,
+                                exec_duration,
+                                &rng,
+                            )?
+                        };
+                        match submission {
                             Ok(submission) => return Ok(StepSubmission::cuda(submission)),
                             Err(forward) => {
                                 let ForwardInputsResult::CausalGeneration { logits } =

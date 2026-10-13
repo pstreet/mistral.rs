@@ -127,6 +127,11 @@ impl CudaMemoryPoolMaintenance {
     }
 
     fn maintain(&mut self, point: MaintenancePoint, transient_bytes: usize) -> MaintenanceOutcome {
+        // Cross-engine capture window: maintenance performs context barriers
+        // and async-pool trims (device frees), the sync-free class whose
+        // implicit synchronization invalidates another engine's in-flight
+        // capture. The Idle-point trim historically ran beside captures.
+        let _step_window = crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
         let outcomes = self.devices.iter_mut().map(|maintained| {
             match maintain_device(maintained, point, transient_bytes) {
                 Ok(outcome) => outcome,

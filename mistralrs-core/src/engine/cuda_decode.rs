@@ -62,6 +62,13 @@ impl<S: CompletionSubmission> CompletionWorker<S> {
             .name(thread_name.to_string())
             .spawn(move || {
                 while let Some(job) = job_rx.blocking_recv() {
+                    // Cross-engine capture window: token-batch completion is
+                    // synchronous device work (sampling kernels and their
+                    // event syncs), and must not race another engine's
+                    // capture.
+                    #[cfg(any(feature = "cuda", feature = "rocm"))]
+                    let _step_window =
+                        crate::pipeline::cuda_graph::enter_cuda_graph_step_window();
                     let result = job.submission.complete();
                     let _ = job.result_tx.send(result);
                 }

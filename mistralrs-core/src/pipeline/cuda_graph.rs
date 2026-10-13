@@ -1,4 +1,5 @@
 use std::{
+    cell::{Cell, RefCell},
     collections::HashMap,
     fmt,
     ptr::NonNull,
@@ -48,6 +49,137 @@ use crate::pipeline::{
     DecodeGraphPrecaptureCtx, RecurrentBatchKind,
 };
 use crate::speculative::SpeculativeGraphState;
+
+// ---------------------------------------------------------------------------
+// Cross-engine CUDA graph capture window
+// ---------------------------------------------------------------------------
+//
+// Stream captures are only valid while no other thread issues
+// capture-unsafe device work. Even under THREAD_LOCAL capture isolation,
+// cross-thread ops of the sync-alloc/free class (hipFree, hipHostFree,
+// hipMallocManaged, and the graph-exec destroys inside a memory reclaim)
+// trigger implicit device synchronization and invalidate an in-flight
+// capture. Observed on prod: an idle engine's graph reclaim stretched
+// another engine's capture from 8s to 118s through retry/fallback with a
+// hip 900/901 storm, and a decoding engine beside a capture failed both
+// engines. The window serializes every capture against every engine's
+// registered device-work segments: captures take the write side, engine
+// segments take the read side (engines still decode concurrently with
+// each other). parking_lot is write-preferring, so a busy box cannot
+// starve a load's captures.
+//
+// Lazy captures run INSIDE a read segment (a step's forward). To avoid
+// self-deadlock, the capture first drops this thread's registered read
+// guards, takes the write, and restores them afterwards. Cross-thread
+// readers keep their guards, so a capture only ever waits for the
+// bounded remainder of another engine's segment, and readers never hold
+// the guard across an await by construction (every registration site is
+// a synchronous segment).
+
+static CUDA_GRAPH_CAPTURE_WINDOW: parking_lot::RwLock<()> = parking_lot::RwLock::new(());
+
+thread_local! {
+    static CUDA_GRAPH_STEP_GUARDS:
+        RefCell<Vec<(u64, parking_lot::RwLockReadGuard<'static, ()>)>> =
+        const { RefCell::new(Vec::new()) };
+    static CUDA_GRAPH_STEP_GUARD_NEXT_ID: Cell<u64> = const { Cell::new(0) };
+    static CUDA_GRAPH_CAPTURE_ACTIVE_ON_THREAD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// RAII registration of an engine device-work segment on the read side of
+/// the cross-engine capture window. Guards never span an `.await`; every
+/// registration site is a synchronous segment, so a pending capture waits
+/// at most the remainder of the current segment.
+pub(crate) struct CudaGraphStepWindow {
+    id: u64,
+}
+
+#[must_use]
+pub(crate) fn enter_cuda_graph_step_window() -> CudaGraphStepWindow {
+    let guard = CUDA_GRAPH_CAPTURE_WINDOW.read();
+    let id = CUDA_GRAPH_STEP_GUARD_NEXT_ID.with(|next| {
+        let id = next.get();
+        next.set(id.wrapping_add(1));
+        id
+    });
+    CUDA_GRAPH_STEP_GUARDS.with(|guards| guards.borrow_mut().push((id, guard)));
+    CudaGraphStepWindow { id }
+}
+
+impl Drop for CudaGraphStepWindow {
+    fn drop(&mut self) {
+        CUDA_GRAPH_STEP_GUARDS.with(|guards| {
+            guards.borrow_mut().retain(|(id, _)| *id != self.id);
+        });
+    }
+}
+
+/// The write side of the capture window, taken by every capture (both
+/// pipelines, load-time precapture and lazy). Dropping it releases the
+/// write and re-registers the read guards this thread held before the
+/// capture (the lazy-capture dance).
+pub(crate) struct CudaGraphCaptureWindow {
+    // Ids of this thread's step segments that were active when the capture
+    // started. Their read guards are DROPPED for the capture's duration
+    // (a capture inside a step must not wait on its own thread's reads)
+    // and fresh reads are re-acquired for the same ids afterwards so the
+    // enclosing segments stay covered. Step segments never nest, so this
+    // holds at most one id in practice.
+    saved_ids: Vec<u64>,
+    write: Option<parking_lot::RwLockWriteGuard<'static, ()>>,
+}
+
+pub(crate) fn enter_cuda_graph_capture_window() -> CudaGraphCaptureWindow {
+    debug_assert!(
+        !CUDA_GRAPH_CAPTURE_ACTIVE_ON_THREAD.with(|active| active.get()),
+        "same-thread nested graph captures are not supported"
+    );
+    CUDA_GRAPH_CAPTURE_ACTIVE_ON_THREAD.with(|active| active.set(true));
+    // Lazy-capture dance: this thread is inside a read segment (a step's
+    // forward). DROP its registered guards - remembering only their ids -
+    // so taking the write cannot self-deadlock. (Relocating the guards
+    // would keep the read alive and deadlock the write on ourselves, which
+    // is exactly what wedged the first lazy capture in testing.) Cross-
+    // thread readers are unaffected; they bound the write's wait.
+    let saved_ids = CUDA_GRAPH_STEP_GUARDS.with(|guards| {
+        guards
+            .borrow_mut()
+            .drain(..)
+            .map(|(id, _guard)| id)
+            .collect::<Vec<u64>>()
+    });
+    let write = match CUDA_GRAPH_CAPTURE_WINDOW.try_write() {
+        Some(write) => write,
+        None => {
+            // Another engine's segment is still draining; this is the
+            // contention the window exists to serialize, so make it visible.
+            metrics::counter!("mistralrs_cuda_graph_capture_window_waits_total").increment(1);
+            CUDA_GRAPH_CAPTURE_WINDOW.write()
+        }
+    };
+    CudaGraphCaptureWindow {
+        saved_ids,
+        write: Some(write),
+    }
+}
+
+impl Drop for CudaGraphCaptureWindow {
+    fn drop(&mut self) {
+        // Release the write before re-registering this thread's read
+        // guards so the re-acquisition cannot queue behind our own write.
+        self.write = None;
+        if !self.saved_ids.is_empty() {
+            let saved_ids = std::mem::take(&mut self.saved_ids);
+            CUDA_GRAPH_STEP_GUARDS.with(|guards| {
+                let mut guards_mut = guards.borrow_mut();
+                for id in saved_ids {
+                    guards_mut.push((id, CUDA_GRAPH_CAPTURE_WINDOW.read()));
+                }
+            });
+        }
+        CUDA_GRAPH_CAPTURE_ACTIVE_ON_THREAD.with(|active| active.set(false));
+    }
+}
 
 fn dbg_nanos() -> u128 {
     std::time::SystemTime::now()
@@ -368,6 +500,10 @@ pub(crate) fn reclaim_cuda_graph_entries(
     if max_entries == 0 {
         return 0;
     }
+    // Cross-engine capture window: reclaims destroy graph execs and free
+    // pinned/managed staging - the sync-free class whose implicit device
+    // synchronization invalidates another engine's in-flight capture.
+    let _step_window = enter_cuda_graph_step_window();
     let target = reclaim_target(max_entries);
     debug_assert!(target <= max_entries);
     let remaining = max_entries - target;
@@ -3119,6 +3255,10 @@ pub(crate) fn capture_cuda_decode_graph<F>(
 where
     F: FnMut(&Tensor, &PagedAttentionInputMetadata) -> candle_core::Result<Tensor>,
 {
+    // The whole capture (warmups, admission, the capture itself, and
+    // instantiation) runs inside the cross-engine capture window: no other
+    // thread's device work can invalidate it, so no retry/fallback storms.
+    let _capture_window = enter_cuda_graph_capture_window();
     let CudaDecodeGraphCaptureCtx {
         key,
         input_ids,
