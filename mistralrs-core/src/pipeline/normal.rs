@@ -32,8 +32,9 @@ type HybridStateIndicesSnapshot = (Option<Tensor>, Option<Vec<u32>>);
 struct CudaDecodeGraphCaptureInputs<'a> {
     kv_cache: &'a [(Tensor, Tensor)],
     flash_meta: &'a FlashParams,
-    block_size: usize,
     recurrent_batch_kind: RecurrentBatchKind,
+    block_size: usize,
+    speculative: bool,
 }
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 struct CudaDecodeGraphForwardInput<'a> {
@@ -53,12 +54,14 @@ use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, Ge
 use crate::pipeline::cuda_graph::{
     capture_cuda_decode_graph, cuda_decode_graph_batch_kind_supported,
     cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled, cuda_graph_batch_bucket,
-    cuda_graph_precapture_batches, cuda_graph_precapture_max_batch, hybrid_graph_slots,
-    install_hybrid_graph_state_indices, record_cuda_graph_dispatch, CudaDecodeGraphCaptureCtx,
-    CudaDecodeGraphKey, CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput,
-    CudaDecodeGraphState, CudaGraphComponent, CudaGraphDecodeStep, CudaGraphDecodeStepInputs,
-    CudaGraphDispatchMode, CudaGraphDispatchReason, CudaGraphEvent, CudaGraphEventGuard,
-    CudaGraphPrecaptureInputs,
+    cuda_graph_precapture_batches, cuda_graph_precapture_max_batch,
+    cuda_graph_startup_capture_allowed, hybrid_graph_slots, install_hybrid_graph_state_indices,
+    record_cuda_graph_dispatch, speculative_graph_tensor_metadata,
+    target_cuda_graph_cache_capacity, validate_speculative_graph_tensor_metadata,
+    CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey, CudaDecodeGraphLaunch, CudaDecodeGraphReplay,
+    CudaDecodeGraphReplayInput, CudaDecodeGraphState, CudaGraphComponent, CudaGraphDecodeStep,
+    CudaGraphDecodeStepInputs, CudaGraphDispatchMode, CudaGraphDispatchReason, CudaGraphEvent,
+    CudaGraphEventGuard, CudaGraphPrecaptureInputs,
 };
 #[cfg(all(
     any(feature = "cuda", feature = "rocm"),
@@ -1821,14 +1824,7 @@ impl NormalPipeline {
             );
             return Ok(None);
         }
-        if self.model.has_speculative_proposer() {
-            record_cuda_graph_dispatch(
-                CudaGraphComponent::Target,
-                CudaGraphDispatchMode::Skipped,
-                CudaGraphDispatchReason::SpeculativeConflict,
-            );
-            return Ok(None);
-        }
+        let speculative = self.model.has_speculative_proposer();
         let Some((kv_cache, metadata)) = paged_attn_meta else {
             record_cuda_graph_dispatch(
                 CudaGraphComponent::Target,
@@ -1854,7 +1850,7 @@ impl NormalPipeline {
             return Ok(None);
         }
         let (batch, q_len) = input_ids.dims2()?;
-        if q_len != 1
+        if (q_len != 1 && !speculative)
             || seqlen_offsets.len() != batch
             || context_lens.len() != batch
             || position_ids.len() != batch
@@ -1864,6 +1860,16 @@ impl NormalPipeline {
                 CudaGraphComponent::Target,
                 CudaGraphDispatchMode::Skipped,
                 CudaGraphDispatchReason::IncompatibleShape,
+            );
+            return Ok(None);
+        }
+        // With a proposer attached every step is a fixed-width verify; the model must expose the
+        // outputs the proposer reads so a replay can refresh them.
+        if speculative && self.model.take_speculative_graph_state().is_none() {
+            record_cuda_graph_dispatch(
+                CudaGraphComponent::Target,
+                CudaGraphDispatchMode::Skipped,
+                CudaGraphDispatchReason::SpeculativeConflict,
             );
             return Ok(None);
         }
@@ -1934,6 +1940,12 @@ impl NormalPipeline {
             recurrent_batch_kind,
         )?;
         if let Some(replay) = state.replay(&key, &step, CudaDecodeGraphReplayInput::Host)? {
+            if let Some(spec_state) = replay.spec_state.as_deref() {
+                if let Err(err) = self.model.install_speculative_graph_state(spec_state) {
+                    state.block_eager_retry();
+                    return Err(err);
+                }
+            }
             return Ok(Some(replay));
         }
 
@@ -1947,6 +1959,7 @@ impl NormalPipeline {
                 flash_meta,
                 block_size: cache_config.block_size,
                 recurrent_batch_kind,
+                speculative,
             },
             true,
         )?;
@@ -1962,6 +1975,12 @@ impl NormalPipeline {
             .ok_or_else(|| {
                 candle_core::Error::msg("newly captured CUDA decode graph was not replayable")
             })?;
+        if let Some(spec_state) = replay.spec_state.as_deref() {
+            if let Err(err) = self.model.install_speculative_graph_state(spec_state) {
+                state.block_eager_retry();
+                return Err(err);
+            }
+        }
         record_cuda_graph_dispatch(
             CudaGraphComponent::Target,
             CudaGraphDispatchMode::Eager,
@@ -1979,7 +1998,6 @@ impl NormalPipeline {
             || !crate::pipeline::cuda_graph::is_cuda_graph_device(&device)
             || !self.model.supports_cuda_decode_graphs()
             || !cuda_decode_graph_supported_for_model(self.metadata.model_metadata.as_deref())
-            || self.model.has_speculative_proposer()
         {
             return Ok(());
         }
@@ -1988,6 +2006,24 @@ impl NormalPipeline {
         else {
             return Ok(());
         };
+        let speculative = self.model.has_speculative_proposer();
+        let graph_plans = self
+            .model
+            .speculative_graph_plans()
+            .into_iter()
+            .filter(|plan| cuda_graph_startup_capture_allowed(1 + plan.proposal_len))
+            .collect::<Vec<_>>();
+        let mut widths = vec![(1usize, usize::MAX)];
+        for plan in graph_plans {
+            if plan.proposal_len > 0 {
+                widths.push((
+                    1 + plan.proposal_len,
+                    plan.max_batch_size.unwrap_or(usize::MAX),
+                ));
+            }
+        }
+        widths.sort_unstable();
+        widths.dedup();
         let kv_cache = cache_engine.get_kv_cache().clone();
         let hybrid_slots = if self.model.cache().is_hybrid() {
             let mut cache = self.model.cache().hybrid();
@@ -2011,13 +2047,39 @@ impl NormalPipeline {
         }
         let start = std::time::Instant::now();
         let mut captured = 0usize;
-        let inputs = CudaGraphPrecaptureInputs::new(ctx, 1, &device, self.device_mapper())?;
-        let live = hybrid_slots.map(|pad_slot| vec![pad_slot]);
-        let max_bucket =
+        let runtime_max_bucket =
             cuda_graph_precapture_max_batch(CudaGraphComponent::Target, 1, ctx.max_batch_size);
-        for bucket in cuda_graph_precapture_batches(CudaGraphComponent::Target, 1)
-            .filter(|bucket| *bucket <= max_bucket)
-        {
+        let runtime_batch_shapes = cuda_graph_precapture_batches(CudaGraphComponent::Target, 1)
+            .filter(|bucket| *bucket <= runtime_max_bucket)
+            .count();
+        let startup_max_bucket = widths
+            .iter()
+            .map(|(q_len, max_bucket)| {
+                (*max_bucket).min(cuda_graph_precapture_max_batch(
+                    CudaGraphComponent::Target,
+                    *q_len,
+                    ctx.max_batch_size,
+                ))
+            })
+            .max()
+            .unwrap_or(runtime_max_bucket);
+        let startup_shapes = widths.iter().fold(0usize, |total, (q_len, max_bucket)| {
+            let width_max_bucket = cuda_graph_precapture_max_batch(
+                CudaGraphComponent::Target,
+                *q_len,
+                ctx.max_batch_size,
+            );
+            total.saturating_add(
+                cuda_graph_precapture_batches(CudaGraphComponent::Target, *q_len)
+                    .filter(|bucket| *bucket <= (*max_bucket).min(width_max_bucket))
+                    .count(),
+            )
+        });
+        state.ensure_capacity(target_cuda_graph_cache_capacity(
+            startup_shapes,
+            runtime_batch_shapes,
+        ));
+        for (q_len, max_bucket) in widths {
             let free = crate::pipeline::cuda_graph::graph_arena_device_free(&device)?;
             if free < crate::pipeline::cuda_graph::DECODE_GRAPH_PRECAPTURE_MIN_FREE_BYTES {
                 info!(
@@ -2025,47 +2087,70 @@ impl NormalPipeline {
                 );
                 break;
             }
-            let Some(step) = CudaGraphDecodeStep::padded(
-                inputs.step_inputs(live.as_deref(), hybrid_slots),
-                bucket,
-            )?
-            else {
-                continue;
+            let inputs = CudaGraphPrecaptureInputs::new(ctx, q_len, &device, self.device_mapper())?;
+            let live = hybrid_slots.map(|pad_slot| vec![pad_slot]);
+            let recurrent_batch_kind = if q_len == 1 {
+                RecurrentBatchKind::Decode
+            } else if speculative {
+                RecurrentBatchKind::SpeculativeDecode
+            } else {
+                RecurrentBatchKind::Prefill
             };
-            let key = CudaDecodeGraphKey::new(
-                &step.input_ids,
-                &step.metadata,
-                cache_config.block_size,
-                RecurrentBatchKind::Decode,
-            )?;
-            if state.contains(&key) {
-                continue;
-            }
-            match self.capture_cuda_decode_graph_step(
-                &mut state,
-                key,
-                &step,
-                CudaDecodeGraphCaptureInputs {
-                    kv_cache: kv_cache.as_slice(),
-                    flash_meta: &inputs.flash_meta,
-                    block_size: cache_config.block_size,
-                    recurrent_batch_kind: RecurrentBatchKind::Decode,
-                },
-                false,
-            ) {
-                Ok(_) => captured += 1,
-                Err(err) => {
-                    warn!(
-                        "CUDA decode graph precapture failed for one bucket (kept earlier captures; lazy fallback for this shape): {err}"
-                    );
+            let graph_pad_slot = hybrid_slots;
+            let width_max_bucket = cuda_graph_precapture_max_batch(
+                CudaGraphComponent::Target,
+                q_len,
+                ctx.max_batch_size,
+            );
+            for bucket in cuda_graph_precapture_batches(CudaGraphComponent::Target, q_len)
+                .filter(|bucket| *bucket <= max_bucket.min(width_max_bucket))
+            {
+                let Some(step) = CudaGraphDecodeStep::padded(
+                    inputs.step_inputs(live.as_deref(), graph_pad_slot),
+                    bucket,
+                )?
+                else {
+                    continue;
+                };
+                let key = CudaDecodeGraphKey::new(
+                    &step.input_ids,
+                    &step.metadata,
+                    cache_config.block_size,
+                    recurrent_batch_kind,
+                )?;
+                if state.contains(&key) {
                     continue;
                 }
+                match self.capture_cuda_decode_graph_step(
+                    &mut state,
+                    key,
+                    &step,
+                    CudaDecodeGraphCaptureInputs {
+                        kv_cache: kv_cache.as_slice(),
+                        flash_meta: &inputs.flash_meta,
+                        block_size: cache_config.block_size,
+                        recurrent_batch_kind,
+                        speculative,
+                    },
+                    false,
+                ) {
+                    Ok(_) => captured += 1,
+                    Err(err) => {
+                        warn!(
+                            "CUDA decode graph precapture failed for one bucket (kept earlier captures; lazy fallback for this shape): {err}"
+                        );
+                        continue;
+                    }
+                }
             }
+        }
+        if speculative {
+            let _ = self.model.take_speculative_graph_state();
         }
         if captured > 0 {
             info!(
                 "Captured {captured} CUDA decode graphs through batch bucket {} in {:.2?}",
-                max_bucket,
+                startup_max_bucket,
                 start.elapsed()
             );
         }
@@ -2084,9 +2169,13 @@ impl NormalPipeline {
         let CudaDecodeGraphCaptureInputs {
             kv_cache,
             flash_meta,
-            block_size,
             recurrent_batch_kind,
+            block_size,
+            speculative,
         } = inputs;
+        if speculative {
+            state.prepare_spec_state_admission_for_key(&key);
+        }
         let graph_event =
             CudaGraphEventGuard::new(CudaGraphComponent::Target, CudaGraphEvent::Capture);
         let graph_device = step.input_ids.device();
@@ -2121,6 +2210,15 @@ impl NormalPipeline {
         let recurrent_snapshots =
             self.snapshot_hybrid_recurrent_checkpoints(recurrent_batch_kind)?;
         let live_state_indices = self.snapshot_hybrid_state_indices();
+        let nonmutating_transition_capture = recurrent_batch_kind
+            == RecurrentBatchKind::SpeculativeDecode
+            && self.model.supports_recurrent_speculative_transitions()
+            && self.model.cache().is_hybrid()
+            && self.model.cache().hybrid().uses_recurrent_transition_log();
+        let mut warm_spec_state = None;
+        let mut warm_spec_metadata = None;
+        let mut warm_live_spec_state = None;
+        let mut graph_spec_state = None;
         let capture_attempt: candle_core::Result<_> = (|| {
             let state_index_buffers = match &step.state_indices {
                 Some(host) => Some(install_hybrid_graph_state_indices(
@@ -2142,9 +2240,29 @@ impl NormalPipeline {
                 dev.reset_alloc_counter();
             }
             let warmup_logits = self.model.forward(&step.input_ids, &mut ctx)?;
+            warm_spec_state = speculative
+                .then(|| self.model.take_speculative_graph_state())
+                .flatten();
+            warm_spec_metadata = warm_spec_state
+                .as_deref()
+                .map(speculative_graph_tensor_metadata);
+            if !nonmutating_transition_capture {
+                warm_live_spec_state = warm_spec_state
+                    .as_deref()
+                    .map(|state| state.for_real_batch(step.real_batch))
+                    .transpose()?;
+            }
             step.input_ids.device().synchronize()?;
             let arena_bytes = fork_device.as_ref().map_or(0, |dev| dev.alloc_counter());
             let live_logits = step.narrow_rows(&warmup_logits)?;
+
+            let spec_state_usage = warm_spec_state
+                .as_deref()
+                .map(|warm| state.prepare_spec_state_admission(warm))
+                .transpose()?;
+            if nonmutating_transition_capture {
+                warm_spec_state = None;
+            }
 
             // CUDA stream capture records recurrent writes without executing them.
             let entry = capture_cuda_decode_graph(
@@ -2173,12 +2291,43 @@ impl NormalPipeline {
                     )
                     .with_recurrent_batch_kind(recurrent_batch_kind)
                     .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
-                    self.model.forward(graph_input_ids, &mut ctx)
+                    let logits = self.model.forward(graph_input_ids, &mut ctx)?;
+                    if let Some(expected) = warm_spec_metadata.as_deref() {
+                        let captured =
+                            self.model.take_speculative_graph_state().ok_or_else(|| {
+                                candle_core::Error::msg(
+                                    "captured forward left no speculative state",
+                                )
+                            })?;
+                        let actual = speculative_graph_tensor_metadata(&*captured);
+                        validate_speculative_graph_tensor_metadata(expected, &actual)?;
+                        graph_spec_state = Some(captured);
+                    }
+                    Ok(logits)
                 },
                 &mut *state,
             )?;
-            Ok((live_logits, entry))
+            Ok((
+                live_logits,
+                entry.with_spec_state(graph_spec_state.take(), spec_state_usage),
+            ))
         })();
+        let capture_attempt = if let Some(warm) = warm_live_spec_state.as_deref() {
+            match self.model.install_speculative_graph_state(warm) {
+                Ok(()) => capture_attempt,
+                Err(install_err) => {
+                    state.block_eager_retry();
+                    match capture_attempt {
+                        Ok(_) => Err(install_err),
+                        Err(capture_err) => Err(candle_core::Error::msg(format!(
+                            "CUDA graph capture failed: {capture_err}; warm speculative state restoration failed: {install_err}"
+                        ))),
+                    }
+                }
+            }
+        } else {
+            capture_attempt
+        };
         let (logits, entry) = self.finish_cuda_graph_capture_attempt(
             state,
             capture_attempt,

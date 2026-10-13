@@ -2109,6 +2109,108 @@ impl CudaDecodeGraphMetadataBuffers {
     }
 }
 
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SpeculativeGraphTensorMetadata {
+    shape: Vec<usize>,
+    strides: Vec<usize>,
+    contiguous: bool,
+    dtype: DType,
+    device: candle_core::DeviceLocation,
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+pub(crate) fn speculative_graph_tensor_metadata(
+    state: &dyn crate::speculative::SpeculativeGraphState,
+) -> Vec<SpeculativeGraphTensorMetadata> {
+    state
+        .tensors()
+        .into_iter()
+        .map(|tensor| {
+            let (_storage, layout) = tensor.storage_and_layout();
+            SpeculativeGraphTensorMetadata {
+                shape: tensor.dims().to_vec(),
+                strides: layout.stride().to_vec(),
+                contiguous: tensor.is_contiguous(),
+                dtype: tensor.dtype(),
+                device: tensor.device().location(),
+            }
+        })
+        .collect()
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm", test))]
+pub(crate) fn validate_speculative_graph_tensor_metadata(
+    expected: &[SpeculativeGraphTensorMetadata],
+    actual: &[SpeculativeGraphTensorMetadata],
+) -> candle_core::Result<()> {
+    if actual.len() != expected.len() {
+        candle_core::bail!(
+            "speculative graph state changed tensor count between warmup and capture"
+        );
+    }
+    if actual.iter().zip(expected).any(|(actual, expected)| {
+        actual.shape != expected.shape
+            || actual.strides != expected.strides
+            || actual.contiguous != expected.contiguous
+            || actual.dtype != expected.dtype
+            || actual.device != expected.device
+    }) {
+        candle_core::bail!(
+            "speculative graph state changed tensor metadata between warmup and capture"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod speculative_graph_tensor_metadata_tests {
+    use super::{validate_speculative_graph_tensor_metadata, SpeculativeGraphTensorMetadata};
+    use candle_core::{DType, DeviceLocation};
+
+    fn metadata(
+        shape: &[usize],
+        strides: &[usize],
+        contiguous: bool,
+        dtype: DType,
+    ) -> SpeculativeGraphTensorMetadata {
+        SpeculativeGraphTensorMetadata {
+            shape: shape.to_vec(),
+            strides: strides.to_vec(),
+            contiguous,
+            dtype,
+            device: DeviceLocation::Cpu,
+        }
+    }
+
+    #[test]
+    fn validates_tensor_count_and_metadata() {
+        let expected = vec![metadata(&[4, 8, 16], &[128, 16, 1], true, DType::BF16)];
+        assert!(validate_speculative_graph_tensor_metadata(&expected, &expected).is_ok());
+        assert!(validate_speculative_graph_tensor_metadata(&expected, &[]).is_err());
+        assert!(validate_speculative_graph_tensor_metadata(
+            &expected,
+            &[metadata(&[4, 8, 17], &[136, 17, 1], true, DType::BF16)]
+        )
+        .is_err());
+        assert!(validate_speculative_graph_tensor_metadata(
+            &expected,
+            &[metadata(&[4, 8, 16], &[128, 16, 1], true, DType::F16)]
+        )
+        .is_err());
+        assert!(validate_speculative_graph_tensor_metadata(
+            &expected,
+            &[metadata(&[4, 8, 16], &[1, 64, 4], false, DType::BF16)]
+        )
+        .is_err());
+        assert!(validate_speculative_graph_tensor_metadata(
+            &expected,
+            &[metadata(&[4, 8, 16], &[128, 16, 1], false, DType::BF16)]
+        )
+        .is_err());
+    }
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct CudaGraphSpecStateUsage {
     bytes: HashMap<DeviceLocation, usize>,
