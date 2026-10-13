@@ -970,6 +970,21 @@ facade today, so the MTP port gates the cutover):
       when hip trim lands). Next lead: the Top1-workspace
       pinned-drop lifecycle vs event tracking (fresh-process first
       sizing fits all manifestations).
+      SOAK v2a 2026-10-12 (fresh process x4, trims-on baseline):
+      4/4 CLEAN, req1 sanity + req2 essay every cycle, ~48-50
+      tok/s - on the IDENTICAL binary that faulted (#6) and spun
+      (#7/#8). Zero pool-trim lines across all boots (live proof
+      of the dual-hip no-op). VERDICT: class DORMANT, not fixed.
+      0/5 fresh boots over ~1.5h on the faulting binary (P~0.05%
+      under p=0.5) = rate dropped without code change:
+      environmental/state shift, prime suspect the graceful-
+      handling streak flushing KILL-residue (v2a uses graceful
+      restarts only; every heal on record follows one). KILL-
+      residue does NOT explain #1-6 (graceful predecessors) - it
+      is a confounder for the 08:05/08:13 streak only. Hunt stays
+      open with diagnostics armed; v2 script ready for the next
+      recurrence. Code-reading lead (no restarts): Top1-workspace
+      lifecycle audit.
       SOAK v1 2026-10-12 (6 unload->reload cycles, same process):
       6/6 clean, ~49-50 tok/s, full recaptures (98 attempts) + MTP
       re-attaches every cycle. At face value 1.6%-likely under
