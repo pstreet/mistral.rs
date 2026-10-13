@@ -343,11 +343,17 @@ impl CacheEngine {
         if !model_config.layer_has_paged_kv_cache(layer_idx) || num_gpu_blocks == 0 {
             return Ok(None);
         }
+        let layout = model_config.kv_cache_layout_for_layer(layer_idx);
         if !matches!(
-            model_config.kv_cache_layout_for_layer(layer_idx),
+            layout,
             KvCacheLayout::Standard | KvCacheLayout::StandardNoFlashInfer
         ) {
-            candle_core::bail!("Block-quantized KV cache requires the Standard layout");
+            candle_core::bail!(
+                "Block-quantized KV cache (Q8_0/Q4_0) needs the Standard layout, but layer \
+                 {layer_idx} auto-selected {layout:?}: the FlashInfer decode path cannot read \
+                 block-quantized KV yet. Drop the cache_type/k_cache_type/v_cache_type \
+                 quantization for this model, or serve it with an unquantized KV cache."
+            );
         }
         if !layer_device.is_cuda() && !is_hip_role(layer_device) {
             candle_core::bail!("Block-quantized KV cache is only supported on CUDA/ROCm");

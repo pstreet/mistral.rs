@@ -648,13 +648,33 @@ facade today, so the MTP port gates the cutover):
       either way. FI decode path is live on the NVIDIA role (kernels
       present, output correct) - the Phase 1 "previously inert" path
       is now observed working. Default stays ON.
-- [ ] ~S Q8-KV + FlashInfer-decode is unimplemented on the NVIDIA role
+- [x] ~S Q8-KV + FlashInfer-decode is unimplemented on the NVIDIA role
       (found 2026-10-07 via the 27B parity bench): cuda-only genuinely
       claims FI (`supports_layer` true) -> FlashInferHnd layout -> the
       block-quant gate bails "requires the Standard layout". Dual never
       reaches it (FI claim is cfg'd solo-only, so dual runs Standard).
       Parities used FI-decode off to match the control. Queued: either
       Q8+FI support or a loud config error (FI A/B done above).
+      CLOSED 2026-10-13 (sweep slice 3) as the loud-config-error
+      variant, ASSESSED for the rest: the bail at cache_engine
+      allocate_q8_scales now names the conflict and the fix (drop the
+      cache_type/k_cache_type/v_cache_type quantization, or serve
+      unquantized KV) - the old message gave no recourse, and there
+      is NO FI-off knob (kv_cache_layout is a per-model hardcode;
+      llama4/gpt_oss pin StandardNoFlashInfer, others default
+      Standard), so a dead-end error was the only outcome.
+      ASSESSMENT of the two bigger variants, journaled: (a) Q8+FI
+      support = a real FlashInfer-handler project (the FI decode
+      path must read block-quant KV + the fp32 sidecar scales; no
+      upstream support) - do it when an FI+Q8 workload exists;
+      (b) auto-suppress (block-quant config suppresses the FI
+      auto-claim + loud WARN, explicit config beats implicit
+      capability) = the right long-term default but needs cache-type
+      visibility in ModelConfigLike (trait method + threading
+      CacheConfig into ModelConfigMetadata at its construction
+      sites) - medium, journaled. Prod is unaffected either way:
+      dual builds never claim FI (solo-cuda cfg), so the hip engines
+      + the 3090 alias all run Standard layouts today.
 - [x] ~S Device sampling on the solo NVIDIA role (done 2026-10-07,
       third stale-gate flip): the top-1/top-k submit path was hip-gated
       (`device_has_fused_ops`), so solo-cuda copied full logits to host
