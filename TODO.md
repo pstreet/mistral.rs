@@ -596,6 +596,19 @@ facade today, so the MTP port gates the cutover):
       re-capture on the probe; "all lazy captures fault" vs
       "512-specific" still open. Fix batch sampling first, then the
       batch-2 discriminator is one probe run.
+      DISCRIMINATOR 2026-10-11 (two resident 4B aliases, ctx 8192 vs
+      4096 via a symlinked second model_id, since one model_id takes
+      one alias): the 4k alias faults 144ms into its FIRST decode with
+      ZERO decode tokens (1 lazy capture + its post-capture replay
+      bookkept OK, then ILLEGAL_ADDRESS; CUDA launches are async so the
+      fault is likely the fresh graph's launch). VERDICT: ALL lazy
+      captures fault, not just the 512 rollover - the earlier 512
+      correlation was incidental (first key miss happened to be the
+      rollover). Load-time precaptured graphs replay fine (494x); only
+      mid-sequence lazy captures corrupt. The ptr census (probe2) covers
+      entry-held buffers only, NOT recurrent pool / KV page storage -
+      extend it there, or sanitizer the boundary capture. Symlink
+      removed after the run. GATES STAY.
       FIXED 2026-10-11: `final_batched_logits` (Batched path) kept BF16
       while `stack_final_logits` (PerSequence) upcast to F32, so every
       F32-only batched device kernel bailed on batch>=2. Now upcasts to
