@@ -713,18 +713,39 @@ facade today, so the MTP port gates the cutover):
 - [ ] ~M 35B graphs on the normal pipeline (opened 2026-10-11 from the
       graph-capture audit): prod's default model runs eager decode
       while the same binary replays the 27B on the same hip device.
-      (a) qwen3_next.rs: add the supports_cuda_decode_graphs override
-      (mirror qwen3_5/qwen3_moe); alone this only un-gates MTP-off
-      runs, since normal.rs skips proposers (SpeculativeConflict).
-      (b) port the mm.rs speculative-graph machinery to normal.rs -
-      multimodal.rs:2197 (speculative_graph_plans consumption) is the
-      reference; it is what lets MTP and graphs coexist (27B proof:
-      126 replays with n=2 attached). House order: probe lane first
-      (fast hip build; 35B MTP-off replays + math sanity + tok/s vs
-      the ~35 tok/s eager baseline, then the port, MTP-on replays),
-      release rebuild, ONE prod restart, essay re-bench. Upside
-      unmeasured - measure before cutting; MTP-off graphs vs MTP-on
-      eager is a legitimate A/B if the port stalls.
+      (a) DONE (dc20c5254): qwen3_next.rs supports_cuda_decode_graphs
+      override, all four shapes check green. With MTP attached it is
+      behavior-neutral (normal.rs still skips proposers as
+      SpeculativeConflict), so prod is unaffected until (b) lands.
+      PROBE VERDICT (2026-10-11, release binary, hip:0, MTP off,
+      essay-600tok temp0.3 x3 per arm, GTT trimmed clean first):
+      graphs 48.44/48.71/48.70 tok/s (Captured 2 graphs bucket 2 in
+      204ms; 1836 replays, 1 population pass, math sanity 391
+      correct) vs eager 28.81/28.81/28.82 via MISTRALRS_CUDA_GRAPHS=0
+      = +69% decode from graphs alone. Graphs-only (48.6) already
+      beats prod's MTP-on eager (~35.0) by +39%. The 4B bisect also
+      proved the hip normal-pipeline path (299 replays, zero eager).
+      (b) REMAINS, now clearly worth it: port the mm.rs speculative-
+      graph machinery to normal.rs (multimodal.rs:2197 is the
+      reference; the 27B replays in prod with MTP n=2 attached, so
+      MTP+graphs coexistence is proven on the mm side). After the
+      port: release rebuild, ONE prod restart, essay re-bench with
+      MTP n=2 + graphs; expected floor ~48.6, upside if MTP still
+      stacks on top. MTP-off graphs vs MTP-on eager is the fallback
+      A/B if the port stalls.
+      Probe-lane findings (2026-10-11):
+      - A second 35B cannot load beside a resident prod: GTT is
+        RAM-backed (Strix Halo APU) and /v1/models/unload frees into
+        prod's own caching allocator, not the driver - GTT sat at
+        49.3GB for 40+ min after unload. The trim at any subsequent
+        prod model load releases it (one 16B demand-load dropped GTT
+        49.3 -> 10.5GB, RAM avail 50 -> 98GB). Trim BEFORE any
+        big-model probe; the fast build also stages weights less
+        efficiently and OOMs at hybrid-cache creation even where the
+        release build fits.
+      - Minor: fast-build error-path teardown aborts with
+        "free(): double free detected in tcache 2" (SIGABRT instead
+        of a clean exit) after the load OOM; not chased.
       of the capture window (post-`end_capture`) so hybrid models (27B/4B)
       can capture on the NVIDIA role; then drop the multimodal eager-skip
       gates. SUPERSEDED 2026-10-07 by backtrace evidence: the pipeline
