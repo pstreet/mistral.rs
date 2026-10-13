@@ -942,6 +942,28 @@ facade today, so the MTP port gates the cutover):
       no-trim gate + trim-off soak as discriminator. Evidence:
       /tmp/opencode/fault6-journal.txt, GPU HANG ANALYSIS queue
       line + hip-700 cascade in-journal.
+      SOAK v1 2026-10-12 (6 unload->reload cycles, same process):
+      6/6 clean, ~49-50 tok/s, full recaptures (98 attempts) + MTP
+      re-attaches every cycle. At face value 1.6%-likely under
+      p=0.5 - but the walls (30-48s, warm page cache) + zero
+      restarts mean it tested the WRONG path: same-process reloads,
+      never a fresh process. Geometry comparison kills layout as
+      the variable anyway (capture consumed byte-identical
+      4890624/9714688/14538752 fault-boot vs soak; mmap/device
+      bases ASLR-differ yet soak clean). REFRAMED: the class is
+      fresh-process-only. Fresh-only machinery: HSA executable
+      freezes (pre-warm covers sparse; GDN/MoE/PA/quant TUs still
+      freeze mid-serve during request 1's prefill), pool creation/
+      reservation growth, module/code-object loads. Proposed
+      bundle (needs explicit go - restarts + prod pain): (a) 5-line
+      MISTRALRS_NO_POOL_TRIM gate, (b) LD_PRELOAD driver shim
+      logging hsa_executable_freeze + Reserve/Map/Unmap (names
+      freeze-in-flight at fault time AND covers driver-internal VA
+      the Rust ledger cannot see), (c) restart-soak v2 (fresh
+      process x4-6). Soak-script bug noted: the 12-min journal
+      window re-flagged the pre-soak 07:12 fault lines as
+      UNEXPECTED on clean cycles - v2 must scope matches to the
+      current boot pid.
       TAILS LANDED 2026-10-12 (5da184dfe, validated same night): the
       async sampling tails are inside the window - sample_sequence's
       dtype conversion, both sampler.sample sites (direct) plus a guard
