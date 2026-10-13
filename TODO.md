@@ -1228,7 +1228,30 @@ facade today, so the MTP port gates the cutover):
       re-capture, per-bucket observation for next sizing). `consumed` also feeds
       the `[cudarc]` diagnostic logs; the internal alloc-count counter feeds the
       overflow log line. No code change; kept as-is.
-- [x] ~M unit tests for the demand-load router estimator (done 2026-09-25,
+- [x] ~S unload_model kept its default binding broken (found+fixed
+      2026-10-12, live in prod): after ANY eviction or /v1/models/unload
+      of the default model, `default_engine_id` was reassigned to
+      an arbitrary remaining engine - mid-swap that is usually None -
+      and NOTHING re-established it (reload paths never touch it;
+      add_model's first-model rebind only fires at len==1). Symptom:
+      every `model:"default"` request 404s "model `default` was not
+      found" forever, while the healthcheck stays green (it pings
+      /health, not a model). Found live: the 16B demand-load evicted
+      the 35B default; alias requests still worked (aliases survive
+      unload_model) and even reloaded the model - but "default" 404'd
+      before AND after the reload. Fix: delete the rebind block in
+      unload_model (lib.rs) - the model is re-inserted as lazily
+      reloadable two lines above, and get_sender's auto-reload
+      already resolves a default that is momentarily unloaded
+      (set_default_model_id's docs have always allowed unloaded
+      defaults). remove_model (full deregistration) keeps its rebind:
+      there the model really leaves. All shapes + fmt green; unit
+      suite 1387 passed (no test depended on the rebind); live
+      regression proof: 16B demand-load (evicts the default) then
+      `model:"default"` auto-reloads and serves - the exact sequence
+      that 404'd pre-fix.
+- [x] ~M unit tests for the demand-load router estimator (done
+      2026-09-25,
       was §3). 13 tests in `mistralrs-core/src/lib.rs` `mod tests` (10 for
       `estimate_load_bytes`: weights+headroom, heap-staging doubling, shard+mmproj
       sums, Mb/BestEffort/Utilization KV incl. 16GiB cap, ContextSize/missing

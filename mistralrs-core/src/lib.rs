@@ -3167,22 +3167,8 @@ impl MistralRs {
             last_used.remove(&resolved_model_id);
         }
 
-        // Update default if needed
-        let mut default_lock = self
-            .default_engine_id
-            .write()
-            .map_err(|_| MistralRsError::EnginePoisoned)?;
-        if let Some(ref default_id) = *default_lock {
-            if default_id == &resolved_model_id {
-                // Set the first available engine as the new default
-                let engines = self
-                    .engines
-                    .read()
-                    .map_err(|_| MistralRsError::EnginePoisoned)?;
-                *default_lock = engines.keys().next().cloned();
-            }
-        }
-
+        // the default binding survives unload: the model stays lazily reloadable
+        // (re-inserted above) and request-time auto-reload resolves it
         info!("Model {} unloaded successfully", resolved_model_id);
         Ok(())
     }
