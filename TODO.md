@@ -1796,7 +1796,18 @@ facade today, so the MTP port gates the cutover):
       incrementally). RC ruled OUT:
       only v7.3-rc3 prebuilt exists and the fix landed in rc4.
       After build: stage debs to /var/local/kernel/, dpkg-scanpackages,
-      apt install, reboot, verify, single prod start.
+      apt install, reboot, verify, single prod start. STAGED
+      04:38 UTC: linux-image/headers-7.2.9_7.2.9-5 built, in
+      /var/local/kernel/, index rebuilt, apt installed (ii),
+      DKMS rebuilt clean for 7.2.9 (nvidia 615.71 + xrt-amdxdna),
+      grub entries present (7.2.9 first). GRUB_DEFAULT is still
+      pinned to 7.2.6 - first boot MUST use one-shot `grub-reboot`
+      into the 7.2.9 id so a bad kernel falls back to 7.2.6 by
+      itself; pin 7.2.9 only after it proves stable. Build notes:
+      needed `--jobserver-style=pipe` (something eats /tmp fifos
+      mid-build), cleared Ubuntu `debian/canonical-*.pem` cert
+      paths from .config (SecureBoot off, inert), kept MODULE_SIG
+      (lockdown selects it).
 - [ ] ~M/P0 unload + failed-load GPU memory retention (found
       2026-10-13 during the cuda-alone validation; five instances,
       one evening, all reproducible): `unload_model` releases
