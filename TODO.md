@@ -1787,7 +1787,14 @@ facade today, so the MTP port gates the cutover):
       /var/local/kernel/, rebuild index per its README, apt
       install, reboot, verify `uname -r`, then ONE prod start.
       7.1.5 is NOT the fallback (bug is v7.1+, likely vulnerable
-      too).
+      too). BUILD STARTED 03:5x UTC: upstream 7.2.9 source
+      (cdn.kernel.org) in scratch/kernel-build/ - fix VERIFIED in
+      source (`if (ret > 0)` in ttm_bo_swapout_cb), configured from
+      /boot/config-7.2.6 (olddefconfig, amdgpu=m/HSA=y posture
+      kept), `make -j32 bindeb-pkg` in background. RC ruled OUT:
+      only v7.3-rc3 prebuilt exists and the fix landed in rc4.
+      After build: stage debs to /var/local/kernel/, dpkg-scanpackages,
+      apt install, reboot, verify, single prod start.
 - [ ] ~M/P0 unload + failed-load GPU memory retention (found
       2026-10-13 during the cuda-alone validation; five instances,
       one evening, all reproducible): `unload_model` releases
