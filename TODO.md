@@ -2072,6 +2072,15 @@ facade today, so the MTP port gates the cutover):
       mistralrs-cli --features cuda,rocm - check the shape before
       any prod swap. 35B iGPU serving was CORRECT throughout on
       rebuild 2 (mapping clamp verified live).
+      REBUILD 4 VERIFIED 23:33 UTC (dual cuda,rocm, nvcc in PATH):
+      35B loads clean (mapping clamp live: pool capped 56718 ->
+      10496MB, sanity CORRECT). 4B-cuda on the REAL 3090
+      (Cuda(DeviceId(2)), nvidia-smi 19.9GB resident): pool 12042MB
+      = the runtime-reserve math exactly (was 15438MB pre-fix),
+      ~6GB left for graphs; decode graphs captured ok on retry,
+      request 200, no OOM. SIZING ITEM CLOSED FOR REAL: ISQ-aware
+      estimator + fit-ctx all arms + runtime reserve + mapping
+      context clamp, all live in the prod binary.
       bites first). Fits the reverted-toml decision: entry stays
       on Utilization, sizing now protects the runtime by default.
       on the 3090).
