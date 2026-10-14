@@ -1872,7 +1872,14 @@ facade today, so the MTP port gates the cutover):
       filing pending user go-ahead. REUNION 07:03 UTC
       (user-directed A/B): comfyui + chatterbox restarted onto the
       warm box (both active) - watching whether NaN/crash returns
-      with tenants back. RE-SPLIT 07:08 UTC (user): tenants back
+      with tenants back. JOINT-PEG 07:18 UTC: sustained iGPU 100%
+      (clocks maxed 2900MHz, 40W) with ZERO requests anywhere and
+      quiet logs - follows the tenants jointly: each tenant solo
+      settles to 0% (chatterbox 60s, comfy 90s), both together peg
+      100% within a minute and hold it; tenants down drops to 0%
+      in <25s (twice). Mechanism unidentified. Caveat: solo windows
+      were short (60-90s) vs joint peg observed over minutes -
+      missing control is one tenant alone for 5+ min. RE-SPLIT 07:08 UTC (user): tenants back
       down after ~5min resident (too short to judge) - 3090 was
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
       samples were our serving. Reunion probe at ~07:28 now runs
