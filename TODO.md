@@ -1913,6 +1913,14 @@ facade today, so the MTP port gates the cutover):
       Strix Halo behavior, power/heat cost, almost surely benign
       for the crashes. Also: legacy-rocm#6371 (HSA busy-spin
       threads under ComfyUI) matches our hot kfd/futex threads.
+      FIX STATUS 07:5x UTC: AMD acknowledged - TheRock#7578 assigned
+      (zichguan-amd, triage/in-progress); kernel fix WIP (same as
+      legacy-rocm#5107; amd-jherichuang on the driver fix). Workaround
+      with data: GPU_MAX_HW_QUEUES=1 on EVERY resident ROCm client
+      -> idle clean (0%/600MHz), no LLM throughput change; partial
+      coverage does not work. Nuances: pins depend on runtime
+      version (7.14 pins, 7.13 doesn't) and CWSR setting; separate
+      CPU-spin issue (rocm-systems#12674) mimics it on meters.
       RE-SPLIT 07:08 UTC (user): tenants back
       down after ~5min resident (too short to judge) - 3090 was
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
