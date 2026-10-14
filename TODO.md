@@ -1818,7 +1818,21 @@ facade today, so the MTP port gates the cutover):
       + update-grub (grub.cfg line 40 confirms); future boots land
       on 7.2.9, 7.2.6/7.1.5 kept as fallback entries. User big-tools
       request still NaNs on Q8_0/7.2.9 (engine bug open, kernel
-      now survives it). Build notes:
+      now survives it). CRASH-7 05:00 UTC: 7.2.9 panicked at T+17min
+      (T10677 tokio-runtime-w, GPF non-canonical 0xc0560000be560018
+      in amdgpu_ttm_tt_populate+0xe2 via ttm_tt_populate <-
+      ttm_bo_populate <- handle_move_mem <- validate <-
+      init_reserved <- amdgpu_bo_create <- ... <-
+      kfd_ioctl_alloc_memory_of_gpu). Prod IDLE 5+min (last
+      completion 04:54:52, 0 running) - no inference in flight.
+      8x the old ~2min window, so the swapout fix helped, but the
+      family is NOT closed: same GPF shape, new site (populate/alloc
+      path, not unpopulate/free). Vmcore /var/crash/202610140500/
+      (5.8GB) + dmesg saved. Boot gap 05:02-05:26 (kdump rebooted
+      05:02:07, box back 05:26:47 - cause of gap TBD with user).
+      Prod parked DOWN again; NaN hunt re-parked on stability.
+      NEXT: check upstream TTM/amdgpu fixes past 7.2.9 (populate-path
+      UAF?), then decide: newer stable build vs mitigation. Build notes:
       needed `--jobserver-style=pipe` (something eats /tmp fifos
       mid-build), cleared Ubuntu `debian/canonical-*.pem` cert
       paths from .config (SecureBoot off, inert), kept MODULE_SIG
