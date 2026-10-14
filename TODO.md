@@ -1803,7 +1803,13 @@ facade today, so the MTP port gates the cutover):
       grub entries present (7.2.9 first). GRUB_DEFAULT is still
       pinned to 7.2.6 - first boot MUST use one-shot `grub-reboot`
       into the 7.2.9 id so a bad kernel falls back to 7.2.6 by
-      itself; pin 7.2.9 only after it proves stable. Build notes:
+      itself; pin 7.2.9 only after it proves stable. REBOOT 04:4x
+      UTC (user-approved): one-shot grub-reboot into 7.2.9.
+      On return: verify `uname -r` = 7.2.9, single prod start +
+      sanity, then openwebui traffic is the real trial. If the
+      box is back on 7.2.6, the one-shot failed - diagnose before
+      retrying. Pre-reboot verified: entry cmdline, initrd,
+      grubenv write path, fallback intact. Build notes:
       needed `--jobserver-style=pipe` (something eats /tmp fifos
       mid-build), cleared Ubuntu `debian/canonical-*.pem` cert
       paths from .config (SecureBoot off, inert), kept MODULE_SIG
