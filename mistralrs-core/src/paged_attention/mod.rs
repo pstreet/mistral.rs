@@ -80,8 +80,8 @@ pub(crate) fn block_aligned_sliding_window_start(
 #[cfg(test)]
 mod tests {
     use super::{
-        block_aligned_sliding_window_start, fit_post_load_cache_budget, MemoryGpuConfig,
-        PagedAttentionConfig, PagedCacheType,
+        block_aligned_sliding_window_start, fit_post_load_cache_budget, utilization_kv_budget_mb,
+        MemoryGpuConfig, PagedAttentionConfig, PagedCacheType, UTILIZATION_RUNTIME_RESERVE_PERCENT,
     };
 
     #[test]
@@ -313,6 +313,24 @@ mod tests {
         .is_err());
         Ok(())
     }
+
+    #[test]
+    fn utilization_budget_reserves_runtime_floor() {
+        // 24GB card, half utilization, 6GB already used: the pool must leave
+        // the runtime floor for activations + graph arena.
+        let floor = 24_000 / 100 * UTILIZATION_RUNTIME_RESERVE_PERCENT;
+        assert_eq!(
+            utilization_kv_budget_mb(24_000.0, 0.5, 6_000.0, 0),
+            6_000 - floor
+        );
+        // An explicit reservation larger than the floor wins.
+        assert_eq!(
+            utilization_kv_budget_mb(24_000.0, 0.5, 6_000.0, 5_000),
+            6_000 - 5_000
+        );
+        // Saturates to zero instead of underflowing.
+        assert_eq!(utilization_kv_budget_mb(1_000.0, 0.1, 0.0, 0), 0);
+    }
 }
 
 /// All memory counts in MB. Default for block size is 32.
@@ -529,6 +547,28 @@ macro_rules! ctxt_to_blocks {
 
 /// Floor for shrink-to-fit: refuse to serve rather than fit below this.
 pub const FIT_CTX_MIN_TOKENS: usize = 2048;
+
+/// Minimum share of device total (percent) reserved for activations and
+/// the decode-graph arena when a Utilization budget sizes the KV pool.
+/// Per-loader activation predictions miss the graph arena entirely and
+/// degenerate to zero without explicit device-map params, so this is the
+/// floor the pool may not eat into.
+pub(crate) const UTILIZATION_RUNTIME_RESERVE_PERCENT: usize = 15;
+
+/// Utilization KV budget: `f` of device total, minus what is already used,
+/// minus a reserve that is at least the runtime floor above.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+pub(crate) fn utilization_kv_budget_mb(
+    total_mb: f64,
+    f: f32,
+    used_mb: f64,
+    reserved_mb: usize,
+) -> usize {
+    let runtime_floor_mb =
+        total_mb.max(0.0).round() as usize / 100 * UTILIZATION_RUNTIME_RESERVE_PERCENT;
+    let budget_mb = (total_mb * f as f64 - used_mb).max(0.0).round() as usize;
+    budget_mb.saturating_sub(reserved_mb.max(runtime_floor_mb))
+}
 
 fn fit_post_load_cache_budget(
     config: MemoryGpuConfig,
@@ -756,12 +796,16 @@ pub fn calculate_cache_config(
                 );
                 if model_weight_size_in_bytes.is_some() {
                     // Pre-loading: compute budget from total memory and known model size.
-                    (total * f - model_weight_per_device_mb as f32).max(0.0) as usize
+                    utilization_kv_budget_mb(
+                        total as f64,
+                        f,
+                        model_weight_per_device_mb as f64,
+                        future_reserved_mb,
+                    )
                 } else {
                     let used = (memory.total() - memory.available()) as f32 / SIZE_IN_MB as f32;
-                    (total * f - used).max(0.0) as usize
+                    utilization_kv_budget_mb(total as f64, f, used as f64, future_reserved_mb)
                 }
-                .saturating_sub(future_reserved_mb)
             }
             MemoryGpuConfig::ContextSize(toks) => {
                 // ContextSize is demand-driven (bytes needed for N tokens), not a memory budget, so model weight does not apply here.

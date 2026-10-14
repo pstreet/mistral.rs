@@ -3,6 +3,7 @@ use std::fmt::{self, Display};
 use crate::paged_attention::{
     calculate_cache_config, device_memory_cap, CacheMemoryReservations, MemoryGpuConfig,
     ModelConfigLike, PagedCacheType, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
+    UTILIZATION_RUNTIME_RESERVE_PERCENT,
 };
 use crate::utils::debug::DeviceRepr;
 use crate::{DeviceLayerMapMetadata, DeviceMapMetadata, MemoryUsage, PagedAttentionConfig};
@@ -285,9 +286,11 @@ pub fn get_device_layers(
                     let avail_bytes = MemoryUsage.query(primary_dev)?.available();
                     let cap = device_memory_cap(avail_bytes, primary_dev);
                     let act_overhead = non_mapped_max.max(mapped_max);
+                    let runtime_reserve_bytes =
+                        (cap / 100).saturating_mul(UTILIZATION_RUNTIME_RESERVE_PERCENT);
                     let occupied = saturating_memory_sum([
                         remaining,
-                        act_overhead,
+                        act_overhead.max(runtime_reserve_bytes),
                         base_device_memory_reservation_bytes,
                     ]);
                     let budget_mb =

@@ -227,6 +227,7 @@ pub use mistralrs_mcp::{
 };
 pub use mistralrs_quant::{IsqBits, IsqType};
 pub use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
+use paged_attention::UTILIZATION_RUNTIME_RESERVE_PERCENT;
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType};
 pub use pipeline::hf::{
     get_model_file, hf_home_dir, hf_hub_cache_dir, hf_token_path, is_hf_hub_offline,
@@ -3652,14 +3653,21 @@ fn estimate_load_bytes(
         Some(planned) => match planned.mem_gpu {
             MemoryGpuConfig::MbAmount(v) => v as u64 * 1024 * 1024,
             MemoryGpuConfig::BestEffortMbAmount { target_mb, .. } => target_mb as u64 * 1024 * 1024,
-            // Mirror the loader chain for Utilization KV: planned = total*f - weights
-            // (pre-load arm), and unified-memory devices cap KV at the model-context
-            // byte ceiling (observed 16 GiB for the deployed hybrid lineup). The
-            // loader min()s KV against post-load free memory at load time, so
-            // underestimating here only shrinks context window, never OOMs.
+            // Mirror the loader chain for Utilization KV: planned = total*f - weights,
+            // minus the runtime reserve (activations + graph arena) so the pool cannot
+            // eat the share the runtime needs to actually serve (2026-10-14: a 4B on a
+            // 24GB card planned a 15.4GB pool and starved decode graphs into OOM), and
+            // unified-memory devices cap KV at the model-context byte ceiling (observed
+            // 16 GiB for the deployed hybrid lineup). The loader min()s KV against
+            // post-load free memory at load time, so underestimating here only shrinks
+            // context window, never OOMs.
             MemoryGpuConfig::Utilization(f) => {
                 let planned = (total_bytes as f64 * f as f64 - weights as f64).max(0.0) as u64;
-                planned.min(UNIFIED_KV_TOKEN_CAP_BYTES)
+                let runtime_reserve =
+                    (total_bytes / 100).saturating_mul(UTILIZATION_RUNTIME_RESERVE_PERCENT as u64);
+                planned
+                    .saturating_sub(runtime_reserve)
+                    .min(UNIFIED_KV_TOKEN_CAP_BYTES)
             }
             MemoryGpuConfig::ContextSize(_) => return None,
         },
@@ -4036,7 +4044,9 @@ mod tests {
         let paged = mb_paged_config(MemoryGpuConfig::Utilization(0.5));
         let cfg = gguf_loader_config(dir.path(), "w.gguf", None, Some(paged));
         let total = 8u64 * 1024 * 1024 * 1024;
-        let kv = (total as f64 * 0.5 - EST_WEIGHT_BYTES as f64).max(0.0) as u64;
+        let planned = (total as f64 * 0.5 - EST_WEIGHT_BYTES as f64).max(0.0) as u64;
+        let reserve = (total / 100) * UTILIZATION_RUNTIME_RESERVE_PERCENT as u64;
+        let kv = planned.saturating_sub(reserve);
         assert!(kv < 16 * 1024 * 1024 * 1024);
         assert_eq!(
             estimate_load_bytes(&cfg, total, total, EST_HEADROOM_BYTES),
