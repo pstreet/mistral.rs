@@ -1744,7 +1744,17 @@ facade today, so the MTP port gates the cutover):
       downtime; if crashes recur outside GPU stress, escalate to
       hardware. Reboot also wiped /tmp/opencode evidence files
       (pcap + exact payloads) - future evidence goes in
-      scratch/nan-hunt/ (real fs).
+      scratch/nan-hunt/ (real fs). UPDATE 03:17-03:24 UTC: full
+      crash-LOOP - four boots in ten minutes, each dying ~107-110s
+      in with the identical amdgpu_ttm_tt_unpopulate GPF (third
+      vmcore /var/crash/202610140322). Stopping mistralrs-server
+      broke the loop at once (box sailed past T+190s) - trigger is
+      OUR GPU workload, not background activity. Standing rule: one
+      model-load per boot cycle while the driver is suspect, no
+      load/unload churn loops; if boots start dying ~2min in again,
+      stop our server FIRST. (User rules out a RAM fault - treat as
+      amdgpu TTM teardown race under GEM churn unless new evidence
+      says otherwise.)
 - [ ] ~M/P0 unload + failed-load GPU memory retention (found
       2026-10-13 during the cuda-alone validation; five instances,
       one evening, all reproducible): `unload_model` releases
