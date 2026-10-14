@@ -1962,6 +1962,19 @@ facade today, so the MTP port gates the cutover):
       lane (no real traffic, resolution first). Knobs, var-OFF
       throughout, one at a time with restore: (0) baseline re-confirm,
       (1) MTP off, (2) graphs off, (3) prefix_cache_n=0. tiny+med38
+      RACE HUNT 08:55 UTC (user: hunt it, prod cleared as lane but
+      var-off prod steps crash - hunting via code + 4B probe instead,
+      prod stays var-ON serving). CODE SUSPECTS (subagent, all with
+      file:line in session ses_ec662f52): #1 GDN checkout/commit
+      scatter vs next-chunk gather across HW queues (no event between,
+      copy_rows has no bounds check - indexed_copy.rs:162); #2 paged
+      recurrent prefix partial-hit vs chunk plan (tools HIT where
+      others MISS); #3 CPU-fallback logit D2H racing forward on the
+      default stream; #4 MTP draft H2D vs target GDN commit; #5 stale
+      index OOB (guard never fired, blind during capture). 4B PROBE:
+      fast rebuild in flight (scratch/fast-rebuild.log), probe-4b.toml
+      :1244 + 4b-{tiny,med,big}38 payloads ready - tests whether the
+      race generalizes off the 35B at small churn.
       each step; big38 skipped (crash-8 trigger).
       return: uname -r, unit states, staggered starts as needed,
       sanity, idle check. Note: tenants auto-start together (cold
