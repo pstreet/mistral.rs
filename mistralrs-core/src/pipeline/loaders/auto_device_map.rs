@@ -295,6 +295,19 @@ pub fn get_device_layers(
                     ]);
                     let budget_mb =
                         ((cap as f64 * f as f64) as usize).saturating_sub(occupied) / (1024 * 1024);
+                    // The real load caps Utilization pools at the model's
+                    // native context; the mapping estimate must cap the same
+                    // way or it reserves a pool the load never allocates and
+                    // rejects fits that would succeed.
+                    let bytes_per_token = model_cfg.kv_cache_bytes_per_token(
+                        cfg.k_type().bits_per_elem(dtype),
+                        cfg.v_type().bits_per_elem(dtype),
+                    );
+                    let context_pool_mb = model_cfg
+                        .max_seq_len()
+                        .saturating_mul(bytes_per_token.max(1))
+                        .div_ceil(1024 * 1024);
+                    let budget_mb = budget_mb.min(context_pool_mb);
                     MemoryGpuConfig::MbAmount(budget_mb)
                 }
                 // ContextSize passes through to calculate_cache_config.
