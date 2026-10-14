@@ -1834,7 +1834,27 @@ facade today, so the MTP port gates the cutover):
       power-on).
       Prod parked DOWN again; NaN hunt re-parked on stability.
       NEXT: check upstream TTM/amdgpu fixes past 7.2.9 (populate-path
-      UAF?), then decide: newer stable build vs mitigation. Build notes:
+      UAF?), then decide: newer stable build vs mitigation.
+      FORENSICS 05:3x UTC (crash-utility built from master - distro
+      9.0.1 predates the 7.x struct-module change): crash-7's
+      ttm->pages array (32k entries/128MB KFD BO, ZERO_ALLOC) holds
+      fp32-pattern garbage in entries [0..28159] (high bytes
+      c0/bf/40/3f/be/3e/bd - model-weight distribution) with only
+      the tail [28160..32255] valid page pointers. The populate loop
+      is the VICTIM (first deref of pages[0]), not the bug: ~220KB
+      of the array was stomped by an fp32-data writer. No upstream
+      fix exists (ttm_pool.c frozen since the 7.2 merge; 7.2.10 has
+      no TTM/amdgpu fix - only an unrelated x86/mm lockdep commit).
+      Prime suspect shifts from TTM-logic bug to wild writer: box
+      runs TWO ROCm tenants on the same iGPU/TTM pool (mistralrs +
+      ComfyUI ROCm service, both active in the crash boot). The
+      still-armed MISTRALRS_GATHER_GUARD shows our stack already
+      suspects its own OOB writes; guard logs are routine (no fire
+      seen). Unification lead (unproven): one wild writer could
+      explain BOTH the NaN logits (stomped activations/KV) and the
+      TTM stomps. NEXT: isolate tenants (stop ComfyUI, prod alone,
+      watch MTBF past 17min) - needs user go-ahead (their service).
+      Build notes:
       needed `--jobserver-style=pipe` (something eats /tmp fifos
       mid-build), cleared Ubuntu `debian/canonical-*.pem` cert
       paths from .config (SecureBoot off, inert), kept MODULE_SIG
