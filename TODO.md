@@ -1984,6 +1984,18 @@ facade today, so the MTP port gates the cutover):
       excluded. Mechanism hunt (subagent ses_ec63b6d7) in flight;
       prod stays down per user (frees memory), probe lane active.
       each step; big38 skipped (crash-8 trigger).
+      GROWN-POOL CELL 10:4x UTC: same probe process (pools grown),
+      cold-miss med38 = CLEAN. Fresh-process-cold-miss NaN-prone
+      (3/3 probe + 2/2 prod fresh) vs grown-process-cold-miss clean
+      isolates the transient to PROCESS FRESHNESS (load-time pool
+      growth/graph-rez/autotune), not cache state. Single-stream
+      FIFO in-lane (audited) rules out in-process stream races -
+      remaining actors: cross-process device contention, host-side
+      first-touch races (OnceLock/static caches), SDMA-vs-compute.
+      POISON 0/2: computed-corruption lean, uninit-read disfavored.
+      PIVOT: var-off live runs crash the box ~every other cycle
+      (crash-8/9) - hunt continues via code + filing, NOT live
+      var-off runs. Prod var-ON serving CORRECT throughout.
       return: uname -r, unit states, staggered starts as needed,
       sanity, idle check. Note: tenants auto-start together (cold
       churn) - watch, don't fight it unless it crashes.
