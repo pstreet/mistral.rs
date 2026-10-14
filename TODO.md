@@ -2000,6 +2000,19 @@ facade today, so the MTP port gates the cutover):
       sanity, idle check. Note: tenants auto-start together (cold
       churn) - watch, don't fight it unless it crashes.
       BOOTED 08:08 UTC clean on 7.2.9, tenants auto-started and
+      SIZING AUDIT 11:2x UTC: openwebui 4b-cuda failure root-caused.
+      Gate numbers: need ~22828MB = weights 4390 + KV 16384 (Utilization
+      arm: 24.4GB*0.9-4.4, min 16GiB unified cap) + 2048 headroom; gate
+      PASSED (avail 24090). Loader then allocated 15438MB KV on the
+      3090 (native context wide, model-context cap never bit), leaving
+      2.7GB for activations+graphs -> graph precapture stopped at 826MB
+      free, first prefill OOM'd. CODE FIX (94ffc9d98): estimate_load_bytes
+      now scales ISQ entries by target/source bits-per-weight (clamped
+      to on-disk; 4 tests). DEPLOY FIX: 4b-cuda entry gets the same
+      per-model context_len=32768 fit its 27B sibling has; Utilization
+      was doing what the config asked, the entry was missing its fit.
+      Stranded-23.9GB lesson: failed cuda loads strand debris (known
+      M item, unload retention) - prod restart flushed it (283MB now).
       settled (busy 0 from boot - workaround active), prod loaded
       staggered + sanity CORRECT, idle 0 with all resident at T+4min.
       Prior session: 2.5h, no crash, clean shutdown for reboot.
