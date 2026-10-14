@@ -1898,6 +1898,11 @@ facade today, so the MTP port gates the cutover):
       drm-engine, KFD queue debugfs empty - nvtop can't split it
       either). Mechanism still unknown; next probe is radeontop
       block mix (GFX vs SDMA = compute vs migration churn).
+      RADEONTOP 07:41 UTC: peg is pure command-processor (cr 100%,
+      every shader/mem block at 0.00%, GTT 21GB steady) - signal/
+      event spin, NOT compute and NOT migration. Burns power, not
+      memory; likely benign for crashes (a spinning CP doesn't
+      write fp32). Peg and stomps are separate leads now.
       RE-SPLIT 07:08 UTC (user): tenants back
       down after ~5min resident (too short to judge) - 3090 was
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
