@@ -1791,7 +1791,9 @@ facade today, so the MTP port gates the cutover):
       (cdn.kernel.org) in scratch/kernel-build/ - fix VERIFIED in
       source (`if (ret > 0)` in ttm_bo_swapout_cb), configured from
       /boot/config-7.2.6 (olddefconfig, amdgpu=m/HSA=y posture
-      kept), `make -j32 bindeb-pkg` in background. RC ruled OUT:
+      kept), `make -j32 bindeb-pkg` relaunched fully detached
+      (setsid session leader, survives the agent session, resumes
+      incrementally). RC ruled OUT:
       only v7.3-rc3 prebuilt exists and the fix landed in rc4.
       After build: stage debs to /var/local/kernel/, dpkg-scanpackages,
       apt install, reboot, verify, single prod start.
