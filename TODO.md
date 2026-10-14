@@ -2035,6 +2035,18 @@ facade today, so the MTP port gates the cutover):
       load+first-request to OOM again at next prod restart unless the
       Utilization planning arm learns to reserve activation/graph space
       (deeper code fix, journaled as the follow-on if the model is needed
+      RUNTIME-RESERVE FIX 12:2x UTC (user-directed, 78ea77e73): all
+      three Utilization sizing sites (post-load pool, predictive
+      device-map arm, demand-load estimator) now reserve >=15% of
+      device total for activations + decode-graph arena (integer
+      percent math; explicit larger reservations win; saturating).
+      Root cause on record: per-loader act predictions return 0
+      without explicit max_seq_len/max_batch_size map params and
+      never counted the graph arena. 4B-on-3090 recheck: pool
+      24.4GB*0.9-6.2GB-3.6GB ~= 12.2GB, leaving ~6GB for runtime
+      (was 2.7GB) - no OOM. iGPU prod unaffected (context cap
+      bites first). Fits the reverted-toml decision: entry stays
+      on Utilization, sizing now protects the runtime by default.
       on the 3090).
       down after ~5min resident (too short to judge) - 3090 was
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
