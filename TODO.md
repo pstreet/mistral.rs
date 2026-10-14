@@ -1883,6 +1883,14 @@ facade today, so the MTP port gates the cutover):
       COMFY-SOLO 07:24 UTC: flat 0% over 6min - exonerated.
       MATRIX-4 07:28 UTC (chatterbox resident): tiny/med/big38 all
       length, zero oops, box T+2:01 - fourth clean matrix.
+      CHATTER-SOLO 07:31 UTC: flat 0% over 6min except one 96%
+      blip at 07:28:18 = our own big38 prefill (matrix-4) - also
+      exonerated. PEG VERDICT: no runaway anywhere; the joint pegs
+      were overlapping tenant model-load churn (cold page cache
+      first time, warm contention the second) - alloc storms + GTT
+      migration while prod serves. Implication for crashes: tenant
+      (re)starts are churn events in the crash-friendly class;
+      stagger them, never together, never during heavy serving.
       RE-SPLIT 07:08 UTC (user): tenants back
       down after ~5min resident (too short to judge) - 3090 was
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
