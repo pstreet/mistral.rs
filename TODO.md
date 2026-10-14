@@ -1925,6 +1925,11 @@ facade today, so the MTP port gates the cutover):
       (wrapper + both tenant units, staggered restarts) -> busy 0%
       with everything resident. ~25W recovered. Remove all three
       copies when the kernel fix lands.
+      REBOOT 08:0x UTC (user-approved): full host reboot to verify
+      clean boot on pinned 7.2.9 + all-three queue workaround. On
+      return: uname -r, unit states, staggered starts as needed,
+      sanity, idle check. Note: tenants auto-start together (cold
+      churn) - watch, don't fight it unless it crashes.
       RE-SPLIT 07:08 UTC (user): tenants back
       down after ~5min resident (too short to judge) - 3090 was
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
