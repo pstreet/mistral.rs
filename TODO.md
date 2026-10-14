@@ -1813,7 +1813,12 @@ facade today, so the MTP port gates the cutover):
       UTC, clean reboot, prod loaded first try, sanity CORRECT,
       Q8_0, box past T+6min with zero oops/BUG/GPF (old window
       was ~2min) - the TTM fix holds so far. Real trial is user
-      openwebui traffic next. Build notes:
+      openwebui traffic next. PINNED 04:56 UTC (user-approved):
+      GRUB_DEFAULT=gnulinux-7.2.9-advanced-... via /etc/default/grub
+      + update-grub (grub.cfg line 40 confirms); future boots land
+      on 7.2.9, 7.2.6/7.1.5 kept as fallback entries. User big-tools
+      request still NaNs on Q8_0/7.2.9 (engine bug open, kernel
+      now survives it). Build notes:
       needed `--jobserver-style=pipe` (something eats /tmp fifos
       mid-build), cleared Ubuntu `debian/canonical-*.pem` cert
       paths from .config (SecureBoot off, inert), kept MODULE_SIG
