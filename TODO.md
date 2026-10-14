@@ -1852,6 +1852,10 @@ facade today, so the MTP port gates the cutover):
       chatterbox.service stopped (both inactive, no leftover procs),
       prod started solo on 7.2.9 - clock starts at load, watching
       MTBF past the 17min crash-7 mark with no other ROCm tenant.
+      VERDICT 06:05 UTC: solo T+20min loaded, box T+38min, prod
+      active, zero oops/BUG/GPF - past crash-7's mark. Co-tenant
+      isolation holds so far; openwebui traffic is the ongoing
+      trial. ComfyUI/Chatterbox stay down until MTBF is convincing.
       The
       still-armed MISTRALRS_GATHER_GUARD shows our stack already
       suspects its own OOB writes; guard logs are routine (no fire
