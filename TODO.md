@@ -1869,7 +1869,10 @@ facade today, so the MTP port gates the cutover):
       big38 all length, no errors), box T+1:31, prod active, zero
       oops. No public bug matches our signature (CVE-2024-56594 is
       a 2024 Renoir DMA issue, long fixed) - freedesktop drm/amd
-      filing pending user go-ahead.
+      filing pending user go-ahead. REUNION 07:03 UTC
+      (user-directed A/B): comfyui + chatterbox restarted onto the
+      warm box (both active) - watching whether NaN/crash returns
+      with tenants back.
       The
       still-armed MISTRALRS_GATHER_GUARD shows our stack already
       suspects its own OOB writes; guard logs are routine (no fire
