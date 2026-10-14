@@ -1856,6 +1856,15 @@ facade today, so the MTP port gates the cutover):
       active, zero oops/BUG/GPF - past crash-7's mark. Co-tenant
       isolation holds so far; openwebui traffic is the ongoing
       trial. ComfyUI/Chatterbox stay down until MTBF is convincing.
+      SOLO REPRO MATRIX 06:21 UTC: tiny38/med38/big38 (4.9/29/70KB
+      tools payloads, the class that NaN'd with tenants up) all
+      completed 200 solo, zero seq-level errors - big38 took 22s
+      prefill (multi-chunk for certain). Second datapoint same
+      direction as MTBF, still small-n, no proof claimed. Tension
+      noted: if NaN needs tenants up to reproduce, the engine hunt
+      later needs them back (with crash risk); if solo keeps
+      passing, the trigger lives in shared-state (pool/GTT
+      pressure, prefix-cache warmth), not in our engine alone.
       The
       still-armed MISTRALRS_GATHER_GUARD shows our stack already
       suspects its own OOB writes; guard logs are routine (no fire
