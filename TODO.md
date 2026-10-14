@@ -1950,6 +1950,19 @@ facade today, so the MTP port gates the cutover):
       (mtp off / graphs off / prefix_cache 0, var off) - needs a
       lane decision with user (probe second-load churn vs prod
       restarts). Prod left var-ON serving.
+      CRASH-9 08:40 UTC (T+7min, shortest 7.2.9): GPF 0x3f0640043f813fd0
+      (fp32-pattern again) in unpopulate+0x4b via BO-free/dmabuf path -
+      same path as crash-8. Hit ~1min after the bisect prod restart
+      (var OFF), during 35B load, no requests logged. Vmcore
+      /var/crash/202610140840/. Var-off regime = 2 crashes in ~15min
+      (crash-8 during big38, crash-9 during load). BISECT ABORTED:
+      var restored ON in wrapper, further var-off steps suspended -
+      the discriminator already answered (run1 NaN vs run2 clean).
+      BISECT AUTHORIZED 08:4x UTC: user cleared prod as the test
+      lane (no real traffic, resolution first). Knobs, var-OFF
+      throughout, one at a time with restore: (0) baseline re-confirm,
+      (1) MTP off, (2) graphs off, (3) prefix_cache_n=0. tiny+med38
+      each step; big38 skipped (crash-8 trigger).
       return: uname -r, unit states, staggered starts as needed,
       sanity, idle check. Note: tenants auto-start together (cold
       churn) - watch, don't fight it unless it crashes.
