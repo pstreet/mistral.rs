@@ -1848,6 +1848,11 @@ facade today, so the MTP port gates the cutover):
       Prime suspect shifts from TTM-logic bug to wild writer: box
       runs TWO ROCm tenants on the same iGPU/TTM pool (mistralrs +
       ComfyUI ROCm service, both active in the crash boot). The
+      ISOLATION TEST 05:44 UTC (user-approved): comfyui.service +
+      chatterbox.service stopped (both inactive, no leftover procs),
+      prod started solo on 7.2.9 - clock starts at load, watching
+      MTBF past the 17min crash-7 mark with no other ROCm tenant.
+      The
       still-armed MISTRALRS_GATHER_GUARD shows our stack already
       suspects its own OOB writes; guard logs are routine (no fire
       seen). Unification lead (unproven): one wild writer could
