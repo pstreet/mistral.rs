@@ -1829,7 +1829,9 @@ facade today, so the MTP port gates the cutover):
       family is NOT closed: same GPF shape, new site (populate/alloc
       path, not unpopulate/free). Vmcore /var/crash/202610140500/
       (5.8GB) + dmesg saved. Boot gap 05:02-05:26 (kdump rebooted
-      05:02:07, box back 05:26:47 - cause of gap TBD with user).
+      05:02:07, box back 05:26:47 - user power-cycled: post-kdump
+      reboot hung with nothing logged, box sat dead until manual
+      power-on).
       Prod parked DOWN again; NaN hunt re-parked on stability.
       NEXT: check upstream TTM/amdgpu fixes past 7.2.9 (populate-path
       UAF?), then decide: newer stable build vs mitigation. Build notes:
