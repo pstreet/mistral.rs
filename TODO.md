@@ -1684,6 +1684,16 @@ facade today, so the MTP port gates the cutover):
       accumulation) - possible follow-up: fp32 state or clamped
       state norm, decided after the invalidation fix makes the
       event visible-but-harmless.
+# ==== OPERATING RULES (2026-10-14, user directive) ====
+# NEVER modify other tools or applications to bypass an issue in this
+# stack. The openwebui webui.db capability patch (builtin_tools=false)
+# used as the NaN workaround was wrong and was fully reverted the same
+# night - fixes belong in mistral.rs/candle or in OUR OWN deploy config
+# (mistralrs.toml / wrappers), nowhere else. tcpdump captures are
+# read-only observation and fine; touching a third-party app's database
+# or settings to dodge a bug is not.
+# =====================================================
+
 - [ ] ~P0 all-NaN logits on multi-chunk prefill WITH tools array
       (openwebui outage root-caused to the trigger, 2026-10-14; the
       underlying engine bug is STILL OPEN). TRIGGER SHAPE (evidence
