@@ -2044,6 +2044,22 @@ facade today, so the MTP port gates the cutover):
       without explicit max_seq_len/max_batch_size map params and
       never counted the graph arena. 4B-on-3090 recheck: pool
       24.4GB*0.9-6.2GB-3.6GB ~= 12.2GB, leaving ~6GB for runtime
+      MAPPING-FIT REGRESSION + FIX 22:5x UTC: first release build
+      with the sizing fixes failed prod's 35B demand-load (fit check
+      rejected 300s, 'no idle resident'). NOT the runtime reserve -
+      old code fails the same toml WORSE (9625MB over vs 2400MB);
+      the reserve shrank the overshoot. Root cause (pre-existing):
+      auto-device-map's Utilization arm converts to MbAmount BEFORE
+      the model-context cap, so the mapping fit reserved an uncapped
+      65GB pool the real load never allocates (real pool: 10496MB,
+      context-capped) - avail-sensitive, passed on empty-GTT boots,
+      fails once tenants/prod reduce avail. FIX (committed): mapping
+      budget min()s the model-context pool; verified 35B eager loads
+      end-to-end (mapping passes, 10496MB pool, serving). FOLLOW-UP
+      (pre-existing, journaled): mapping KV reservation counts 2x
+      the pool (key/val shape double-count) - harmless post-cap,
+      worth fixing for multi-GPU maps. Release rebuild #2 in flight;
+      prod swap + 35B + 4b-cuda verification next.
       (was 2.7GB) - no OOM. iGPU prod unaffected (context cap
       bites first). Fits the reverted-toml decision: entry stays
       on Utilization, sizing now protects the runtime by default.
