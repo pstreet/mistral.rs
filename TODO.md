@@ -1925,6 +1925,20 @@ facade today, so the MTP port gates the cutover):
       (wrapper + both tenant units, staggered restarts) -> busy 0%
       with everything resident. ~25W recovered. Remove all three
       copies when the kernel fix lands.
+      QUEUES-OFF TEST 08:26 UTC: var pulled from wrapper, prod
+      restarted, matrix run - med38 NaN'd FIRST TRY (all-NaN,
+      status 500), tiny38 passed just before. BUT confounded: the
+      test also fresh-loaded prod (empty GTT + cold prefix cache =
+      the original repro recipe), and earlier var-off matrices on
+      warm prod were clean. Var-mask vs fresh-regime undecided.
+      CRASH-8 08:27 UTC (~30s later, T+18min boot like crash-7):
+      GPF non-canonical 0x7fff7fff7fff8017 in unpopulate+0x4b via
+      BO-free/dmabuf-release path, during big38. Vmcore
+      /var/crash/202610140827/ (4.2GB). Box kdump'd, back 08:33.
+      NEXT: discriminate - (1) prod start now (var still off,
+      fresh boot) + med38; (2) var back ON + prod restart (fresh
+      load WITH var) + med38. NaN in (2) = regime wins; clean =
+      var masks a race.
       REBOOT 08:0x UTC (user-approved): full host reboot to verify
       clean boot on pinned 7.2.9 + all-three queue workaround. On
       return: uname -r, unit states, staggered starts as needed,
