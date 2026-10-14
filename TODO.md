@@ -1754,7 +1754,19 @@ facade today, so the MTP port gates the cutover):
       load/unload churn loops; if boots start dying ~2min in again,
       stop our server FIRST. (User rules out a RAM fault - treat as
       amdgpu TTM teardown race under GEM churn unless new evidence
-      says otherwise.)
+      says otherwise.) UPDATE 03:31-03:39 UTC: serving ALONE trips
+      it - the user's single openwebui request crashed the box
+      (fourth vmcore /var/crash/202610140334, identical
+      amdgpu_ttm_tt_unpopulate+0x5b GPF; two reboot-loop boots
+      before this one stabilized). Prod is DOWN and staying down:
+      stopped + watchdog userstop marker placed so the healthcheck
+      stays quiet (note: a bare `systemctl disable` deleted the
+      unit symlink itself - restored, unit is `linked`/inactive;
+      the marker suppresses watchdog restarts). Do NOT start
+      mistralrs-server again until the driver crash is understood -
+      every start risks another crash-loop. The NaN hunt is parked:
+      repro + sampler analysis journaled, engine fix lands only
+      after the box is trustworthy.
 - [ ] ~M/P0 unload + failed-load GPU memory retention (found
       2026-10-13 during the cuda-alone validation; five instances,
       one evening, all reproducible): `unload_model` releases
