@@ -1865,6 +1865,11 @@ facade today, so the MTP port gates the cutover):
       later needs them back (with crash risk); if solo keeps
       passing, the trigger lives in shared-state (pool/GTT
       pressure, prefix-cache warmth), not in our engine alone.
+      RE-PROBE 06:58 UTC: full matrix clean again solo (tiny/med/
+      big38 all length, no errors), box T+1:31, prod active, zero
+      oops. No public bug matches our signature (CVE-2024-56594 is
+      a 2024 Renoir DMA issue, long fixed) - freedesktop drm/amd
+      filing pending user go-ahead.
       The
       still-armed MISTRALRS_GATHER_GUARD shows our stack already
       suspects its own OOB writes; guard logs are routine (no fire
