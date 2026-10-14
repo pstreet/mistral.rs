@@ -1766,7 +1766,28 @@ facade today, so the MTP port gates the cutover):
       mistralrs-server again until the driver crash is understood -
       every start risks another crash-loop. The NaN hunt is parked:
       repro + sampler analysis journaled, engine fix lands only
-      after the box is trustworthy.
+      after the box is trustworthy. KERNEL-FIX LEAD 03:45 UTC
+      (user-directed audit): full change inventory finds NO
+      code/config cause - same binary md5 all week, no uncommitted
+      changes, wrappers identical, openwebui reverted+verified,
+      kernel constant (7.2.6) for a month. Upstream instead:
+      CVE-2026-98166, TTM swapout bulk_move-cursor UAF (dangling
+      range endpoint -> freed-memory deref on later free paths),
+      fixed in 7.2.8 (released 2026-09-25); our 7.2.6 was built
+      2026-09-14 and predates the fix, and third-party source
+      checks confirm 7.2.6 still carries the buggy `if (!ret)`.
+      Our six crashes (GPF on non-canonical pointer, all on TTM
+      free/teardown paths) match the family; memory-pressure
+      swapout is the trigger class and the night's dual-35B
+      co-resident churn is exactly such pressure. Caveat: our RIP
+      (unpopulate+0x5b) is adjacent to, not identical with, the
+      CVE's listed signatures - proof is crashes stopping on
+      7.2.8, not the match alone. FIX RECIPE: fetch mainline
+      7.2.8+ debs (kernel.ubuntu.com/~kernel-ppa/mainline/) into
+      /var/local/kernel/, rebuild index per its README, apt
+      install, reboot, verify `uname -r`, then ONE prod start.
+      7.1.5 is NOT the fallback (bug is v7.1+, likely vulnerable
+      too).
 - [ ] ~M/P0 unload + failed-load GPU memory retention (found
       2026-10-13 during the cuda-alone validation; five instances,
       one evening, all reproducible): `unload_model` releases
