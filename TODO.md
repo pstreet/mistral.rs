@@ -1809,7 +1809,11 @@ facade today, so the MTP port gates the cutover):
       sanity, then openwebui traffic is the real trial. If the
       box is back on 7.2.6, the one-shot failed - diagnose before
       retrying. Pre-reboot verified: entry cmdline, initrd,
-      grubenv write path, fallback intact. Build notes:
+      grubenv write path, fallback intact. BOOTED 7.2.9 04:42
+      UTC, clean reboot, prod loaded first try, sanity CORRECT,
+      Q8_0, box past T+6min with zero oops/BUG/GPF (old window
+      was ~2min) - the TTM fix holds so far. Real trial is user
+      openwebui traffic next. Build notes:
       needed `--jobserver-style=pipe` (something eats /tmp fifos
       mid-build), cleared Ubuntu `debian/canonical-*.pem` cert
       paths from .config (SecureBoot off, inert), kept MODULE_SIG
