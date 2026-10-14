@@ -235,6 +235,12 @@ alias = "qwen3.5-4b-cuda"
 lazy = true
 mtp = false
 device = "cuda:0"
+# Per-model fit for the 24GB 3090 (mirrors the 27B cuda entry): without it
+# the Utilization(0.9) default planned a 15.4GB KV pool for this 4B (native
+# context is huge, so the model-context cap never bit), starving
+# activations+graphs until the first prefill OOM'd (2026-10-14 openwebui
+# failure). 32k of context is 8x any real request for this model.
+context_len = 32768
 
 [models.format]
 quantized_file = "Qwen3.5-4B-Q8_0.gguf"

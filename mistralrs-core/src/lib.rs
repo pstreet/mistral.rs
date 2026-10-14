@@ -3627,7 +3627,18 @@ fn estimate_load_bytes(
     total_bytes: u64,
     headroom_bytes: u64,
 ) -> Option<u64> {
-    let weights = gguf_local_weight_bytes(&loader_config.model_selected)?;
+    let on_disk = gguf_local_weight_bytes(&loader_config.model_selected)?;
+    // ISQ quantizes in flight, so the device holds the target dtype, not the
+    // file bytes. Scale down (never up: the transient can still hold
+    // source-sized buffers, and overestimating only refuses, never OOMs).
+    let weights = match loader_config.isq {
+        None => on_disk,
+        Some(target) => {
+            let ratio = isq_bits_per_weight(target)
+                / gguf_source_bits_per_weight(&loader_config.model_selected);
+            ((on_disk as f64 * ratio).ceil() as u64).min(on_disk)
+        }
+    };
     // NO_MMAP shards read straight into a host Vec while the device copy
     // catches up, so a load transiently holds weights twice. Charge it or the
     // loader's own fit check runs against ~25 GB less than the gate saw.
@@ -3659,6 +3670,57 @@ fn estimate_load_bytes(
             .saturating_add(kv)
             .saturating_add(headroom_bytes),
     )
+}
+
+const fn isq_bits_per_weight(t: IsqType) -> f64 {
+    match t {
+        IsqType::Q4_0 | IsqType::Q4_1 | IsqType::Q4K | IsqType::HQQ4 | IsqType::AFQ4 => 4.5,
+        IsqType::Q5_0 | IsqType::Q5_1 | IsqType::Q5K => 5.5,
+        IsqType::Q2K | IsqType::AFQ2 => 2.6,
+        IsqType::Q3K | IsqType::AFQ3 => 3.9,
+        IsqType::Q6K | IsqType::AFQ6 => 6.6,
+        IsqType::Q8K => 8.5,
+        _ => 8.0,
+    }
+}
+
+// Nominal source bits parsed from the GGUF filename tag. Unknown tags fall
+// back to 16 (fp16): overestimating only refuses loads, underestimating OOMs.
+fn gguf_source_bits_per_weight(selected: &ModelSelected) -> f64 {
+    let name = match selected {
+        ModelSelected::GGUF {
+            quantized_filename, ..
+        }
+        | ModelSelected::XLoraGGUF {
+            quantized_filename, ..
+        }
+        | ModelSelected::LoraGGUF {
+            quantized_filename, ..
+        } => quantized_filename.to_uppercase(),
+        _ => return 16.0,
+    };
+    for (tag, bits) in [
+        ("Q8_0", 8.0),
+        ("Q8_1", 8.0),
+        ("Q4_0", 4.5),
+        ("Q4_1", 4.5),
+        ("Q2K", 2.6),
+        ("Q3K", 3.9),
+        ("Q4K", 4.5),
+        ("Q5K", 5.5),
+        ("Q6K", 6.6),
+        ("Q8K", 8.5),
+        ("F16", 16.0),
+        ("BF16", 16.0),
+        ("FP16", 16.0),
+        ("F32", 32.0),
+        ("FP32", 32.0),
+    ] {
+        if name.contains(tag) {
+            return bits;
+        }
+    }
+    16.0
 }
 
 /// On-disk bytes of local GGUF weight files (shards + projector). `None`
@@ -3885,6 +3947,52 @@ mod tests {
         assert_eq!(
             estimate_load_bytes(&cfg, u64::MAX, u64::MAX, EST_HEADROOM_BYTES),
             Some(12 * 1024 * 1024 + EST_HEADROOM_BYTES)
+        );
+    }
+
+    #[test]
+    fn estimate_isq_scales_weights_down() {
+        let _lock = ESTIMATE_ENV_LOCK.lock().unwrap();
+        let _env = NoMmapEnv::set(None);
+        let dir = tempfile::tempdir().unwrap();
+        // F16 source quantized to Q4K in flight: device holds ~4.5/16 of file.
+        write_sized(dir.path(), "w-F16.gguf", EST_WEIGHT_BYTES as usize);
+        let mut cfg = gguf_loader_config(dir.path(), "w-F16.gguf", None, None);
+        cfg.isq = Some(IsqType::Q4K);
+        let scaled = ((EST_WEIGHT_BYTES as f64 * 4.5 / 16.0).ceil() as u64).min(EST_WEIGHT_BYTES);
+        assert_eq!(
+            estimate_load_bytes(&cfg, u64::MAX, u64::MAX, EST_HEADROOM_BYTES),
+            Some(scaled + EST_HEADROOM_BYTES)
+        );
+    }
+
+    #[test]
+    fn estimate_isq_never_exceeds_file() {
+        let _lock = ESTIMATE_ENV_LOCK.lock().unwrap();
+        let _env = NoMmapEnv::set(None);
+        let dir = tempfile::tempdir().unwrap();
+        // Q2K source with a "bigger" ISQ target: clamped to on-disk bytes.
+        write_sized(dir.path(), "w-Q2K.gguf", EST_WEIGHT_BYTES as usize);
+        let mut cfg = gguf_loader_config(dir.path(), "w-Q2K.gguf", None, None);
+        cfg.isq = Some(IsqType::Q8K);
+        assert_eq!(
+            estimate_load_bytes(&cfg, u64::MAX, u64::MAX, EST_HEADROOM_BYTES),
+            Some(EST_WEIGHT_BYTES + EST_HEADROOM_BYTES)
+        );
+    }
+
+    #[test]
+    fn estimate_isq_unknown_tag_treats_source_as_f16() {
+        let _lock = ESTIMATE_ENV_LOCK.lock().unwrap();
+        let _env = NoMmapEnv::set(None);
+        let dir = tempfile::tempdir().unwrap();
+        write_sized(dir.path(), "w-MYSTERIOUS.gguf", EST_WEIGHT_BYTES as usize);
+        let mut cfg = gguf_loader_config(dir.path(), "w-MYSTERIOUS.gguf", None, None);
+        cfg.isq = Some(IsqType::Q4K);
+        let scaled = ((EST_WEIGHT_BYTES as f64 * 4.5 / 16.0).ceil() as u64).min(EST_WEIGHT_BYTES);
+        assert_eq!(
+            estimate_load_bytes(&cfg, u64::MAX, u64::MAX, EST_HEADROOM_BYTES),
+            Some(scaled + EST_HEADROOM_BYTES)
         );
     }
 
