@@ -1891,6 +1891,13 @@ facade today, so the MTP port gates the cutover):
       migration while prod serves. Implication for crashes: tenant
       (re)starts are churn events in the crash-friendly class;
       stagger them, never together, never during heavy serving.
+      PAIR-PEG 07:37 UTC: peg needs ComfyUI + co-tenant (3/3):
+      comfy solo 6min = 0%, chatter solo 6min = 0%, pair = 100%
+      sustained, comfy stop drops to 0% in <25s. No per-process
+      engine counters exist on this kernel (fdinfo lacks
+      drm-engine, KFD queue debugfs empty - nvtop can't split it
+      either). Mechanism still unknown; next probe is radeontop
+      block mix (GFX vs SDMA = compute vs migration churn).
       RE-SPLIT 07:08 UTC (user): tenants back
       down after ~5min resident (too short to judge) - 3090 was
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
