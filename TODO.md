@@ -1921,6 +1921,10 @@ facade today, so the MTP port gates the cutover):
       coverage does not work. Nuances: pins depend on runtime
       version (7.14 pins, 7.13 doesn't) and CWSR setting; separate
       CPU-spin issue (rocm-systems#12674) mimics it on meters.
+      WORKAROUND LIVE 08:00 UTC: GPU_MAX_HW_QUEUES=1 on all three
+      (wrapper + both tenant units, staggered restarts) -> busy 0%
+      with everything resident. ~25W recovered. Remove all three
+      copies when the kernel fix lands.
       RE-SPLIT 07:08 UTC (user): tenants back
       down after ~5min resident (too short to judge) - 3090 was
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
