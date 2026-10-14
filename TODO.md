@@ -2061,6 +2061,17 @@ facade today, so the MTP port gates the cutover):
       worth fixing for multi-GPU maps. Release rebuild #2 in flight;
       prod swap + 35B + 4b-cuda verification next.
       (was 2.7GB) - no OOM. iGPU prod unaffected (context cap
+      BUILD-SHAPE BUG (mine) 23:1x UTC: release rebuilds 1+2 used
+      --features rocm; prod's shape is DUAL cuda,rocm (AGENTS). The
+      rocm-only binary silently dropped the NVIDIA role: 'cuda:0'
+      fell through to a hip device (4b-cuda loaded on the iGPU,
+      DeviceId(3)-as-Hip; nvidia-smi 1MB), and the 3090 entries
+      failed probing at boot. Binary size 129.7MB -> 96.3MB was the
+      tell. Correct dual build in flight (rebuild 3). Lesson: the
+      release build command is cargo build --release --package
+      mistralrs-cli --features cuda,rocm - check the shape before
+      any prod swap. 35B iGPU serving was CORRECT throughout on
+      rebuild 2 (mapping clamp verified live).
       bites first). Fits the reverted-toml decision: entry stays
       on Utilization, sizing now protects the runtime by default.
       on the 3090).
