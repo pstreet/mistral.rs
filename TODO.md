@@ -1684,6 +1684,57 @@ facade today, so the MTP port gates the cutover):
       accumulation) - possible follow-up: fp32 state or clamped
       state norm, decided after the invalidation fix makes the
       event visible-but-harmless.
+- [ ] ~P0 all-NaN logits on multi-chunk prefill WITH tools array
+      (openwebui outage root-caused to the trigger, 2026-10-14; the
+      underlying engine bug is STILL OPEN). TRIGGER SHAPE (evidence
+      chain): openwebui 0.12.0 injects its 38 built-in tool schemas
+      (~26KB tools JSON) into EVERY chat request unless the model's
+      meta.capabilities.builtin_tools=false; such requests render to
+      ~6.8k-token prompts (4 prefill chunks at 2048). In prod's
+      load-into-empty-GTT regime those requests produce all-NaN
+      first-sample logits 13/13 (user's 5 openwebui failures +
+      verbatim replays). Requests without tools: 100% clean all
+      night (raw 120KB completions, essays, sanity, bare chats).
+      Bisect history (midnight-02:00): tool ENTRY COUNT and payload
+      SIZE both matter (38 entries fail ~100%, <=32 pass, 33-42
+      noisy) but identical bytes flip outcomes across cold runs -
+      per-request randomness (uuid token-count shifts block
+      alignment). A/B'd on the probe lane (pre-crash machine):
+      v_cache_type Q4_0 + empty-GTT load + 6.8k-token tools
+      payload => NaN 5/5; V=Q8_0 => clean 3/3 same payload. THE
+      REVERT: all five split-KV entries (35B q5/q4 arms + all three
+      27Bs) moved back to V=Q8_0 in models/mistralrs.toml (the
+      27Bs were masked by loading on demand alongside the resident
+      35B). CAVEAT: post-reboot (post-crash) prod on Q8_0 still
+      NaNs on OTHER multi-chunk tools payloads (med38 29KB,
+      big38 70KB synthetic) - so Q4_0 was A/B-proven to be A
+      trigger for the user-shaped payload, not THE bug; the class
+      persists. WORKAROUND SHIPPED: webui.db model rows patched
+      capabilities.builtin_tools=false (all 11 chat models) +
+      open-webui restarted - openwebui now sends clean requests;
+      chats work. Re-enable per-model when the engine bug closes.
+      NEXT: the deterministic repro recipe (fresh boot/empty GTT
+      + tools-array prompt >2048 tokens) on the probe lane; bisect
+      engine knobs (mtp off / prefix_cache_n=0 / graphs) and re-add
+      the stripped per-layer NaN probes (11993a14f) to find the
+      layer where NaN first appears.
+- [ ] ~P0 MACHINE STABILITY (found 2026-10-14 02:20+): TWO kernel
+      crashes within 15 minutes during heavy GPU stress testing
+      (prod + repeated probe model loads + NaN-poison batteries).
+      Both: general protection fault on a NON-CANONICAL garbage
+      pointer in amdgpu_ttm_tt_unpopulate <- amdgpu_gem_object_free
+      (kdump vmcores /var/crash/202610140221 and 202610140232).
+      No MCE/EDAC RAM errors logged; rasdaemon not running. Could
+      be an amdgpu TTM teardown race under heavy GEM churn (both
+      crashes during/around process teardown of probe instances)
+      OR bad RAM (no evidence either way yet - the NaN "lottery"
+      and the GPF are consistent with either). DO NOT hammer this
+      box with repeated model-load/unload cycles until understood;
+      consider rasdaemon + a memtest86+ run at next convenient
+      downtime; if crashes recur outside GPU stress, escalate to
+      hardware. Reboot also wiped /tmp/opencode evidence files
+      (pcap + exact payloads) - future evidence goes in
+      scratch/nan-hunt/ (real fs).
 - [ ] ~M/P0 unload + failed-load GPU memory retention (found
       2026-10-13 during the cuda-alone validation; five instances,
       one evening, all reproducible): `unload_model` releases
