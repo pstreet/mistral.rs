@@ -1879,7 +1879,11 @@ facade today, so the MTP port gates the cutover):
       100% within a minute and hold it; tenants down drops to 0%
       in <25s (twice). Mechanism unidentified. Caveat: solo windows
       were short (60-90s) vs joint peg observed over minutes -
-      missing control is one tenant alone for 5+ min. RE-SPLIT 07:08 UTC (user): tenants back
+      missing control is one tenant alone for 5+ min.
+      COMFY-SOLO 07:24 UTC: flat 0% over 6min - exonerated.
+      MATRIX-4 07:28 UTC (chatterbox resident): tiny/med/big38 all
+      length, zero oops, box T+2:01 - fourth clean matrix.
+      RE-SPLIT 07:08 UTC (user): tenants back
       down after ~5min resident (too short to judge) - 3090 was
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
       samples were our serving. Reunion probe at ~07:28 now runs
