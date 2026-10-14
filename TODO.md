@@ -2020,6 +2020,12 @@ facade today, so the MTP port gates the cutover):
       reload + first request 200 clean, 3090 at 8.6GB total, no OOM,
       no stranding. Sizing item CLOSED.
       RE-SPLIT 07:08 UTC (user): tenants back
+      FIT-CTX UNIFICATION (user-directed, post-audit): Utilization
+      budgets now honor fit_ctx (shrink + 2048-token floor + warn when
+      armed; silent best-effort min preserved unarmed - no behavior
+      change for existing Utilization deployments). 3 tests. Both 3090
+      entries arm fit_ctx = true. Same commit as the ISQ estimator fix
+      follow-on; toml active at next prod restart.
       down after ~5min resident (too short to judge) - 3090 was
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
       samples were our serving. Reunion probe at ~07:28 now runs
