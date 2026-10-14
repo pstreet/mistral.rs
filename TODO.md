@@ -1975,6 +1975,14 @@ facade today, so the MTP port gates the cutover):
       fast rebuild in flight (scratch/fast-rebuild.log), probe-4b.toml
       :1244 + 4b-{tiny,med,big}38 payloads ready - tests whether the
       race generalizes off the 35B at small churn.
+      BISECT MATRIX (probe-35b :1246, cold, multi-queue): n=2+
+      cache4=NaN (x3: Q4K draft, stock head, graphs-off); n=1=clean
+      (graphs on+off); MTP off=clean; cache0+n=2=clean; warm HIT=
+      clean; 4B/27B probes clean (no MTP). VERDICT: needs BOTH MTP
+      n=2 AND prefix cache - race is in MTP-speculative vs cache-
+      checkpoint capture on cold multi-chunk prefill. Graphs
+      excluded. Mechanism hunt (subagent ses_ec63b6d7) in flight;
+      prod stays down per user (frees memory), probe lane active.
       each step; big38 skipped (crash-8 trigger).
       return: uname -r, unit states, staggered starts as needed,
       sanity, idle check. Note: tenants auto-start together (cold
