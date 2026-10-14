@@ -1872,7 +1872,11 @@ facade today, so the MTP port gates the cutover):
       filing pending user go-ahead. REUNION 07:03 UTC
       (user-directed A/B): comfyui + chatterbox restarted onto the
       warm box (both active) - watching whether NaN/crash returns
-      with tenants back.
+      with tenants back. RE-SPLIT 07:08 UTC (user): tenants back
+      down after ~5min resident (too short to judge) - 3090 was
+      0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
+      samples were our serving. Reunion probe at ~07:28 now runs
+      solo again, extending the solo-MTBF leg.
       The
       still-armed MISTRALRS_GATHER_GUARD shows our stack already
       suspects its own OOB writes; guard logs are routine (no fire
