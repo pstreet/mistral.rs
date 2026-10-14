@@ -2026,6 +2026,16 @@ facade today, so the MTP port gates the cutover):
       change for existing Utilization deployments). 3 tests. Both 3090
       entries arm fit_ctx = true. Same commit as the ISQ estimator fix
       follow-on; toml active at next prod restart.
+      REVERT 12:0x UTC (user): per-entry context_len=32768 removed from
+      4b-cuda; entry back to the Utilization(0.9) arm with fit_ctx=true.
+      CAVEAT ON RECORD: the 4B OOM was the Utilization pool (15.4GB)
+      FITTING available (18.1GB) but starving graphs/activations of the
+      2.7GB remainder - fit-ctx only shrinks pools that EXCEED available,
+      so it does NOT prevent that specific failure. Expect the 4b-cuda
+      load+first-request to OOM again at next prod restart unless the
+      Utilization planning arm learns to reserve activation/graph space
+      (deeper code fix, journaled as the follow-on if the model is needed
+      on the 3090).
       down after ~5min resident (too short to judge) - 3090 was
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
       samples were our serving. Reunion probe at ~07:28 now runs
