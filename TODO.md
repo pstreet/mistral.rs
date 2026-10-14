@@ -2016,6 +2016,9 @@ facade today, so the MTP port gates the cutover):
       settled (busy 0 from boot - workaround active), prod loaded
       staggered + sanity CORRECT, idle 0 with all resident at T+4min.
       Prior session: 2.5h, no crash, clean shutdown for reboot.
+      VERIFIED post-restart: 4b-cuda KV pool 2048MB (was 15438MB),
+      reload + first request 200 clean, 3090 at 8.6GB total, no OOM,
+      no stranding. Sizing item CLOSED.
       RE-SPLIT 07:08 UTC (user): tenants back
       down after ~5min resident (too short to judge) - 3090 was
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
