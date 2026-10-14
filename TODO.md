@@ -1903,6 +1903,16 @@ facade today, so the MTP port gates the cutover):
       event spin, NOT compute and NOT migration. Burns power, not
       memory; likely benign for crashes (a spinning CP doesn't
       write fp32). Peg and stomps are separate leads now.
+      ONLINE MATCH 07:45 UTC: ollama#17958 (open, Aug 2026) is our
+      peg on the same gfx1151: >=2 resident HIP contexts pins
+      gpu_busy 100% + max clocks + ~25W at zero load, deterministic
+      both directions, solo = clean. Companion ROCm-side filing:
+      ROCm/TheRock#7578. Their lead: multiple armed HIP contexts
+      defeat KFD/MES power-gating (queue state, not polling) -
+      matches our radeontop (pure CP, zero shader work). Known
+      Strix Halo behavior, power/heat cost, almost surely benign
+      for the crashes. Also: legacy-rocm#6371 (HSA busy-spin
+      threads under ComfyUI) matches our hot kfd/futex threads.
       RE-SPLIT 07:08 UTC (user): tenants back
       down after ~5min resident (too short to judge) - 3090 was
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
