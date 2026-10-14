@@ -1941,6 +1941,15 @@ facade today, so the MTP port gates the cutover):
       var masks a race.
       REBOOT 08:0x UTC (user-approved): full host reboot to verify
       clean boot on pinned 7.2.9 + all-three queue workaround. On
+      VERDICT 08:38 UTC: run1 (var OFF, fresh load) med38 NaN;
+      run2 (var ON, fresh load) med38 clean - same regime, only
+      the var differs. Single-HW-queue MASKS the NaN => race/
+      timing bug in our engine (queue overlap), with a reliable
+      on/off switch (off=repro, on=serve). Crash-8 also fits:
+      multi-queue exposure during big38. NEXT: bisect the race
+      (mtp off / graphs off / prefix_cache 0, var off) - needs a
+      lane decision with user (probe second-load churn vs prod
+      restarts). Prod left var-ON serving.
       return: uname -r, unit states, staggered starts as needed,
       sanity, idle check. Note: tenants auto-start together (cold
       churn) - watch, don't fight it unless it crashes.
