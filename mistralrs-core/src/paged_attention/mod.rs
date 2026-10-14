@@ -259,6 +259,60 @@ mod tests {
         .is_err());
         Ok(())
     }
+
+    #[test]
+    fn fit_ctx_utilization_unarmed_stays_best_effort() -> anyhow::Result<()> {
+        // Without fit-ctx, a Utilization pool that exceeds available memory
+        // silently takes what fits (the historical contract).
+        assert_eq!(
+            fit_post_load_cache_budget(
+                MemoryGpuConfig::Utilization(0.9),
+                40_000,
+                35_000,
+                false,
+                4096
+            )?,
+            35_000
+        );
+        // Even below the floor: unarmed Utilization never bails.
+        assert_eq!(
+            fit_post_load_cache_budget(
+                MemoryGpuConfig::Utilization(0.9),
+                40_000,
+                10,
+                false,
+                262_144
+            )?,
+            10
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fit_ctx_utilization_armed_shrinks_with_floor() -> anyhow::Result<()> {
+        // Armed: same shrink as hard budgets.
+        assert_eq!(
+            fit_post_load_cache_budget(
+                MemoryGpuConfig::Utilization(0.9),
+                40_000,
+                35_000,
+                true,
+                4096
+            )?,
+            35_000
+        );
+        // Armed and below the 2048-token floor (8 MB at 4KB/token): refuses
+        // instead of loading a uselessly small pool.
+        assert!(fit_post_load_cache_budget(
+            MemoryGpuConfig::Utilization(0.9),
+            40_000,
+            4,
+            true,
+            4096
+        )
+        .is_err());
+        Ok(())
+    }
 }
 
 /// All memory counts in MB. Default for block size is 32.
@@ -484,7 +538,28 @@ fn fit_post_load_cache_budget(
     bytes_per_token: usize,
 ) -> anyhow::Result<usize> {
     match config {
-        MemoryGpuConfig::Utilization(_) => Ok(requested_mb.min(available_mb)),
+        MemoryGpuConfig::Utilization(_) => {
+            if requested_mb <= available_mb {
+                return Ok(requested_mb);
+            }
+            // Unarmed Utilization stays best-effort: take what fits, silently.
+            if !fit_ctx {
+                return Ok(available_mb);
+            }
+            let floor_mb = FIT_CTX_MIN_TOKENS
+                .saturating_mul(bytes_per_token.max(1))
+                .div_ceil(SIZE_IN_MB)
+                .max(1);
+            if available_mb < floor_mb {
+                anyhow::bail!(
+                    "PagedAttention KV cache requires {requested_mb} MB but only {available_mb} MB is safely available after model loading (fit-ctx floor is {floor_mb} MB)."
+                );
+            }
+            tracing::warn!(
+                "fit-ctx: KV cache budget cut {requested_mb} -> {available_mb} MB to fit available memory."
+            );
+            Ok(available_mb)
+        }
         MemoryGpuConfig::BestEffortMbAmount { min_mb, .. } => {
             let fitted_mb = requested_mb.min(available_mb);
             if let Some(minimum) = min_mb {

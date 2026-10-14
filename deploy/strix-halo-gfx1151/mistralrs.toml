@@ -115,6 +115,8 @@ context_len = 32768
 # Per-model fit for the 24GB 3090 (replaces the old global max_seqs=2
 # TEMP): capacity-33 checkpoint pool OOMs the MTP attach here.
 max_seqs = 2
+# Shrink-instead-of-fail if the 3090 is crowded when this demand-loads.
+fit_ctx = true
 # MTP n=2 locked by sweep (global n=3 is for the 35B).
 mtp_n_predict = 2
 k_cache_type = "Q8_0"
@@ -241,6 +243,8 @@ device = "cuda:0"
 # activations+graphs until the first prefill OOM'd (2026-10-14 openwebui
 # failure). 32k of context is 8x any real request for this model.
 context_len = 32768
+# Shrink-instead-of-fail if the 3090 is crowded when this demand-loads.
+fit_ctx = true
 
 [models.format]
 quantized_file = "Qwen3.5-4B-Q8_0.gguf"
