@@ -1930,6 +1930,10 @@ facade today, so the MTP port gates the cutover):
       return: uname -r, unit states, staggered starts as needed,
       sanity, idle check. Note: tenants auto-start together (cold
       churn) - watch, don't fight it unless it crashes.
+      BOOTED 08:08 UTC clean on 7.2.9, tenants auto-started and
+      settled (busy 0 from boot - workaround active), prod loaded
+      staggered + sanity CORRECT, idle 0 with all resident at T+4min.
+      Prior session: 2.5h, no crash, clean shutdown for reboot.
       RE-SPLIT 07:08 UTC (user): tenants back
       down after ~5min resident (too short to judge) - 3090 was
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
