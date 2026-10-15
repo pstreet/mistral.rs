@@ -2,8 +2,7 @@ use std::fmt::{self, Display};
 
 use crate::paged_attention::{
     calculate_cache_config, device_memory_cap, CacheMemoryReservations, MemoryGpuConfig,
-    ModelConfigLike, PagedCacheType, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
-    UTILIZATION_RUNTIME_RESERVE_PERCENT,
+    DEFAULT_PAGED_ATTENTION_BLOCK_SIZE, UTILIZATION_RUNTIME_RESERVE_PERCENT,
 };
 use crate::utils::debug::DeviceRepr;
 use crate::{DeviceLayerMapMetadata, DeviceMapMetadata, MemoryUsage, PagedAttentionConfig};
@@ -160,43 +159,6 @@ impl AutoDeviceMapParams {
     }
 }
 
-fn calculate_key_block_shape(
-    model_config: &dyn ModelConfigLike,
-    dtype: DType,
-    block_size: usize,
-    cache_type: PagedCacheType,
-) -> (usize, usize, usize, usize) {
-    // Identical to the engine's shape math; keep in sync (k/v split passes
-    // the resolved per-side type).
-    let element_size = dtype.size_in_bytes();
-    let x = 16 / element_size;
-    // Q4_0 packs 2 elems per byte: 16-byte chunks cover 32 head-dim elems.
-    let chunks = if cache_type == PagedCacheType::Q4_0 {
-        model_config.k_head_dim() / 32
-    } else {
-        model_config.k_head_dim() / x
-    };
-    (model_config.num_kv_heads(), chunks, block_size, x)
-}
-
-fn calculate_value_block_shape(
-    model_config: &dyn ModelConfigLike,
-    block_size: usize,
-    cache_type: PagedCacheType,
-) -> (usize, usize, usize) {
-    // Q4_0 packs 2 slots per byte along the block.
-    let block_elems = if cache_type == PagedCacheType::Q4_0 {
-        block_size / 2
-    } else {
-        block_size
-    };
-    (
-        model_config.num_kv_heads(),
-        model_config.v_head_dim(),
-        block_elems,
-    )
-}
-
 macro_rules! b_to_mb {
     ($x:expr) => {
         $x / (1024 * 1024)
@@ -246,7 +208,9 @@ pub fn get_device_layers(
     let base_device_memory_reservation_bytes = paged_attn_config
         .as_ref()
         .map_or(0, |config| config.base_device_memory_reservation_bytes);
-    let kv_cache_elems = match paged_attn_config {
+    // Per-layer KV bytes the mapped stack must reserve (paged pools: one
+    // layer's share of the block budget; dense fallback: full layer cache).
+    let kv_bytes_per_layer = match paged_attn_config {
         Some(cfg) => {
             // The mapping estimate is bounded independently from the post-load memory mode.
             let requested_mem_gpu = cfg.mem_gpu;
@@ -348,14 +312,18 @@ pub fn get_device_layers(
                 Some(max_seq_len * max_batch_size),
                 cfg.fit_ctx,
             )?;
-            let key_shape =
-                calculate_key_block_shape(&*model_cfg, dtype, cache.block_size, cache.k_type());
-            let key_sz =
-                cache.num_gpu_blocks * key_shape.0 * key_shape.1 * key_shape.2 * key_shape.3;
-            let val_shape =
-                calculate_value_block_shape(&*model_cfg, cache.block_size, cache.v_type());
-            let val_sz = cache.num_gpu_blocks * val_shape.0 * val_shape.1 * val_shape.2;
-            key_sz + val_sz
+            let k_bits = cache.k_type().bits_per_elem(dtype);
+            let v_bits = cache.v_type().bits_per_elem(dtype);
+            // Charge at the cache types' packed width, not the activation
+            // width: the element math priced Q8_0/F8 pools at 2x on bf16
+            // activations (Q4_0 only cancelled out by accidental shape
+            // pairing). Blocks x block tokens x per-token bytes per paged
+            // layer equals exactly the pool bytes the loader will allocate.
+            cache.num_gpu_blocks
+                * cache.block_size
+                * model_cfg.num_kv_heads()
+                * (model_cfg.k_head_dim() * k_bits + model_cfg.v_head_dim() * v_bits)
+                / 8
         }
         None => {
             let key_shape = [
@@ -370,14 +338,14 @@ pub fn get_device_layers(
                 max_seq_len,
                 model_cfg.v_head_dim(),
             ];
-            key_shape.iter().product::<usize>() + val_shape.iter().product::<usize>()
+            (key_shape.iter().product::<usize>() + val_shape.iter().product::<usize>())
+                * dtype.size_in_bytes()
         }
     };
     // Per paged layer; hybrid models leave the recurrent/linear layers out of the cache entirely.
-    let kv_cache_bytes = kv_cache_elems * dtype.size_in_bytes();
     let kv_bytes_for_layer = |idx: usize| {
         if model_cfg.layer_has_paged_kv_cache(idx) {
-            kv_cache_bytes
+            kv_bytes_per_layer
         } else {
             0
         }
