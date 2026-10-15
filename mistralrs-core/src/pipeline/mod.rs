@@ -474,8 +474,10 @@ fn automatic_recurrent_checkpoint_lanes(
         paged_attention_memory_reservations(cache, paged_attn_config, primary_device)?;
     let mut selected_lanes = paged_attn_config.recurrent_checkpoint_lanes;
     for device in recurrent_devices {
-        #[cfg(feature = "cuda")]
-        if device.is_cuda() {
+        // Lane sizing reads free memory, so free-but-cached pool blocks must
+        // be returned first or hybrid lanes undersize on busy devices.
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
+        if crate::utils::memory_usage::device_has_driver_pool(&device) {
             crate::utils::memory_usage::MemoryUsage.trim_cuda_memory_pool(&device, 0)?;
         }
         let memory = crate::utils::memory_usage::MemoryUsage.query(&device)?;

@@ -142,10 +142,6 @@ impl MemoryUsage {
             Device::Cuda(_) => {
                 candle_core::bail!("Cannot query memory for a cuda device without the cuda feature")
             }
-            #[cfg(not(any(feature = "cuda", feature = "rocm")))]
-            Device::Cuda(_) => {
-                candle_core::bail!("Cannot query memory for CUDA device")
-            }
             #[cfg(feature = "metal")]
             Device::Metal(dev) => {
                 let sysctl_floor = metal_sysctl_floor_bytes()?;
@@ -235,6 +231,20 @@ impl MemoryUsage {
             _ => Ok(false),
         }
     }
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+pub(crate) fn device_has_driver_pool(device: &Device) -> bool {
+    if device.is_cuda() {
+        return true;
+    }
+    // candle gates is_hip() on the rocm feature; the dummy variant in
+    // other shapes never reaches a pool anyway.
+    #[cfg(feature = "rocm")]
+    let hip = device.is_hip();
+    #[cfg(not(feature = "rocm"))]
+    let hip = false;
+    hip
 }
 
 /// One pool-introspection body per driver twin. The hip fork ships

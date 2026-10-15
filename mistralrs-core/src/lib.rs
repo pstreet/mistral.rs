@@ -313,7 +313,9 @@ pub fn set_hf_cache_path(path: impl Into<PathBuf>) {
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 fn settle_cuda_allocator_for_speculative_attach(pipeline: &dyn Pipeline) {
     for device in pipeline.execution_devices() {
-        if !device.is_cuda() {
+        // In this fork `is_cuda()` matches the NVIDIA variant only, so the
+        // hip role must be gated in explicitly or its settle is inert.
+        if !crate::utils::memory_usage::device_has_driver_pool(&device) {
             continue;
         }
         if let Err(err) = device.synchronize() {
@@ -334,7 +336,7 @@ fn settle_cuda_allocator_for_speculative_attach(pipeline: &dyn Pipeline) {
 /// blocks are trimmed back out here.
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) fn settle_device_after_teardown(device: &Device) {
-    if !device.is_cuda() {
+    if !crate::utils::memory_usage::device_has_driver_pool(device) {
         return;
     }
     if let Err(err) = device.synchronize() {
