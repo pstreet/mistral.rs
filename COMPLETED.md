@@ -74,7 +74,7 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   SEGV cores to scratch spool (LimitCORE=infinity), cuda-alone revival
   validation, ExecStartPre TOML guard, degraded-hardware boot,
   ATTN_PROBE removal, eprintln removal, per-call env::var OnceLock cache,
-  stale deploy comments.
+  stale deploy comments, env-knob docs audit (environment-variables.md).
 
 ## Dropped
 - freedesktop drm/amd upstream filing (wild-writer vmcore forensics):

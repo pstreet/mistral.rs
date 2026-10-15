@@ -1969,13 +1969,6 @@ parity queue) now outranks it on impact.
       not delete it: `cuMemPoolTrimTo`, `cuMemcpy{HtoD,DtoH}Async_v2`, `alloc_pinned`,
       `CudaEvent::elapsed_ms`, `CUDA_ERROR_NOT_SUPPORTED`
       (`cudarc-hip/src/driver/sys.rs:55,260,292,310`). Trivial insurance.
-- [x] _S stale deploy comments (was §7; closed 2026-10-01): the 35B MoE
-      "ACTIVE default" label corrected to "lazy; the orcarouter 27B is the
-      entry default" in the re-synced toml; `mistralrs-test.toml` header
-      now states it is a pre-router smoke config (eager loads, no
-      demand-loading, no [router] policy) and points at mistralrs.toml
-      as the live router config. The `memory_mb = 512` there is
-      intentional for smoke runs.
 - [ ] ~M ROCm CI, remaining checklist (was §3, after P0 build-only):
     - [ ] Set up ROCm runner (self-hosted or `rocm/actions` if available)
     - [ ] Add test job running basic inference on ROCm
@@ -1997,20 +1990,6 @@ mistral.rs hot zones, then merge.
       vs upstream `f80854c5` (#3697) look like the same aarch64 repack work.
       Diff the two, converge to one impl.
 - [ ] ~L decide `candle-ug` keep vs drop before upstream `ddf1b879` deletes it.
-- [x] _S document the functional MRS_/MISTRALRS_ env knobs (was §7; done
-      2026-10-01): the audit showed the old list half stale - `MRS_GDN_KERNEL`
-      (now `MISTRALRS_GDN_KERNEL`), `MISTRALRS_NO_FAST_MMQ`,
-      `CANDLE_NO_FAST_MMQ`, and the GDN/FlashInfer selectors were already
-      documented, and MRS_NO_FUSED_QKV/FFN, MRS_ATTENTION_DEBUG,
-      MRS_DIFFUSION_DEBUG_DUMP, MRS_PROFILE, MRS_TRACE_LAYERS, MRS_DEBUG_PA,
-      MRS_MMQ_DEBUG no longer exist in the tree. Newly documented in
-      `docs/src/content/docs/reference/environment-variables.md`:
-      `MISTRALRS_NO_FAST_MMVQ`, `MISTRALRS_MOE_BACKEND`,
-      `MISTRALRS_FORCE_AVX2`, and the expert/debug cluster
-      (`MISTRALRS_NAN_TRACE`, `MISTRALRS_NAN_PROBE`,
-      `MISTRALRS_LAYER_PROFILE`, `MRS_ZERO_WS`, `MRS_POISON_NAN`); the
-      `MISTRALRS_DECODE_ARENA_OVERRIDE` row was corrected to the measured
-      x1.25 default + geometric regrow (was "6x the warmup").
 - [ ] _S ROCm docs (remainder of the old §7): build instructions,
       `CANDLE_ROCM_PATH`/`CANDLE_ROCM_ARCH` (fix the hardcode-vs-knob issue
       in P3 first), ROCm example in `examples/`, known limitations vs CUDA
