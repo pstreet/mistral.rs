@@ -2232,6 +2232,17 @@ facade today, so the MTP port gates the cutover):
       FIT_CTX_MIN_TOKENS worth of KV; genuinely-too-big models still
       reject. Build 9 in flight; retry: expect pool ~765MB, attach
       clean, 200.
+      SECOND FAILURE 10:1x, deeper root cause: the mapping floor held
+      but the POST-LOAD arm saturated too (90% cap 21.9GB - 18.1GB
+      resident incl. recurrent pools - 5.5GB attach reserve < 0 ->
+      'Num GPU blocks is 0'). The eager probe's 'success' was a false
+      friend (no device field -> loaded on the iGPU, total=118784 in
+      its [cache] line). FIX (committed): physical-fit fallback in
+      utilization_kv_budget_mb when resident weights saturate the
+      fraction cap (free minus the same protection; empty cards keep
+      saturating arithmetic, all budget tests bit-identical) ->
+      ~819MB pool, then fit_ctx clamps to available. Build 10 (env
+      sourced correctly this time) in flight.
       (~7-8GB expected) and attach clean beside nothing, then
       beside a resident model, request 200.
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
