@@ -1,5 +1,5 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-use candle_core::{DType, Device};
+use candle_core::{DType, Device, DeviceLocation};
 use engine::Engine;
 pub use engine::{
     agentic_session::{AgenticSessionStore, SerializedSession, SerializedVideo},
@@ -872,6 +872,33 @@ impl Drop for MistralRs {
             engine.join();
         }
     }
+}
+
+/// Borrow-view of a resident engine for eviction picks. Evicting an
+/// off-device resident frees nothing on the target device, so picks are
+/// always scoped to one location.
+struct ResidentView<'a> {
+    id: &'a str,
+    location: DeviceLocation,
+    running: usize,
+    last_used: Option<Instant>,
+}
+
+/// Least-recently-used idle resident on `location`, excluding `for_model`
+/// and `tried`. Idle means no admitted sequences; never-touched residents
+/// sort before touched ones, as before.
+fn lru_idle_pick<'a>(
+    residents: impl IntoIterator<Item = ResidentView<'a>>,
+    location: &DeviceLocation,
+    for_model: &str,
+    tried: &HashSet<String>,
+) -> Option<String> {
+    residents
+        .into_iter()
+        .filter(|r| r.id != for_model && !tried.contains(r.id))
+        .filter(|r| &r.location == location && r.running == 0)
+        .min_by_key(|r| r.last_used)
+        .map(|r| r.id.to_string())
 }
 
 impl MistralRs {
@@ -2182,15 +2209,25 @@ impl MistralRs {
                     .last_used
                     .read()
                     .map_err(|_| MistralRsError::EnginePoisoned)?;
-                let any_busy = engines
-                    .iter()
-                    .any(|(id, inst)| *id != model_id && inst.logger.num_running() > 0);
-                let candidate = engines
-                    .iter()
-                    .filter(|(id, _)| *id != model_id && !skipped.contains(*id))
-                    .filter(|(_, inst)| inst.logger.num_running() == 0)
-                    .min_by_key(|(id, _)| last_used.get(*id).copied())
-                    .map(|(id, _)| id.clone());
+                let location = device.location();
+                // Busy residents on other devices never free target-device
+                // memory, so only same-device activity justifies waiting.
+                let any_busy = engines.iter().any(|(id, inst)| {
+                    *id != model_id
+                        && inst.config.device.location() == location
+                        && inst.logger.num_running() > 0
+                });
+                let candidate = lru_idle_pick(
+                    engines.iter().map(|(id, inst)| ResidentView {
+                        id,
+                        location: inst.config.device.location(),
+                        running: inst.logger.num_running(),
+                        last_used: last_used.get(id).copied(),
+                    }),
+                    &location,
+                    model_id,
+                    &skipped,
+                );
                 (candidate, any_busy)
             };
             if let Some(candidate) = candidate {
@@ -2255,13 +2292,17 @@ impl MistralRs {
                     .last_used
                     .read()
                     .map_err(|_| MistralRsError::EnginePoisoned)?;
-                engines
-                    .iter()
-                    .filter(|(id, _)| *id != for_model && !tried.contains(*id))
-                    .filter(|(_, inst)| inst.config.device.location() == device.location())
-                    .filter(|(_, inst)| inst.logger.num_running() == 0)
-                    .min_by_key(|(id, _)| last_used.get(*id).copied())
-                    .map(|(id, _)| id.clone())
+                lru_idle_pick(
+                    engines.iter().map(|(id, inst)| ResidentView {
+                        id,
+                        location: inst.config.device.location(),
+                        running: inst.logger.num_running(),
+                        last_used: last_used.get(id).copied(),
+                    }),
+                    &device.location(),
+                    for_model,
+                    tried,
+                )
             };
             let Some(candidate) = candidate else {
                 return Ok(None);
@@ -4288,5 +4329,71 @@ mod tests {
         assert!(state.evict_idle("anything").is_ok());
         state.router_policy.idle_ttl = Duration::from_secs(60);
         assert!(state.evict_idle("anything").is_ok());
+    }
+
+    fn resident(
+        id: &str,
+        location: DeviceLocation,
+        running: usize,
+        last_used: Option<Instant>,
+    ) -> ResidentView<'_> {
+        ResidentView {
+            id,
+            location,
+            running,
+            last_used,
+        }
+    }
+
+    #[test]
+    fn lru_pick_prefers_least_recently_used_on_device() {
+        let now = Instant::now();
+        let older = now - Duration::from_secs(100);
+        let loc = DeviceLocation::Cpu;
+        let tried = HashSet::new();
+        assert_eq!(
+            lru_idle_pick(
+                [
+                    resident("new", loc.clone(), 0, Some(now)),
+                    resident("old", loc.clone(), 0, Some(older)),
+                ],
+                &loc,
+                "loader",
+                &tried,
+            ),
+            Some("old".to_string())
+        );
+    }
+
+    #[test]
+    fn lru_pick_skips_other_devices_busy_self_and_tried() {
+        let now = Instant::now();
+        let here = DeviceLocation::Cpu;
+        let elsewhere = DeviceLocation::Cuda { gpu_id: 0 };
+        let tried: HashSet<String> = ["tried".to_string()].into_iter().collect();
+        assert_eq!(
+            lru_idle_pick(
+                [
+                    resident("off-device", elsewhere, 0, Some(now)),
+                    resident("busy", here.clone(), 1, Some(now)),
+                    resident("self", here.clone(), 0, Some(now)),
+                    resident("tried", here.clone(), 0, Some(now)),
+                    resident("idle", here.clone(), 0, Some(now)),
+                ],
+                &here,
+                "self",
+                &tried,
+            ),
+            Some("idle".to_string())
+        );
+        assert_eq!(
+            lru_idle_pick(
+                [resident("off-device", elsewhere, 0, Some(now))],
+                &here,
+                "loader",
+                &HashSet::new(),
+            ),
+            None
+        );
     }
 }
