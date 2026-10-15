@@ -2197,7 +2197,13 @@ facade today, so the MTP port gates the cutover):
       fully live in prod: query/trim/sync route by device variant,
       settle paths gate on pool-carrying variants. Follow-ups stand:
       hip pool-attribute support (degrades to None gracefully if a
-      ROCm lacks an attr), 16 latent GPU-kernel test-env failures,
+      ROCm lacks an attr), 16 latent GPU-kernel test-env failures
+      (CLOSED 2026-10-15: full dual run showed 20, not 16 - 19
+      device-env failures ignore-gated with reason, 1 (q4k fused
+      decode) was a real TEST bug fixed not gated: 2-token input to
+      a single-token decode reference path, now (1,1) passing;
+      cuda-only run added 2 FA3 workspace tests needing an sm_90
+      build host, gated too. Lib green in all four shapes),
       arena_estimate dual drift.
       ~816MB pool, MTP attach ok, request 200; [pool-trim] lines in
       prod-stderr on the next eviction cycle.
