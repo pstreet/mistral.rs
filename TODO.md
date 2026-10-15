@@ -2170,6 +2170,22 @@ facade today, so the MTP port gates the cutover):
       JOURNAL NOTE: one commit briefly collapsed this file via a
       mangled python newline escape (5265 lines -> 25); recovered by
       reverting; beware heredoc escaping for line joins.
+      TWIN WORK WAS INERT AT CALL SITES 05:2x UTC: first live test of
+      build 6 (35B manual unload) showed GTT returning (6.3GB) but NO
+      [pool-trim] line (count stuck at 43) - the trim never fired.
+      ROOT CAUSE: this candle fork's Device::is_cuda() matches only
+      the NVIDIA variant (not Hip), so ALL three memory-settle gates
+      (teardown settle, MTP-attach settle, recurrent-lane pre-sizing
+      trim) skipped hip before reaching the twin router. The
+      2026-10-12 note's 'hip leg degrades to sync-only' was wrong -
+      it was fully inert; hip teardown only ever worked via eager
+      release. FIX (committed): device_has_driver_pool() gates the
+      three sites on the pool-carrying variants per feature shape
+      (is_hip is rocm-cfg'd in candle, so the helper is feature-
+      aware). Also dropped a dead duplicate Device::Cuda bail arm in
+      query() that clippy flagged once the file was clean. Build 7 in
+      flight; THE observable on deploy: [pool-trim] count increments
+      on a 35B unload - first hip trim ever in a dual build.
       ~816MB pool, MTP attach ok, request 200; [pool-trim] lines in
       prod-stderr on the next eviction cycle.
       on Utilization, sizing now protects the runtime by default.
