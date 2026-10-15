@@ -107,7 +107,7 @@ The MCP *client* configuration (`mcp_config`) lives under `[runtime]`, not `[ser
 | `cache_type` | `--pa-cache-type` | `auto` | KV cache quantization type: `auto`, `bf16`, `f8e4m3`, `q8_0`, or `q4_0` (quantized `q8_0`/`q4_0` need a GPU backend: CUDA/ROCm, see [paged attention](/guides/perf/paged-attention/)). |
 | `k_cache_type` | `--pa-k-cache-type` | not set | K cache type override (inherits `cache_type` when unset). |
 | `v_cache_type` | `--pa-v-cache-type` | not set | V cache type override (inherits `cache_type` when unset). Split K/V (e.g. K `q8_0` + V `q4_0`) needs the Standard paged layout on CUDA/ROCm. |
-| `fit_ctx` | `--fit-ctx` | `false` | Shrink-to-fit: when the configured pool does not fit post-load memory, cut it (loudly) instead of refusing to load. Per-model `fit_ctx` overrides this. |
+| `fit_ctx` | `--fit-ctx` | `false` | Shrink-to-fit: when the configured pool does not fit post-load memory, cut it (loudly) instead of refusing to load. Applies to exact pools (`context_len`, `memory_mb`) and to utilization budgets. Per-model `fit_ctx` overrides this. |
 
 ## `[router]` section (`serve` only)
 

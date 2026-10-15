@@ -66,6 +66,7 @@ Mistral.rs supports multiple model types and advanced features via dedicated cra
    - `--release` (thin-LTO, `codegen-units = 1`) only for the performance bar and production artifacts. Never benchmark `fast` builds.
    - Probe/debug lane (policy, 2026-10-08): diagnostic probes and load-experiments build `--profile fast` and run as a standalone server on a spare port (e.g. 1244) against a minimal TOML - never by restarting prod, never benchmarked. `release` is reserved for benches, prod swaps, and perf validation. EXCEPTION (2026-10-12): when the 3090 is held by prod's caching allocator (`/v1/models/unload` frees into prod's pool, not the driver, so a :1244 probe OOMs against held memory), validate CUDA-role changes via prod unload+reload of the lazy alias instead - separate device from the hip engines, self-healing on demand, zero restart risk. Toolchain: mold links everything (`~/.cargo/config.toml` plus build.rs `.so` links), sccache (Rust + host C/C++, 100G) and ccache (hipcc/nvcc `-c` steps, 100G, opt-in `MISTRALRS_CCACHE_GPU=1`) cache compiles; nvcc must not go through sccache (phantom hits on failed compiles). Scratch `CARGO_TARGET_DIR`s for shape checks live on disk outside the repo tree (e.g. `../scratch/<shape>`; the workspace root is not a git repo, so they can never be committed), never `/tmp`: `/tmp` is tmpfs here, so multi-GB cargo artifacts eat RAM and churn swap. `mistralrs/scratch/` and `mistralrs.pre-*` rollback binaries are git-ignored as backstops against `git add -A`.
    - `sccache` is wired via `~/.cargo/config.toml`, so rebuilds after target-dir wipes and crates shared with the candle workspace come from cache.
+   - GPU builds need the toolchains in the same shell: `export LOCALAI_ROOT=/home/pstreet/LocalAI && source $LOCALAI_ROOT/.rocm-env.sh && export PATH=/usr/local/cuda/bin:$PATH` before every `cargo` invocation (the build scripts fall back to `/opt/rocm` without it, and nvcc is outside the ROCm env). This applies to backgrounded builds too: put the sourcing inside the backgrounded command, not the launching shell.
 
 ## Models
 
@@ -143,12 +144,15 @@ The CI pipeline is defined in `.github/workflows/ci.yml` and includes:
   on `candle_core::GpuArch`, never raw compute-capability ints; the
   HIP-synthetic `cc` encoding (gfx1151 -> 1150) lives only at the kernel
   bridge where the llama.cpp-derived C launchers consume it. Supported
-  shapes: default (CPU-only), `rocm` (AMD, the prod shape), `cuda`
+  shapes: default (CPU-only), `rocm` (AMD), `cuda`
   (NVIDIA), and any combination by plain comma separation (`cuda,rocm`
   serves both roles, with NVIDIA access gated on cudarc's
   `is_culib_present()` probe; a future `vulkan` backend adds
   `--features rocm,cuda,vulkan` with no new compounds). No compound feature
-  names. Every GPU build is portable: drivers
+  names. The production binary on a dual-vendor host is always the dual
+  shape (`--features cuda,rocm`): a rocm-only build silently drops the
+  NVIDIA role (cuda entries fall through to hip devices, and the binary
+  shrinks ~25%). Every GPU build is portable: drivers
   resolve via dlopen and kernel sets load from companion libraries, all
   probe-gated, so the binary starts with no GPU runtimes installed.
 - Update `/docs/src/content/docs/` and examples when adding features or breaking changes.
