@@ -2264,6 +2264,12 @@ facade today, so the MTP port gates the cutover):
       activity. TTL eviction stays global hygiene by design. Build 11
       in flight; live verify: 3090 contention must evict ONLY the
       on-device idle (35B stays resident throughout).
+      VERIFIED LIVE 16:5x UTC ON BUILD 11: 27B staged onto the empty
+      3090 with zero evictions, then the 4B request produced EXACTLY
+      ONE eviction line - the on-device 27B. The 35B was never
+      touched (zero reloads, GTT steady 33.7GB, serves 391 instantly
+      with no demand-load). The build-10 run evicted both; the waste
+      is gone. On-device eviction item closed.
       (~7-8GB expected) and attach clean beside nothing, then
       beside a resident model, request 200.
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
