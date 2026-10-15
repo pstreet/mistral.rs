@@ -111,9 +111,12 @@ model_id = "models/orcarouter/Qwen3.8-27B-Uncensored-GGUF"
 alias = "qwen3.8-27b-cuda"
 device = "cuda:0"
 lazy = true
-context_len = 32768
+context_len = 24576
 # Per-model fit for the 24GB 3090 (replaces the old global max_seqs=2
 # TEMP): capacity-33 checkpoint pool OOMs the MTP attach here.
+# 2026-10-15: 32768 fit V=Q4_0 (816MB pool); the NaN-mitigation revert
+# to V=Q8_0 (c05966df9) grew the pool to 1088MB and the attach OOM'd
+# again. 24576 tokens restores the 816MB envelope at Q8/Q8.
 max_seqs = 2
 # Shrink-instead-of-fail if the 3090 is crowded when this demand-loads.
 fit_ctx = true
