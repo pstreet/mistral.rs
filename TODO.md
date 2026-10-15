@@ -2186,6 +2186,17 @@ facade today, so the MTP port gates the cutover):
       query() that clippy flagged once the file was clean. Build 7 in
       flight; THE observable on deploy: [pool-trim] count increments
       on a 35B unload - first hip trim ever in a dual build.
+      TWIN WORK CLOSED LIVE 05:4x UTC ON BUILD 7: 35B manual unload
+      -> [pool-trim] count 50 -> 51 (first hip trim in any dual
+      build), GTT full return 33.7 -> 6.4GB; reload sanity CORRECT,
+      33.7GB resident again. The load path now also settles hip
+      (attach settle + lane-sizing trims fire; count climbed 43 -> 50
+      across the restart+load on the fixed gates). Both driver twins
+      fully live in prod: query/trim/sync route by device variant,
+      settle paths gate on pool-carrying variants. Follow-ups stand:
+      hip pool-attribute support (degrades to None gracefully if a
+      ROCm lacks an attr), 16 latent GPU-kernel test-env failures,
+      arena_estimate dual drift.
       ~816MB pool, MTP attach ok, request 200; [pool-trim] lines in
       prod-stderr on the next eviction cycle.
       on Utilization, sizing now protects the runtime by default.
