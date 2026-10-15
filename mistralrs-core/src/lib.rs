@@ -3734,7 +3734,7 @@ fn estimate_load_bytes(
     )
 }
 
-const fn isq_bits_per_weight(t: IsqType) -> f64 {
+pub(crate) const fn isq_bits_per_weight(t: IsqType) -> f64 {
     match t {
         IsqType::Q4_0 | IsqType::Q4_1 | IsqType::Q4K | IsqType::HQQ4 | IsqType::AFQ4 => 4.5,
         IsqType::Q5_0 | IsqType::Q5_1 | IsqType::Q5K => 5.5,

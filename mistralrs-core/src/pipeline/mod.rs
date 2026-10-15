@@ -622,6 +622,19 @@ fn add_recurrent_prefix_memory_reservations(
     Ok(reservations)
 }
 
+/// Device bytes the built-in MTP attach needs when the draft lm_head is
+/// ISQ-quantized at attach instant: on-device source, its bf16 dequant
+/// materialization, the quantized target, and ISQ workspace. The core
+/// (2B bf16 + 2 x isq bits per element) undershoots the measured 27B
+/// envelope (OOM at 4259 MiB free, clean at 4535), so a 25% workspace
+/// margin puts the reservation above the observed pass point.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+pub(crate) fn mtp_draft_lm_head_isq_bytes(vocab: usize, hidden: usize, isq: IsqType) -> usize {
+    let elems = vocab.saturating_mul(hidden);
+    let per_elem = 2.0 + 2.0 * crate::isq_bits_per_weight(isq) / 8.0;
+    (elems as f64 * per_elem * 1.25).ceil() as usize
+}
+
 fn paged_attention_memory_reservations(
     cache: &EitherCache,
     paged_attn_config: PagedAttentionConfig,
@@ -3032,7 +3045,7 @@ mod tests {
 
     use super::{
         add_recurrent_prefix_memory_reservations, automatic_recurrent_checkpoint_lane_budget,
-        decode_positions_tensor, effective_recurrent_checkpoint_lanes,
+        decode_positions_tensor, effective_recurrent_checkpoint_lanes, mtp_draft_lm_head_isq_bytes,
         next_pipeline_prompt_chunk_group, paged_attention_memory_reservations,
         prompt_chunk_is_final, recurrent_batch_kind_for_input, recurrent_kv_floor_bytes,
         reserve_recurrent_serving_capacity, resolve_lora_execution, should_sample_step,
@@ -3059,6 +3072,21 @@ mod tests {
             end,
             attention_policy: MultimodalAttentionPolicy::Causal,
         }
+    }
+
+    #[test]
+    fn mtp_draft_lm_head_isq_reservation_covers_measured_attach_envelope() {
+        // 27B-cuda on the 3090: Q4K draft lm_head ISQ OOM'd with 4259 MiB
+        // free and attached clean with 4535 MiB; the reservation must sit
+        // above the pass point and stay proportionate to vocab x hidden.
+        let bytes = mtp_draft_lm_head_isq_bytes(248_320, 5120, mistralrs_quant::IsqType::Q4K);
+        assert!(bytes > 4535 * 1024 * 1024, "reservation {bytes} too small");
+        assert!(bytes < 5500 * 1024 * 1024, "reservation {bytes} excessive");
+        // No ISQ-scale inflation for small models: a 4B-class head stays
+        // proportionate (vocab dominates), well under the 27B's band.
+        let small = mtp_draft_lm_head_isq_bytes(151_936, 2560, mistralrs_quant::IsqType::Q4K);
+        assert!(small < 2 * 1024 * 1024 * 1024);
+        assert!(small < bytes / 2);
     }
 
     #[test]

@@ -1371,9 +1371,22 @@ impl Loader for MultimodalLoader {
         let _ = recurrent_pool_grew;
 
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
+            let mut reservations =
+                paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
+            if self.mtp {
+                if let Some(isq) = in_situ_quant {
+                    reservations.primary_device_bytes = reservations
+                        .primary_device_bytes
+                        .saturating_add(super::mtp_draft_lm_head_isq_bytes(
+                            tokenizer.get_vocab_size(true),
+                            model_metadata.hidden_size(),
+                            isq,
+                        ));
+                }
+            }
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
-                paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?,
+                reservations,
                 paged_attn_config.block_size,
                 dtype,
                 paged_attn_config.cache_type,

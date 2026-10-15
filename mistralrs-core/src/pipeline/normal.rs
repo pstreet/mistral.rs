@@ -159,6 +159,9 @@ pub(crate) struct NormalPipelineBuildArgs {
     pub source_weight_files: Vec<PathBuf>,
     pub source_weight_source: Option<Arc<dyn mistralrs_quant::QuantizedWeightSource>>,
     pub dynamic_lora: Option<Arc<DynamicLoraRuntime>>,
+    /// Device bytes the built-in MTP attach will claim at attach instant
+    /// (draft lm_head ISQ); the pool sizing must leave this room free.
+    pub mtp_attach_reservation_bytes: Option<usize>,
 }
 
 pub(crate) fn build_normal_pipeline(
@@ -186,6 +189,7 @@ pub(crate) fn build_normal_pipeline(
         source_weight_files,
         source_weight_source,
         dynamic_lora,
+        mtp_attach_reservation_bytes,
     } = args;
 
     let model_metadata = model.model_config();
@@ -227,9 +231,16 @@ pub(crate) fn build_normal_pipeline(
     let _ = recurrent_pool_grew;
 
     let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
+        let mut reservations =
+            paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
+        if let Some(attach_bytes) = mtp_attach_reservation_bytes {
+            reservations.primary_device_bytes = reservations
+                .primary_device_bytes
+                .saturating_add(attach_bytes);
+        }
         let cache_config = calculate_cache_config(
             paged_attn_config.mem_gpu,
-            paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?,
+            reservations,
             paged_attn_config.block_size,
             dtype,
             paged_attn_config.cache_type,
@@ -1482,6 +1493,19 @@ impl Loader for NormalLoader {
             None => paths.get_weight_filenames().to_vec(),
         };
 
+        let mtp_attach_reservation_bytes = if self.mtp {
+            in_situ_quant.map(|isq| {
+                let metadata = model.model_config();
+                super::mtp_draft_lm_head_isq_bytes(
+                    tokenizer.get_vocab_size(true),
+                    metadata.hidden_size(),
+                    isq,
+                )
+            })
+        } else {
+            None
+        };
+
         build_normal_pipeline(NormalPipelineBuildArgs {
             model,
             tokenizer,
@@ -1504,6 +1528,7 @@ impl Loader for NormalLoader {
             source_weight_files,
             source_weight_source: weight_source,
             dynamic_lora,
+            mtp_attach_reservation_bytes,
         })
     }
 
