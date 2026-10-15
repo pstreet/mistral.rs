@@ -2202,6 +2202,26 @@ facade today, so the MTP port gates the cutover):
       on Utilization, sizing now protects the runtime by default.
       on the 3090).
       down after ~5min resident (too short to judge) - 3090 was
+      ATTACH-AWARE POOL RESERVATIONS 08:0x-09:0x UTC: root cause
+      MEASURED via probe checkpoints (35B MTP on :1246, memory_mb
+      pool, MRS_ALLOC_TRACE): the MTP attach itself is ~1MB -
+      transition storage + checkpoint lanes are reserved at LOAD;
+      the ONLY material consumer is the draft lm_head ISQ at attach
+      (source + bf16 dequant + target + workspace ~4.2GB on the 27B,
+      matching the 4259-fail/4535-pass MiB knife edge). It exists
+      only when the entry carries ISQ (27B Q4K; 35B attaches free).
+      Fixes committed: (1) mapping fit priced KV at activation bytes
+      (2x on bf16 vs Q8_0) - now exact packed-width pricing, mapping
+      reservation == pool bytes (also unblocked the probe's 58GB
+      pool); (2) mtp_draft_lm_head_isq_bytes (vocab x hidden x (2 +
+      2x bits) + 25% margin, > measured pass point) added to the
+      primary reservation in both pipeline build paths; Utilization
+      budgets and fit_ctx leave the envelope. Deploy: 27B-cuda
+      context_len REMOVED (the last manual context knob; Utilization
+      + fit_ctx now own it), max_seqs=2 stays. Build 8 in flight;
+      live validation: 27B demand-load must self-size the pool
+      (~7-8GB expected) and attach clean beside nothing, then
+      beside a resident model, request 200.
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
       samples were our serving. Reunion probe at ~07:28 now runs
       solo again, extending the solo-MTBF leg.
