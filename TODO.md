@@ -1869,7 +1869,9 @@ facade today, so the MTP port gates the cutover):
       big38 all length, no errors), box T+1:31, prod active, zero
       oops. No public bug matches our signature (CVE-2024-56594 is
       a 2024 Renoir DMA issue, long fixed) - freedesktop drm/amd
-      filing pending user go-ahead. REUNION 07:03 UTC
+      filing DROPPED per user 2026-10-15 (not worth the upstream
+      cycle; the wild-writer forensics stay in the journal if ever
+      needed). REUNION 07:03 UTC
       (user-directed A/B): comfyui + chatterbox restarted onto the
       warm box (both active) - watching whether NaN/crash returns
       with tenants back. JOINT-PEG 07:18 UTC: sustained iGPU 100%
