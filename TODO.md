@@ -2124,6 +2124,20 @@ facade today, so the MTP port gates the cutover):
       FOLLOW-UPS (backlog, not tonight): (a) evict gate picks the
       GLOBAL LRU idle, not the on-device LRU - it evicted the iGPU
       35B while making room on the 3090 (wasteful but harmless);
+      IGPU UNLOAD VERIFIED 02:1x UTC: direct test on the 35B
+      (build 5): demand-load clean (GTT 5.4 -> 33.7GB, sanity
+      CORRECT), manual /v1/models/unload returned the FULL ~28GB
+      to GTT within 5s (33.7 -> 6.3GB, stable across 30s) - no
+      stranding, no trim needed. Hip frees reach GTT once the
+      stream drains; the engine-tail synchronize (new in the
+      retention fix, runs on ALL devices) makes that deterministic.
+      NVIDIA pools cache free blocks across syncs - that asymmetry
+      is why the 3090 needed the explicit trim and hip does not.
+      Residual risk unchanged: if a ROCm update makes hip's pool
+      cache like NVIDIA's, the dual-build hip trim no-op would
+      strand - parameterize over both driver twins then (the sys
+      API is identical). Reloaded 35B after the test; prod default
+      resident and sane.
       (b) attach-aware pool reservations: fit_ctx doesn't know about
       the MTP draft head + checkpoint lanes, so ContextSize fits rely
       on manual context_len tuning (this entry) instead of shrinking
