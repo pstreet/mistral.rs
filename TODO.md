@@ -2110,6 +2110,24 @@ facade today, so the MTP port gates the cutover):
       Tests: 18 estimator green (incl. hand-built GGUF header +
       garbage-layout fallback); all 4 feature shapes check clean.
       Build 5 (dual) in flight; verify: 27B retry evicts 4B, loads
+      VERIFIED LIVE 01:4x UTC ON BUILD 5: (1) trim fix - failed
+      27B load stranded 567MB (was 23447MB pre-fix), 24 [pool-trim]
+      lines in stderr; eviction teardown returned the 4B's 19.9GB
+      within one poll (evict check 4478 -> 20190MB in 0.5s - the
+      exact loop that used to wedge 300s). (2) estimator - 27B need
+      ~12474MB computed, LRU eviction fired correctly. (3) 27B attach
+      still OOM'd: the V=Q4_0->Q8_0 NaN-mitigation revert (c05966df9)
+      grew the pool 816->1088MB past the attach envelope; deploy fix:
+      context_len 32768->24576 restores the exact 816MB envelope.
+      FINAL: 27B-cuda loads (816MB pool, MTP attach ok, generates 391
+      stop), 4B round-trip evicts it cleanly and generates 391.
+      FOLLOW-UPS (backlog, not tonight): (a) evict gate picks the
+      GLOBAL LRU idle, not the on-device LRU - it evicted the iGPU
+      35B while making room on the 3090 (wasteful but harmless);
+      (b) attach-aware pool reservations: fit_ctx doesn't know about
+      the MTP draft head + checkpoint lanes, so ContextSize fits rely
+      on manual context_len tuning (this entry) instead of shrinking
+      automatically - pair with the mapping 2x KV double-count item.
       ~816MB pool, MTP attach ok, request 200; [pool-trim] lines in
       prod-stderr on the next eviction cycle.
       on Utilization, sizing now protects the runtime by default.
