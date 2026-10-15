@@ -7,7 +7,7 @@ candle 56 ahead / 26 behind huggingface/candle:main, mistral.rs 111 ahead /
 Legend: [ ] open, [x] done. P0 = do first, P1 = do next, P2 = merge prep,
 P3 = polish, Deferred = do not do on RDNA.
 
-## Current status (2026-10-15, prod build 11, dual cuda,rocm)
+## Current status (2026-10-15, prod build 12, dual cuda,rocm)
 35B (iGPU) + 4B (3090) serving; 27B demand-loads clean. GPU_MAX_HW_QUEUES=1
 on all three ROCm tenants until the NaN fix lands. Branch synced to
 origin/pstreet-rocm.
