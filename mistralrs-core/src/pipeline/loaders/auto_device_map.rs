@@ -272,6 +272,16 @@ pub fn get_device_layers(
                         .saturating_mul(bytes_per_token.max(1))
                         .div_ceil(1024 * 1024);
                     let budget_mb = budget_mb.min(context_pool_mb);
+                    // The mapping projection is an estimate against
+                    // conservative weight bytes; a weight-dominated card
+                    // saturates it to zero even though the post-load
+                    // measured arm sizes a healthy pool. Floor it at the
+                    // fit-ctx minimum so only genuinely-too-big models
+                    // reject here.
+                    let floor_mb = crate::paged_attention::FIT_CTX_MIN_TOKENS
+                        .saturating_mul(bytes_per_token.max(1))
+                        .div_ceil(1024 * 1024);
+                    let budget_mb = budget_mb.max(floor_mb);
                     MemoryGpuConfig::MbAmount(budget_mb)
                 }
                 // ContextSize passes through to calculate_cache_config.
