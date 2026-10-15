@@ -2082,6 +2082,36 @@ facade today, so the MTP port gates the cutover):
       estimator + fit-ctx all arms + runtime reserve + mapping
       context clamp, all live in the prod binary.
       bites first). Fits the reverted-toml decision: entry stays
+      UNLOAD-RETENTION + 27B-CUDA SPOT CHECK 00:0x UTC (Oct 15):
+      spot check FAILED first: 27B demand-load ran 'footprint
+      unknown; loading without eviction' (estimator ContextSize arm
+      returned None) beside the resident 4B (19.9GB). Mapping spilled
+      layers to CPU -> PagedAttention off -> MTP attach refused
+      ('requires PagedAttention'). The failed load ALSO stranded
+      ~3.5GB (3090: 19895 -> 23447MB) - unload-retention reproduced
+      live, same pattern as the 23.9GB morning stranding. Not a new-
+      binary regression: the entry was always eviction-blind; Oct 13
+      worked only because the 3090 was empty (last success Oct 13
+      00:28). ROOT CAUSES (both mine to fix, committed):
+      (1) unload/failed-load teardown frees into the caching pool;
+      driver-level availability and the loader fit checks can't see
+      pooled-free blocks, and the engine loop had NO post-loop
+      teardown - nothing ever trimmed, so evict/fit retry loops
+      polled on memory that never reappears (300s wedge). FIX: engine
+      thread trims after the last pipeline Arc drops (try_unwrap
+      tail), failed reloads trim the target device, both wait loops
+      trim per poll.
+      (2) estimator ContextSize arm returned None -> no eviction for
+      context-sized entries. FIX: per-token KV from first-shard GGUF
+      headers (kv_heads fallback q-heads, value_len fallback key_len,
+      all-layers charge overestimates hybrids - refuse not OOM), so
+      ContextSize pools estimate and evict. 27B need ~16GB incl.
+      overestimate vs 4B's 19.9GB -> correct eviction expected.
+      Tests: 18 estimator green (incl. hand-built GGUF header +
+      garbage-layout fallback); all 4 feature shapes check clean.
+      Build 5 (dual) in flight; verify: 27B retry evicts 4B, loads
+      ~816MB pool, MTP attach ok, request 200; [pool-trim] lines in
+      prod-stderr on the next eviction cycle.
       on Utilization, sizing now protects the runtime by default.
       on the 3090).
       down after ~5min resident (too short to judge) - 3090 was
