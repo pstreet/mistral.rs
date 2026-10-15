@@ -2220,6 +2220,18 @@ facade today, so the MTP port gates the cutover):
       context_len REMOVED (the last manual context knob; Utilization
       + fit_ctx now own it), max_seqs=2 stays. Build 8 in flight;
       live validation: 27B demand-load must self-size the pool
+      FIRST VALIDATION FAILED 09:0x, root-caused instantly: the evict
+      gate passed (available 24090 vs need 20327 - the Utilization
+      estimator with reservation working) but the MAPPING projection
+      saturated: cap x 0.9 - conservative-weight-bytes - 15% reserve < 0
+      on the weight-dominated 24GB card -> zero pool -> 'Num GPU blocks
+      is 0' -> 300s reject loop -> request timeout. The mapping estimate
+      forgot that the post-load MEASURED arm (which sizes a healthy
+      ~765MB pool with the attach reservation) is the real oracle.
+      FIX (committed): floor the mapping Utilization budget at
+      FIT_CTX_MIN_TOKENS worth of KV; genuinely-too-big models still
+      reject. Build 9 in flight; retry: expect pool ~765MB, attach
+      clean, 200.
       (~7-8GB expected) and attach clean beside nothing, then
       beside a resident model, request 200.
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
