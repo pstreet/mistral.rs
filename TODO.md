@@ -2243,6 +2243,17 @@ facade today, so the MTP port gates the cutover):
       saturating arithmetic, all budget tests bit-identical) ->
       ~819MB pool, then fit_ctx clamps to available. Build 10 (env
       sourced correctly this time) in flight.
+      CLOSED LIVE 15:2x UTC ON BUILD 10: 27B demand-load with NO
+      context_len: evict gate passed, mapping floor held (no reject
+      loop), post-load physical fallback requested 1096MB, fit-ctx
+      (armed) cut 1096 -> 585MB loudly to fit available, MTP attached
+      clean, reloaded, generates 391 stop. Then the 4B round-trip
+      evicted both idle residents (35B + 27B, global-LRU wart as
+      journaled) and serves 391 at 19773MB. The config now carries
+      ZERO manual context knobs: every entry rides Utilization +
+      fit_ctx + reservations, pools self-size, crowding degrades
+      gracefully instead of OOMing. Attach-aware reservations item
+      complete.
       (~7-8GB expected) and attach clean beside nothing, then
       beside a resident model, request 200.
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
