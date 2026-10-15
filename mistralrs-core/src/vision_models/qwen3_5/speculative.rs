@@ -195,7 +195,8 @@ impl Qwen3_5Model {
         let metadata = make_paged_rows_metadata(&seq_ids, &context_lens, paged_meta, device)?;
         let embeds = self.text.embed_tokens(&tokens)?.to_dtype(head.dtype())?;
         let target_hidden = target_hidden.to_device(device)?.to_dtype(head.dtype())?;
-        head.forward(
+        crate::cuda::gdn::probe_tensors_debug("draft-in", n, &[&target_hidden]);
+        let out = head.forward(
             &embeds,
             &target_hidden,
             &positions,
@@ -205,7 +206,10 @@ impl Qwen3_5Model {
                 attention_mask: &AttentionMask::None,
                 flash_params: &FlashParams::empty(false),
             },
-        )
+        );
+        let out = out?;
+        crate::cuda::gdn::probe_tensors_debug("draft-out", n, &[&out]);
+        Ok(out)
     }
 
     /// Catch the drafter up over a whole prompt chunk with the target's own attention inputs: one causal
@@ -254,7 +258,7 @@ impl Qwen3_5Model {
         } else {
             AttentionMask::None
         };
-        head.forward(
+        let out = head.forward(
             &embeds,
             &target_hidden,
             &positions,
@@ -265,6 +269,7 @@ impl Qwen3_5Model {
                 flash_params: target.flash_params,
             },
         )?;
+        crate::cuda::gdn::probe_tensors_debug("draft-prefill-out", batch * seq_len, &[&out]);
         Ok(())
     }
 

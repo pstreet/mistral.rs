@@ -1454,11 +1454,16 @@ enum RecurrenceKernel {
 /// `state` is `[BH, K, V]` or `[BH, V, K]` (gathered), or the matching pooled layout, mutated in place.
 /// Returns output `[BH, S, V]`.
 pub(crate) fn probe_tensors_debug(tag: &str, qlen: usize, tensors: &[&Tensor]) {
-    use std::sync::OnceLock;
+    use std::sync::{
+        atomic::{AtomicU64, Ordering},
+        OnceLock,
+    };
     static ENABLED: OnceLock<bool> = OnceLock::new();
     if !*ENABLED.get_or_init(|| std::env::var("MISTRALRS_NAN_TRACE").is_ok()) {
         return;
     }
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let report = (|| -> candle_core::Result<(u64, u64, f32)> {
         let flats = tensors
             .iter()
@@ -1480,10 +1485,10 @@ pub(crate) fn probe_tensors_debug(tag: &str, qlen: usize, tensors: &[&Tensor]) {
     })();
     match report {
         Ok((total, nan, absmax)) if nan > 0 || !absmax.is_finite() || absmax > 1e5 => {
-            tracing::error!(target: "mistralrs_core::engine", "nan-trace qlen={qlen} kind=probe-{tag} total={total} nan={nan} absmax={absmax:?}");
+            tracing::error!(target: "mistralrs_core::engine", "nan-trace seq={seq} qlen={qlen} kind=probe-{tag} total={total} nan={nan} absmax={absmax:?}");
         }
         Err(e) if !e.to_string().contains("capture") => {
-            tracing::error!(target: "mistralrs_core::engine", "nan-trace qlen={qlen} kind=probe-{tag} check failed: {e:?}");
+            tracing::error!(target: "mistralrs_core::engine", "nan-trace seq={seq} qlen={qlen} kind=probe-{tag} check failed: {e:?}");
         }
         _ => {}
     }

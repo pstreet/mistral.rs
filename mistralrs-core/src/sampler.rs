@@ -2164,6 +2164,7 @@ impl Sampler {
         sample_speculative: bool,
         multiple_sequences: bool,
     ) -> Result<Logprobs> {
+        crate::cuda::gdn::probe_tensors_debug("sampler-in", 1, &[&logits]);
         #[cfg(any(feature = "cuda", feature = "rocm"))]
         if mistralrs_quant::device_has_fused_ops(logits.device())
             && self.can_sample_greedy_on_device(
