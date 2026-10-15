@@ -5459,6 +5459,7 @@ mod tests {
     #[test]
     #[ignore = "requires a CUDA device"]
     fn unlaunched_graph_cleanup_returns_allocator_to_baseline() -> anyhow::Result<()> {
+        use candle_core::cuda_backend::cudarc::driver::sys;
         let device = Device::new_cuda(0)?;
         let stream = GraphStream::from_graph_device(&device)?;
         let used_attribute = sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_USED_MEM_CURRENT;

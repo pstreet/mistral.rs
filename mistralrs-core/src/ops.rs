@@ -8159,7 +8159,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn cuda_resident_topk_sampling_reuses_ring_and_destination() -> candle_core::Result<()> {
         const BATCH: usize = 2;
@@ -8265,7 +8265,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn cuda_async_top1_device_and_host_tokens_match() -> candle_core::Result<()> {
         let device = Device::new_cuda(0)?;
@@ -8290,7 +8290,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn cuda_async_top1_queues_two_submissions_and_reuses_slots() -> candle_core::Result<()> {
         let device = Device::new_cuda(0)?;
@@ -8329,7 +8329,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn cuda_async_top1_releases_resident_target_before_host_completion() -> candle_core::Result<()>
     {
@@ -8370,7 +8370,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     #[test]
     fn cuda_async_top1_resizes_after_completion() -> candle_core::Result<()> {
         let device = Device::new_cuda(0)?;

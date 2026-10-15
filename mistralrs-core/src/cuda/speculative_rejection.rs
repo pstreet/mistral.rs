@@ -1846,7 +1846,7 @@ pub(crate) fn sparse_rejection_cuda_complete(
     Ok(SparseRejectionCompletion { rows, draft_tokens })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cuda"))]
 #[allow(clippy::too_many_lines)]
 pub(crate) fn sparse_rejection_cuda(
     input: SparseRejectionInput<'_>,
@@ -2933,11 +2933,16 @@ pub(crate) fn sparse_rejection_hip_complete(
     Ok(SparseRejectionCompletion { rows, draft_tokens })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cuda"))]
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 mod tests {
     use super::*;
     use candle_core::Device;
+
+    // The module's helpers and cases target the CUDA-named API surface
+    // (sparse_rejection_cuda_*, CudaSparseRejectionWorkspace), which the
+    // AMD role exposes as sparse_rejection_hip_* instead; solo-rocm shapes
+    // skip this module entirely.
 
     struct HostCase {
         batch: usize,

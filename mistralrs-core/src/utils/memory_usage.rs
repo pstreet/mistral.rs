@@ -34,22 +34,13 @@ impl DeviceMemory {
 
 pub struct MemoryUsage;
 
-// Pool-query backend: the NVIDIA role in cuda builds (dual included),
-// the hip role in rocm-only builds.
-// FOLLOW-UP (found 2026-10-12 via the cuda-role graph fix): in DUAL
-// builds the hip pool query/trim arms below are dead (the Device::Cuda
-// match under cfg(feature="cuda") rejects Hip with Ok(None)/Ok(false),
-// and pool_backend is the NVIDIA twin). Hip serving is healthy anyway
-// (allocator reuse covers it; the 49.3->10.5GB GTT drops prove reuse,
-// not trim), and settle-then-attach's hip leg degrades to sync-only.
-// Fixing it needs the query/trim bodies parameterized over both driver
-// twins (the hip sys API has identical cuDeviceGetMemPool/
-// cuMemPoolTrimTo) - do it when hip-side trim pressure is observed,
-// not before.
+// Plain device-query backend: the NVIDIA role in cuda builds (dual
+// included). The pool introspection methods (query/trim/synchronize
+// over the async allocator pool) are twin-parameterized instead - see
+// pool_introspection - and the hip query arm goes through
+// candle_core::role::backend (the serving-role backend).
 #[cfg(feature = "cuda")]
 use candle_core::cuda_backend as pool_backend;
-#[cfg(all(feature = "rocm", not(feature = "cuda")))]
-use candle_core::hip_backend as pool_backend;
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,284 +176,268 @@ impl MemoryUsage {
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub fn query_cuda_memory_pool(&self, device: &Device) -> Result<Option<CudaMemoryPoolUsage>> {
-        use pool_backend::cudarc::driver::sys;
-        use pool_backend::WrapErr;
-
-        #[cfg(feature = "cuda")]
-        let Device::Cuda(device) = device
-        else {
-            return Ok(None);
-        };
-        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
-        let Device::Hip(device) = device
-        else {
-            return Ok(None);
-        };
-        let stream = device.cuda_stream();
-        stream.context().bind_to_thread().w()?;
-        if !stream.context().has_async_alloc() {
-            return Ok(None);
+        match device {
+            #[cfg(feature = "cuda")]
+            Device::Cuda(dev) => nvidia_pool::pool_usage(dev),
+            #[cfg(feature = "rocm")]
+            Device::Hip(dev) => amd_pool::pool_usage(dev),
+            _ => Ok(None),
         }
-
-        let mut pool = std::ptr::null_mut();
-        cuda_result(
-            unsafe { sys::cuDeviceGetMemPool(&mut pool, stream.context().cu_device()) },
-            "CUDA memory pool lookup",
-        )?;
-        let reserved = cuda_memory_pool_attribute(
-            pool,
-            sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RESERVED_MEM_CURRENT,
-        )?;
-        let used = cuda_memory_pool_attribute(
-            pool,
-            sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_USED_MEM_CURRENT,
-        )?;
-        Ok(Some(CudaMemoryPoolUsage {
-            reserved: usize::try_from(reserved)?,
-            used: usize::try_from(used)?,
-        }))
     }
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub fn query_cuda_allocator(&self, device: &Device) -> Result<Option<CudaAllocatorSnapshot>> {
-        use pool_backend::cudarc::driver::result;
-        use pool_backend::cudarc::driver::sys;
-        use pool_backend::WrapErr;
-
-        #[cfg(feature = "cuda")]
-        let Device::Cuda(device) = device
-        else {
-            return Ok(None);
-        };
-        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
-        let Device::Hip(device) = device
-        else {
-            return Ok(None);
-        };
-        let stream = device.cuda_stream();
-        stream.context().bind_to_thread().w()?;
-        let (available, total) = result::mem_get_info().w()?;
-        let async_pool = if stream.context().has_async_alloc() {
-            let mut pool = std::ptr::null_mut();
-            cuda_result(
-                unsafe { sys::cuDeviceGetMemPool(&mut pool, stream.context().cu_device()) },
-                "CUDA memory pool lookup",
-            )?;
-            let reserved = cuda_memory_pool_attribute(
-                pool,
-                sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RESERVED_MEM_CURRENT,
-            )?;
-            let used = cuda_memory_pool_attribute(
-                pool,
-                sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_USED_MEM_CURRENT,
-            )?;
-            let reserved_high = cuda_memory_pool_attribute(
-                pool,
-                sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RESERVED_MEM_HIGH,
-            )?;
-            let used_high = cuda_memory_pool_attribute(
-                pool,
-                sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_USED_MEM_HIGH,
-            )?;
-            let release_threshold = cuda_memory_pool_attribute(
-                pool,
-                sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
-            )?;
-            Some(CudaMemoryPoolSnapshot {
-                current: CudaMemoryPoolUsage {
-                    reserved: usize::try_from(reserved)?,
-                    used: usize::try_from(used)?,
-                },
-                reserved_high: usize::try_from(reserved_high)?,
-                used_high: usize::try_from(used_high)?,
-                release_threshold: usize::try_from(release_threshold)?,
-            })
-        } else {
-            None
-        };
-        let graph_pool = query_cuda_graph_memory(stream.context().cu_device())?;
-        Ok(Some(CudaAllocatorSnapshot {
-            total,
-            available,
-            async_pool,
-            graph_pool,
-        }))
+        match device {
+            #[cfg(feature = "cuda")]
+            Device::Cuda(dev) => nvidia_pool::allocator_snapshot(dev),
+            #[cfg(feature = "rocm")]
+            Device::Hip(dev) => amd_pool::allocator_snapshot(dev),
+            _ => Ok(None),
+        }
     }
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub fn trim_cuda_memory_pool(&self, device: &Device, min_bytes: usize) -> Result<bool> {
-        use pool_backend::cudarc::driver::sys;
-        use pool_backend::WrapErr;
-
         // Fault-hunt discriminator (first-decode sporadic class): env-gated
         // off switch for every pool trim in the process. Inert unless set.
         static NO_TRIM: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         if *NO_TRIM.get_or_init(|| std::env::var("MISTRALRS_NO_POOL_TRIM").as_deref() == Ok("1")) {
             return Ok(false);
         }
-
-        #[cfg(feature = "cuda")]
-        let Device::Cuda(device) = device
-        else {
-            return Ok(false);
-        };
-        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
-        let Device::Hip(device) = device
-        else {
-            return Ok(false);
-        };
-        let stream = device.cuda_stream();
-        stream.context().bind_to_thread().w()?;
-        if !stream.context().has_async_alloc() {
-            return Ok(false);
+        match device {
+            #[cfg(feature = "cuda")]
+            Device::Cuda(dev) => nvidia_pool::trim(dev, min_bytes),
+            #[cfg(feature = "rocm")]
+            Device::Hip(dev) => amd_pool::trim(dev, min_bytes),
+            _ => Ok(false),
         }
-
-        let mut pool = std::ptr::null_mut();
-        cuda_result(
-            unsafe { sys::cuDeviceGetMemPool(&mut pool, stream.context().cu_device()) },
-            "CUDA memory pool lookup",
-        )?;
-        // Fault-hunt ledger: trims unmap pool backing, so every trim is
-        // timestamped for correlation against fault windows.
-        eprintln!(
-            "[pool-trim] pool={pool:p} min_bytes={min_bytes} t={}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        );
-        cuda_result(
-            unsafe { sys::cuMemPoolTrimTo(pool, min_bytes) },
-            "CUDA memory pool trim",
-        )?;
-        Ok(true)
     }
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub fn synchronize_cuda_context(&self, device: &Device) -> Result<bool> {
-        #[cfg(feature = "cuda")]
-        let Device::Cuda(device) = device
-        else {
-            return Ok(false);
-        };
-        #[cfg(all(feature = "rocm", not(feature = "cuda")))]
-        let Device::Hip(device) = device
-        else {
-            return Ok(false);
-        };
-        device
-            .cuda_stream()
-            .context()
-            .synchronize()
-            .map_err(candle_core::Error::wrap)?;
-        Ok(true)
-    }
-}
-
-#[cfg(any(feature = "cuda", feature = "rocm"))]
-fn cuda_memory_pool_attribute(
-    pool: pool_backend::cudarc::driver::sys::CUmemoryPool,
-    attribute: pool_backend::cudarc::driver::sys::CUmemPool_attribute,
-) -> Result<u64> {
-    use pool_backend::cudarc::driver::sys;
-
-    let mut value = 0u64;
-    cuda_result(
-        unsafe {
-            sys::cuMemPoolGetAttribute(
-                pool,
-                attribute,
-                (&mut value as *mut u64).cast::<std::ffi::c_void>(),
-            )
-        },
-        "CUDA memory pool attribute lookup",
-    )?;
-    Ok(value)
-}
-
-#[cfg(any(feature = "cuda", feature = "rocm"))]
-fn query_cuda_graph_memory(
-    device: pool_backend::cudarc::driver::sys::CUdevice,
-) -> Result<Option<CudaGraphMemoryUsage>> {
-    use pool_backend::cudarc::driver::sys;
-
-    let Some(used) = cuda_graph_memory_attribute(
-        device,
-        sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_USED_MEM_CURRENT,
-    )?
-    else {
-        return Ok(None);
-    };
-    let Some(reserved) = cuda_graph_memory_attribute(
-        device,
-        sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_RESERVED_MEM_CURRENT,
-    )?
-    else {
-        return Ok(None);
-    };
-    let Some(used_high) = cuda_graph_memory_attribute(
-        device,
-        sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_USED_MEM_HIGH,
-    )?
-    else {
-        return Ok(None);
-    };
-    let Some(reserved_high) = cuda_graph_memory_attribute(
-        device,
-        sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_RESERVED_MEM_HIGH,
-    )?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(CudaGraphMemoryUsage {
-        reserved,
-        used,
-        reserved_high,
-        used_high,
-    }))
-}
-
-#[cfg(any(feature = "cuda", feature = "rocm"))]
-fn cuda_graph_memory_attribute(
-    device: pool_backend::cudarc::driver::sys::CUdevice,
-    attribute: pool_backend::cudarc::driver::sys::CUgraphMem_attribute,
-) -> Result<Option<usize>> {
-    use pool_backend::cudarc::driver::sys;
-
-    let mut value = 0usize;
-    let result = unsafe {
-        sys::cuDeviceGetGraphMemAttribute(
-            device,
-            attribute,
-            (&mut value as *mut usize).cast::<std::ffi::c_void>(),
-        )
-    };
-    match result {
-        sys::CUresult::CUDA_SUCCESS => Ok(Some(value)),
-        sys::CUresult::CUDA_ERROR_NOT_SUPPORTED | sys::CUresult::CUDA_ERROR_INVALID_VALUE => {
-            Ok(None)
+        match device {
+            #[cfg(feature = "cuda")]
+            Device::Cuda(dev) => {
+                dev.cuda_stream()
+                    .context()
+                    .synchronize()
+                    .map_err(candle_core::Error::wrap)?;
+                Ok(true)
+            }
+            #[cfg(feature = "rocm")]
+            Device::Hip(dev) => {
+                dev.cuda_stream()
+                    .context()
+                    .synchronize()
+                    .map_err(candle_core::Error::wrap)?;
+                Ok(true)
+            }
+            _ => Ok(false),
         }
-        _ => Err(candle_core::Error::msg(format!(
-            "CUDA graph memory attribute lookup failed: {result:?}"
-        ))),
     }
 }
 
+/// One pool-introspection body per driver twin. The hip fork ships
+/// cu-prefixed aliases (`cuDeviceGetMemPool` -> `hipDeviceGetMemPool`,
+/// `cuMemPoolTrimTo` -> `hipMemPoolTrimTo`) and the same
+/// CudaDevice/stream/context surface via the shared backend body, so the
+/// same text compiles against either backend; dual builds instantiate
+/// both and the public methods above route by device variant. Pool
+/// attributes degrade to `None` on unsupported runtimes (hip varies
+/// here) so the engine's maintenance path falls back to driver-level
+/// numbers instead of erroring.
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-fn cuda_result(
-    result: pool_backend::cudarc::driver::sys::CUresult,
-    context: &'static str,
-) -> Result<()> {
-    use pool_backend::cudarc::driver::sys;
+macro_rules! pool_introspection {
+    ($name:ident, $($backend:ident)::+, $Device:ty) => {
+        mod $name {
+            use super::*;
+            pub(super) use $($backend)::+::cudarc::driver::sys;
+            pub(super) use $($backend)::+::WrapErr;
 
-    if result == sys::CUresult::CUDA_SUCCESS {
-        Ok(())
-    } else {
-        Err(candle_core::Error::msg(format!(
-            "{context} failed: {result:?}"
-        )))
-    }
+            fn check(result: sys::CUresult, context: &'static str) -> Result<()> {
+                if result == sys::CUresult::CUDA_SUCCESS {
+                    Ok(())
+                } else {
+                    Err(candle_core::Error::msg(format!(
+                        "{context} failed: {result:?}"
+                    )))
+                }
+            }
+
+            fn pool_handle(dev: &$Device) -> Result<Option<sys::CUmemoryPool>> {
+                let stream = dev.cuda_stream();
+                stream.context().bind_to_thread().w()?;
+                if !stream.context().has_async_alloc() {
+                    return Ok(None);
+                }
+                let mut pool = std::ptr::null_mut();
+                check(
+                    unsafe { sys::cuDeviceGetMemPool(&mut pool, stream.context().cu_device()) },
+                    "memory pool lookup",
+                )?;
+                Ok(Some(pool))
+            }
+
+            fn pool_attribute(
+                pool: sys::CUmemoryPool,
+                attribute: sys::CUmemPool_attribute,
+            ) -> Result<Option<u64>> {
+                let mut value = 0u64;
+                let result = unsafe {
+                    sys::cuMemPoolGetAttribute(
+                        pool,
+                        attribute,
+                        (&mut value as *mut u64).cast::<std::ffi::c_void>(),
+                    )
+                };
+                match result {
+                    sys::CUresult::CUDA_SUCCESS => Ok(Some(value)),
+                    sys::CUresult::CUDA_ERROR_NOT_SUPPORTED
+                    | sys::CUresult::CUDA_ERROR_INVALID_VALUE => Ok(None),
+                    _ => Err(candle_core::Error::msg(format!(
+                        "memory pool attribute lookup failed: {result:?}"
+                    ))),
+                }
+            }
+
+            fn graph_memory_attribute(
+                device: sys::CUdevice,
+                attribute: sys::CUgraphMem_attribute,
+            ) -> Result<Option<usize>> {
+                let mut value = 0usize;
+                let result = unsafe {
+                    sys::cuDeviceGetGraphMemAttribute(
+                        device,
+                        attribute,
+                        (&mut value as *mut usize).cast::<std::ffi::c_void>(),
+                    )
+                };
+                match result {
+                    sys::CUresult::CUDA_SUCCESS => Ok(Some(value)),
+                    sys::CUresult::CUDA_ERROR_NOT_SUPPORTED
+                    | sys::CUresult::CUDA_ERROR_INVALID_VALUE => Ok(None),
+                    _ => Err(candle_core::Error::msg(format!(
+                        "graph memory attribute lookup failed: {result:?}"
+                    ))),
+                }
+            }
+
+            fn graph_memory(device: sys::CUdevice) -> Result<Option<CudaGraphMemoryUsage>> {
+                let attr = |a| graph_memory_attribute(device, a);
+                match (
+                    attr(sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_USED_MEM_CURRENT)?,
+                    attr(sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_RESERVED_MEM_CURRENT)?,
+                    attr(sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_USED_MEM_HIGH)?,
+                    attr(sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_RESERVED_MEM_HIGH)?,
+                ) {
+                    (Some(used), Some(reserved), Some(used_high), Some(reserved_high)) => {
+                        Ok(Some(CudaGraphMemoryUsage {
+                            reserved,
+                            used,
+                            reserved_high,
+                            used_high,
+                        }))
+                    }
+                    _ => Ok(None),
+                }
+            }
+
+            pub(super) fn pool_usage(dev: &$Device) -> Result<Option<CudaMemoryPoolUsage>> {
+                let Some(pool) = pool_handle(dev)? else {
+                    return Ok(None);
+                };
+                let attr = |a| pool_attribute(pool, a);
+                match (
+                    attr(sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RESERVED_MEM_CURRENT)?,
+                    attr(sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_USED_MEM_CURRENT)?,
+                ) {
+                    (Some(reserved), Some(used)) => Ok(Some(CudaMemoryPoolUsage {
+                        reserved: usize::try_from(reserved)?,
+                        used: usize::try_from(used)?,
+                    })),
+                    _ => Ok(None),
+                }
+            }
+
+            pub(super) fn allocator_snapshot(
+                dev: &$Device,
+            ) -> Result<Option<CudaAllocatorSnapshot>> {
+                use $($backend)::+::cudarc::driver::result;
+
+                let stream = dev.cuda_stream();
+                stream.context().bind_to_thread().w()?;
+                let (available, total) = result::mem_get_info().w()?;
+                let async_pool = match pool_handle(dev)? {
+                    Some(pool) => {
+                        let attr = |a| pool_attribute(pool, a);
+                        match (
+                            attr(sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RESERVED_MEM_CURRENT)?,
+                            attr(sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_USED_MEM_CURRENT)?,
+                            attr(sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RESERVED_MEM_HIGH)?,
+                            attr(sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_USED_MEM_HIGH)?,
+                            attr(sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RELEASE_THRESHOLD)?,
+                        ) {
+                            (
+                                Some(reserved),
+                                Some(used),
+                                Some(reserved_high),
+                                Some(used_high),
+                                Some(release_threshold),
+                            ) => Some(CudaMemoryPoolSnapshot {
+                                current: CudaMemoryPoolUsage {
+                                    reserved: usize::try_from(reserved)?,
+                                    used: usize::try_from(used)?,
+                                },
+                                reserved_high: usize::try_from(reserved_high)?,
+                                used_high: usize::try_from(used_high)?,
+                                release_threshold: usize::try_from(release_threshold)?,
+                            }),
+                            _ => None,
+                        }
+                    }
+                    None => None,
+                };
+                let graph_pool = graph_memory(stream.context().cu_device())?;
+                Ok(Some(CudaAllocatorSnapshot {
+                    total,
+                    available,
+                    async_pool,
+                    graph_pool,
+                }))
+            }
+
+            pub(super) fn trim(dev: &$Device, min_bytes: usize) -> Result<bool> {
+                let Some(pool) = pool_handle(dev)? else {
+                    return Ok(false);
+                };
+                // Fault-hunt ledger: trims unmap pool backing, so every trim
+                // is timestamped for correlation against fault windows.
+                eprintln!(
+                    "[pool-trim] pool={pool:p} min_bytes={min_bytes} t={}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0)
+                );
+                check(
+                    unsafe { sys::cuMemPoolTrimTo(pool, min_bytes) },
+                    "memory pool trim",
+                )?;
+                Ok(true)
+            }
+        }
+    };
 }
+
+#[cfg(feature = "cuda")]
+pool_introspection!(
+    nvidia_pool,
+    candle_core::cuda_backend,
+    candle_core::CudaDevice
+);
+
+#[cfg(feature = "rocm")]
+pool_introspection!(amd_pool, candle_core::hip_backend, candle_core::HipDevice);
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 fn igpu_memory_fraction() -> f64 {
@@ -501,4 +476,23 @@ fn metal_sysctl_floor_bytes() -> Result<usize> {
         Some(x) => x,
     };
     Ok(floor_mb * SIZE_IN_MB)
+}
+
+#[cfg(all(test, any(feature = "cuda", feature = "rocm")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pool_introspection_routes_non_gpu_devices_to_none() {
+        assert!(MemoryUsage
+            .query_cuda_memory_pool(&Device::Cpu)
+            .unwrap()
+            .is_none());
+        assert!(MemoryUsage
+            .query_cuda_allocator(&Device::Cpu)
+            .unwrap()
+            .is_none());
+        assert!(!MemoryUsage.trim_cuda_memory_pool(&Device::Cpu, 0).unwrap());
+        assert!(!MemoryUsage.synchronize_cuda_context(&Device::Cpu).unwrap());
+    }
 }
