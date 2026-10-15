@@ -2256,6 +2256,14 @@ facade today, so the MTP port gates the cutover):
       fit_ctx + reservations, pools self-size, crowding degrades
       gracefully instead of OOMing. Attach-aware reservations item
       complete.
+      ON-DEVICE EVICTION 15:3x UTC (user-prioritized): the 35B
+      eviction above was pure waste - off-device residents free
+      nothing on the target card. Both eviction paths now share a
+      tested device-scoped LRU helper (off-device/busy/self/tried
+      exclusions pinned); the busy-wait only waits on same-device
+      activity. TTL eviction stays global hygiene by design. Build 11
+      in flight; live verify: 3090 contention must evict ONLY the
+      on-device idle (35B stays resident throughout).
       (~7-8GB expected) and attach clean beside nothing, then
       beside a resident model, request 200.
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
