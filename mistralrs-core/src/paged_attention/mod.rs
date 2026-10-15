@@ -330,6 +330,15 @@ mod tests {
         );
         // Saturates to zero instead of underflowing.
         assert_eq!(utilization_kv_budget_mb(1_000.0, 0.1, 0.0, 0), 0);
+        // Weight-dominated: the fraction cap saturates but physical memory
+        // holds the reserve plus a pool, so physical fit applies (27B on
+        // 24GB: 24372 total, 18077 used, 5476 reserve -> 819MB pool).
+        assert_eq!(
+            utilization_kv_budget_mb(24_372.0, 0.9, 18_077.0, 5_476),
+            24_372 - 18_077 - 5_476
+        );
+        // Genuinely full cards still yield zero.
+        assert_eq!(utilization_kv_budget_mb(24_372.0, 0.9, 20_000.0, 5_476), 0);
     }
 }
 
@@ -566,8 +575,22 @@ pub(crate) fn utilization_kv_budget_mb(
 ) -> usize {
     let runtime_floor_mb =
         total_mb.max(0.0).round() as usize / 100 * UTILIZATION_RUNTIME_RESERVE_PERCENT;
+    let protection_mb = reserved_mb.max(runtime_floor_mb);
     let budget_mb = (total_mb * f as f64 - used_mb).max(0.0).round() as usize;
-    budget_mb.saturating_sub(reserved_mb.max(runtime_floor_mb))
+    let capped = budget_mb.saturating_sub(protection_mb);
+    if capped > 0 || used_mb <= 0.0 {
+        return capped;
+    }
+    // Weight-dominated cards saturate the fraction cap to zero even though
+    // physical memory holds the reserve plus a small pool (27B on 24GB:
+    // 18GB resident, 5.5GB attach reserve, 6.3GB free). With resident
+    // weights the fraction contract is already blown, so fall back to
+    // physical fit instead of refusing: the loader fit check, fit_ctx,
+    // and the attach settle-retry stay the backstops. Empty cards keep
+    // the saturating arithmetic above, and genuinely full cards still
+    // yield zero here.
+    let free_mb = (total_mb - used_mb).max(0.0).round() as usize;
+    free_mb.saturating_sub(protection_mb)
 }
 
 fn fit_post_load_cache_budget(
