@@ -13,6 +13,7 @@ use crate::sampler::{
 };
 use crate::{
     prefix_cacher::PrefixCacheManagerV2,
+    response::Response,
     sampler::Logprobs,
     sequence::{Sequence, SequenceRecognizer, SequenceState, StopReason, StreamingEmission},
     tools::ToolCallState,
@@ -797,6 +798,31 @@ impl CausalLogitsBatch {
     }
 }
 
+fn nan_like_sample_error(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    ["nan", "inf", "probability", "categorical", "multinomial"]
+        .iter()
+        .any(|m| lower.contains(m))
+}
+
+fn invalidate_poisoned_prefix(
+    prefix_cacher: &mut PrefixCacheManagerV2,
+    seq: &Sequence,
+    error: &candle_core::Error,
+) {
+    if !nan_like_sample_error(&error.to_string()) {
+        return;
+    }
+    let evicted = prefix_cacher.evict_seq_prefix(seq);
+    let paged = prefix_cacher.evict_paged_prefix_for_seq(seq);
+    tracing::warn!(
+        sequence_id = seq.id(),
+        evicted,
+        paged,
+        "Invalidated prefix family after NaN-class sampling error"
+    );
+}
+
 async fn sample_and_add_toks_inner(
     this: &dyn Pipeline,
     seqs: &mut [&mut Sequence],
@@ -854,7 +880,23 @@ async fn sample_and_add_toks_inner(
     };
 
     for (sampled, seq) in std::iter::zip(sampled_vec, seqs.iter_mut()) {
-        let next_token = crate::handle_seq_error_stateaware_ok!(sampled, seq);
+        let next_token = match sampled {
+            Ok(next) => next,
+            Err(e) => {
+                invalidate_poisoned_prefix(prefix_cacher, seq, &e);
+                tracing::error!(target: "mistralrs_core::engine", "seq-level error swallowed as InternalError: {e:?}");
+                if seq
+                    .responder()
+                    .send(Response::InternalError(e.into()))
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!("Receiver disconnected");
+                }
+                seq.set_state(SequenceState::Error);
+                return Ok(());
+            }
+        };
 
         let metadata = this.get_metadata();
         let eos_tok = seq.effective_eos_tokens(&metadata.eos_tok, disable_eos_stop);

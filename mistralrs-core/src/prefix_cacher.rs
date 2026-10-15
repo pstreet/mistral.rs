@@ -7,7 +7,10 @@ use tracing::info;
 use crate::{
     kv_cache::RecurrentStateSnapshot,
     paged_attention::{
-        block_hash::{BlockHash, MultiModalFeature, MultimodalKind},
+        block_hash::{
+            adapter_generation_key, compute_block_hashes, BlockHash, MultiModalFeature,
+            MultimodalKind,
+        },
         block_pool::{PrefixBlockRetention, PrefixBlockRetentionLease},
     },
     pipeline::KvCache,
@@ -27,6 +30,7 @@ const PAGED_RECURRENT_PREFIX_OWNER_EVICTIONS_METRIC: &str =
     "mistralrs_paged_recurrent_prefix_owner_evictions_total";
 const CAPACITY_EVICTION_REASON: &str = "capacity";
 const BLOCK_PRESSURE_EVICTION_REASON: &str = "block_pressure";
+const POISON_EVICTION_REASON: &str = "poison";
 
 #[derive(PartialEq, Eq, Debug, Hash)]
 struct Tokens(Vec<u32>);
@@ -182,6 +186,7 @@ pub struct PrefixCacheManagerV2 {
     paged_recurrent_bytes: usize,
     paged_recurrent_reported: bool,
     paged_block_retention: Option<PrefixBlockRetention>,
+    paged_block_size: Option<usize>,
     n_on_device: usize,
     no_prefix_cache: bool,
     has_paged_attention: bool,
@@ -230,6 +235,7 @@ impl PrefixCacheManagerV2 {
             paged_recurrent_bytes: 0,
             paged_recurrent_reported: false,
             paged_block_retention: None,
+            paged_block_size: None,
             n_on_device,
             no_prefix_cache,
             has_paged_attention,
@@ -266,6 +272,10 @@ impl PrefixCacheManagerV2 {
             retention.enable();
             self.paged_block_retention = Some(retention);
         }
+    }
+
+    pub(crate) fn set_paged_block_size(&mut self, block_size: usize) {
+        self.paged_block_size = Some(block_size);
     }
 
     fn paged_recurrent_capacity(&self) -> usize {
@@ -481,6 +491,123 @@ impl PrefixCacheManagerV2 {
             metrics::counter!("mistralrs_prefix_cache_evictions_total").increment(len as u64);
         }
         Ok(len)
+    }
+
+    /// Evict the non-paged cache entries poisoned by the failed sequence: strict
+    /// prefixes of its tokens. Mid-prefill captures cannot exist here
+    /// (add_sequence runs only on Done), so exact and longer entries are from
+    /// earlier clean runs and are kept: the retry restores clean state.
+    pub fn evict_seq_prefix(&mut self, seq: &Sequence) -> usize {
+        self.evict_token_prefix(seq.get_toks(), seq.adapter_generation())
+    }
+
+    pub(crate) fn evict_token_prefix(
+        &mut self,
+        tokens: &[u32],
+        adapter_generation: Option<AdapterGenerationId>,
+    ) -> usize {
+        if self.no_prefix_cache || self.has_paged_attention || tokens.is_empty() {
+            return 0;
+        }
+        let failed = Tokens(tokens.to_vec());
+        let before = self.caches.len();
+        self.caches.retain(|key, _| {
+            if key.adapter_generation != adapter_generation {
+                return true;
+            }
+            let shared = key.tokens.shared_prefix_len(&failed);
+            shared != key.tokens.0.len() || shared >= failed.0.len()
+        });
+        let evicted = before - self.caches.len();
+        if evicted > 0 {
+            metrics::counter!("mistralrs_prefix_cache_evictions_total").increment(evicted as u64);
+        }
+        evicted
+    }
+
+    /// Evict paged recurrent checkpoints in the failed sequence's prefix family:
+    /// entries whose key is a prefix of (or equal to) the failed block hashes.
+    /// Snapshots fire mid-prefill at block boundaries, so a full-length key can
+    /// still be poisoned; longer keys come from earlier clean runs and are kept.
+    /// Dropping an entry drops its block-retention lease, which revokes the KV
+    /// blocks for that prefix so the pool stops serving them as prefix hits.
+    /// The block size is learned from snapshot traffic; unknown means no-op.
+    pub fn evict_paged_prefix_for_seq(&mut self, seq: &Sequence) -> usize {
+        let Some(block_size) = self.paged_block_size else {
+            return 0;
+        };
+        self.evict_paged_prefix_for_tokens(
+            seq.get_toks(),
+            seq.mm_features(),
+            seq.adapter_generation(),
+            block_size,
+        )
+    }
+
+    fn evict_paged_prefix_for_tokens(
+        &mut self,
+        tokens: &[u32],
+        mm_features: &[MultiModalFeature],
+        adapter_generation: Option<AdapterGenerationId>,
+        block_size: usize,
+    ) -> usize {
+        if self.no_prefix_cache || !self.has_paged_attention || block_size == 0 || tokens.is_empty()
+        {
+            return 0;
+        }
+        self.prune_revoked_paged_recurrent_entries();
+        let adapter_key = adapter_generation_key(adapter_generation);
+        let hashes = compute_block_hashes(tokens, block_size, mm_features, adapter_key.as_slice());
+        if hashes.is_empty() {
+            return 0;
+        }
+        let doomed = self
+            .paged_recurrent_caches
+            .keys()
+            .filter(|key| {
+                !key.is_empty()
+                    && key
+                        .iter()
+                        .zip(hashes.iter())
+                        .take_while(|(a, b)| a == b)
+                        .count()
+                        == key.len()
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if doomed.is_empty() {
+            return 0;
+        }
+        let mut removed_owners = 0;
+        for key in &doomed {
+            if let Some(entry) = self.paged_recurrent_caches.shift_remove(key) {
+                self.paged_recurrent_bytes =
+                    self.paged_recurrent_bytes
+                        .saturating_sub(Self::checkpoint_bytes(
+                            &entry.snapshots,
+                            entry.auxiliary.as_deref(),
+                        ));
+                for owner in entry.owners {
+                    if self
+                        .paged_recurrent_sequence_keys
+                        .get(&owner)
+                        .is_some_and(|owner_key| owner_key == key)
+                    {
+                        self.paged_recurrent_sequence_keys.shift_remove(&owner);
+                        removed_owners += 1;
+                    }
+                }
+            }
+        }
+        self.publish_paged_recurrent_metrics();
+        metrics::counter!("mistralrs_prefix_cache_evictions_total")
+            .increment(removed_owners as u64);
+        metrics::counter!(
+            PAGED_RECURRENT_PREFIX_OWNER_EVICTIONS_METRIC,
+            "reason" => POISON_EVICTION_REASON
+        )
+        .increment(removed_owners as u64);
+        doomed.len()
     }
 
     /// Add a recurrent-state snapshot for a paged-attention block-hash prefix key.
@@ -1004,6 +1131,81 @@ mod tests {
         assert!(prefix_cacher
             .get_paged_recurrent_prefix(&hashes[..6], owner)
             .is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn evict_token_prefix_removes_strict_prefixes_only() -> candle_core::Result<()> {
+        let mut prefix_cacher = PrefixCacheManagerV2::new(2, false, false);
+        let insert = |prefix_cacher: &mut PrefixCacheManagerV2, toks: Vec<u32>| {
+            prefix_cacher.caches.insert(
+                CacheKey::new(toks, None),
+                CacheElement {
+                    cache: Vec::new(),
+                    recurrent_snapshots: None,
+                    audio_hashes: None,
+                    image_hashes: None,
+                    video_hashes: None,
+                },
+            );
+        };
+        insert(&mut prefix_cacher, vec![1, 2]);
+        insert(&mut prefix_cacher, vec![1, 2, 3, 5]);
+        insert(&mut prefix_cacher, vec![1, 2, 3, 5, 6]);
+        insert(&mut prefix_cacher, vec![1, 2, 9, 9]);
+        insert(&mut prefix_cacher, vec![7, 8]);
+        assert_eq!(prefix_cacher.caches.len(), 5);
+
+        let evicted = prefix_cacher.evict_token_prefix(&[1, 2, 3, 5], None);
+        assert_eq!(evicted, 1);
+        assert_eq!(prefix_cacher.caches.len(), 4);
+        assert!(!prefix_cacher
+            .caches
+            .contains_key(&CacheKey::from(vec![1, 2])));
+
+        Ok(())
+    }
+
+    #[test]
+    fn evict_paged_prefix_removes_prefix_or_equal_keys() -> candle_core::Result<()> {
+        let mut prefix_cacher = PrefixCacheManagerV2::new(4, false, true);
+        let hashes = compute_block_hashes(&[10, 11, 12], 1, &[], &[]);
+        let ext_hashes = compute_block_hashes(&[10, 11, 12, 13], 1, &[], &[]);
+        assert_eq!(ext_hashes[..3], hashes[..]);
+        let other_hashes = block_hashes(20, 2);
+        let owner_short = hashes[1];
+        let owner_full = hashes[2];
+        let owner_ext = *ext_hashes.last().unwrap();
+        let owner_other = *other_hashes.last().unwrap();
+        for (owner, key) in [
+            (owner_short, hashes[..2].to_vec()),
+            (owner_full, hashes.clone()),
+            (owner_ext, ext_hashes),
+        ] {
+            prefix_cacher.add_paged_recurrent_prefix(
+                owner,
+                key,
+                vec![make_recurrent_snapshot()?],
+                None,
+            );
+        }
+        prefix_cacher.add_paged_recurrent_prefix(
+            owner_other,
+            other_hashes,
+            vec![make_recurrent_snapshot()?],
+            None,
+        );
+        assert_eq!(prefix_cacher.paged_recurrent_caches.len(), 4);
+
+        let tokens = vec![10, 11, 12];
+        let removed = prefix_cacher.evict_paged_prefix_for_tokens(&tokens, &[], None, 1);
+        assert_eq!(removed, 2);
+        assert_eq!(prefix_cacher.paged_recurrent_caches.len(), 2);
+        assert!(!prefix_cacher.has_paged_recurrent_owner(owner_short));
+        assert!(!prefix_cacher.has_paged_recurrent_owner(owner_full));
+        assert!(prefix_cacher.has_paged_recurrent_owner(owner_ext));
+        assert!(prefix_cacher.has_paged_recurrent_owner(owner_other));
 
         Ok(())
     }

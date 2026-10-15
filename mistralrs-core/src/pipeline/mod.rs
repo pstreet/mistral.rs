@@ -1929,6 +1929,7 @@ pub trait Pipeline:
         {
             return Ok(());
         }
+        prefix_cacher.set_paged_block_size(block_size);
         let Some(slot_idx) = seq.recurrent_state_idx() else {
             return Ok(());
         };

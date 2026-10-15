@@ -52,16 +52,18 @@ live verifications; docs sync.
       prefill), and the fused-categorical "invalid batched CUDA
       categorical output". Mitigation delivered: restart clears
       the cache (user's conversation works again; cold-prefill
-      the first send is slow). THE FIX to land: on a seq-level
-      NaN/invalid-sampling error, INVALIDATE that sequence's
-      prefix-cache blocks + recurrent checkpoints (engine's
-      seq-error catch site) so the poison cannot persist - one
-      failed message instead of a bricked conversation. Optional
-      hardening: finite-check at checkpoint capture. Open
-      question: the numerics origin (bf16 GDN long-context
+      the first send is slow). CONTAINMENT FIX LANDED 2026-10-15:
+      on a seq-level NaN-class sampling error, sample_and_add_toks
+      now evicts that sequence's prefix family before marking Error
+      (evict_seq_prefix: strict token prefixes; paged: prefix-or-equal
+      block keys, lease drop revokes KV retention; clean exact/longer
+      entries kept so retries restore clean state). No restart needed;
+      one failed message instead of a bricked conversation. Lib green
+      (1401/0 default incl 2 new tests), check clean all four shapes.
+      REMAINING: the numerics origin (bf16 GDN long-context
       accumulation) - possible follow-up: fp32 state or clamped
-      state norm, decided after the invalidation fix makes the
-      event visible-but-harmless.
+      state norm; needs a live NaN repro to validate end-to-end
+      (unproven until the var-off probe lane reproduces one).
 
 - [ ] ~P0 all-NaN logits on multi-chunk prefill WITH tools array
       (openwebui outage root-caused to the trigger, 2026-10-14; the
