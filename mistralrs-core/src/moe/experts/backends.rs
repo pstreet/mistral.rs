@@ -360,6 +360,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn quantized_fast_decode_lora_matches_gather_pipeline() -> Result<()> {
         const EXPERTS: usize = 3;
         const HIDDEN: usize = 64;
@@ -714,16 +715,19 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn quantized_grouped_prefill_lora_f32_matches_gather_pipeline() -> Result<()> {
         run_quantized_grouped_prefill_lora(DType::F32, 0.08)
     }
 
     #[test]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn quantized_grouped_prefill_lora_f16_matches_gather_pipeline() -> Result<()> {
         run_quantized_grouped_prefill_lora(DType::F16, 0.1)
     }
 
     #[test]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn quantized_grouped_prefill_lora_bf16_matches_gather_pipeline() -> Result<()> {
         run_quantized_grouped_prefill_lora(DType::BF16, 0.12)
     }
@@ -1001,7 +1005,8 @@ mod tests {
 
     #[test]
     fn q4k_fused_decode_matches_gather_pipeline() -> Result<()> {
-        run_q4k_fast_cuda_matches_gather(2, 1)
+        // Fused decode is single-token per sequence: batch 1, one token.
+        run_q4k_fast_cuda_matches_gather(1, 1)
     }
 
     #[test]

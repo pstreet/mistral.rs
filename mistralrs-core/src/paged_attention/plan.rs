@@ -1085,6 +1085,7 @@ mod tests {
         );
     }
 
+    #[ignore = "requires an sm_90 build host (FA3 kernels)"]
     #[test]
     fn prompt_workspace_falls_back_for_ineligible_known_attention() {
         let model = workspace_model(Some(PrefixPrefillAttentionFeatures::default()));
@@ -1117,6 +1118,7 @@ mod tests {
 
     #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
     #[test]
+    #[ignore = "requires an sm_90 build host (FA3 kernels)"]
     fn prompt_workspace_matches_direct_fa3_availability() {
         let model = workspace_model(Some(PrefixPrefillAttentionFeatures::default()));
         let query_lens = [128, 128];

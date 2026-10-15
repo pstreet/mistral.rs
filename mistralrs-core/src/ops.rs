@@ -7458,6 +7458,7 @@ mod tests {
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn causal_mask_f32_survives_int32_index_overflow() -> candle_core::Result<()> {
         // 24 * 1024 * 87382 = 2_147_514_880 > 2^31: the old int32 `idx`/`total`
         // wrapped negative for the tail, writing -inf into the wrong slots.
@@ -7480,6 +7481,7 @@ mod tests {
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn softmax_last_dim_f32_survives_int32_index_overflow() -> candle_core::Result<()> {
         // (24576, 87382) = 2_147_514_880 > 2^31 elements: the old int32
         // `i = row*ncols + col` in softmax_f32 wrapped and indexed out of bounds.
@@ -7697,6 +7699,7 @@ mod tests {
 
     #[cfg(feature = "cuda")]
     #[test]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn cuda_add_rms_norm_matches_separate_ops() -> candle_core::Result<()> {
         const ROWS: usize = 2;
         const COLS: usize = 16;
@@ -7759,6 +7762,7 @@ mod tests {
     #[cfg(feature = "cuda")]
     #[test]
     #[allow(clippy::cast_precision_loss)]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn cuda_qk_norm_rope_writes_token_major_from_packed_projection() -> candle_core::Result<()> {
         const BATCH: usize = 2;
         const SEQ_LEN: usize = 3;
@@ -8061,6 +8065,7 @@ mod tests {
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn cuda_batched_topk_matches_cpu_with_offsets_and_mixed_temperatures() -> candle_core::Result<()>
     {
         let device = Device::new_cuda(0)?;
@@ -8093,6 +8098,7 @@ mod tests {
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn cuda_batched_topk_rejects_nan_distribution() -> candle_core::Result<()> {
         let device = Device::new_cuda(0)?;
         let logits = Tensor::new(&[[1.0f32, f32::NAN, 3.0, 2.0]], &device)?;
@@ -8106,6 +8112,7 @@ mod tests {
     // cudarc-hip has no resident top-k sampling API
     #[cfg(feature = "cuda")]
     #[test]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn cuda_resident_topk_sampling_matches_filtered_reference() -> candle_core::Result<()> {
         const BATCH: usize = 4;
         const VOCAB: usize = 2051;
@@ -8250,6 +8257,7 @@ mod tests {
 
     #[cfg(feature = "cuda")]
     #[test]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn cuda_cached_batched_top1_tracks_batch_shape() -> candle_core::Result<()> {
         let device = Device::new_cuda(0)?;
         let mut workspace = None;
@@ -8475,6 +8483,7 @@ mod tests {
 
     #[cfg(feature = "cuda")]
     #[test]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn cuda_batched_topk_orders_ties_by_lowest_index() -> candle_core::Result<()> {
         const VOCAB: usize = 4097;
 
@@ -8497,6 +8506,7 @@ mod tests {
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn cuda_batched_topk_low_precision_inputs_match_f32() -> candle_core::Result<()> {
         const ROWS: usize = 3;
         const VOCAB: usize = 4097;
@@ -9019,6 +9029,7 @@ mod tests {
 
     #[cfg(feature = "cuda")]
     #[test]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn cuda_batched_categorical_matches_reference_across_chunks() -> candle_core::Result<()> {
         const VOCAB: usize = 2051;
 
@@ -9054,6 +9065,7 @@ mod tests {
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn cuda_batched_categorical_marks_invalid_distribution() -> candle_core::Result<()> {
         let device = Device::new_cuda(0)?;
         let logits = Tensor::new(&[[1.0f32, f32::NAN, 3.0]], &device)?;
@@ -9072,6 +9084,7 @@ mod tests {
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn cuda_batched_categorical_selects_at_upper_boundary() -> candle_core::Result<()> {
         const VOCAB: usize = 2048;
 
@@ -9110,6 +9123,7 @@ mod tests {
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn cuda_top1_uses_first_maximum_across_lanes_and_chunks() -> candle_core::Result<()> {
         const VOCAB: usize = 4097;
 
@@ -9151,6 +9165,7 @@ mod tests {
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
+    #[ignore = "requires a GPU device with the fast-path plugin env"]
     fn moe_router_gemv_matches_matmul() -> candle_core::Result<()> {
         let device = Device::new_cuda(0)?;
         let (hidden, n_experts) = (2048usize, 64usize);
