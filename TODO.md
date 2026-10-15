@@ -2142,6 +2142,34 @@ facade today, so the MTP port gates the cutover):
       the MTP draft head + checkpoint lanes, so ContextSize fits rely
       on manual context_len tuning (this entry) instead of shrinking
       automatically - pair with the mapping 2x KV double-count item.
+      TWIN PARAMETERIZATION 02:4x UTC (user-directed, the documented
+      2026-10-12 follow-up): pool introspection (query_cuda_memory_pool,
+      query_cuda_allocator, trim_cuda_memory_pool, synchronize_cuda_
+      context) now instantiates per driver twin via macro (nvidia_pool
+      / amd_pool) with device-variant routing; hip trims are REAL in
+      dual builds. Pool attributes degrade to None on unsupported
+      runtimes (hip varies) so engine maintenance falls back to driver
+      numbers instead of erroring. Side effect: engine cuda_memory
+      maintenance now SEES hip allocator pools in dual (was
+      maintenance_failure_outcome before) - watch for new hip-side
+      behavior in prod.
+      DRIVE-BY (pre-existing, exposed because NO GPU shape's lib test
+      target ever compiled): restored dropped sys import (cuda_graph
+      test); gated cuda-named speculative-rejection test module + its
+      cfg(test) helper and 4 solo-cuda ops tests to their shapes. All
+      4 shapes now compile lib tests; routing test green in cuda/rocm/
+      dual. LATENT (first-ever dual test run, journaled not fixed): 16
+      GPU-kernel ops/cuda_graph tests fail in the test-binary env
+      (device_has_fused_ops false - plugin/arch env the wrappers set
+      is absent in test runs; the nvcc companion also goes stale in
+      debug target dirs when the toolchain env changes), and
+      arena_estimate drifts 475 bytes in dual. None in touched code
+      paths; estimator/sparse/memory suites green. Build 6 (dual) in
+      flight; live verify: [pool-trim] lines for hip devices (never
+      before possible in dual), GTT round trip, maintenance quiet.
+      JOURNAL NOTE: one commit briefly collapsed this file via a
+      mangled python newline escape (5265 lines -> 25); recovered by
+      reverting; beware heredoc escaping for line joins.
       ~816MB pool, MTP attach ok, request 200; [pool-trim] lines in
       prod-stderr on the next eviction cycle.
       on Utilization, sizing now protects the runtime by default.
