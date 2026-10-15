@@ -2295,6 +2295,22 @@ impl Engine {
             #[cfg(not(any(feature = "cuda", feature = "rocm")))]
             self.free_finished_scheduler_sequences(&mut *scheduler);
         }
+
+        // This thread holds the last Engine Arc once the router removed the
+        // EngineInstance (eviction, unload), so the pipeline tensors free
+        // here at the earliest - straight into the caching pool, which
+        // driver-level availability cannot see. Unwrap to force the drop,
+        // then trim so demand-load fit checks converge on real memory.
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
+        {
+            let devices = get_mut_arcmutex!(self.pipeline).execution_devices();
+            if let Ok(engine) = Arc::try_unwrap(self) {
+                drop(engine);
+                for device in devices {
+                    crate::settle_device_after_teardown(&device);
+                }
+            }
+        }
     }
 
     fn build_sequence_recognizer(

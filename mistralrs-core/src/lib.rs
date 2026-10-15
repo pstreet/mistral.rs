@@ -1,5 +1,5 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-use candle_core::Device;
+use candle_core::{DType, Device};
 use engine::Engine;
 pub use engine::{
     agentic_session::{AgenticSessionStore, SerializedSession, SerializedVideo},
@@ -325,6 +325,26 @@ fn settle_cuda_allocator_for_speculative_attach(pipeline: &dyn Pipeline) {
             Ok(false) => (),
             Err(err) => warn!("MTP attach settle: pool trim failed: {err}"),
         }
+    }
+}
+
+/// Return teardown to the driver: dropped tensors sit in the device caching
+/// pool, which `available()` cannot see, so evictions and failed loads wedge
+/// the demand-load fit loops on memory that never reappears unless the free
+/// blocks are trimmed back out here.
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+pub(crate) fn settle_device_after_teardown(device: &Device) {
+    if !device.is_cuda() {
+        return;
+    }
+    if let Err(err) = device.synchronize() {
+        warn!("Post-teardown settle: device synchronize failed: {err}");
+        return;
+    }
+    match MemoryUsage.trim_cuda_memory_pool(device, 0) {
+        Ok(true) => debug!("Post-teardown settle: trimmed device memory pool"),
+        Ok(false) => (),
+        Err(err) => warn!("Post-teardown settle: pool trim failed: {err}"),
     }
 }
 
@@ -2100,10 +2120,9 @@ impl MistralRs {
     /// Make room for a demand-load: engines idle past the router TTL go
     /// first, then the footprint estimate drives LRU eviction until it fits
     /// (plus headroom). Engines with admitted sequences are never evicted;
-    /// models whose footprint can't be estimated (remote weights,
-    /// context-sized KV) load without eviction, as before. Explicit
-    /// `/v1/models/reload` does not evict. No-op when the router policy
-    /// disables auto-evict.
+    /// models whose footprint can't be estimated (remote weights) load
+    /// without eviction, as before. Explicit `/v1/models/reload` does not
+    /// evict. No-op when the router policy disables auto-evict.
     fn evict_for_request(&self, model_id: &str) -> Result<(), MistralRsError> {
         if !self.router_policy.auto_evict {
             return Ok(());
@@ -2193,6 +2212,10 @@ impl MistralRs {
                         );
                         wait_logged = true;
                     }
+                    // Eviction teardown frees into the caching pool; trim so
+                    // this poll actually observes the reclaimed memory.
+                    #[cfg(any(feature = "cuda", feature = "rocm"))]
+                    settle_device_after_teardown(&device);
                     std::thread::sleep(EVICT_BUSY_POLL);
                 } else {
                     return Err(MistralRsError::ReloadFailed(format!(
@@ -2207,8 +2230,8 @@ impl MistralRs {
     /// Evict the LRU idle resident on `device` (excluding `for_model` and
     /// `tried`) to make room for a fit-rejected demand-load. The loader's
     /// fit check is the precise oracle, so this drives eviction for models
-    /// whose pre-load footprint estimate is unknown (ContextSize pools,
-    /// remote weights). `Ok(None)` when nothing evictable remains on the
+    /// whose pre-load footprint estimate is unknown (remote weights, exotic
+    /// GGUF layouts). `Ok(None)` when nothing evictable remains on the
     /// device; unload failures move to `tried` and the next candidate is
     /// attempted.
     fn evict_lru_idle_on_device(
@@ -3217,9 +3240,17 @@ impl MistralRs {
         };
 
         // Attempt to reload
+        // Failed loads drop partial pipelines into the caching pool; settle
+        // so the next attempt's fit check sees the freed blocks.
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
+        let reload_device = unloaded_state.loader_config.device.clone();
         let result = self
             .do_reload_model(resolved_model_id, unloaded_state)
             .await;
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
+        if result.is_err() {
+            crate::settle_device_after_teardown(&reload_device);
+        }
 
         // Remove from reloading set and wake demand-load waiters (they
         // re-check the maps, so this runs on success and failure).
@@ -3271,10 +3302,9 @@ impl MistralRs {
         // free memory, which can lag async eviction teardown; retry that
         // specific refusal until the demand-load wait budget lapses. The
         // fit check is the precise capacity oracle, so it also drives
-        // eviction: pre-load footprint estimates are unknown for
-        // ContextSize pools and ISQ-resized weights, and refusing to evict
-        // there strands residents (first load after a restart could never
-        // displace anyone).
+        // eviction for models whose pre-load footprint is unknown (remote
+        // weights, exotic GGUF layouts), where refusing to evict would
+        // strand residents.
         let fit_deadline = Instant::now() + self.router_policy.evict_busy_wait;
         let mut evict_tried: HashSet<String> = HashSet::new();
         let mut last_evicted: Option<Instant> = None;
@@ -3324,6 +3354,10 @@ impl MistralRs {
                             );
                             wait_logged = true;
                         }
+                        // Prior attempts and evictions free into the caching
+                        // pool; trim so the next fit check sees the blocks.
+                        #[cfg(any(feature = "cuda", feature = "rocm"))]
+                        settle_device_after_teardown(&loader_config.device);
                         tokio::time::sleep(RELOAD_FIT_POLL).await;
                     } else {
                         return Err(MistralRsError::ReloadFailed(format!(
@@ -3669,7 +3703,25 @@ fn estimate_load_bytes(
                     .saturating_sub(runtime_reserve)
                     .min(UNIFIED_KV_TOKEN_CAP_BYTES)
             }
-            MemoryGpuConfig::ContextSize(_) => return None,
+            // Exact-size pools are deterministic: tokens x per-token KV bytes
+            // from the GGUF headers. Charging every block overestimates
+            // hybrids whose recurrent layers hold no paged KV, which only
+            // refuses; the loader fit check stays the precise oracle.
+            MemoryGpuConfig::ContextSize(tokens) => {
+                let act_dtype = match loader_config.dtype {
+                    ModelDType::Auto | ModelDType::BF16 => DType::BF16,
+                    ModelDType::F16 => DType::F16,
+                    ModelDType::F32 => DType::F32,
+                };
+                let k_bits = planned.k_type().bits_per_elem(act_dtype) as u64;
+                let v_bits = planned.v_type().bits_per_elem(act_dtype) as u64;
+                let per_token = gguf_kv_bytes_per_token_estimate(
+                    &loader_config.model_selected,
+                    k_bits,
+                    v_bits,
+                )?;
+                tokens as u64 * per_token
+            }
         },
     };
     Some(
@@ -3729,6 +3781,59 @@ fn gguf_source_bits_per_weight(selected: &ModelSelected) -> f64 {
         }
     }
     16.0
+}
+
+/// Per-token paged KV bytes from the first local GGUF shard's headers
+/// (headers only; tensor payloads are never touched). KV heads fall back
+/// to query heads, value length to key length; hybrid blocks without
+/// paged KV are still charged, so the result overestimates rather than
+/// under. `None` for hub ids, unreadable files, and layouts missing the
+/// generic attention keys.
+fn gguf_kv_bytes_per_token_estimate(
+    selected: &ModelSelected,
+    k_bits: u64,
+    v_bits: u64,
+) -> Option<u64> {
+    let (base, files) = match selected {
+        ModelSelected::GGUF {
+            quantized_model_id,
+            quantized_filename,
+            ..
+        }
+        | ModelSelected::XLoraGGUF {
+            quantized_model_id,
+            quantized_filename,
+            ..
+        }
+        | ModelSelected::LoraGGUF {
+            quantized_model_id,
+            quantized_filename,
+            ..
+        } => (quantized_model_id, quantized_filename),
+        _ => return None,
+    };
+    let first = files.split(';').next()?;
+    let file = std::fs::File::open(std::path::Path::new(base).join(first)).ok()?;
+    let metadata =
+        candle_core::quantized::gguf_file::Content::read(&mut std::io::BufReader::new(file))
+            .ok()?
+            .metadata;
+    let arch = metadata
+        .get("general.architecture")?
+        .to_string()
+        .ok()?
+        .clone();
+    let field = |name: &str| {
+        metadata
+            .get(&format!("{arch}.{name}"))
+            .and_then(|v| v.to_u64().ok())
+    };
+    let n_layers = field("block_count")?;
+    let head_count = field("attention.head_count")?;
+    let head_count_kv = field("attention.head_count_kv").unwrap_or(head_count);
+    let key_len = field("attention.key_length")?;
+    let value_len = field("attention.value_length").unwrap_or(key_len);
+    Some(n_layers * head_count_kv * (key_len * k_bits + value_len * v_bits) / 8)
 }
 
 /// On-disk bytes of local GGUF weight files (shards + projector). `None`
@@ -4069,8 +4174,59 @@ mod tests {
         );
     }
 
+    /// Header-only GGUF: magic, version 2, no tensors, u32 metadata
+    /// entries plus the architecture string (gguf_file::write's layout).
+    fn write_header_gguf(path: &std::path::Path, arch: &str, fields: &[(&str, u32)]) {
+        let mut out = Vec::new();
+        out.extend_from_slice(&0x46554747u32.to_le_bytes());
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&0u64.to_le_bytes());
+        out.extend_from_slice(&(fields.len() as u64 + 1).to_le_bytes());
+        let entry = |out: &mut Vec<u8>, name: &str| {
+            out.extend_from_slice(&(name.len() as u64).to_le_bytes());
+            out.extend_from_slice(name.as_bytes());
+        };
+        entry(&mut out, "general.architecture");
+        out.extend_from_slice(&8u32.to_le_bytes());
+        out.extend_from_slice(&(arch.len() as u64).to_le_bytes());
+        out.extend_from_slice(arch.as_bytes());
+        for (name, val) in fields {
+            entry(&mut out, name);
+            out.extend_from_slice(&4u32.to_le_bytes());
+            out.extend_from_slice(&val.to_le_bytes());
+        }
+        std::fs::write(path, out).unwrap();
+    }
+
     #[test]
-    fn estimate_contextsize_is_unknown() {
+    fn estimate_contextsize_kv_from_headers() {
+        let _lock = ESTIMATE_ENV_LOCK.lock().unwrap();
+        let _env = NoMmapEnv::set(None);
+        let dir = tempfile::tempdir().unwrap();
+        // 4 blocks, 8 query heads / 4 KV heads, K=V=64: Q8_0 both sides
+        // (mb_paged_config) gives 4*4*(64*8+64*8)/8 = 2048 B/token.
+        write_header_gguf(
+            &dir.path().join("w.gguf"),
+            "qwen3",
+            &[
+                ("qwen3.block_count", 4),
+                ("qwen3.attention.head_count", 8),
+                ("qwen3.attention.head_count_kv", 4),
+                ("qwen3.attention.key_length", 64),
+            ],
+        );
+        let on_disk = std::fs::metadata(dir.path().join("w.gguf")).unwrap().len();
+        let paged = mb_paged_config(MemoryGpuConfig::ContextSize(32_768));
+        let cfg = gguf_loader_config(dir.path(), "w.gguf", None, Some(paged));
+        let kv = 32_768u64 * 2048;
+        assert_eq!(
+            estimate_load_bytes(&cfg, u64::MAX, u64::MAX, EST_HEADROOM_BYTES),
+            Some(on_disk + kv + EST_HEADROOM_BYTES)
+        );
+    }
+
+    #[test]
+    fn estimate_contextsize_garbage_layout_is_unknown() {
         let _lock = ESTIMATE_ENV_LOCK.lock().unwrap();
         let _env = NoMmapEnv::set(None);
         let dir = tempfile::tempdir().unwrap();
