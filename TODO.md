@@ -2276,6 +2276,14 @@ facade today, so the MTP port gates the cutover):
       touched (zero reloads, GTT steady 33.7GB, serves 391 instantly
       with no demand-load). The build-10 run evicted both; the waste
       is gone. On-device eviction item closed.
+      DOCS + PUSH 2026-10-15: user pushed all pending commits to
+      origin/pstreet-rocm (verified in sync) - the week's work is
+      off-disk. AGENTS.md corrected (prod shape is dual cuda,rocm,
+      not rocm-only; build-env sourcing requirement added),
+      cli-toml-config fit_ctx scope clarified (covers Utilization),
+      docs site builds clean (340 pages). prod-stderr.log at 9.1GB
+      left in place (journal line refs point into it); rotation
+      offered, deferred - disk at 81% with 350G free, no pressure.
       (~7-8GB expected) and attach clean beside nothing, then
       beside a resident model, request 200.
       0%/1MiB the whole time (both tenants iGPU-only), iGPU 100%
