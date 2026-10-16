@@ -313,6 +313,21 @@ pub(crate) fn submit_forward_lookahead<P: Pipeline + ?Sized>(
     {
         return Ok(Err(result));
     }
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    let lookahead_role: &'static str = {
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        {
+            use crate::pipeline::graph_role::GraphStream;
+            match launch.graph_stream() {
+                GraphStream::Hip(_) => "hip",
+                GraphStream::Cuda(_) => "cuda",
+            }
+        }
+        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        {
+            "single"
+        }
+    };
     // Single-shape builds keep the hip-only token-batch path; dual builds
     // match the sampling submission role to the graph stream role below
     // (mismatches fall back to graph replay with host sampling).
@@ -325,6 +340,9 @@ pub(crate) fn submit_forward_lookahead<P: Pipeline + ?Sized>(
     let Some(current) =
         sampling::try_submit_cuda_token_batch(logits, seqs, launch.resident_input(), rng)?
     else {
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
+        metrics::counter!("mistralrs_cuda_lookahead_total", "role" => lookahead_role, "outcome" => "no_submit")
+            .increment(1);
         return Ok(Err(result));
     };
     #[cfg(all(feature = "cuda", feature = "rocm"))]
@@ -333,6 +351,8 @@ pub(crate) fn submit_forward_lookahead<P: Pipeline + ?Sized>(
         let pair_ok =
             (current.is_nvidia() && stream.is_cuda()) || (!current.is_nvidia() && stream.is_hip());
         if !pair_ok {
+            metrics::counter!("mistralrs_cuda_lookahead_total", "role" => lookahead_role, "outcome" => "role_mismatch")
+                .increment(1);
             return Ok(Err(result));
         }
         match &stream {
@@ -363,6 +383,9 @@ pub(crate) fn submit_forward_lookahead<P: Pipeline + ?Sized>(
     }
     #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     current.release_after(&stream)?;
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    metrics::counter!("mistralrs_cuda_lookahead_total", "role" => lookahead_role, "outcome" => "engaged")
+        .increment(1);
     Ok(Ok(CudaStepSubmission::new(
         current,
         tail,
