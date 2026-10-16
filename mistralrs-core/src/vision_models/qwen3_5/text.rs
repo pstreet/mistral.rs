@@ -2351,6 +2351,22 @@ impl Qwen3_5TextModel {
         if nan_probe_enabled() {
             nan_probe("embed", -1, &xs);
         }
+        {
+            use std::sync::{
+                atomic::{AtomicU64, Ordering},
+                OnceLock,
+            };
+            static FWD: AtomicU64 = AtomicU64::new(0);
+            static FWD_LOG: OnceLock<bool> = OnceLock::new();
+            if *FWD_LOG.get_or_init(|| {
+                std::env::var("MISTRALRS_NAN_TRACE").is_ok()
+                    || std::env::var("MISTRALRS_NAN_TRACE_ABS").is_ok()
+            }) {
+                let fwd = FWD.fetch_add(1, Ordering::Relaxed);
+                let qlen = xs.dim(1).unwrap_or(0);
+                tracing::error!(target: "mistralrs_core::engine", "nan-trace fwd={fwd} qlen={qlen} kind=probe-fwd-start");
+            }
+        }
         let mut hybrid_cache = self.cache.hybrid();
         let checkpoint_lanes = hybrid_cache.checkpoint_lanes();
         let batch_size = xs.dim(0)?;
