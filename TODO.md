@@ -151,6 +151,16 @@ live verifications; docs sync.
       log (dtype-dispatched helper). Running Lt-shape-identified
       trial (CANDLE_LT_DEBUG + addrs + ledger): last LTMUL before a
       fault names the faulting (m,n,k).
+      CRASH-10 2026-10-16 03:47 UTC: box rebooted during noaslr var-off
+      probe series (vmcore /var/crash/202610160347, 26GB). SAME signature
+      as crash-8/9: GPF non-canonical address in
+      amdgpu_ttm_tt_unpopulate+0x4b. 10th crash, all TTM teardown
+      family. Wild-write theory now has: 10 kernel GPFs + 1 userspace
+      hip-700 (gap address) + NaN lottery, all consistent with device
+      wild-address writes stomping neighbors (activations AND TTM page
+      arrays). NO MORE VAR-OFF RUNS without explicit approval - each
+      fresh var-off load risks another crash-loop. Noaslr series died
+      with it (2/2 NAN before the crash).
       UNINIT-BLOCK MECHANISM 2026-10-16 ~03:30 UTC: the ENTIRE paged KV
       cache is Tensor::empty (uninit_block, cache_engine.rs:57) - fresh
       blocks hold virgin GPU garbage, and the codebase KNOWS it
