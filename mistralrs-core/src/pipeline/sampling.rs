@@ -1369,6 +1369,20 @@ fn try_sample_batch_cuda(
     {
         return Ok(None);
     }
+    // Dual builds have no NVIDIA-role twins for the categorical packed
+    // kernel or the logprob top-k packed path; keep those plans on host
+    // sampling instead of erroring the step. Greedy and plain ranked
+    // top-k proceed to the NVIDIA twins below.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if logits.device().is_cuda()
+        && (categorical
+            || (sampling_logprob_required
+                && samplers_and_plans
+                    .iter()
+                    .any(|(_, plan)| !plan.kind.is_argmax())))
+    {
+        return Ok(None);
+    }
 
     let all_argmax = samplers_and_plans
         .iter()
