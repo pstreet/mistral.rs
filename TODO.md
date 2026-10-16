@@ -119,6 +119,19 @@ live verifications; docs sync.
       series (safe regime, script scratch/nan-hunt + /tmp/opencode/
       varon-series.sh) to test whether queue count is causal; then
       legacy-chunked kernel cell and 3090/CUDA comparison.
+      VAR-ON SERIES RESULT 2026-10-16 (~00:35 UTC): 5/5 CLEAN var-ON
+      (fresh loads, med38, MTP n=2, chunk 2048, zero anomalies) vs
+      3/3 NaN var-off (layers 4/52/43, GDN-proj/rec-y/attn-y). With
+      the earlier manual var-ON clean, 0/6 vs 3/3 (p~0.012): queue
+      count is causal, not lottery. HIP_LAUNCH_BLOCKING=1 still NaN'd,
+      so it is NOT an async kernel-timing race (blocking serializes
+      launches but NOT library/SDMA streams) - prime suspect is now a
+      missing cross-stream dependency (BLAS-lib stream or H2D vs
+      compute) or layout-dependent addressing, both masked by the
+      single-queue FIFO. D1 blocking trial also rules out in-process
+      stream races as previously audited. NEXT: audit GDN-prefill
+      producer->consumer stream edges (hipBLASLt handle stream,
+      f32-upcast/slot-H2D visibility) for the missing event.
 - [ ] ~P0 MACHINE STABILITY (found 2026-10-14 02:20+): TWO kernel
       crashes within 15 minutes during heavy GPU stress testing
       (prod + repeated probe model loads + NaN-poison batteries).
