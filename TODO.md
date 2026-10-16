@@ -151,6 +151,20 @@ live verifications; docs sync.
       log (dtype-dispatched helper). Running Lt-shape-identified
       trial (CANDLE_LT_DEBUG + addrs + ledger): last LTMUL before a
       fault names the faulting (m,n,k).
+      UNINIT-BLOCK MECHANISM 2026-10-16 ~03:30 UTC: the ENTIRE paged KV
+      cache is Tensor::empty (uninit_block, cache_engine.rs:57) - fresh
+      blocks hold virgin GPU garbage, and the codebase KNOWS it
+      (MISTRALRS_POISON_NAN fills fresh blocks with NaN so
+      read-before-write shows up instead of flaky garbage). Null
+      block 0 is never written. Any unmasked read of unwritten blocks
+      (null padding, stale tables, not-yet-written tails) yields
+      garbage: inf/NaN patterns cascade, finite patterns pass
+      silently. Fits the lottery (garbage content), fresh-vs-grown
+      (virgin vs recycled), Q4/Q8 (different garbage patterns), and
+      var-ON/OFF (heap layout). DECISIVE TEST RUNNING: poisoned
+      tiny38 (var-ON safe) - instant failure PROVES unmasked
+      unwritten reads; clean EXONERATES masking (back to wild
+      addresses).
       GATE CENSUS VERDICT 2026-10-16 ~03:00 UTC: two trials with the
       census active show g<=0 EVERYWHERE yet still NaN - the +187 was
       garbage content landing in g's buffer, not a systematic gating
