@@ -1493,6 +1493,20 @@ pub(crate) fn probe_tensors_debug(tag: &str, qlen: usize, tensors: &[&Tensor]) {
         }
         Ok((total, nan, absmax))
     })();
+    // Gate-sign census on the FIRST tensor only (g; beta is legitimately
+    // positive): the GDN decay gate g must be <= 0 by construction
+    // (g = -exp(a_log) * softplus(a + dt_bias)); any positive element is a
+    // wild write or gating miscompute, and expf of it overflows to inf.
+    // Logs only when positives exist.
+    if tag == "rec-gb" {
+        if let Some(g) = tensors.first() {
+            if let Ok(pos) = gate_positive_census(g) {
+                if pos.0 > 0 {
+                    tracing::error!(target: "mistralrs_core::engine", "nan-trace seq={seq} qlen={qlen} kind=probe-gate-pos count={} max={:?} first_idx={:?}", pos.0, pos.1, pos.2);
+                }
+            }
+        }
+    }
     match report {
         Ok((total, nan, absmax)) if abs || nan > 0 || !absmax.is_finite() || absmax > 1e5 => {
             tracing::error!(target: "mistralrs_core::engine", "nan-trace seq={seq} qlen={qlen} kind=probe-{tag} total={total} nan={nan} absmax={absmax:?} addrs={addrs}");
@@ -1502,6 +1516,28 @@ pub(crate) fn probe_tensors_debug(tag: &str, qlen: usize, tensors: &[&Tensor]) {
         }
         _ => {}
     }
+}
+
+/// Count positive elements in a gate tensor that must be non-positive
+/// (GDN decay gate). Returns (count, max, first 8 flat indices).
+fn gate_positive_census(t: &candle_core::Tensor) -> candle_core::Result<(u64, f32, Vec<u64>)> {
+    let v: Vec<f32> = t
+        .flatten_all()?
+        .to_dtype(candle_core::DType::F32)?
+        .to_vec1()?;
+    let mut count = 0u64;
+    let mut max = 0f32;
+    let mut first_idx = Vec::new();
+    for (i, x) in v.iter().enumerate() {
+        if *x > 0.0 {
+            count += 1;
+            max = max.max(*x);
+            if first_idx.len() < 8 {
+                first_idx.push(i as u64);
+            }
+        }
+    }
+    Ok((count, max, first_idx))
 }
 
 pub(crate) fn tensor_dev_addr(t: &candle_core::Tensor) -> (u64, u64) {
