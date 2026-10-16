@@ -176,6 +176,13 @@ live verifications; docs sync.
       waits); testing var-off + HSA_ENABLE_SDMA=0 (shader-copy
       fallback, fully ordered). KFD MQDs confirmed every process
       carries SDMA + compute queues even var-ON.
+      SDMA RESULT: var-off + HSA_ENABLE_SDMA=0 STILL NaN'd (layer-2,
+      inf). Copy-engine concurrency excluded (caveat: HSA var governs
+      HSA-API copies; HIP memcpy path may bypass it - weakens but
+      does not kill the exclusion). CWSR REVERTED 2026-10-16 ~05:05
+      UTC (reboot to stock 7.2.9, cwsr=1 verified): unproven cmdline
+      change removed to keep one variable stable; all baselines are
+      cwsr=1.
       CRASH-10 2026-10-16 03:47 UTC: box rebooted during noaslr var-off
       probe series (vmcore /var/crash/202610160347, 26GB). SAME signature
       as crash-8/9: GPF non-canonical address in
