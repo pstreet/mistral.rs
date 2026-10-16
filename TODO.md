@@ -181,6 +181,14 @@ live verifications; docs sync.
       block-table validation probe (unmapped/empty ids at dispatch)
       + repeated hard-fault collection (clustered addrs = systematic
       offset, scattered = content lottery).
+      STRUCTURAL IDENTITY 2026-10-16 ~06:00 UTC: var-ON-clean vs
+      var-off-NaN logs run IDENTICAL code paths (same fwds, qlens,
+      chunks, MTP n=2). Variance must come from memory content
+      (ASLR) or device nondeterminism, not branching. ASLR test
+      running: setarch -R (no-aslr) var-off trials - same fault
+      layer twice PROVES layout-determinism (bug becomes
+      reproducible at will); differing layers PROVE true
+      nondeterminism (race/thermal/ulp direction).
       LT POINTER SCREEN 2026-10-16 ~05:00 UTC: all 2016 Lt GEMM A/C
       footprints fit inside live ledger ranges (one false alarm from
       a swapped-m/n footprint formula, corrected to transpose-invariant
