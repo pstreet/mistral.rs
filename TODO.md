@@ -163,6 +163,12 @@ live verifications; docs sync.
       test - preemption is disabled). Clean => ROOT CAUSE CONFIRMED.
       Determinism check (prod 35B var-ON 3x full outputs): identical
       md5s - safe regime fully deterministic.
+      REBOOT 2026-10-16 ~04:36 UTC: clean boot on 7.2.9 with
+      amdgpu.cwsr_enable=0 ACTIVE (verified sysfs). Tenants
+      auto-started. DECISIVE TEST NEXT: var-off probe trial with
+      preemption disabled - clean => CWSR corruption CONFIRMED as
+      root cause; NaN => back to wild-address hunt (CWSR exonerated
+      as the NaN mechanism, crashes may still implicate it).
       CRASH-10 2026-10-16 03:47 UTC: box rebooted during noaslr var-off
       probe series (vmcore /var/crash/202610160347, 26GB). SAME signature
       as crash-8/9: GPF non-canonical address in
