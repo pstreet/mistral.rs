@@ -660,18 +660,20 @@ parity queue) now outranks it on impact.
 - [ ] ~S Solo-rocm loud fallbacks: fused FP8 GLU quantize (unfused
       path today), gemv -> plain GEMM, HQQ CPU bitpack-at-load.
       Pure wins, no architecture risk.
-- [ ] ~M Dual NVIDIA-role device sampling + one-token lookahead
-      (measured 2026-10-13, the cuda-alone parity pair): PARTIALLY
-      LANDED 2026-10-16 (build 15): device_sampling_supported dual
-      arm + categorical packed twin (FFI decls, ops_cuda_role twin,
-      early-route dispatcher) + safe host fallbacks for the paths
-      without twins (resident top-k submit, logprob top-k). Live on
-      prod: default-temp samples on-device (was host), temp-0
-      unchanged, 17x23=391 verified correct through the twin.
-      REMAINING: top-k sampling submit twin (sample_ranked_topk),
-      single-seq f32_packed twin, dual lookahead tail twin
-      (CuStream-typed tail + submission flow), and the pair-parity
-      bench vs solo-cuda to confirm the measured ~7%.
+- [x] ~M Dual NVIDIA-role device sampling (LANDED 2026-10-16,
+      builds 15-18): device_sampling_supported dual arm, categorical
+      packed twin, single-seq f32_packed twin, sampler single-seq
+      gates widened; safe host fallbacks where twins don't exist
+      (resident top-k submit, logprob top-k). Live verified: all
+      sampling modes clean, 17x23/19x21 correct through the twins,
+      temp-0 path unchanged. One-token lookahead twin ALSO LANDED
+      (GraphStream-typed tail, per-combo wait/release, engagement
+      counter) but the counter shows ZERO attempts on EITHER role in
+      current traffic - the overlap path doesn't trigger here, so no
+      pair-parity delta is observable yet. REMAINING: find traffic
+      that engages lookahead (or confirm it needs MTP-off + graph
+      decode conditions), then re-bench; resident top-k submit twin
+      stays open (unreachable without lookahead tails).
 - [ ] ~S UQFF vs GGUF shootout: same weights through the CLI
       `quantize`/`uqff` path, bench load + decode on this box.
       Unmeasured; native format may win both.
