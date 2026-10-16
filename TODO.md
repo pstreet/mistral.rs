@@ -151,6 +151,17 @@ live verifications; docs sync.
       log (dtype-dispatched helper). Running Lt-shape-identified
       trial (CANDLE_LT_DEBUG + addrs + ledger): last LTMUL before a
       fault names the faulting (m,n,k).
+      BREAKTHROUGH 2026-10-16 ~02:45 UTC: cross-checking the faulting
+      layer's launch pointers against probed tensor addresses - EVERY
+      pointer matches (q/k/v/g/beta/state/out/slot all verified). But
+      rec-gb absmax=187 with beta=sigmoid<=1 PROVES +187 lives in the
+      decay gate g, which the reference formula (g=-exp(a_log)*
+      softplus(a+dt), fused kernel verified identical) says is
+      IMPOSSIBLE for finite inputs (g<=0 always). +187 => expf => inf
+      => NaN cascade. Either a wild write into g's buffer between
+      gating and recurrence, or gating miscompute. Gate-sign census
+      probe built (counts g>0 + first indices) to get the pattern
+      (scattered=miscompute, clustered=stomp) on the next trial.
       GROWN-PROCESS RE-NaN 2026-10-16: same probe process NaN'd twice
       in a row (req2 after containment eviction => cold miss in grown
       pools still NaNs, layer-1 again, pure partial-NaN no inf). Fresh
