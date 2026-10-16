@@ -169,6 +169,13 @@ live verifications; docs sync.
       preemption disabled - clean => CWSR corruption CONFIRMED as
       root cause; NaN => back to wild-address hunt (CWSR exonerated
       as the NaN mechanism, crashes may still implicate it).
+      CWSR EXONERATED (NaN) 2026-10-16 ~05:00 UTC: var-off + CWSR-off
+      trial STILL NaN'd (layer-4, pure-NaN). Preemption-restore
+      corruption is NOT the NaN mechanism. SDMA THEORY NEXT: var may
+      gate copy-engine concurrency (H2D/D2H vs compute cross-engine
+      waits); testing var-off + HSA_ENABLE_SDMA=0 (shader-copy
+      fallback, fully ordered). KFD MQDs confirmed every process
+      carries SDMA + compute queues even var-ON.
       CRASH-10 2026-10-16 03:47 UTC: box rebooted during noaslr var-off
       probe series (vmcore /var/crash/202610160347, 26GB). SAME signature
       as crash-8/9: GPF non-canonical address in
