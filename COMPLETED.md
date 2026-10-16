@@ -38,6 +38,22 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   concurrent max_seqs=2 pair 199 tok/s combined; prod restored to
   build 19 and re-verified (rate 111.9, counter re-engaged,
   journal clean). A/B artifacts in scratch/topk-twin/deltas/.
+- Tail-path counter outcomes (build 20, `7c1b083f2`): chained/
+  chain_end/no_submit/role_mismatch/tail_unsupported on
+  mistralrs_cuda_lookahead_total - per-request accounting now exact
+  (220-tok temp = 8 engaged + 210 chained + 1 chain_end; greedy
+  zero, argmax is in-graph). No measurable overhead (111.2 tok/s
+  warm unchanged).
+- PAIR-PARITY ANSWERED (2026-10-16, no prod outage: 4B-cuda lane
+  parked via /v1/models/unload - the retention fixes returned
+  19.3GB to the driver in seconds - probe on :1244, identical toml,
+  FlashInfer pinned off, 3 warm runs each): dual 106.6-106.7 tok/s
+  vs solo-cuda 112.1-112.2 tok/s = ~4.9% dual dispatch cost on
+  sampled decode (hypothesis was ~7%). Counter outcomes identical
+  between shapes. Side finding: solo-cuda auto-selects FlashInfer
+  decode (dual excludes it on the NVIDIA role; needs F16 KV) -
+  logged as its own TODO item. Prod lane restored (self-healed
+  reload, 112.1 tok/s warm, counters exact).
 - Still host-side on NVIDIA (by design, unreachable on the resident
   path): the sync logprob top-k packed family
   (cuda_topk_logits_f32_packed_batched). Optional follow-up: a

@@ -692,8 +692,39 @@ parity queue) now outranks it on impact.
       streaming == non-streaming. REMAINING: logprob top-k packed
       path still host-side on NVIDIA (untwinned
       cuda_topk_logits_packed_batched family); optional chained-step
-      counter for per-step visibility; pair-parity bench vs solo-cuda
-      (the ~7% question) still open on its own merits.
+      counter for per-step visibility LANDED (build 20, commit
+      7c1b083f2): tail-path outcomes chained/chain_end/no_submit/
+      role_mismatch/tail_unsupported on the same metric; accounting is
+      now exact (a 220-tok temp request = 8 engaged + 210 chained +
+      1 chain_end = 219/219 steps; greedy contributes ZERO - argmax
+      is sampled inside the graph replay, never entering the submit
+      machinery). PAIR-PARITY BENCH ANSWERED (2026-10-16, probe lane
+      on the parked 4B-cuda VRAM, no prod outage; identical toml,
+      Standard paged attention + Q8_0 KV pinned via
+      MISTRALRS_FLASHINFER_DECODE=0, 3 warm runs each): dual 106.7/
+      106.7/106.6 tok/s vs solo-cuda 112.2/112.1/112.2 tok/s = dual
+      dispatch costs ~4.9% on sampled decode (better than the ~7%
+      hypothesis); counter outcomes byte-identical between shapes
+      (32/840/4, role cuda vs single) so the cost is per-step
+      overhead, not behavioral. NEW FINDING: solo-cuda auto-selects
+      FlashInfer decode for this model (dual deliberately excludes
+      it on the NVIDIA role per flashinfer/mod.rs; FlashInfer
+      rejects Q8_0 KV) - see the FlashInfer item below. REMAINING:
+      logprob top-k packed path still host-side on NVIDIA (untwinned
+      cuda_topk_logits_packed_batched family).
+- [ ] ~M FlashInfer decode on the NVIDIA role in DUAL builds: solo-cuda
+      auto-selects it for Qwen3.5-4B (FlashInferAttentionBackend::
+      supports_layer bails on `all(cuda, not(rocm))` - the exclusion
+      dates from the shared-kernel-set era, per the comment in
+      flashinfer/mod.rs). If the dual nvcc companion already carries
+      the kernels, lifting the cfg may be near-free decode headroom
+      on the 3090 lane, stacked on top of the twin win. CAVEATS:
+      FlashInfer rejects block-quantized KV (Q8_0/Q4_0), so the lane
+      would move to F16/BF16 KV - VRAM per token doubles; bench
+      FlashInfer+F16 vs Standard+Q8_0 on the 4B-cuda lane before
+      committing. Measured 2026-10-16 context: dual Standard+Q8_0
+      106.7 tok/s vs solo Standard+Q8_0 112.2 (dispatch overhead
+      ~4.9%); solo FlashInfer+F16 unbenched.
 - [ ] ~S UQFF vs GGUF shootout: same weights through the CLI
       `quantize`/`uqff` path, bench load + decode on this box.
       Unmeasured; native format may win both.
