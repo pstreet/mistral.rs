@@ -7,8 +7,6 @@ use std::time::Instant;
 use std::sync::Arc;
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-use candle_core::role::backend::cudarc::driver::CudaStream;
-#[cfg(any(feature = "cuda", feature = "rocm"))]
 use rand_isaac::Isaac64Rng;
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -403,7 +401,24 @@ pub(crate) fn submit_decode_tail<P: Pipeline + ?Sized>(
     rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
 ) -> candle_core::Result<CudaTailSubmission> {
     let started = Instant::now();
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    let tail_role: &'static str = {
+        #[cfg(all(feature = "cuda", feature = "rocm"))]
+        {
+            use crate::pipeline::graph_role::GraphStream;
+            match &tail.stream {
+                GraphStream::Hip(_) => "hip",
+                GraphStream::Cuda(_) => "cuda",
+            }
+        }
+        #[cfg(not(all(feature = "cuda", feature = "rocm")))]
+        {
+            "single"
+        }
+    };
     if tail.batch_size()? != seqs.len() || !sampling::can_submit_cuda_token_batch_seqs(seqs) {
+        metrics::counter!("mistralrs_cuda_lookahead_total", "role" => tail_role, "outcome" => "tail_unsupported")
+            .increment(1);
         return Ok(CudaTailSubmission::Unsupported(tail));
     }
 
@@ -421,6 +436,8 @@ pub(crate) fn submit_decode_tail<P: Pipeline + ?Sized>(
             rng,
         )?
         else {
+            metrics::counter!("mistralrs_cuda_lookahead_total", "role" => tail_role, "outcome" => "no_submit")
+                .increment(1);
             return Ok(CudaTailSubmission::Unsupported(tail));
         };
         current
@@ -428,9 +445,13 @@ pub(crate) fn submit_decode_tail<P: Pipeline + ?Sized>(
         let Some(current) =
             sampling::try_submit_cuda_token_batch_owned(tail.causal_logits()?, seqs, rng)?
         else {
+            metrics::counter!("mistralrs_cuda_lookahead_total", "role" => tail_role, "outcome" => "no_submit")
+                .increment(1);
             return Ok(CudaTailSubmission::Unsupported(tail));
         };
         tail.take_result();
+        metrics::counter!("mistralrs_cuda_lookahead_total", "role" => tail_role, "outcome" => "chain_end")
+            .increment(1);
         return Ok(CudaTailSubmission::Submitted(CudaStepSubmission::new(
             current,
             None,
@@ -445,6 +466,8 @@ pub(crate) fn submit_decode_tail<P: Pipeline + ?Sized>(
         let pair_ok =
             (current.is_nvidia() && stream.is_cuda()) || (!current.is_nvidia() && stream.is_hip());
         if !pair_ok {
+            metrics::counter!("mistralrs_cuda_lookahead_total", "role" => tail_role, "outcome" => "role_mismatch")
+                .increment(1);
             return Ok(CudaTailSubmission::Unsupported(tail));
         }
         match &stream {
@@ -474,6 +497,8 @@ pub(crate) fn submit_decode_tail<P: Pipeline + ?Sized>(
     }
     #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     current.release_after(&stream)?;
+    metrics::counter!("mistralrs_cuda_lookahead_total", "role" => tail_role, "outcome" => "chained")
+        .increment(1);
     Ok(CudaTailSubmission::Submitted(CudaStepSubmission::new(
         current,
         next_tail,
