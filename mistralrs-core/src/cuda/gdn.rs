@@ -1466,6 +1466,14 @@ pub(crate) fn probe_tensors_debug(tag: &str, qlen: usize, tensors: &[&Tensor]) {
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     static ABS: OnceLock<bool> = OnceLock::new();
     let abs = *ABS.get_or_init(|| std::env::var("MISTRALRS_NAN_TRACE_ABS").is_ok());
+    let addrs = tensors
+        .iter()
+        .map(|t| {
+            let (addr, bytes) = tensor_dev_addr(t);
+            format!("{addr:#x}:{bytes}")
+        })
+        .collect::<Vec<_>>()
+        .join(";");
     let report = (|| -> candle_core::Result<(u64, u64, f32)> {
         let flats = tensors
             .iter()
@@ -1487,13 +1495,37 @@ pub(crate) fn probe_tensors_debug(tag: &str, qlen: usize, tensors: &[&Tensor]) {
     })();
     match report {
         Ok((total, nan, absmax)) if abs || nan > 0 || !absmax.is_finite() || absmax > 1e5 => {
-            tracing::error!(target: "mistralrs_core::engine", "nan-trace seq={seq} qlen={qlen} kind=probe-{tag} total={total} nan={nan} absmax={absmax:?}");
+            tracing::error!(target: "mistralrs_core::engine", "nan-trace seq={seq} qlen={qlen} kind=probe-{tag} total={total} nan={nan} absmax={absmax:?} addrs={addrs}");
         }
         Err(e) if !e.to_string().contains("capture") => {
-            tracing::error!(target: "mistralrs_core::engine", "nan-trace seq={seq} qlen={qlen} kind=probe-{tag} check failed: {e:?}");
+            tracing::error!(target: "mistralrs_core::engine", "nan-trace seq={seq} qlen={qlen} kind=probe-{tag} check failed: {e:?} addrs={addrs}");
         }
         _ => {}
     }
+}
+
+fn tensor_dev_addr(t: &candle_core::Tensor) -> (u64, u64) {
+    use candle_core as candle;
+    let bytes = (t.elem_count() * t.dtype().size_in_bytes()) as u64;
+    let (s, l) = t.storage_and_layout();
+    let off = l.start_offset();
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    if let candle::Storage::Cuda(c) = &*s {
+        use candle::role::backend::cudarc::driver::DevicePtr;
+        if let Ok(sl) = c.as_cuda_slice::<u8>() {
+            return (sl.slice(off..).device_ptr(sl.stream()).0 as u64, bytes);
+        }
+        return (0, bytes);
+    }
+    #[cfg(feature = "rocm")]
+    if let candle::Storage::Hip(c) = &*s {
+        use candle::role::backend::cudarc::driver::DevicePtr;
+        if let Ok(sl) = c.as_cuda_slice::<u8>() {
+            return (sl.slice(off..).device_ptr(sl.stream()).0 as u64, bytes);
+        }
+        return (0, bytes);
+    }
+    (0, bytes)
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
