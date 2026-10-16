@@ -208,7 +208,14 @@ live verifications; docs sync.
       v7.2.9..v7.2.11): NO TTM/HMM/userptr/populate fixes. Only
       TTM-adjacent change is an SDMA-DCC corruption workaround for
       gfx12 (RDNA4, not our gfx1151). STAY ON 7.2.9 - no kernel
-      rebuild/reboot for 7.2.11. NEXT:
+      rebuild/reboot for 7.2.11.
+      CUDA COMPARISON 2026-10-16 (~09:00 UTC): same 38-tools med38
+      payload (7.3k tokens, MTP n=2, prefix cache, multi-chunk) on
+      prod qwen3.8-27b-cuda (3090, speculative ENABLED): 3/3 CLEAN.
+      Same math on NVIDIA is clean => NOT a model-math bug. Bug is
+      ROCm-side (hipcc kernels, hipBLASLt/rocBLAS library behavior
+      on gfx1151, KFD queues, or allocator) or HIP+code interaction.
+      (27B-cuda resident ~20GB on 3090 now; 4B demand-reloads.) NEXT:
       block-table validation probe (unmapped/empty ids at dispatch)
       + repeated hard-fault collection (clustered addrs = systematic
       offset, scattered = content lottery).
