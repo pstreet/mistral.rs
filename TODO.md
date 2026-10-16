@@ -712,21 +712,36 @@ parity queue) now outranks it on impact.
       rejects Q8_0 KV) - see the FlashInfer item below. REMAINING:
       logprob top-k packed path still host-side on NVIDIA (untwinned
       cuda_topk_logits_packed_batched family).
-- [ ] ~M FlashInfer decode on the NVIDIA role in DUAL builds: solo-cuda
-      auto-selects it for Qwen3.5-4B (FlashInferAttentionBackend::
-      supports_layer bails on `all(cuda, not(rocm))` - the exclusion
-      dates from the shared-kernel-set era, per the comment in
-      flashinfer/mod.rs). If the dual nvcc companion already carries
-      the kernels, lifting the cfg may be near-free decode headroom
-      on the 3090 lane, stacked on top of the twin win. The KV-dtype
-      side is now handled (see below): auto-selection is gated to
-      readable KV dtypes (F16/BF16/F8E4M3), so enabling dual would
-      never clobber a lane that chose Q8_0/Q4_0 KV - those simply
-      stay Standard. CAVEATS: an F16/BF16 KV lane doubles VRAM per
-      token; bench FlashInfer+F16 vs Standard+Q8_0 on the 4B-cuda
-      lane before committing. Measured 2026-10-16 context: dual
-      Standard+Q8_0 106.7 tok/s vs solo Standard+Q8_0 112.2
-      (dispatch overhead ~4.9%); solo FlashInfer+F16 unbenched.
+- [ ] ~L FlashInfer decode on the NVIDIA role in DUAL builds (RE-SCOPED
+      2026-10-16 after bench + plumbing audit; was ~M "maybe near-free"):
+      the nvcc companion DOES build the kernels in dual
+      (PAGED_ATTN_CUDA_KERNELS is cfg'd on plain `feature = "cuda"`
+      and includes flashinfer_decode.cu), but the RUNTIME is
+      solo-cuda-only: all FlashInfer FFI decls and launch wrappers
+      are `cfg(not(feature = "rocm"))` because `ffi.rs`/`backend`
+      bind the hip companion in dual, which has no FlashInfer
+      symbols. Port surface: ~3.9k lines of backend launch
+      wrappers to twin onto cuda_backend/ffi_cuda
+      (flashinfer.rs 873 + fa3.rs 1320 + mla.rs 897 +
+      flash_attn_sinks.rs 385 + context_attention_mla.rs 435,
+      plus cache/scale parts), *_auto role dispatchers, and ~150
+      cfg sites in mistralrs-core (86 in flashinfer/, rest in
+      plan.rs/layers/cache_engine/attention_backend). Same port
+      unlocks FA2/sinks and the MLA paged path on dual-NVIDIA
+      (serves the FA2-proof item too). ROLE-AWARENESS already
+      solved: KvQuantGatedConfig wraps per-pipeline with the
+      device in scope, so the hip role can stay Standard while
+      the cuda role selects FlashInfer - the static
+      supports_layer cfg would lift to `feature = "cuda"`.
+      BENCH (solo-cuda probe, 4B Q8_0 weights, 3 warm runs):
+      FlashInfer+BF16 KV 117.5-117.8 tok/s vs Standard+Q8_0
+      112.1-112.2 = +4.9% decode, lookahead accounting exact
+      (876 = 4x219). Net for prod's dual 4B lane after the ~4.9%
+      dispatch overhead: roughly break-even vs today's lane rate,
+      so the 4B alone does NOT justify ~L; the real payoff is
+      FlashInfer on bigger future 3090 residents (27B+), the
+      FA2/MLA paths, and closing the last solo-vs-dual capability
+      gap. KV cost: BF16/F16 doubles KV VRAM per token vs Q8_0.
 - [ ] ~S UQFF vs GGUF shootout: same weights through the CLI
       `quantize`/`uqff` path, bench load + decode on this box.
       Unmeasured; native format may win both.

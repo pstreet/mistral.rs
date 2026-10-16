@@ -72,6 +72,20 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   excluded on the NVIDIA role); prod refreshed to build 21 and
   verified (111.7 tok/s, counters exact, journal clean). Four
   unit tests on the gate; all four shapes compile clean.
+- FlashInfer-on-dual BENCHED AND SCOPED (2026-10-16, no prod outage,
+  same parked-lane probe pattern): solo-cuda FlashInfer + BF16 KV on
+  the 4B runs 117.5-117.8 tok/s vs Standard+Q8_0 112.1-112.2
+  (+4.9% decode, exact lookahead accounting 876 = 4x219; probe
+  VRAM 7.1GB). Plumbing audit: the dual nvcc companion builds the
+  FlashInfer kernels, but all FFI decls/launch wrappers are
+  cfg(not(rocm)) solo-cuda-only - dual would need the ~3.9k-line
+  cuda_role twin of the flashinfer/fa3/mla/flash_attn_sinks backend
+  plus ~150 cfg-site lifts in mistralrs-core. Re-scoped the TODO
+  item ~M -> ~L with the full surface list; net for today's 4B lane
+  is roughly break-even after dual dispatch overhead, so the port
+  is justified by bigger 3090 residents + FA2/MLA paths, not the
+  4B alone. The KV-dtype gate (adf0f48d9) and the per-pipeline
+  wrapper's device awareness already solve the role-selection half.
 - Still host-side on NVIDIA (by design, unreachable on the resident
   path): the sync logprob top-k packed family
   (cuda_topk_logits_f32_packed_batched). Optional follow-up: a
