@@ -664,16 +664,25 @@ parity queue) now outranks it on impact.
       builds 15-18): device_sampling_supported dual arm, categorical
       packed twin, single-seq f32_packed twin, sampler single-seq
       gates widened; safe host fallbacks where twins don't exist
-      (resident top-k submit, logprob top-k). Live verified: all
-      sampling modes clean, 17x23/19x21 correct through the twins,
-      temp-0 path unchanged. One-token lookahead twin ALSO LANDED
-      (GraphStream-typed tail, per-combo wait/release, engagement
-      counter) but the counter shows ZERO attempts on EITHER role in
-      current traffic - the overlap path doesn't trigger here, so no
-      pair-parity delta is observable yet. REMAINING: find traffic
-      that engages lookahead (or confirm it needs MTP-off + graph
-      decode conditions), then re-bench; resident top-k submit twin
-      stays open (unreachable without lookahead tails).
+      (logprob top-k only now). Live verified: all sampling modes
+      clean, 17x23/19x21 correct through the twins, temp-0 path
+      unchanged. One-token lookahead twin ALSO LANDED (GraphStream-
+      typed tail, per-combo wait/release, engagement counter).
+      CLOSED 2026-10-16 (build 19, commit 384894552): resident top-k
+      sampling submit twin (ops_cuda_role workspace/pinned-slots/
+      token-ring + sample_ranked_topk, dual dispatchers for submit/
+      wait/release/complete/cancel, sampler + batch wrapper role
+      enums, host-fallback gate removed) - live verified on the
+      qwen3.5-4b-cuda lane: 220tok temp-0.7/topk-40 coherent through
+      the twin, invalid-token guard silent, journal clean. ENGAGEMENT
+      TRAFFIC FOUND: the lookahead gate is device.is_cuda() = NVIDIA
+      role ONLY in dual builds, so 4B-cuda decode traffic (greedy or
+      sampled) is what moves the counter - first nonzero reading
+      {role="cuda",outcome="engaged"}=16 over 3 requests. REMAINING:
+      logprob top-k packed path still host-side on NVIDIA (untwinned
+      cuda_topk_logits_packed_batched family); engagement-rate
+      analysis (16 of ~520 decode steps - per-step conditions not yet
+      mapped) folds into the pair-parity bench.
 - [ ] ~S UQFF vs GGUF shootout: same weights through the CLI
       `quantize`/`uqff` path, bench load + decode on this box.
       Unmeasured; native format may win both.

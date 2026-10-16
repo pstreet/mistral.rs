@@ -2,6 +2,36 @@
 
 Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
 
+## Oct 16 (top-k submit twin live, lookahead engaged)
+- Resident top-k sampling submit twin (commit `384894552`, build 19):
+  the last NVIDIA-role sampling gap in the resident decode path.
+  `ops_cuda_role` gained the CudaTopKSamplingWorkspace family (pinned
+  param slots, async token ring reuse, `sample_ranked_topk` launch -
+  the kernel already lived in the nvcc companion, sort.cu; only the
+  Rust machinery was missing) with dual dispatchers in ops.rs for
+  submit/`_into`/wait_on/release_after (both stream roles)/complete/
+  cancel, take_topk_{nvidia,hip} role guards, solo-build aliases, and
+  the sampler + CudaTokenBatchSubmission wrapper carrying the role
+  enums (wait_on_cuda/release_after_cuda/is_nvidia). The dual host-
+  fallback gate in try_submit_cuda_token_batch_inner is GONE: non-
+  argmax resident plans now submit on the NVIDIA role.
+- Lookahead engagement traffic FOUND: the one-token lookahead gate is
+  `device().is_cuda()`, i.e. NVIDIA-role only in dual builds, and
+  pre-twin every sampled plan on that role bailed to host. So 4B-cuda
+  decode traffic is the engagement trigger; first nonzero counter
+  reading {role="cuda",outcome="engaged"}=16 over 3 requests (previously
+  zero on both roles).
+- Live verification (build 19 swap, rollback saved as
+  mistralrs.pre-384894552-build18): 220tok temp-0.7/topk-40 coherent
+  through the twin on qwen3.5-4b-cuda, greedy top1 and hip-role lanes
+  unchanged, invalid-token guard silent, journal clean. Four shapes
+  compile warning-free in touched files; CUDA_TOPK_SAMPLING_PARAM_WIDTH
+  hoisted pub(crate); pre-existing dead imports removed.
+- Still host-side on NVIDIA (by design, unreachable on the resident
+  path): the sync logprob top-k packed family
+  (cuda_topk_logits_f32_packed_batched). Engagement-rate mapping (16
+  of ~520 decode steps) folds into the pair-parity bench.
+
 ## Week of Oct 14-15 (serving sized, retention closed, twins live)
 - 4B CUDA OOM root-caused: Utilization pool (15.4GB) fit but starved graphs;
   ISQ-aware `estimate_load_bytes` (scale by target/source bits, clamp to
