@@ -65,9 +65,25 @@ live verifications; docs sync.
       state norm; needs a live NaN repro to validate end-to-end
       (unproven until the var-off probe lane reproduces one).
 
-- [ ] ~P0 all-NaN logits on multi-chunk prefill WITH tools array
-      (openwebui outage root-caused to the trigger, 2026-10-14; the
-      underlying engine bug is STILL OPEN). TRIGGER SHAPE (evidence
+- [ ] ~P2/BACKLOG all-NaN logits on multi-chunk prefill WITH tools array
+      (openwebui outage root-caused to the trigger, 2026-10-14; root
+      cause PARKED 2026-10-16 - revisit only with a promising change:
+      AMD fix in a future stable changelog, a reproducible fault with
+      addresses, or approval for disruptive concurrency tests).
+      LIVE MITIGATIONS (prod healthy on these): GPU_MAX_HW_QUEUES=1
+      on all ROCm tenants (var-gated corruption never manifests
+      single-queue) + prefix-family invalidation on NaN-class sample
+      errors (build 12+, one failed message instead of bricked chats)
+      + openwebui builtin_tools=false workaround + dmesg early
+      warning (init_user_pages failures / restore_worker hogging).
+      Evidence: full hunt journal in git history (2026-10-15/16:
+      first-fault localization, 10+ trials, vmcore forensics,
+      stream/allocator/Lt audits, CUDA comparison, CWSR/SDMA
+      exclusions). Prime theory: wild-address reads with ASLR content
+      lottery (one hip-700 gap fault), crashes = kernel HMM/userptr
+      UAF under fresh-load churn (11 crashes, TTM teardown family).
+      Standing rules: NO var-off loads (3 crashes/21h); probe lane
+      var-ON only. TRIGGER SHAPE (evidence
       chain): openwebui 0.12.0 injects its 38 built-in tool schemas
       (~26KB tools JSON) into EVERY chat request unless the model's
       meta.capabilities.builtin_tools=false; such requests render to
