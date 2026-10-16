@@ -34,6 +34,14 @@ fn device_sampling_supported(device: &candle_core::Device) -> bool {
     if device.is_cuda() {
         return true;
     }
+    // Dual NVIDIA role: same nvcc-companion kernels as solo-cuda, routed
+    // through the ops_cuda_role twins (is_cuda is the NVIDIA role here;
+    // in rocm-only builds Device::Cuda IS the AMD device, so this arm
+    // stays dual-only).
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if device.is_cuda() {
+        return true;
+    }
     false
 }
 
@@ -1094,6 +1102,13 @@ fn try_submit_cuda_token_batch_inner(
     let Some(plan) = prepare_cuda_token_batch(seqs, rng) else {
         return Ok(None);
     };
+    // Dual builds have no NVIDIA-role top-k sampling submit twin yet
+    // (the inner bails on Cuda storage); keep those plans on host
+    // sampling instead of erroring the step. Greedy proceeds below.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if plan.topk_params.is_some() && logits.device().is_cuda() {
+        return Ok(None);
+    }
     let inner = match (plan.topk_params, resident_input) {
         (None, Some(resident_input)) => CudaTokenBatchSubmissionInner::Top1(
             plan.sampler
