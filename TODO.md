@@ -259,6 +259,17 @@ live verifications; docs sync.
       layer twice PROVES layout-determinism (bug becomes
       reproducible at will); differing layers PROVE true
       nondeterminism (race/thermal/ulp direction).
+      HEAP VERDICT: first-alloc bases scatter WIDELY across var-off
+      runs (0x7347-0x7c3f range) - heap base is per-run ASLR, NOT
+      var-determined. So var does NOT act via heap layout. With
+      single-stream FIFO + identical code/inputs, remaining var
+      pathway: LIBRARY-INTERNAL concurrency (rocBLAS/hipBLASLt
+      worker streams, split-K atomics, workspace hazards) gated by
+      per-process queue count - invisible to source audit,
+      unaffected by HIP_LAUNCH_BLOCKING, shape-dependent. Testing
+      via concurrency, not var: batched (2x parallel med38,
+      max_seqs=2) var-ON probe - NaN under batching CONFIRMS
+      concurrency-gating in the safe regime.
       LT POINTER SCREEN 2026-10-16 ~05:00 UTC: all 2016 Lt GEMM A/C
       footprints fit inside live ledger ranges (one false alarm from
       a swapped-m/n footprint formula, corrected to transpose-invariant
