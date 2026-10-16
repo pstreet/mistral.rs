@@ -165,6 +165,14 @@ live verifications; docs sync.
       tiny38 (var-ON safe) - instant failure PROVES unmasked
       unwritten reads; clean EXONERATES masking (back to wild
       addresses).
+      POISON VERDICT 2026-10-16 ~04:00 UTC: poisoned tiny38 AND
+      poisoned med38 (ALL fresh KV blocks NaN) BOTH GENERATE
+      correctly - every block the model reads is written first or
+      masked, single AND multi-chunk. Read-before-write EXCLUDED.
+      Remaining: wild-address writes (hip-700 proved), nondeterministic
+      compute, or hardware. Testing output determinism next (3x same
+      prompt temp=0 on prod 35B): differing outputs PROVE ambient
+      wildness even in clean mode and give a cheap every-run oracle.
       GATE CENSUS VERDICT 2026-10-16 ~03:00 UTC: two trials with the
       census active show g<=0 EVERYWHERE yet still NaN - the +187 was
       garbage content landing in g's buffer, not a systematic gating
