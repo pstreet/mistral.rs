@@ -187,7 +187,23 @@ live verifications; docs sync.
       census active show g<=0 EVERYWHERE yet still NaN - the +187 was
       garbage content landing in g's buffer, not a systematic gating
       bug. Pure-NaN runs (no inf phase) need a 0/0 path (attention
-      softmax over empty/unmapped blocks?) or NaN-bit reads. NEXT:
+      softmax over empty/unmapped blocks?) or NaN-bit reads.
+      SPLIT VERDICT 2026-10-16 ~04:15 UTC (post crash-10 forensics):
+      journald shows ZERO kernel distress (no GUP failures, no
+      restore-worker hogging) during ALL silent-NaN probe trials -
+      distress appeared ONLY in the crash boot shortly before the GPF.
+      So: silent-NaN = userspace-side (kernel mappings healthy),
+      crashes = kernel HMM/userptr-side under churn (GUP failures +
+      spinning restore worker + TTM free-path GPF). Crash-10 dmesg
+      also reframes crash-7: page-array entries that look like fp32
+      small-floats may be TRUNCATED PFNs (small ints), i.e. a kernel
+      32/64-bit handling bug, not model-data stomps. QUEUED (need
+      user approval): (a) tenants-down var-off probe (tests fault-
+      concurrency interaction), (b) userptr-reduction deploy test
+      (NO_MMAP + no-managed, needs fresh loads), (c) 7.2.11 stable
+      changelog check (released 2026-10-15) for HMM/TTM race fixes.
+      dmesg WATCH: init_user_pages failures / restore_worker hogging
+      are now the early-warning pattern for crashes. NEXT:
       block-table validation probe (unmapped/empty ids at dispatch)
       + repeated hard-fault collection (clustered addrs = systematic
       offset, scattered = content lottery).
