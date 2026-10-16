@@ -676,13 +676,24 @@ parity queue) now outranks it on impact.
       qwen3.5-4b-cuda lane: 220tok temp-0.7/topk-40 coherent through
       the twin, invalid-token guard silent, journal clean. ENGAGEMENT
       TRAFFIC FOUND: the lookahead gate is device.is_cuda() = NVIDIA
-      role ONLY in dual builds, so 4B-cuda decode traffic (greedy or
-      sampled) is what moves the counter - first nonzero reading
-      {role="cuda",outcome="engaged"}=16 over 3 requests. REMAINING:
-      logprob top-k packed path still host-side on NVIDIA (untwinned
-      cuda_topk_logits_packed_batched family); engagement-rate
-      analysis (16 of ~520 decode steps - per-step conditions not yet
-      mapped) folds into the pair-parity bench.
+      role ONLY in dual builds, so 4B-cuda decode traffic is what
+      moves the counter. BENEFIT MEASURED (2026-10-16 A/B, build 18
+      rollback vs build 19, same lane/prompts, warm runs): temp-0.7/
+      topk-40 on qwen3.5-4b-cuda 88.7-89.2 tok/s (host fallback) ->
+      111.2-112.0 tok/s (twin) = +25%; greedy control unchanged
+      (~112) so sampled decode now matches in-graph argmax.
+      ENGAGEMENT MAP: greedy argmax is sampled INSIDE the graph
+      replay (no submission, zero counter movement); temp runs the
+      lease chain with on-device top-k per step - the counter only
+      counts chain (re)starts (~1 per 27 steps; steady-state chained
+      steps are uncounted); logprobs requests move no counters (plan
+      gate excludes device submit upstream, by design, 76 tok/s);
+      concurrent pair at max_seqs=2 hits 199 tok/s combined;
+      streaming == non-streaming. REMAINING: logprob top-k packed
+      path still host-side on NVIDIA (untwinned
+      cuda_topk_logits_packed_batched family); optional chained-step
+      counter for per-step visibility; pair-parity bench vs solo-cuda
+      (the ~7% question) still open on its own merits.
 - [ ] ~S UQFF vs GGUF shootout: same weights through the CLI
       `quantize`/`uqff` path, bench load + decode on this box.
       Unmeasured; native format may win both.

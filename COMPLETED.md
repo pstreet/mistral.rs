@@ -27,10 +27,21 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   unchanged, invalid-token guard silent, journal clean. Four shapes
   compile warning-free in touched files; CUDA_TOPK_SAMPLING_PARAM_WIDTH
   hoisted pub(crate); pre-existing dead imports removed.
+- BENEFIT MEASURED (2026-10-16): brief A/B via the build 18 rollback
+  binary (same lane, same prompts, warm): sampled decode on
+  qwen3.5-4b-cuda 88.7-89.2 tok/s host-fallback -> 111.2-112.0 tok/s
+  twin (+25%), greedy control flat (~112) - sampled decode now
+  matches in-graph argmax. Engagement structure mapped: greedy argmax
+  samples inside the graph replay (no submission); temp runs the
+  lease chain with per-step on-device top-k (counter only marks
+  chain re-starts, ~1/27 steps); logprobs stays host-side by design;
+  concurrent max_seqs=2 pair 199 tok/s combined; prod restored to
+  build 19 and re-verified (rate 111.9, counter re-engaged,
+  journal clean). A/B artifacts in scratch/topk-twin/deltas/.
 - Still host-side on NVIDIA (by design, unreachable on the resident
   path): the sync logprob top-k packed family
-  (cuda_topk_logits_f32_packed_batched). Engagement-rate mapping (16
-  of ~520 decode steps) folds into the pair-parity bench.
+  (cuda_topk_logits_f32_packed_batched). Optional follow-up: a
+  chained-step counter for per-step engagement visibility.
 
 ## Week of Oct 14-15 (serving sized, retention closed, twins live)
 - 4B CUDA OOM root-caused: Utilization pool (15.4GB) fit but starved graphs;
