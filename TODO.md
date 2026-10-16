@@ -151,6 +151,14 @@ live verifications; docs sync.
       log (dtype-dispatched helper). Running Lt-shape-identified
       trial (CANDLE_LT_DEBUG + addrs + ledger): last LTMUL before a
       fault names the faulting (m,n,k).
+      GATE CENSUS VERDICT 2026-10-16 ~03:00 UTC: two trials with the
+      census active show g<=0 EVERYWHERE yet still NaN - the +187 was
+      garbage content landing in g's buffer, not a systematic gating
+      bug. Pure-NaN runs (no inf phase) need a 0/0 path (attention
+      softmax over empty/unmapped blocks?) or NaN-bit reads. NEXT:
+      block-table validation probe (unmapped/empty ids at dispatch)
+      + repeated hard-fault collection (clustered addrs = systematic
+      offset, scattered = content lottery).
       BREAKTHROUGH 2026-10-16 ~02:45 UTC: cross-checking the faulting
       layer's launch pointers against probed tensor addresses - EVERY
       pointer matches (q/k/v/g/beta/state/out/slot all verified). But
