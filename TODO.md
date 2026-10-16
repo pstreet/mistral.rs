@@ -718,13 +718,15 @@ parity queue) now outranks it on impact.
       dates from the shared-kernel-set era, per the comment in
       flashinfer/mod.rs). If the dual nvcc companion already carries
       the kernels, lifting the cfg may be near-free decode headroom
-      on the 3090 lane, stacked on top of the twin win. CAVEATS:
-      FlashInfer rejects block-quantized KV (Q8_0/Q4_0), so the lane
-      would move to F16/BF16 KV - VRAM per token doubles; bench
-      FlashInfer+F16 vs Standard+Q8_0 on the 4B-cuda lane before
-      committing. Measured 2026-10-16 context: dual Standard+Q8_0
-      106.7 tok/s vs solo Standard+Q8_0 112.2 (dispatch overhead
-      ~4.9%); solo FlashInfer+F16 unbenched.
+      on the 3090 lane, stacked on top of the twin win. The KV-dtype
+      side is now handled (see below): auto-selection is gated to
+      readable KV dtypes (F16/BF16/F8E4M3), so enabling dual would
+      never clobber a lane that chose Q8_0/Q4_0 KV - those simply
+      stay Standard. CAVEATS: an F16/BF16 KV lane doubles VRAM per
+      token; bench FlashInfer+F16 vs Standard+Q8_0 on the 4B-cuda
+      lane before committing. Measured 2026-10-16 context: dual
+      Standard+Q8_0 106.7 tok/s vs solo Standard+Q8_0 112.2
+      (dispatch overhead ~4.9%); solo FlashInfer+F16 unbenched.
 - [ ] ~S UQFF vs GGUF shootout: same weights through the CLI
       `quantize`/`uqff` path, bench load + decode on this box.
       Unmeasured; native format may win both.

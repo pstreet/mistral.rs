@@ -54,6 +54,24 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   decode (dual excludes it on the NVIDIA role; needs F16 KV) -
   logged as its own TODO item. Prod lane restored (self-healed
   reload, 112.1 tok/s warm, counters exact).
+- FlashInfer auto-selection gated on the requested KV dtype
+  (`adf0f48d9`, build 21): solo-cuda picked FlashInfer for any
+  model it supports, then died at cache allocation when the KV
+  cache was block-quantized (Q8_0/Q4_0 payloads are unreadable
+  U8) - the Q8_0 pair-parity probe only booted via the
+  MISTRALRS_FLASHINFER_DECODE=0 pin. FlashInfer now auto-selects
+  only when the effective KV dtype is readable (F16/BF16 native or
+  the F8E4M3 FP8 paged path; Auto resolves to the activation
+  dtype), via KvQuantGatedConfig wrapping the pipeline metadata
+  where the resolved cache config is known, so allocation, plans,
+  and graph capture see one consistent answer. Hard error kept for
+  direct CacheEngine users. Validated on the solo-cuda probe
+  without the env pin: Q8_0 KV boots on Standard at 112.0-112.1
+  tok/s, identical to the pinned baseline, lookahead accounting
+  exact (657 = 3x219). Dual builds unaffected (FlashInfer already
+  excluded on the NVIDIA role); prod refreshed to build 21 and
+  verified (111.7 tok/s, counters exact, journal clean). Four
+  unit tests on the gate; all four shapes compile clean.
 - Still host-side on NVIDIA (by design, unreachable on the resident
   path): the sync logprob top-k packed family
   (cuda_topk_logits_f32_packed_batched). Optional follow-up: a
