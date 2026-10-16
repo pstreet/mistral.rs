@@ -99,6 +99,26 @@ live verifications; docs sync.
       engine knobs (mtp off / prefix_cache_n=0 / graphs) and re-add
       the stripped per-layer NaN probes (11993a14f) to find the
       layer where NaN first appears.
+      ROOT-CAUSE HUNT 2026-10-15/16 (27B+MTP probe, :1245, fast dual):
+      reproduced 2/2 var-off with med38. Mechanism-A (no-op hook)
+      DEAD for 35B/27B: both serve via MultimodalPipeline, mtp_prefill
+      runs per chunk with complete coverage. First-fault localized to
+      TARGET prefill (drafter downstream): trial1 chunk2 layer-4 GDN
+      rec-y inf; trial2 chunk1 layer-52 input-proj mixed_qkv inf from
+      finite inputs; trial3 (blocking) chunk1 layer-43 attn-y inf.
+      KILLED: MTP-KV holes (coverage complete), async queue race
+      (HIP_LAUNCH_BLOCKING=1 still NaNs), gradual bf16 overflow
+      (blowup sudden at modest magnitudes), fused-gating sign bug
+      (kernel matches CPU ref exactly, g<=0 by construction).
+      STANDING: nondeterministic across runs (3 trials, 3 layers,
+      2 kernel families) with bounded math + finite probed inputs
+      => kernels read memory the probes don't cover (wrong-row/OOB
+      reads into ASLR-varying garbage) or beta!=0 GEMM over fresh
+      buffers. Activation growth 37->252 across chunk-1 layers is
+      real but benign (clean layers sustain it). NEXT: var-ON rate
+      series (safe regime, script scratch/nan-hunt + /tmp/opencode/
+      varon-series.sh) to test whether queue count is causal; then
+      legacy-chunked kernel cell and 3090/CUDA comparison.
 - [ ] ~P0 MACHINE STABILITY (found 2026-10-14 02:20+): TWO kernel
       crashes within 15 minutes during heavy GPU stress testing
       (prod + repeated probe model loads + NaN-poison batteries).
