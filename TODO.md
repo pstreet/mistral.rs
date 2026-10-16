@@ -203,7 +203,12 @@ live verifications; docs sync.
       (NO_MMAP + no-managed, needs fresh loads), (c) 7.2.11 stable
       changelog check (released 2026-10-15) for HMM/TTM race fixes.
       dmesg WATCH: init_user_pages failures / restore_worker hogging
-      are now the early-warning pattern for crashes. NEXT:
+      are now the early-warning pattern for crashes.
+      7.2.11 VERDICT 2026-10-16 (~08:00 UTC, stable-log changelog
+      v7.2.9..v7.2.11): NO TTM/HMM/userptr/populate fixes. Only
+      TTM-adjacent change is an SDMA-DCC corruption workaround for
+      gfx12 (RDNA4, not our gfx1151). STAY ON 7.2.9 - no kernel
+      rebuild/reboot for 7.2.11. NEXT:
       block-table validation probe (unmapped/empty ids at dispatch)
       + repeated hard-fault collection (clustered addrs = systematic
       offset, scattered = content lottery).
