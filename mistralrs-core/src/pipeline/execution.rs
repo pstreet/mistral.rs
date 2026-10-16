@@ -111,13 +111,13 @@ impl StepSubmission {
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaDecodeTail {
     result: Option<ForwardStepResult>,
-    stream: Arc<CudaStream>,
+    stream: super::graph_role::GraphStream,
     pending: bool,
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 impl CudaDecodeTail {
-    fn new(result: ForwardStepResult, stream: Arc<CudaStream>) -> Self {
+    fn new(result: ForwardStepResult, stream: super::graph_role::GraphStream) -> Self {
         Self {
             result: Some(result),
             stream,
@@ -313,26 +313,34 @@ pub(crate) fn submit_forward_lookahead<P: Pipeline + ?Sized>(
     {
         return Ok(Err(result));
     }
-    // The on-device token-batch path is serving-role-only: the NVIDIA
-    // role replays the graph and samples on the host instead.
+    // Single-shape builds keep the hip-only token-batch path; dual builds
+    // match the sampling submission role to the graph stream role below
+    // (mismatches fall back to graph replay with host sampling).
     #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     let stream = launch.graph_stream().clone();
+    // Dual builds serve both roles: match the sampling submission role
+    // to the graph stream role, falling back to host replay on mismatch.
     #[cfg(all(feature = "cuda", feature = "rocm"))]
-    let stream = match launch.graph_stream() {
-        crate::pipeline::graph_role::GraphStream::Hip(s) => s.clone(),
-        _ => {
-            tracing::warn!(
-                "one-token lookahead sampling needs the serving (hip) role; \
-                 falling back to graph replay with host sampling"
-            );
-            return Ok(Err(result));
-        }
-    };
+    let stream = launch.graph_stream().clone();
     let Some(current) =
         sampling::try_submit_cuda_token_batch(logits, seqs, launch.resident_input(), rng)?
     else {
         return Ok(Err(result));
     };
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    {
+        use crate::pipeline::graph_role::GraphStream;
+        let pair_ok =
+            (current.is_nvidia() && stream.is_cuda()) || (!current.is_nvidia() && stream.is_hip());
+        if !pair_ok {
+            return Ok(Err(result));
+        }
+        match &stream {
+            GraphStream::Cuda(s) => current.wait_on_cuda(s)?,
+            GraphStream::Hip(s) => current.wait_on(s)?,
+        }
+    }
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     current.wait_on(&stream)?;
 
     let ForwardStepResult {
@@ -345,6 +353,15 @@ pub(crate) fn submit_forward_lookahead<P: Pipeline + ?Sized>(
     let tail = pipeline
         .replay_cuda_decode_one_token(launch)?
         .map(|result| CudaDecodeTail::new(result, stream.clone()));
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    {
+        use crate::pipeline::graph_role::GraphStream;
+        match &stream {
+            GraphStream::Cuda(s) => current.release_after_cuda(s)?,
+            GraphStream::Hip(s) => current.release_after(s)?,
+        }
+    }
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     current.release_after(&stream)?;
     Ok(Ok(CudaStepSubmission::new(
         current,
@@ -399,6 +416,20 @@ pub(crate) fn submit_decode_tail<P: Pipeline + ?Sized>(
     };
 
     let stream = tail.stream.clone();
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    {
+        use crate::pipeline::graph_role::GraphStream;
+        let pair_ok =
+            (current.is_nvidia() && stream.is_cuda()) || (!current.is_nvidia() && stream.is_hip());
+        if !pair_ok {
+            return Ok(CudaTailSubmission::Unsupported(tail));
+        }
+        match &stream {
+            GraphStream::Cuda(s) => current.wait_on_cuda(s)?,
+            GraphStream::Hip(s) => current.wait_on(s)?,
+        }
+    }
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     current.wait_on(&stream)?;
     let ForwardStepResult {
         output: _,
@@ -410,6 +441,15 @@ pub(crate) fn submit_decode_tail<P: Pipeline + ?Sized>(
     let next_tail = pipeline
         .replay_cuda_decode_one_token(launch)?
         .map(|result| CudaDecodeTail::new(result, stream.clone()));
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    {
+        use crate::pipeline::graph_role::GraphStream;
+        match &stream {
+            GraphStream::Cuda(s) => current.release_after_cuda(s)?,
+            GraphStream::Hip(s) => current.release_after(s)?,
+        }
+    }
+    #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     current.release_after(&stream)?;
     Ok(CudaTailSubmission::Submitted(CudaStepSubmission::new(
         current,

@@ -360,6 +360,24 @@ impl CudaTop1BatchSubmission {
         )
     }
 
+    /// Dual-build NVIDIA-role wait: the submission must be an Nvidia one.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    pub(crate) fn wait_on_cuda(
+        &self,
+        stream: &Arc<crate::pipeline::graph_role::CuStream>,
+    ) -> Result<()> {
+        let mut cache = self.cache.lock().unwrap();
+        crate::ops::cuda_top1_device_tokens_wait_on_cuda(
+            cache
+                .as_mut()
+                .expect("CUDA top-1 workspace exists while its submission is active"),
+            self.submission
+                .as_ref()
+                .expect("CUDA top-1 submission was already completed"),
+            stream,
+        )
+    }
+
     pub(crate) fn release_after(
         &self,
         stream: &Arc<candle_core::role::backend::cudarc::driver::CudaStream>,
@@ -373,6 +391,33 @@ impl CudaTop1BatchSubmission {
                 .as_ref()
                 .expect("CUDA top-1 submission was already completed"),
             stream,
+        )
+    }
+
+    /// Dual-build NVIDIA-role release: the submission must be an Nvidia one.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    pub(crate) fn release_after_cuda(
+        &self,
+        stream: &Arc<crate::pipeline::graph_role::CuStream>,
+    ) -> Result<()> {
+        let mut cache = self.cache.lock().unwrap();
+        crate::ops::cuda_top1_device_tokens_release_after_cuda(
+            cache
+                .as_mut()
+                .expect("CUDA top-1 workspace exists while its submission is active"),
+            self.submission
+                .as_ref()
+                .expect("CUDA top-1 submission was already completed"),
+            stream,
+        )
+    }
+
+    /// Dual builds only: whether this top-1 submission targets the NVIDIA role.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    pub(crate) fn is_nvidia(&self) -> bool {
+        matches!(
+            self.submission.as_ref(),
+            Some(crate::ops::Top1Submission::Nvidia(_))
         )
     }
 

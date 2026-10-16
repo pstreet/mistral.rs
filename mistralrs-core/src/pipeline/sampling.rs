@@ -985,6 +985,46 @@ impl CudaTokenBatchSubmission {
         }
     }
 
+    /// Dual builds only: whether this batch submission targets NVIDIA.
+    /// Only Top1 submissions can be Nvidia ones (dual has no top-k
+    /// sampling submit twin, so those stay host-side).
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    pub(crate) fn is_nvidia(&self) -> bool {
+        matches!(
+            &self.inner,
+            CudaTokenBatchSubmissionInner::Top1(inner) if inner.is_nvidia()
+        )
+    }
+
+    /// Dual-build NVIDIA-role wait on a CUDA-role stream.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    pub(crate) fn wait_on_cuda(&self, stream: &Arc<super::graph_role::CuStream>) -> Result<()> {
+        match &self.inner {
+            CudaTokenBatchSubmissionInner::Top1(inner) => inner.wait_on_cuda(stream),
+            CudaTokenBatchSubmissionInner::TopK(_) => {
+                candle_core::bail!(
+                    "CUDA token batch wait has no NVIDIA-role top-k sampling submission"
+                )
+            }
+        }
+    }
+
+    /// Dual-build NVIDIA-role release on a CUDA-role stream.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    pub(crate) fn release_after_cuda(
+        &self,
+        stream: &Arc<super::graph_role::CuStream>,
+    ) -> Result<()> {
+        match &self.inner {
+            CudaTokenBatchSubmissionInner::Top1(inner) => inner.release_after_cuda(stream),
+            CudaTokenBatchSubmissionInner::TopK(_) => {
+                candle_core::bail!(
+                    "CUDA token batch release has no NVIDIA-role top-k sampling submission"
+                )
+            }
+        }
+    }
+
     pub(crate) fn complete(self) -> Result<Vec<u32>> {
         match self.inner {
             CudaTokenBatchSubmissionInner::Top1(inner) => Ok(inner.complete()?.token_ids),

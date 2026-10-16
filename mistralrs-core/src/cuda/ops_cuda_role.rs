@@ -1224,6 +1224,32 @@ pub(crate) fn cuda_top1_submission_cancel(
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_top1_device_tokens_wait_on(
+    workspace: &mut CudaTop1LogitsWorkspace,
+    submission: &CudaTop1Submission,
+    consumer_stream: &Arc<role_backend::cudarc::driver::CudaStream>,
+) -> Result<()> {
+    const OP: &str = "cuda_top1_device_tokens_wait_on";
+    validate_cuda_top1_submission(workspace, submission, OP)?;
+    workspace
+        .token_ring
+        .wait_on(&submission.token, consumer_stream, OP)
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_top1_device_tokens_release_after(
+    workspace: &mut CudaTop1LogitsWorkspace,
+    submission: &CudaTop1Submission,
+    consumer_stream: &Arc<role_backend::cudarc::driver::CudaStream>,
+) -> Result<()> {
+    const OP: &str = "cuda_top1_device_tokens_release_after";
+    validate_cuda_top1_submission(workspace, submission, OP)?;
+    workspace
+        .token_ring
+        .release_after(&submission.token, consumer_stream, OP)
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm"))]
 fn cuda_top1_logits_f32_packed_cached_inner<'a>(
     input: &Tensor,
     nrows: usize,

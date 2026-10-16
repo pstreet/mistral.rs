@@ -9581,6 +9581,44 @@ pub(crate) fn cuda_topk_ranked_packed_batched_with_workspace(
 }
 
 #[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_top1_device_tokens_wait_on_cuda(
+    workspace: &mut Top1LogitsWorkspace,
+    submission: &Top1Submission,
+    consumer_stream: &Arc<crate::pipeline::graph_role::CuStream>,
+) -> Result<()> {
+    const OP: &str = "cuda_top1_device_tokens_wait_on";
+    match (workspace, submission) {
+        (Top1LogitsWorkspace::Nvidia(workspace), Top1Submission::Nvidia(submission)) => {
+            crate::cuda::ops_cuda_role::cuda_top1_device_tokens_wait_on(
+                workspace,
+                submission,
+                consumer_stream,
+            )
+        }
+        _ => candle_core::bail!("{OP} workspace and submission roles do not match"),
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_top1_device_tokens_release_after_cuda(
+    workspace: &mut Top1LogitsWorkspace,
+    submission: &Top1Submission,
+    consumer_stream: &Arc<crate::pipeline::graph_role::CuStream>,
+) -> Result<()> {
+    const OP: &str = "cuda_top1_device_tokens_release_after";
+    match (workspace, submission) {
+        (Top1LogitsWorkspace::Nvidia(workspace), Top1Submission::Nvidia(submission)) => {
+            crate::cuda::ops_cuda_role::cuda_top1_device_tokens_release_after(
+                workspace,
+                submission,
+                consumer_stream,
+            )
+        }
+        _ => candle_core::bail!("{OP} workspace and submission roles do not match"),
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
 pub(crate) fn cuda_top1_device_tokens_wait_on(
     workspace: &mut Top1LogitsWorkspace,
     submission: &Top1Submission,

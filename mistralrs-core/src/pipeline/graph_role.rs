@@ -474,7 +474,9 @@ mod imp {
     use candle_core::cuda_backend::cudarc::driver as cu_drv;
     use candle_core::hip_backend::cudarc::driver as hip_drv;
 
-    type CuStream = cu_drv::CudaStream;
+    /// NVIDIA-role stream (dual builds): names the CUDA-role lookahead
+    /// tail and sampling wait/release overloads.
+    pub(crate) type CuStream = cu_drv::CudaStream;
     type HipStream = hip_drv::CudaStream;
     #[cfg(feature = "rocm")]
     type HipStreamSlice = hip_drv::CudaSlice<u8>;
@@ -497,6 +499,10 @@ mod imp {
 
         pub(crate) fn is_hip(&self) -> bool {
             matches!(self, Self::Hip(_))
+        }
+
+        pub(crate) fn is_cuda(&self) -> bool {
+            matches!(self, Self::Cuda(_))
         }
 
         pub(crate) fn cu_stream(&self) -> *mut core::ffi::c_void {
