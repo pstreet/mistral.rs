@@ -151,6 +151,13 @@ live verifications; docs sync.
       log (dtype-dispatched helper). Running Lt-shape-identified
       trial (CANDLE_LT_DEBUG + addrs + ledger): last LTMUL before a
       fault names the faulting (m,n,k).
+      GROWN-PROCESS RE-NaN 2026-10-16: same probe process NaN'd twice
+      in a row (req2 after containment eviction => cold miss in grown
+      pools still NaNs, layer-1 again, pure partial-NaN no inf). Fresh
+      is worse but not required; grown is NOT safe. Layer-1 now leads
+      4 of 7 fault loci. Launch-side pointer logging built (slot table
+      addr at install vs consumed pointers at launch) to test
+      stale-table reads directly.
 - [ ] ~P0 MACHINE STABILITY (found 2026-10-14 02:20+): TWO kernel
       crashes within 15 minutes during heavy GPU stress testing
       (prod + repeated probe model loads + NaN-poison batteries).
