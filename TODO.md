@@ -151,6 +151,18 @@ live verifications; docs sync.
       log (dtype-dispatched helper). Running Lt-shape-identified
       trial (CANDLE_LT_DEBUG + addrs + ledger): last LTMUL before a
       fault names the faulting (m,n,k).
+      CWSR LEAD 2026-10-16 (~09:30 UTC): community precedent found -
+      Framework/Strix-Halo docs list amdgpu.cwsr_enable=0 as the fix
+      for GPU hangs/crashes; CWSR (compute wave save/restore on
+      preemption) corrupting wavefront state on restore fits EVERYTHING
+      (silent wrong-values AND hangs, run variance via preemption
+      timing, multi-queue-gated, device-specific, tenant-aggravated).
+      Current: cwsr_enable=1, runtime read-only (0444) => needs GRUB
+      cmdline + reboot to test. PROPOSAL: add amdgpu.cwsr_enable=0,
+      reboot, verify, then var-off trial (moratorium lifted for the
+      test - preemption is disabled). Clean => ROOT CAUSE CONFIRMED.
+      Determinism check (prod 35B var-ON 3x full outputs): identical
+      md5s - safe regime fully deterministic.
       CRASH-10 2026-10-16 03:47 UTC: box rebooted during noaslr var-off
       probe series (vmcore /var/crash/202610160347, 26GB). SAME signature
       as crash-8/9: GPF non-canonical address in
