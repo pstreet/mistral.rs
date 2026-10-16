@@ -145,6 +145,12 @@ live verifications; docs sync.
       (dtype-dispatched helper, built) + ONE var-off trial -> victim
       ranges vs ledger overlap analysis to place the fix (allocator
       overlap vs wild dims vs corrupt weights).
+      OVERLAP RESULT 2026-10-16: 45k ledger events, ZERO double-allocs,
+      victim range inside its own live buffer - pool allocator SOUND,
+      no use-after-free in tracked ranges. Per-tensor addresses now
+      log (dtype-dispatched helper). Running Lt-shape-identified
+      trial (CANDLE_LT_DEBUG + addrs + ledger): last LTMUL before a
+      fault names the faulting (m,n,k).
 - [ ] ~P0 MACHINE STABILITY (found 2026-10-14 02:20+): TWO kernel
       crashes within 15 minutes during heavy GPU stress testing
       (prod + repeated probe model loads + NaN-poison batteries).
