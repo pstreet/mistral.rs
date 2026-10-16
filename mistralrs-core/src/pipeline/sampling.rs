@@ -22,7 +22,7 @@ use crate::{
 use super::Pipeline;
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-fn device_sampling_supported(device: &candle_core::Device) -> bool {
+pub(crate) fn device_sampling_supported(device: &candle_core::Device) -> bool {
     if mistralrs_quant::device_has_fused_ops(device) {
         return true;
     }

@@ -833,6 +833,14 @@ pub fn cuda_topk_logits_f32_packed(
     use candle_core::role::backend::cudarc::driver::{DevicePtr, DevicePtrMut};
     use candle_core::role::backend::CudaStorageSlice;
 
+    // Dual NVIDIA role: the hip-typed path below cannot serve Cuda
+    // tensors, so route to the nvcc-companion twin up front. Other
+    // shapes keep their exact current behavior.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if input.device().is_cuda() {
+        return crate::cuda::ops_cuda_role::cuda_topk_logits_f32_packed(input, k, temperature);
+    }
+
     if temperature <= 0.0 || !temperature.is_finite() {
         candle_core::bail!("cuda_topk_logits_f32_packed requires a positive finite temperature");
     }
@@ -4263,7 +4271,7 @@ pub struct TopKLogitsPackedOutput {
     /// Each row is packed as `[values; indices_as_f32; softmax_denominator; global_max]`.
     pub packed: Tensor,
     pub k: usize,
-    _workspace: Vec<Tensor>,
+    pub(crate) _workspace: Vec<Tensor>,
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]

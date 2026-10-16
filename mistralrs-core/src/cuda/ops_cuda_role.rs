@@ -12,10 +12,10 @@
 use crate::cuda::ffi_cuda as ffi;
 use crate::ops::{
     final_logits_row, CategoricalLogitsPackedOutput, CudaTop1Completion, RankedTopKPackedOutput,
-    CUDA_ASYNC_TOKEN_RING_SLOTS, CUDA_CATEGORICAL_PACKED_WIDTH, CUDA_TOP1_INVALID_TOKEN,
-    CUDA_TOP1_PACKED_WIDTH, CUDA_TOPK_CHUNK_SIZE, CUDA_TOPK_MAX_EXACT_PACKED_VOCAB,
-    CUDA_TOPK_MAX_GRID_Y, CUDA_TOPK_MAX_K, CUDA_TOPK_MAX_STAGE2_CANDIDATES,
-    CUDA_WORKSPACE_MIN_ROWS,
+    TopKLogitsPackedOutput, CUDA_ASYNC_TOKEN_RING_SLOTS, CUDA_CATEGORICAL_PACKED_WIDTH,
+    CUDA_TOP1_INVALID_TOKEN, CUDA_TOP1_PACKED_WIDTH, CUDA_TOPK_CHUNK_SIZE,
+    CUDA_TOPK_MAX_EXACT_PACKED_VOCAB, CUDA_TOPK_MAX_GRID_Y, CUDA_TOPK_MAX_K,
+    CUDA_TOPK_MAX_STAGE2_CANDIDATES, CUDA_WORKSPACE_MIN_ROWS,
 };
 use candle_core::Shape;
 
@@ -1415,6 +1415,144 @@ pub(crate) fn cuda_categorical_logits_f32_packed_batched(
             role_storage(packed_storage),
             Shape::from_dims(&[batch, CUDA_CATEGORICAL_PACKED_WIDTH]),
         )),
+        _workspace: workspace,
+    })
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_topk_logits_f32_packed(
+    input: &Tensor,
+    k: usize,
+    temperature: f64,
+) -> Result<TopKLogitsPackedOutput> {
+    use candle_core::backend::{BackendDevice, BackendStorage};
+    use role_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+    use role_backend::CudaStorageSlice;
+
+    const OP: &str = "cuda_topk_logits_f32_packed";
+
+    if temperature <= 0.0 || !temperature.is_finite() {
+        candle_core::bail!("{OP} requires a positive finite temperature");
+    }
+
+    let input = input.contiguous()?;
+    if input.dtype() != DType::F32 {
+        candle_core::bail!("{OP} requires F32 logits");
+    }
+
+    let ncols = input.elem_count();
+    if ncols == 0 {
+        candle_core::bail!("{OP} got empty logits");
+    }
+    let k = k.min(ncols);
+    if k == 0 || k > CUDA_TOPK_MAX_K {
+        candle_core::bail!("{OP} k={k} must be in [1, {}]", CUDA_TOPK_MAX_K.min(ncols));
+    }
+
+    let nblocks = ncols.div_ceil(CUDA_TOPK_CHUNK_SIZE);
+    let stage2_candidates = nblocks
+        .checked_mul(k)
+        .ok_or_else(|| candle_core::Error::Msg(format!("{OP} workspace overflow")))?;
+    if stage2_candidates > CUDA_TOPK_MAX_STAGE2_CANDIDATES {
+        candle_core::bail!("{OP} workspace too large: {stage2_candidates} candidates");
+    }
+
+    let (storage, layout) = input.storage_and_layout();
+    let candle_core::Storage::Cuda(storage) = &*storage else {
+        candle_core::bail!("{OP} requires CUDA logits");
+    };
+    let dev = storage.device();
+    let stream = dev.cuda_stream();
+    let stream_raw = stream.cu_stream() as i64;
+
+    let CudaStorageSlice::F32(inp) = &storage.slice else {
+        candle_core::bail!("{OP} only supports F32");
+    };
+
+    let workspace_elems = nblocks
+        .checked_mul(k)
+        .ok_or_else(|| candle_core::Error::Msg(format!("{OP} workspace overflow")))?;
+    let block_elems = nblocks;
+    let packed_elems = 2usize
+        .checked_mul(k)
+        .and_then(|width| width.checked_add(2))
+        .ok_or_else(|| candle_core::Error::Msg(format!("{OP} packed width overflow")))?;
+    let mut block_values = unsafe { dev.alloc::<f32>(workspace_elems) }?;
+    let mut block_indices = unsafe { dev.alloc::<u32>(workspace_elems) }?;
+    let mut block_maxes = unsafe { dev.alloc::<f32>(block_elems) }?;
+    let mut block_sums = unsafe { dev.alloc::<f32>(block_elems) }?;
+    let mut packed_dst = unsafe { dev.alloc::<f32>(packed_elems) }?;
+
+    let (src_ptr, src_guard) = inp.device_ptr(&stream);
+    let (block_values_ptr, block_values_guard) = block_values.device_ptr_mut(&stream);
+    let (block_indices_ptr, block_indices_guard) = block_indices.device_ptr_mut(&stream);
+    let (block_maxes_ptr, block_maxes_guard) = block_maxes.device_ptr_mut(&stream);
+    let (block_sums_ptr, block_sums_guard) = block_sums.device_ptr_mut(&stream);
+    let (packed_ptr, packed_guard) = packed_dst.device_ptr_mut(&stream);
+    let src_ptr = unsafe { (src_ptr as *const f32).add(layout.start_offset()) };
+
+    unsafe {
+        ffi::topk_large_f32_packed(
+            src_ptr,
+            block_values_ptr as *mut f32,
+            block_indices_ptr as *mut u32,
+            block_maxes_ptr as *mut f32,
+            block_sums_ptr as *mut f32,
+            packed_ptr as *mut f32,
+            ncols as i32,
+            k as i32,
+            CUDA_TOPK_CHUNK_SIZE as i32,
+            nblocks as i32,
+            (1.0 / temperature) as f32,
+            stream_raw,
+        );
+    }
+
+    drop(src_guard);
+    drop(block_values_guard);
+    drop(block_indices_guard);
+    drop(block_maxes_guard);
+    drop(block_sums_guard);
+    drop(packed_guard);
+
+    let packed_storage = role_backend::CudaStorage {
+        slice: CudaStorageSlice::F32(packed_dst),
+        device: dev.clone(),
+    };
+    let workspace = vec![
+        Tensor::from((
+            role_storage(role_backend::CudaStorage {
+                slice: CudaStorageSlice::F32(block_values),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[workspace_elems]),
+        )),
+        Tensor::from((
+            role_storage(role_backend::CudaStorage {
+                slice: CudaStorageSlice::U32(block_indices),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[workspace_elems]),
+        )),
+        Tensor::from((
+            role_storage(role_backend::CudaStorage {
+                slice: CudaStorageSlice::F32(block_maxes),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[nblocks]),
+        )),
+        Tensor::from((
+            role_storage(role_backend::CudaStorage {
+                slice: CudaStorageSlice::F32(block_sums),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[nblocks]),
+        )),
+    ];
+
+    Ok(TopKLogitsPackedOutput {
+        packed: Tensor::from((role_storage(packed_storage), Shape::from_dims(&[2 * k + 2]))),
+        k,
         _workspace: workspace,
     })
 }

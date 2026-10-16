@@ -2166,7 +2166,7 @@ impl Sampler {
     ) -> Result<Logprobs> {
         crate::cuda::gdn::probe_tensors_debug("sampler-in", 1, &[&logits]);
         #[cfg(any(feature = "cuda", feature = "rocm"))]
-        if mistralrs_quant::device_has_fused_ops(logits.device())
+        if crate::pipeline::sampling::device_sampling_supported(logits.device())
             && self.can_sample_greedy_on_device(
                 return_logprobs,
                 sample_speculative,
@@ -2180,7 +2180,7 @@ impl Sampler {
         }
 
         #[cfg(any(feature = "cuda", feature = "rocm"))]
-        if mistralrs_quant::device_has_fused_ops(logits.device())
+        if crate::pipeline::sampling::device_sampling_supported(logits.device())
             && self.can_sample_topk_on_device(
                 return_logprobs,
                 sample_speculative,
