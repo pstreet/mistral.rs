@@ -1,5 +1,9 @@
+use std::sync::Arc;
+
 use super::attention_backend::{AttentionBackend, AttentionBackendKind, AttentionLayerSpec};
+use super::cache_engine::PagedCacheType;
 use crate::flashinfer::FlashInferAttentionBackend;
+use candle_core::DType;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KvCacheLayout {
@@ -316,6 +320,139 @@ impl ModelConfigLike for ModelConfigMetadata {
     }
 }
 
+/// KV dtypes the FlashInfer decode path can read: native F16/BF16 and the
+/// FP8 (F8E4M3) paged path. Block-quantized payloads (Q8_0/Q4_0, U8) are
+/// Standard-only.
+pub fn flashinfer_readable_kv_dtype(dtype: DType) -> bool {
+    matches!(dtype, DType::F16 | DType::BF16 | DType::F8E4M3)
+}
+
+/// Reconciles the auto-selected attention backend with the requested KV
+/// cache quantization: FlashInfer only when the effective K and V dtypes
+/// are readable, otherwise Standard. Wraps the model metadata where the
+/// pipeline knows the cache config, so every consumer (cache allocation,
+/// plans, graph capture) sees one consistent answer.
+#[derive(Clone)]
+pub struct KvQuantGatedConfig {
+    base: Arc<dyn ModelConfigLike + Send + Sync>,
+    flashinfer_kv_ok: bool,
+}
+
+impl KvQuantGatedConfig {
+    pub fn new(
+        base: Arc<dyn ModelConfigLike + Send + Sync>,
+        k_type: &PagedCacheType,
+        v_type: &PagedCacheType,
+        act_dtype: DType,
+    ) -> Self {
+        let flashinfer_kv_ok = flashinfer_readable_kv_dtype(k_type.to_dtype(act_dtype))
+            && flashinfer_readable_kv_dtype(v_type.to_dtype(act_dtype));
+        Self {
+            base,
+            flashinfer_kv_ok,
+        }
+    }
+}
+
+impl ModelConfigLike for KvQuantGatedConfig {
+    fn max_seq_len(&self) -> usize {
+        self.base.max_seq_len()
+    }
+    fn num_layers(&self) -> usize {
+        self.base.num_layers()
+    }
+    fn hidden_size(&self) -> usize {
+        self.base.hidden_size()
+    }
+    fn num_kv_heads(&self) -> usize {
+        self.base.num_kv_heads()
+    }
+    fn num_attn_heads(&self) -> usize {
+        self.base.num_attn_heads()
+    }
+    fn k_head_dim(&self) -> usize {
+        self.base.k_head_dim()
+    }
+    fn v_head_dim(&self) -> usize {
+        self.base.v_head_dim()
+    }
+    fn num_attn_heads_for_layer(&self, layer_idx: usize) -> usize {
+        self.base.num_attn_heads_for_layer(layer_idx)
+    }
+    fn num_kv_heads_for_layer(&self, layer_idx: usize) -> usize {
+        self.base.num_kv_heads_for_layer(layer_idx)
+    }
+    fn k_head_dim_for_layer(&self, layer_idx: usize) -> usize {
+        self.base.k_head_dim_for_layer(layer_idx)
+    }
+    fn v_head_dim_for_layer(&self, layer_idx: usize) -> usize {
+        self.base.v_head_dim_for_layer(layer_idx)
+    }
+    fn has_kv_cache_sharing(&self) -> bool {
+        self.base.has_kv_cache_sharing()
+    }
+    fn kv_cache_topology(&self) -> KvCacheTopology {
+        self.base.kv_cache_topology()
+    }
+    fn uses_own_kv_cache_for_layer(&self, layer_idx: usize) -> bool {
+        self.base.uses_own_kv_cache_for_layer(layer_idx)
+    }
+    fn layer_has_paged_kv_cache(&self, layer_idx: usize) -> bool {
+        self.base.layer_has_paged_kv_cache(layer_idx)
+    }
+    fn layer_kv_cache_elements_per_token(&self, layer_idx: usize) -> Option<usize> {
+        self.base.layer_kv_cache_elements_per_token(layer_idx)
+    }
+    fn total_kv_cache_elements_per_token(&self) -> usize {
+        self.base.total_kv_cache_elements_per_token()
+    }
+    fn kv_cache_bytes_per_token(&self, k_bits_per_elem: usize, v_bits_per_elem: usize) -> usize {
+        self.base
+            .kv_cache_bytes_per_token(k_bits_per_elem, v_bits_per_elem)
+    }
+    fn kv_cache_group_ids(&self) -> Vec<u32> {
+        self.base.kv_cache_group_ids()
+    }
+    fn attention_layer_spec(&self, layer_idx: usize) -> AttentionLayerSpec {
+        self.base.attention_layer_spec(layer_idx)
+    }
+    fn kv_cache_elements_per_token(&self) -> usize {
+        self.base.kv_cache_elements_per_token()
+    }
+    fn prefix_prefill_attention_features(
+        &self,
+        layer_idx: usize,
+    ) -> Option<PrefixPrefillAttentionFeatures> {
+        self.base.prefix_prefill_attention_features(layer_idx)
+    }
+    fn attention_backend_kind(&self) -> AttentionBackendKind {
+        if self.flashinfer_kv_ok {
+            self.base.attention_backend_kind()
+        } else {
+            AttentionBackendKind::Standard
+        }
+    }
+    fn attention_backend_kind_for_layer(&self, layer_idx: usize) -> AttentionBackendKind {
+        if self.flashinfer_kv_ok {
+            self.base.attention_backend_kind_for_layer(layer_idx)
+        } else {
+            AttentionBackendKind::Standard
+        }
+    }
+    fn kv_cache_layout(&self) -> KvCacheLayout {
+        match self.base.kv_cache_layout() {
+            KvCacheLayout::FlashInferHnd if !self.flashinfer_kv_ok => KvCacheLayout::Standard,
+            layout => layout,
+        }
+    }
+    fn kv_cache_layout_for_layer(&self, layer_idx: usize) -> KvCacheLayout {
+        match self.base.kv_cache_layout_for_layer(layer_idx) {
+            KvCacheLayout::FlashInferHnd if !self.flashinfer_kv_ok => KvCacheLayout::Standard,
+            layout => layout,
+        }
+    }
+}
+
 /// Base config plus a per-layer mask of which layers keep a paged KV cache.
 ///
 /// Hybrid models interleave attention layers with linear/recurrent ones that hold no paged cache.
@@ -485,6 +622,154 @@ mod tests {
             kv_cache_layout: KvCacheLayout::Standard,
         };
 
+        assert_eq!(
+            config.attention_backend_kind(),
+            AttentionBackendKind::Standard
+        );
+        assert_eq!(config.kv_cache_layout(), KvCacheLayout::Standard);
+    }
+
+    #[test]
+    fn flashinfer_readable_kv_dtype_covers_native_and_fp8_only() {
+        assert!(super::flashinfer_readable_kv_dtype(candle_core::DType::F16));
+        assert!(super::flashinfer_readable_kv_dtype(
+            candle_core::DType::BF16
+        ));
+        assert!(super::flashinfer_readable_kv_dtype(
+            candle_core::DType::F8E4M3
+        ));
+        assert!(!super::flashinfer_readable_kv_dtype(candle_core::DType::U8));
+    }
+
+    struct FlashInferOnlyConfig;
+
+    impl ModelConfigLike for FlashInferOnlyConfig {
+        fn max_seq_len(&self) -> usize {
+            4096
+        }
+        fn num_layers(&self) -> usize {
+            2
+        }
+        fn hidden_size(&self) -> usize {
+            896
+        }
+        fn num_kv_heads(&self) -> usize {
+            2
+        }
+        fn num_attn_heads(&self) -> usize {
+            14
+        }
+        fn k_head_dim(&self) -> usize {
+            64
+        }
+        fn v_head_dim(&self) -> usize {
+            64
+        }
+        fn attention_backend_kind(&self) -> AttentionBackendKind {
+            AttentionBackendKind::FlashInfer
+        }
+        fn attention_backend_kind_for_layer(&self, _layer_idx: usize) -> AttentionBackendKind {
+            AttentionBackendKind::FlashInfer
+        }
+        fn kv_cache_layout(&self) -> KvCacheLayout {
+            KvCacheLayout::FlashInferHnd
+        }
+        fn kv_cache_layout_for_layer(&self, _layer_idx: usize) -> KvCacheLayout {
+            KvCacheLayout::FlashInferHnd
+        }
+    }
+
+    fn gated(cache_type: super::PagedCacheType) -> super::KvQuantGatedConfig {
+        let base: std::sync::Arc<dyn ModelConfigLike + Send + Sync> =
+            std::sync::Arc::new(FlashInferOnlyConfig);
+        super::KvQuantGatedConfig::new(base, &cache_type, &cache_type, candle_core::DType::BF16)
+    }
+
+    #[test]
+    fn kv_quant_gate_blocks_flashinfer_for_block_quantized_kv() {
+        let config = gated(super::PagedCacheType::Q8_0);
+        assert_eq!(
+            config.attention_backend_kind(),
+            AttentionBackendKind::Standard
+        );
+        assert_eq!(
+            config.attention_backend_kind_for_layer(1),
+            AttentionBackendKind::Standard
+        );
+        assert_eq!(config.kv_cache_layout(), KvCacheLayout::Standard);
+        assert_eq!(config.kv_cache_layout_for_layer(1), KvCacheLayout::Standard);
+    }
+
+    #[test]
+    fn kv_quant_gate_keeps_flashinfer_for_native_kv() {
+        let config = gated(super::PagedCacheType::Auto);
+        assert_eq!(
+            config.attention_backend_kind(),
+            AttentionBackendKind::FlashInfer
+        );
+        assert_eq!(config.kv_cache_layout(), KvCacheLayout::FlashInferHnd);
+
+        let config = gated(super::PagedCacheType::BF16);
+        assert_eq!(config.kv_cache_layout(), KvCacheLayout::FlashInferHnd);
+
+        let config = gated(super::PagedCacheType::F8E4M3);
+        assert_eq!(config.kv_cache_layout(), KvCacheLayout::FlashInferHnd);
+    }
+
+    #[test]
+    fn kv_quant_gate_leaves_standard_and_mla_requests_untouched() {
+        let base: std::sync::Arc<dyn ModelConfigLike + Send + Sync> =
+            std::sync::Arc::new(ModelConfigMetadata {
+                max_seq_len: 4096,
+                num_layers: 2,
+                hidden_size: 896,
+                num_kv_heads: 2,
+                num_attn_heads: 14,
+                sliding_window: None,
+                k_head_dim: 64,
+                v_head_dim: 64,
+                kv_cache_layout: KvCacheLayout::Mla {
+                    kv_lora_rank: 512,
+                    kpe_head_dim: 64,
+                },
+            });
+        let config = super::KvQuantGatedConfig::new(
+            base.clone(),
+            &super::PagedCacheType::Q8_0,
+            &super::PagedCacheType::Q8_0,
+            candle_core::DType::BF16,
+        );
+        assert_eq!(
+            config.kv_cache_layout(),
+            KvCacheLayout::Mla {
+                kv_lora_rank: 512,
+                kpe_head_dim: 64
+            }
+        );
+        assert_eq!(
+            config.kv_cache_elements_per_token(),
+            512 + 64,
+            "MLA element pricing must come from the wrapped base"
+        );
+
+        let base: std::sync::Arc<dyn ModelConfigLike + Send + Sync> =
+            std::sync::Arc::new(ModelConfigMetadata {
+                max_seq_len: 4096,
+                num_layers: 2,
+                hidden_size: 896,
+                num_kv_heads: 2,
+                num_attn_heads: 14,
+                sliding_window: None,
+                k_head_dim: 64,
+                v_head_dim: 64,
+                kv_cache_layout: KvCacheLayout::StandardNoFlashInfer,
+            });
+        let config = super::KvQuantGatedConfig::new(
+            base,
+            &super::PagedCacheType::Q8_0,
+            &super::PagedCacheType::Q8_0,
+            candle_core::DType::BF16,
+        );
         assert_eq!(
             config.attention_backend_kind(),
             AttentionBackendKind::Standard

@@ -48,7 +48,10 @@ struct CudaDecodeGraphForwardInput<'a> {
     model_specific_args: &'a dyn Any,
     recurrent_batch_kind: RecurrentBatchKind,
 }
-use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
+use crate::paged_attention::{
+    calculate_cache_config, AttentionImplementation, CacheEngine, KvQuantGatedConfig,
+    ModelConfigLike,
+};
 use crate::pipeline::chat_template::{
     calculate_eos_tokens, BeginEndUnkPadTok, ChatTemplateValue, GenerationConfig,
 };
@@ -1370,47 +1373,55 @@ impl Loader for MultimodalLoader {
         #[cfg(not(feature = "cuda"))]
         let _ = recurrent_pool_grew;
 
-        let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
-            let mut reservations =
-                paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
-            if self.mtp {
-                if let Some(isq) = in_situ_quant {
-                    reservations.primary_device_bytes = reservations
-                        .primary_device_bytes
-                        .saturating_add(super::mtp_draft_lm_head_isq_bytes(
-                            tokenizer.get_vocab_size(true),
-                            model_metadata.hidden_size(),
-                            isq,
-                        ));
+        let (cache_config, cache_engine, model_metadata) =
+            if let Some(paged_attn_config) = paged_attn_config {
+                let mut reservations =
+                    paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
+                if self.mtp {
+                    if let Some(isq) = in_situ_quant {
+                        reservations.primary_device_bytes = reservations
+                            .primary_device_bytes
+                            .saturating_add(super::mtp_draft_lm_head_isq_bytes(
+                                tokenizer.get_vocab_size(true),
+                                model_metadata.hidden_size(),
+                                isq,
+                            ));
+                    }
                 }
-            }
-            let cache_config = calculate_cache_config(
-                paged_attn_config.mem_gpu,
-                reservations,
-                paged_attn_config.block_size,
-                dtype,
-                paged_attn_config.cache_type,
-                paged_attn_config.k_cache_type,
-                paged_attn_config.v_cache_type,
-                model_metadata.as_ref(),
-                &device,
-                &layer_devices,
-                silent,
-                None,
-                max_kv_tokens,
-                paged_attn_config.fit_ctx,
-            )?;
-            let cache_engine = CacheEngine::new(
-                model_metadata.as_ref(),
-                &cache_config,
-                dtype,
-                &device,
-                layer_devices,
-            )?;
-            (Some(cache_config), Some(cache_engine))
-        } else {
-            (None, None)
-        };
+                let cache_config = calculate_cache_config(
+                    paged_attn_config.mem_gpu,
+                    reservations,
+                    paged_attn_config.block_size,
+                    dtype,
+                    paged_attn_config.cache_type,
+                    paged_attn_config.k_cache_type,
+                    paged_attn_config.v_cache_type,
+                    model_metadata.as_ref(),
+                    &device,
+                    &layer_devices,
+                    silent,
+                    None,
+                    max_kv_tokens,
+                    paged_attn_config.fit_ctx,
+                )?;
+                let model_metadata: Arc<dyn ModelConfigLike + Send + Sync> =
+                    Arc::new(KvQuantGatedConfig::new(
+                        model_metadata,
+                        &cache_config.k_type(),
+                        &cache_config.v_type(),
+                        dtype,
+                    ));
+                let cache_engine = CacheEngine::new(
+                    model_metadata.as_ref(),
+                    &cache_config,
+                    dtype,
+                    &device,
+                    layer_devices,
+                )?;
+                (Some(cache_config), Some(cache_engine), model_metadata)
+            } else {
+                (None, None, model_metadata)
+            };
 
         #[cfg(any(feature = "cuda", feature = "rocm"))]
         super::synchronize_cuda_contexts(&device, pipeline_mapper.as_ref())?;

@@ -48,7 +48,10 @@ struct CudaDecodeGraphForwardInput<'a> {
 }
 use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
-use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
+use crate::paged_attention::{
+    calculate_cache_config, AttentionImplementation, CacheEngine, KvQuantGatedConfig,
+    ModelConfigLike,
+};
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::pipeline::cuda_graph::{
@@ -230,48 +233,56 @@ pub(crate) fn build_normal_pipeline(
     #[cfg(not(feature = "cuda"))]
     let _ = recurrent_pool_grew;
 
-    let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
-        let mut reservations =
-            paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
-        if let Some(attach_bytes) = mtp_attach_reservation_bytes {
-            reservations.primary_device_bytes = reservations
-                .primary_device_bytes
-                .saturating_add(attach_bytes);
-        }
-        let cache_config = calculate_cache_config(
-            paged_attn_config.mem_gpu,
-            reservations,
-            paged_attn_config.block_size,
-            dtype,
-            paged_attn_config.cache_type,
-            paged_attn_config.k_cache_type,
-            paged_attn_config.v_cache_type,
-            model_metadata.as_ref(),
-            &device,
-            &mapper
-                .get_unique_devices()
-                .into_iter()
-                .map(Some)
-                .collect::<Vec<_>>(),
-            silent,
-            None,
-            max_kv_tokens,
-            paged_attn_config.fit_ctx,
-        )?;
-        let layer_devices = (0..num_hidden_layers)
-            .map(|layer| mapper.device_for(layer, false).cloned())
-            .collect();
-        let cache_engine = CacheEngine::new(
-            model_metadata.as_ref(),
-            &cache_config,
-            dtype,
-            model.device(),
-            layer_devices,
-        )?;
-        (Some(cache_config), Some(cache_engine))
-    } else {
-        (None, None)
-    };
+    let (cache_config, cache_engine, model_metadata) =
+        if let Some(paged_attn_config) = paged_attn_config {
+            let mut reservations =
+                paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
+            if let Some(attach_bytes) = mtp_attach_reservation_bytes {
+                reservations.primary_device_bytes = reservations
+                    .primary_device_bytes
+                    .saturating_add(attach_bytes);
+            }
+            let cache_config = calculate_cache_config(
+                paged_attn_config.mem_gpu,
+                reservations,
+                paged_attn_config.block_size,
+                dtype,
+                paged_attn_config.cache_type,
+                paged_attn_config.k_cache_type,
+                paged_attn_config.v_cache_type,
+                model_metadata.as_ref(),
+                &device,
+                &mapper
+                    .get_unique_devices()
+                    .into_iter()
+                    .map(Some)
+                    .collect::<Vec<_>>(),
+                silent,
+                None,
+                max_kv_tokens,
+                paged_attn_config.fit_ctx,
+            )?;
+            let model_metadata: Arc<dyn ModelConfigLike + Send + Sync> =
+                Arc::new(KvQuantGatedConfig::new(
+                    model_metadata,
+                    &cache_config.k_type(),
+                    &cache_config.v_type(),
+                    dtype,
+                ));
+            let layer_devices = (0..num_hidden_layers)
+                .map(|layer| mapper.device_for(layer, false).cloned())
+                .collect();
+            let cache_engine = CacheEngine::new(
+                model_metadata.as_ref(),
+                &cache_config,
+                dtype,
+                model.device(),
+                layer_devices,
+            )?;
+            (Some(cache_config), Some(cache_engine), model_metadata)
+        } else {
+            (None, None, model_metadata)
+        };
 
     let max_seq_len = model.max_seq_len();
     let llg_factory = build_llg_factory(tokenizer.clone())?;
