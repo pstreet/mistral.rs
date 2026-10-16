@@ -132,6 +132,19 @@ live verifications; docs sync.
       stream races as previously audited. NEXT: audit GDN-prefill
       producer->consumer stream edges (hipBLASLt handle stream,
       f32-upcast/slot-H2D visibility) for the missing event.
+      STREAM AUDIT 2026-10-16: single per-device stream everywhere
+      (BLAS Lt, custom kernels, H2D all share it) - NO cross-stream
+      edge exists in-process; missing-dependency theory DEAD.
+      ILLEGAL-ACCESS TRIAL: var-off probe faulted with hip error 700
+      on a CK-GEMM (grid 372736) at fault va in NO live ledger range
+      (18MB unmapped gap) - a wild GEMM address, hardware-confirmed.
+      32F-accum cell still NaN'd (F16-overflow DEAD), legacy-chunked
+      cell still NaN'd (vmajor-specific DEAD). Score: var-off 4/4 NaN
+      (layers 1/4/43/52, GDN-proj/rec-y/attn-y + one hard fault) vs
+      var-ON 6/6 clean. NEXT: per-tensor device addresses in probes
+      (dtype-dispatched helper, built) + ONE var-off trial -> victim
+      ranges vs ledger overlap analysis to place the fix (allocator
+      overlap vs wild dims vs corrupt weights).
 - [ ] ~P0 MACHINE STABILITY (found 2026-10-14 02:20+): TWO kernel
       crashes within 15 minutes during heavy GPU stress testing
       (prod + repeated probe model loads + NaN-poison batteries).
