@@ -181,6 +181,12 @@ live verifications; docs sync.
       block-table validation probe (unmapped/empty ids at dispatch)
       + repeated hard-fault collection (clustered addrs = systematic
       offset, scattered = content lottery).
+      LT POINTER SCREEN 2026-10-16 ~05:00 UTC: all 2016 Lt GEMM A/C
+      footprints fit inside live ledger ranges (one false alarm from
+      a swapped-m/n footprint formula, corrected to transpose-invariant
+      numel check). Lt GEMM addressing EXONERATED. Wild address must
+      come from non-Lt kernels (custom FA/GDN/speculative/sampling,
+      rocBLAS non-Lt, or missed paths).
       BREAKTHROUGH 2026-10-16 ~02:45 UTC: cross-checking the faulting
       layer's launch pointers against probed tensor addresses - EVERY
       pointer matches (q/k/v/g/beta/state/out/slot all verified). But
