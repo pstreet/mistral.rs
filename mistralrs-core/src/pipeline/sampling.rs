@@ -986,14 +986,12 @@ impl CudaTokenBatchSubmission {
     }
 
     /// Dual builds only: whether this batch submission targets NVIDIA.
-    /// Only Top1 submissions can be Nvidia ones (dual has no top-k
-    /// sampling submit twin, so those stay host-side).
     #[cfg(all(feature = "cuda", feature = "rocm"))]
     pub(crate) fn is_nvidia(&self) -> bool {
-        matches!(
-            &self.inner,
-            CudaTokenBatchSubmissionInner::Top1(inner) if inner.is_nvidia()
-        )
+        match &self.inner {
+            CudaTokenBatchSubmissionInner::Top1(inner) => inner.is_nvidia(),
+            CudaTokenBatchSubmissionInner::TopK(inner) => inner.is_nvidia(),
+        }
     }
 
     /// Dual-build NVIDIA-role wait on a CUDA-role stream.
@@ -1001,11 +999,7 @@ impl CudaTokenBatchSubmission {
     pub(crate) fn wait_on_cuda(&self, stream: &Arc<super::graph_role::CuStream>) -> Result<()> {
         match &self.inner {
             CudaTokenBatchSubmissionInner::Top1(inner) => inner.wait_on_cuda(stream),
-            CudaTokenBatchSubmissionInner::TopK(_) => {
-                candle_core::bail!(
-                    "CUDA token batch wait has no NVIDIA-role top-k sampling submission"
-                )
-            }
+            CudaTokenBatchSubmissionInner::TopK(inner) => inner.wait_on_cuda(stream),
         }
     }
 
@@ -1017,11 +1011,7 @@ impl CudaTokenBatchSubmission {
     ) -> Result<()> {
         match &self.inner {
             CudaTokenBatchSubmissionInner::Top1(inner) => inner.release_after_cuda(stream),
-            CudaTokenBatchSubmissionInner::TopK(_) => {
-                candle_core::bail!(
-                    "CUDA token batch release has no NVIDIA-role top-k sampling submission"
-                )
-            }
+            CudaTokenBatchSubmissionInner::TopK(inner) => inner.release_after_cuda(stream),
         }
     }
 
@@ -1142,13 +1132,6 @@ fn try_submit_cuda_token_batch_inner(
     let Some(plan) = prepare_cuda_token_batch(seqs, rng) else {
         return Ok(None);
     };
-    // Dual builds have no NVIDIA-role top-k sampling submit twin yet
-    // (the inner bails on Cuda storage); keep those plans on host
-    // sampling instead of erroring the step. Greedy proceeds below.
-    #[cfg(all(feature = "cuda", feature = "rocm"))]
-    if plan.topk_params.is_some() && logits.device().is_cuda() {
-        return Ok(None);
-    }
     let inner = match (plan.topk_params, resident_input) {
         (None, Some(resident_input)) => CudaTokenBatchSubmissionInner::Top1(
             plan.sampler

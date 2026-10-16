@@ -312,7 +312,7 @@ pub struct Sampler {
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     top1_cache: Arc<Mutex<Option<crate::ops::Top1LogitsWorkspace>>>,
     #[cfg(any(feature = "cuda", feature = "rocm"))]
-    topk_sampling_cache: Arc<Mutex<Option<crate::ops::CudaTopKSamplingWorkspace>>>,
+    topk_sampling_cache: Arc<Mutex<Option<crate::ops::TopKSamplingWorkspace>>>,
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -473,8 +473,8 @@ impl Drop for CudaTop1BatchSubmission {
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 pub(crate) struct CudaTopKBatchSubmission {
-    cache: Arc<Mutex<Option<crate::ops::CudaTopKSamplingWorkspace>>>,
-    submission: Option<crate::ops::CudaTopKSamplingSubmission>,
+    cache: Arc<Mutex<Option<crate::ops::TopKSamplingWorkspace>>>,
+    submission: Option<crate::ops::TopKSamplingSubmission>,
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -502,6 +502,24 @@ impl CudaTopKBatchSubmission {
         )
     }
 
+    /// Dual-build NVIDIA-role wait: the submission must be an Nvidia one.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    pub(crate) fn wait_on_cuda(
+        &self,
+        stream: &Arc<crate::pipeline::graph_role::CuStream>,
+    ) -> Result<()> {
+        let mut cache = self.cache.lock().unwrap();
+        crate::ops::cuda_topk_sampling_device_tokens_wait_on_cuda(
+            cache
+                .as_mut()
+                .expect("CUDA top-k workspace exists while its submission is active"),
+            self.submission
+                .as_ref()
+                .expect("CUDA top-k submission was already completed"),
+            stream,
+        )
+    }
+
     pub(crate) fn release_after(
         &self,
         stream: &Arc<candle_core::role::backend::cudarc::driver::CudaStream>,
@@ -515,6 +533,33 @@ impl CudaTopKBatchSubmission {
                 .as_ref()
                 .expect("CUDA top-k submission was already completed"),
             stream,
+        )
+    }
+
+    /// Dual-build NVIDIA-role release: the submission must be an Nvidia one.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    pub(crate) fn release_after_cuda(
+        &self,
+        stream: &Arc<crate::pipeline::graph_role::CuStream>,
+    ) -> Result<()> {
+        let mut cache = self.cache.lock().unwrap();
+        crate::ops::cuda_topk_sampling_device_tokens_release_after_cuda(
+            cache
+                .as_mut()
+                .expect("CUDA top-k workspace exists while its submission is active"),
+            self.submission
+                .as_ref()
+                .expect("CUDA top-k submission was already completed"),
+            stream,
+        )
+    }
+
+    /// Dual builds only: whether this top-k submission targets the NVIDIA role.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    pub(crate) fn is_nvidia(&self) -> bool {
+        matches!(
+            self.submission.as_ref(),
+            Some(crate::ops::TopKSamplingSubmission::Nvidia(_))
         )
     }
 

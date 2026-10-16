@@ -30,7 +30,7 @@ pub(crate) const CUDA_ASYNC_TOKEN_RING_SLOTS: usize = 2;
 // pinned-staging workspaces pre-size rows to this floor so batch growth never reallocs mid-request
 pub(crate) const CUDA_WORKSPACE_MIN_ROWS: usize = 64;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
-const CUDA_TOPK_SAMPLING_PARAM_WIDTH: usize = 5;
+pub(crate) const CUDA_TOPK_SAMPLING_PARAM_WIDTH: usize = 5;
 #[cfg(feature = "cuda")]
 pub(crate) const CUDA_DFLASH_SELECTOR_MAX_K: usize = 128;
 #[cfg(all(feature = "cuda", test))]
@@ -3907,6 +3907,7 @@ fn cuda_topk_sampling_submit_inner(
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 pub(crate) fn cuda_topk_sampling_submit_batched(
     input: &Tensor,
     params: &[CudaTopKSamplingParams],
@@ -3922,6 +3923,7 @@ pub(crate) fn cuda_topk_sampling_submit_batched(
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 pub(crate) fn cuda_topk_sampling_submit_batched_into(
     input: &Tensor,
     token_ids_dst: &Tensor,
@@ -3938,6 +3940,7 @@ pub(crate) fn cuda_topk_sampling_submit_batched_into(
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 pub(crate) fn cuda_topk_sampling_device_tokens_wait_on(
     workspace: &mut CudaTopKSamplingWorkspace,
     submission: &CudaTopKSamplingSubmission,
@@ -3951,6 +3954,7 @@ pub(crate) fn cuda_topk_sampling_device_tokens_wait_on(
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 pub(crate) fn cuda_topk_sampling_device_tokens_release_after(
     workspace: &mut CudaTopKSamplingWorkspace,
     submission: &CudaTopKSamplingSubmission,
@@ -3964,6 +3968,7 @@ pub(crate) fn cuda_topk_sampling_device_tokens_release_after(
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 pub(crate) fn cuda_topk_sampling_submission_complete<'a>(
     workspace: &'a mut CudaTopKSamplingWorkspace,
     submission: &CudaTopKSamplingSubmission,
@@ -3978,6 +3983,7 @@ pub(crate) fn cuda_topk_sampling_submission_complete<'a>(
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
+#[cfg(not(all(feature = "cuda", feature = "rocm")))]
 pub(crate) fn cuda_topk_sampling_submission_cancel(
     workspace: &mut CudaTopKSamplingWorkspace,
     submission: &CudaTopKSamplingSubmission,
@@ -9315,6 +9321,35 @@ impl Top1Submission {
 }
 
 #[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) enum TopKSamplingWorkspace {
+    Nvidia(crate::cuda::ops_cuda_role::CudaTopKSamplingWorkspace),
+    Hip(CudaTopKSamplingWorkspace),
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) enum TopKSamplingSubmission {
+    Nvidia(crate::cuda::ops_cuda_role::CudaTopKSamplingSubmission),
+    Hip(CudaTopKSamplingSubmission),
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+impl TopKSamplingSubmission {
+    pub(crate) fn batch_size(&self) -> usize {
+        match self {
+            Self::Nvidia(sub) => sub.batch_size(),
+            Self::Hip(sub) => sub.batch_size(),
+        }
+    }
+
+    pub(crate) fn wait(&self) -> Result<()> {
+        match self {
+            Self::Nvidia(sub) => sub.wait(),
+            Self::Hip(sub) => sub.wait(),
+        }
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
 pub(crate) enum RankedTopKPackedWorkspace {
     Nvidia(crate::cuda::ops_cuda_role::CudaRankedTopKPackedWorkspace),
     Hip(CudaRankedTopKPackedWorkspace),
@@ -9335,6 +9370,16 @@ pub(crate) type Top1Submission = CudaTop1Submission;
     not(all(feature = "cuda", feature = "rocm"))
 ))]
 pub(crate) type RankedTopKPackedWorkspace = CudaRankedTopKPackedWorkspace;
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+pub(crate) type TopKSamplingWorkspace = CudaTopKSamplingWorkspace;
+#[cfg(all(
+    any(feature = "cuda", feature = "rocm"),
+    not(all(feature = "cuda", feature = "rocm"))
+))]
+pub(crate) type TopKSamplingSubmission = CudaTopKSamplingSubmission;
 
 #[cfg(all(feature = "cuda", feature = "rocm"))]
 fn take_top1_hip(
@@ -9613,6 +9658,225 @@ pub(crate) fn cuda_top1_device_tokens_release_after_cuda(
                 submission,
                 consumer_stream,
             )
+        }
+        _ => candle_core::bail!("{OP} workspace and submission roles do not match"),
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+fn take_topk_nvidia(
+    cache: &mut Option<TopKSamplingWorkspace>,
+    op: &'static str,
+) -> Result<Option<crate::cuda::ops_cuda_role::CudaTopKSamplingWorkspace>> {
+    match cache.take() {
+        None => Ok(None),
+        Some(TopKSamplingWorkspace::Nvidia(workspace)) => Ok(Some(workspace)),
+        Some(TopKSamplingWorkspace::Hip(_)) => {
+            candle_core::bail!("{op} workspace role switched mid-stream")
+        }
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+fn take_topk_hip(
+    cache: &mut Option<TopKSamplingWorkspace>,
+    op: &'static str,
+) -> Result<Option<CudaTopKSamplingWorkspace>> {
+    match cache.take() {
+        None => Ok(None),
+        Some(TopKSamplingWorkspace::Hip(workspace)) => Ok(Some(workspace)),
+        Some(TopKSamplingWorkspace::Nvidia(_)) => {
+            candle_core::bail!("{op} workspace role switched mid-stream")
+        }
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_topk_sampling_submit_batched(
+    input: &Tensor,
+    params: &[CudaTopKSamplingParams],
+    cache: &mut Option<TopKSamplingWorkspace>,
+) -> Result<TopKSamplingSubmission> {
+    const OP: &str = "cuda_topk_sampling_submit_batched";
+    if input.device().is_cuda() {
+        let mut slot = take_topk_nvidia(cache, OP)?;
+        let submission = crate::cuda::ops_cuda_role::cuda_topk_sampling_submit_batched(
+            input, params, &mut slot,
+        )?;
+        *cache = slot.map(TopKSamplingWorkspace::Nvidia);
+        return Ok(TopKSamplingSubmission::Nvidia(submission));
+    }
+    let mut slot = take_topk_hip(cache, OP)?;
+    let submission = cuda_topk_sampling_submit_inner(
+        input,
+        None,
+        params,
+        &mut slot,
+        "cuda_topk_sampling_submit_batched",
+    )?;
+    *cache = slot.map(TopKSamplingWorkspace::Hip);
+    Ok(TopKSamplingSubmission::Hip(submission))
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_topk_sampling_submit_batched_into(
+    input: &Tensor,
+    token_ids_dst: &Tensor,
+    params: &[CudaTopKSamplingParams],
+    cache: &mut Option<TopKSamplingWorkspace>,
+) -> Result<TopKSamplingSubmission> {
+    const OP: &str = "cuda_topk_sampling_submit_batched_into";
+    if input.device().is_cuda() {
+        let mut slot = take_topk_nvidia(cache, OP)?;
+        let submission = crate::cuda::ops_cuda_role::cuda_topk_sampling_submit_batched_into(
+            input,
+            token_ids_dst,
+            params,
+            &mut slot,
+        )?;
+        *cache = slot.map(TopKSamplingWorkspace::Nvidia);
+        return Ok(TopKSamplingSubmission::Nvidia(submission));
+    }
+    let mut slot = take_topk_hip(cache, OP)?;
+    let submission = cuda_topk_sampling_submit_inner(
+        input,
+        Some(token_ids_dst),
+        params,
+        &mut slot,
+        "cuda_topk_sampling_submit_batched_into",
+    )?;
+    *cache = slot.map(TopKSamplingWorkspace::Hip);
+    Ok(TopKSamplingSubmission::Hip(submission))
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_topk_sampling_device_tokens_wait_on(
+    workspace: &mut TopKSamplingWorkspace,
+    submission: &TopKSamplingSubmission,
+    consumer_stream: &Arc<candle_core::role::backend::cudarc::driver::CudaStream>,
+) -> Result<()> {
+    const OP: &str = "cuda_topk_sampling_device_tokens_wait_on";
+    match (workspace, submission) {
+        (TopKSamplingWorkspace::Nvidia(workspace), TopKSamplingSubmission::Nvidia(submission)) => {
+            // Cross-stream waits on the NVIDIA role go through the
+            // lookahead tail twin (CuStream overloads below).
+            let _ = (workspace, submission, consumer_stream);
+            candle_core::bail!("{OP} on the NVIDIA role needs a CUDA-role stream")
+        }
+        (TopKSamplingWorkspace::Hip(workspace), TopKSamplingSubmission::Hip(submission)) => {
+            workspace.token_ring.wait_on(
+                &submission.token,
+                consumer_stream,
+                "cuda_topk_sampling_device_tokens_wait_on",
+            )
+        }
+        _ => candle_core::bail!("{OP} workspace and submission roles do not match"),
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_topk_sampling_device_tokens_wait_on_cuda(
+    workspace: &mut TopKSamplingWorkspace,
+    submission: &TopKSamplingSubmission,
+    consumer_stream: &Arc<crate::pipeline::graph_role::CuStream>,
+) -> Result<()> {
+    const OP: &str = "cuda_topk_sampling_device_tokens_wait_on";
+    match (workspace, submission) {
+        (TopKSamplingWorkspace::Nvidia(workspace), TopKSamplingSubmission::Nvidia(submission)) => {
+            crate::cuda::ops_cuda_role::cuda_topk_sampling_device_tokens_wait_on(
+                workspace,
+                submission,
+                consumer_stream,
+            )
+        }
+        _ => candle_core::bail!("{OP} workspace and submission roles do not match"),
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_topk_sampling_device_tokens_release_after(
+    workspace: &mut TopKSamplingWorkspace,
+    submission: &TopKSamplingSubmission,
+    consumer_stream: &Arc<candle_core::role::backend::cudarc::driver::CudaStream>,
+) -> Result<()> {
+    const OP: &str = "cuda_topk_sampling_device_tokens_release_after";
+    match (workspace, submission) {
+        (TopKSamplingWorkspace::Nvidia(workspace), TopKSamplingSubmission::Nvidia(submission)) => {
+            let _ = (workspace, submission, consumer_stream);
+            candle_core::bail!("{OP} on the NVIDIA role needs a CUDA-role stream")
+        }
+        (TopKSamplingWorkspace::Hip(workspace), TopKSamplingSubmission::Hip(submission)) => {
+            workspace.token_ring.release_after(
+                &submission.token,
+                consumer_stream,
+                "cuda_topk_sampling_device_tokens_release_after",
+            )
+        }
+        _ => candle_core::bail!("{OP} workspace and submission roles do not match"),
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_topk_sampling_device_tokens_release_after_cuda(
+    workspace: &mut TopKSamplingWorkspace,
+    submission: &TopKSamplingSubmission,
+    consumer_stream: &Arc<crate::pipeline::graph_role::CuStream>,
+) -> Result<()> {
+    const OP: &str = "cuda_topk_sampling_device_tokens_release_after";
+    match (workspace, submission) {
+        (TopKSamplingWorkspace::Nvidia(workspace), TopKSamplingSubmission::Nvidia(submission)) => {
+            crate::cuda::ops_cuda_role::cuda_topk_sampling_device_tokens_release_after(
+                workspace,
+                submission,
+                consumer_stream,
+            )
+        }
+        _ => candle_core::bail!("{OP} workspace and submission roles do not match"),
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_topk_sampling_submission_complete<'a>(
+    workspace: &'a mut TopKSamplingWorkspace,
+    submission: &TopKSamplingSubmission,
+) -> Result<CudaTopKSamplingCompletion<'a>> {
+    const OP: &str = "cuda_topk_sampling_submission_complete";
+    match (workspace, submission) {
+        (TopKSamplingWorkspace::Nvidia(workspace), TopKSamplingSubmission::Nvidia(submission)) => {
+            let completion = crate::cuda::ops_cuda_role::cuda_topk_sampling_submission_complete(
+                workspace, submission,
+            )?;
+            Ok(CudaTopKSamplingCompletion {
+                token_ids: completion.token_ids(),
+            })
+        }
+        (TopKSamplingWorkspace::Hip(workspace), TopKSamplingSubmission::Hip(submission)) => {
+            let token_ids = workspace
+                .token_ring
+                .complete(&submission.token, "cuda_topk_sampling_submission_complete")?;
+            if token_ids.contains(&CUDA_TOP1_INVALID_TOKEN) {
+                candle_core::bail!("invalid CUDA top-k sampling output");
+            }
+            Ok(CudaTopKSamplingCompletion { token_ids })
+        }
+        _ => candle_core::bail!("{OP} workspace and submission roles do not match"),
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_topk_sampling_submission_cancel(
+    workspace: &mut TopKSamplingWorkspace,
+    submission: &TopKSamplingSubmission,
+) -> Result<()> {
+    const OP: &str = "cuda_topk_sampling_submission_cancel";
+    match (workspace, submission) {
+        (TopKSamplingWorkspace::Nvidia(workspace), TopKSamplingSubmission::Nvidia(submission)) => {
+            crate::cuda::ops_cuda_role::cuda_topk_sampling_submission_cancel(workspace, submission)
+        }
+        (TopKSamplingWorkspace::Hip(workspace), TopKSamplingSubmission::Hip(submission)) => {
+            workspace
+                .token_ring
+                .cancel(&submission.token, "cuda_topk_sampling_submission_cancel")
         }
         _ => candle_core::bail!("{OP} workspace and submission roles do not match"),
     }
