@@ -661,18 +661,17 @@ parity queue) now outranks it on impact.
       path today), gemv -> plain GEMM, HQQ CPU bitpack-at-load.
       Pure wins, no architecture risk.
 - [ ] ~M Dual NVIDIA-role device sampling + one-token lookahead
-      (measured 2026-10-13, the cuda-alone parity pair): the dual
-      arm warns per token "one-token lookahead sampling needs the
-      serving (hip) role; falling back to graph replay with host
-      sampling" - the matched-pair bench put its decode cost at
-      ~7% (38.9 dual vs 41.8 solo tok/s, identical config/payloads/
-      device). Solo-cuda already has device sampling (the
-      2026-10-07 device_sampling_supported fix); the DUAL
-      NVIDIA role still samples on the host and skips the
-      lookahead. Port both to the role: extend
-      device_sampling_supported to the dual Cuda role + extract
-      the hip-only lookahead arm in execution.rs. The 27B-cuda
-      alias lane gains the measured delta directly.
+      (measured 2026-10-13, the cuda-alone parity pair): PARTIALLY
+      LANDED 2026-10-16 (build 15): device_sampling_supported dual
+      arm + categorical packed twin (FFI decls, ops_cuda_role twin,
+      early-route dispatcher) + safe host fallbacks for the paths
+      without twins (resident top-k submit, logprob top-k). Live on
+      prod: default-temp samples on-device (was host), temp-0
+      unchanged, 17x23=391 verified correct through the twin.
+      REMAINING: top-k sampling submit twin (sample_ranked_topk),
+      single-seq f32_packed twin, dual lookahead tail twin
+      (CuStream-typed tail + submission flow), and the pair-parity
+      bench vs solo-cuda to confirm the measured ~7%.
 - [ ] ~S UQFF vs GGUF shootout: same weights through the CLI
       `quantize`/`uqff` path, bench load + decode on this box.
       Unmeasured; native format may win both.
