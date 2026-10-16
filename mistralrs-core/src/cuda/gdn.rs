@@ -1504,26 +1504,41 @@ pub(crate) fn probe_tensors_debug(tag: &str, qlen: usize, tensors: &[&Tensor]) {
     }
 }
 
-fn tensor_dev_addr(t: &candle_core::Tensor) -> (u64, u64) {
+pub(crate) fn tensor_dev_addr(t: &candle_core::Tensor) -> (u64, u64) {
     use candle_core as candle;
     let bytes = (t.elem_count() * t.dtype().size_in_bytes()) as u64;
     let (s, l) = t.storage_and_layout();
     let off = l.start_offset();
+    macro_rules! addr_of {
+        ($c:expr, $T:ty) => {{
+            use candle::role::backend::cudarc::driver::DevicePtr;
+            if let Ok(sl) = $c.as_cuda_slice::<$T>() {
+                return (sl.slice(off..).device_ptr(sl.stream()).0 as u64, bytes);
+            }
+            return (0, bytes);
+        }};
+    }
     #[cfg(all(feature = "cuda", not(feature = "rocm")))]
     if let candle::Storage::Cuda(c) = &*s {
-        use candle::role::backend::cudarc::driver::DevicePtr;
-        if let Ok(sl) = c.as_cuda_slice::<u8>() {
-            return (sl.slice(off..).device_ptr(sl.stream()).0 as u64, bytes);
+        match t.dtype() {
+            candle_core::DType::F32 => addr_of!(c, f32),
+            candle_core::DType::F16 => addr_of!(c, half::f16),
+            candle_core::DType::BF16 => addr_of!(c, half::bf16),
+            candle_core::DType::U32 => addr_of!(c, u32),
+            candle_core::DType::U8 => addr_of!(c, u8),
+            _ => return (0, bytes),
         }
-        return (0, bytes);
     }
     #[cfg(feature = "rocm")]
     if let candle::Storage::Hip(c) = &*s {
-        use candle::role::backend::cudarc::driver::DevicePtr;
-        if let Ok(sl) = c.as_cuda_slice::<u8>() {
-            return (sl.slice(off..).device_ptr(sl.stream()).0 as u64, bytes);
+        match t.dtype() {
+            candle_core::DType::F32 => addr_of!(c, f32),
+            candle_core::DType::F16 => addr_of!(c, half::f16),
+            candle_core::DType::BF16 => addr_of!(c, half::bf16),
+            candle_core::DType::U32 => addr_of!(c, u32),
+            candle_core::DType::U8 => addr_of!(c, u8),
+            _ => return (0, bytes),
         }
-        return (0, bytes);
     }
     (0, bytes)
 }
@@ -1583,6 +1598,15 @@ fn launch_recurrence(
     probe_tensors_debug("rec-state", seq_len, &[&*state]);
 
     with_slot_indices(slots, |slot_ptr, batch| {
+        use std::sync::OnceLock;
+        static LAUNCH_LOG: OnceLock<bool> = OnceLock::new();
+        if *LAUNCH_LOG.get_or_init(|| std::env::var("MISTRALRS_NAN_TRACE").is_ok()) {
+            let out_ptr = {
+                use candle::role::backend::cudarc::driver::DevicePtr;
+                output_buf.device_ptr(output_buf.stream()).0 as u64
+            };
+            tracing::error!(target: "mistralrs_core::engine", "nan-trace qlen={seq_len} kind=rec-launch q={q_ptr:?} k={k_ptr:?} v={v_ptr:?} g={g_ptr:?} beta={beta_ptr:?} state={state_ptr:?} st={state_dtype} out={out_ptr:#x} bh={bh} K={k_dim} V={v_dim} slot_ptr={slot_ptr:?} batch={batch}");
+        }
         let num_heads = bh.checked_div(batch).unwrap_or(1);
         let values_per_warp = match kernel {
             RecurrenceKernel::ValueMajorWarp2 => Some(2),

@@ -112,9 +112,13 @@ fn trace_state_indices(indices: &Tensor, layer: usize, query_len: usize) {
     if !*ENABLED.get_or_init(|| std::env::var("MISTRALRS_NAN_TRACE").is_ok()) {
         return;
     }
+    // Include the device-table address so launch-side slot pointers can be
+    // checked against the table the model actually installed (stale-table
+    // reads would show up here as a pointer mismatch, not a value mismatch).
+    let (table_addr, _) = crate::cuda::gdn::tensor_dev_addr(indices);
     match indices.to_vec1::<u32>() {
         Ok(vals) => {
-            tracing::error!(target: "mistralrs_core::engine", "nan-trace qlen={query_len} layer={layer} kind=slots vals={vals:?}");
+            tracing::error!(target: "mistralrs_core::engine", "nan-trace qlen={query_len} layer={layer} kind=slots vals={vals:?} table={table_addr:#x}");
         }
         Err(e) => {
             tracing::error!(target: "mistralrs_core::engine", "nan-trace qlen={query_len} layer={layer} kind=slots read failed: {e:?}");
