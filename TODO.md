@@ -151,6 +151,20 @@ live verifications; docs sync.
       log (dtype-dispatched helper). Running Lt-shape-identified
       trial (CANDLE_LT_DEBUG + addrs + ledger): last LTMUL before a
       fault names the faulting (m,n,k).
+      CRASH-11 2026-10-16 05:15 UTC (9 min after clean boot, during
+      no-trim var-off probe LOAD - no request ever fired): SAME
+      unpopulate+0x4b GPF, fault addr 0xfe00fe00fe00fe18 = FILL
+      PATTERN (freed-memory poison, not model data) => kernel
+      USE-AFTER-FREE in TTM teardown (entry freed+poisoned, then
+      dereferenced). No-trim trial crashed anyway => pool trims NOT
+      necessary for crashes. 3 crashes in 21h, ALL around fresh
+      var-off loads; var-ON loads (prod x4+) never crash. FIRM RULE:
+      NO MORE VAR-OFF LOADS, period. Mechanism: fresh-load GEM/HMM
+      churn (mmap'd GGUF userptr registrations + managed-weight
+      migration faults) racing across multi-queue faults; corruption
+      manifests later at teardown. NaN side stays userspace-side per
+      the no-distress journals (or sub-threshold kernel staleness -
+      untestable now).
       CWSR LEAD 2026-10-16 (~09:30 UTC): community precedent found -
       Framework/Strix-Halo docs list amdgpu.cwsr_enable=0 as the fix
       for GPU hangs/crashes; CWSR (compute wave save/restore on
@@ -270,6 +284,16 @@ live verifications; docs sync.
       via concurrency, not var: batched (2x parallel med38,
       max_seqs=2) var-ON probe - NaN under batching CONFIRMS
       concurrency-gating in the safe regime.
+      BATCHED VAR-ON RESULT: 2x parallel med38 (max_seqs=2) both
+      completed clean - concurrency alone does NOT trip it (weak
+      negative: overlap unconfirmed). TRIM-RACE THEORY (new prime):
+      background pool-trim maintenance (engine-tail/per-poll/failed-
+      reload trims from the retention fix) freeing live blocks that
+      get recycled while in flight - timing-dependent (trim cadence
+      vs inference), heap-dependent (reuse victims), var-modulated
+      (throughput shifts interleaving). TESTABLE VIA KNOB:
+      var-off + MISTRALRS_NO_POOL_TRIM=1 - clean IMPLICATES trims
+      (fixable in our code), NaN EXCLUDES them.
       LT POINTER SCREEN 2026-10-16 ~05:00 UTC: all 2016 Lt GEMM A/C
       footprints fit inside live ledger ranges (one false alarm from
       a swapped-m/n footprint formula, corrected to transpose-invariant
