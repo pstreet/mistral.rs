@@ -3,17 +3,19 @@
 //!
 //! Same contracts and names, bound to `cuda_backend`, with kernels resolved
 //! through the nvcc companion (`ffi_cuda`). Dual dispatch happens in `ops.rs`.
-//! Intentionally NOT twinned - not on the builtin-MTP path; they refuse
-//! loudly if reached on this role: the topk *sampling* machinery
-//! (`sample_ranked_topk`, `categorical_large_*`), the dflash selectors,
+//! Also twinned: the categorical packed sampler (default-temperature path).
+//! Still NOT twinned - not on the builtin-MTP path; they refuse
+//! loudly if reached on this role: the topk *sampling* submit
+//! (`sample_ranked_topk`), the dflash selectors,
 //! and the caller-less `cuda_topk_logits_packed_batched` family.
 #[allow(dead_code)]
 use crate::cuda::ffi_cuda as ffi;
 use crate::ops::{
-    final_logits_row, CudaTop1Completion, RankedTopKPackedOutput, CUDA_ASYNC_TOKEN_RING_SLOTS,
-    CUDA_TOP1_INVALID_TOKEN, CUDA_TOP1_PACKED_WIDTH, CUDA_TOPK_CHUNK_SIZE,
-    CUDA_TOPK_MAX_EXACT_PACKED_VOCAB, CUDA_TOPK_MAX_GRID_Y, CUDA_TOPK_MAX_K,
-    CUDA_TOPK_MAX_STAGE2_CANDIDATES, CUDA_WORKSPACE_MIN_ROWS,
+    final_logits_row, CategoricalLogitsPackedOutput, CudaTop1Completion, RankedTopKPackedOutput,
+    CUDA_ASYNC_TOKEN_RING_SLOTS, CUDA_CATEGORICAL_PACKED_WIDTH, CUDA_TOP1_INVALID_TOKEN,
+    CUDA_TOP1_PACKED_WIDTH, CUDA_TOPK_CHUNK_SIZE, CUDA_TOPK_MAX_EXACT_PACKED_VOCAB,
+    CUDA_TOPK_MAX_GRID_Y, CUDA_TOPK_MAX_K, CUDA_TOPK_MAX_STAGE2_CANDIDATES,
+    CUDA_WORKSPACE_MIN_ROWS,
 };
 use candle_core::Shape;
 
@@ -1261,4 +1263,158 @@ pub fn cuda_top1_logits_f32_cached(
     let ncols = input.elem_count();
     let packed = cuda_top1_logits_f32_packed_cached_inner(&input, 1, ncols, cache, OP)?;
     Ok([packed[0], packed[1]])
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_categorical_logits_f32_packed_batched(
+    input: &Tensor,
+    inverse_temperatures: &Tensor,
+    uniforms: &Tensor,
+) -> Result<CategoricalLogitsPackedOutput> {
+    use candle_core::backend::{BackendDevice, BackendStorage};
+    use role_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+    use role_backend::CudaStorageSlice;
+
+    const OP: &str = "cuda_categorical_logits_f32_packed_batched";
+    if input.dtype() != DType::F32
+        || inverse_temperatures.dtype() != DType::F32
+        || uniforms.dtype() != DType::F32
+    {
+        candle_core::bail!("{OP} requires F32 tensors");
+    }
+    if !input.is_contiguous() || !inverse_temperatures.is_contiguous() || !uniforms.is_contiguous()
+    {
+        return Err(candle_core::Error::RequiresContiguous { op: OP });
+    }
+    if !input.device().same_device(inverse_temperatures.device())
+        || !input.device().same_device(uniforms.device())
+    {
+        candle_core::bail!("{OP} tensors must be on the same CUDA device");
+    }
+
+    let [batch, vocab] = input.dims() else {
+        candle_core::bail!("{OP} requires logits with shape [batch, vocab]");
+    };
+    let (batch, vocab) = (*batch, *vocab);
+    if batch == 0 || vocab == 0 {
+        candle_core::bail!("{OP} requires a non-empty batch and vocabulary");
+    }
+    if inverse_temperatures.dims() != [batch] || uniforms.dims() != [batch] {
+        candle_core::bail!(
+            "{OP} expected sampling tensors with shape [{batch}], got {:?} and {:?}",
+            inverse_temperatures.dims(),
+            uniforms.dims()
+        );
+    }
+    if vocab > CUDA_TOPK_MAX_EXACT_PACKED_VOCAB {
+        candle_core::bail!(
+            "{OP} vocabulary size {vocab} cannot be represented exactly by packed F32 indices"
+        );
+    }
+    if batch > CUDA_TOPK_MAX_GRID_Y {
+        candle_core::bail!("{OP} batch is too large for a 2D CUDA launch: {batch}");
+    }
+
+    let nblocks = vocab.div_ceil(CUDA_TOPK_CHUNK_SIZE);
+    let workspace_elems = batch
+        .checked_mul(nblocks)
+        .ok_or_else(|| candle_core::Error::Msg(format!("{OP} workspace overflow")))?;
+    let packed_elems = batch
+        .checked_mul(CUDA_CATEGORICAL_PACKED_WIDTH)
+        .ok_or_else(|| candle_core::Error::Msg(format!("{OP} output overflow")))?;
+    let nrows_i32 = i32::try_from(batch).map_err(candle_core::Error::wrap)?;
+    let ncols_i32 = i32::try_from(vocab).map_err(candle_core::Error::wrap)?;
+    let chunk_size_i32 = i32::try_from(CUDA_TOPK_CHUNK_SIZE).map_err(candle_core::Error::wrap)?;
+    let nblocks_i32 = i32::try_from(nblocks).map_err(candle_core::Error::wrap)?;
+
+    let (input_storage, input_layout) = input.storage_and_layout();
+    let candle_core::Storage::Cuda(input_storage) = &*input_storage else {
+        candle_core::bail!("{OP} requires CUDA logits");
+    };
+    let CudaStorageSlice::F32(input_slice) = &input_storage.slice else {
+        candle_core::bail!("{OP} only supports F32 logits");
+    };
+    let (temperature_storage, temperature_layout) = inverse_temperatures.storage_and_layout();
+    let candle_core::Storage::Cuda(temperature_storage) = &*temperature_storage else {
+        candle_core::bail!("{OP} requires CUDA inverse temperatures");
+    };
+    let CudaStorageSlice::F32(temperature_slice) = &temperature_storage.slice else {
+        candle_core::bail!("{OP} only supports F32 inverse temperatures");
+    };
+    let (uniform_storage, uniform_layout) = uniforms.storage_and_layout();
+    let candle_core::Storage::Cuda(uniform_storage) = &*uniform_storage else {
+        candle_core::bail!("{OP} requires CUDA uniforms");
+    };
+    let CudaStorageSlice::F32(uniform_slice) = &uniform_storage.slice else {
+        candle_core::bail!("{OP} only supports F32 uniforms");
+    };
+
+    let dev = input_storage.device();
+    let stream = dev.cuda_stream();
+    let mut block_values = unsafe { dev.alloc::<f32>(workspace_elems) }?;
+    let mut block_sums = unsafe { dev.alloc::<f32>(workspace_elems) }?;
+    let mut packed_dst = unsafe { dev.alloc::<f32>(packed_elems) }?;
+
+    let (input_ptr, input_guard) = input_slice.device_ptr(&stream);
+    let (temperature_ptr, temperature_guard) = temperature_slice.device_ptr(&stream);
+    let (uniform_ptr, uniform_guard) = uniform_slice.device_ptr(&stream);
+    let (block_values_ptr, block_values_guard) = block_values.device_ptr_mut(&stream);
+    let (block_sums_ptr, block_sums_guard) = block_sums.device_ptr_mut(&stream);
+    let (packed_ptr, packed_guard) = packed_dst.device_ptr_mut(&stream);
+    let input_ptr = unsafe { (input_ptr as *const f32).add(input_layout.start_offset()) };
+    let temperature_ptr =
+        unsafe { (temperature_ptr as *const f32).add(temperature_layout.start_offset()) };
+    let uniform_ptr = unsafe { (uniform_ptr as *const f32).add(uniform_layout.start_offset()) };
+
+    unsafe {
+        ffi::categorical_large_f32_packed_batched(
+            input_ptr,
+            temperature_ptr,
+            uniform_ptr,
+            block_values_ptr as *mut f32,
+            block_sums_ptr as *mut f32,
+            packed_ptr as *mut f32,
+            nrows_i32,
+            ncols_i32,
+            chunk_size_i32,
+            nblocks_i32,
+            stream.cu_stream() as i64,
+        );
+    }
+
+    drop(input_guard);
+    drop(temperature_guard);
+    drop(uniform_guard);
+    drop(block_values_guard);
+    drop(block_sums_guard);
+    drop(packed_guard);
+
+    let workspace = vec![
+        Tensor::from((
+            role_storage(role_backend::CudaStorage {
+                slice: CudaStorageSlice::F32(block_values),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[batch, nblocks]),
+        )),
+        Tensor::from((
+            role_storage(role_backend::CudaStorage {
+                slice: CudaStorageSlice::F32(block_sums),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[batch, nblocks]),
+        )),
+    ];
+    let packed_storage = role_backend::CudaStorage {
+        slice: CudaStorageSlice::F32(packed_dst),
+        device: dev.clone(),
+    };
+
+    Ok(CategoricalLogitsPackedOutput {
+        packed: Tensor::from((
+            role_storage(packed_storage),
+            Shape::from_dims(&[batch, CUDA_CATEGORICAL_PACKED_WIDTH]),
+        )),
+        _workspace: workspace,
+    })
 }

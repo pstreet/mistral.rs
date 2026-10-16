@@ -2360,6 +2360,17 @@ pub(crate) fn cuda_categorical_logits_f32_packed_batched(
     use candle_core::role::backend::CudaStorageSlice;
 
     const OP: &str = "cuda_categorical_logits_f32_packed_batched";
+    // Dual NVIDIA role: the hip-typed path below cannot serve Cuda
+    // tensors, so route to the nvcc-companion twin up front. Other
+    // shapes keep their exact current behavior.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if input.device().is_cuda() {
+        return crate::cuda::ops_cuda_role::cuda_categorical_logits_f32_packed_batched(
+            input,
+            inverse_temperatures,
+            uniforms,
+        );
+    }
     if input.dtype() != DType::F32
         || inverse_temperatures.dtype() != DType::F32
         || uniforms.dtype() != DType::F32
@@ -4267,7 +4278,7 @@ pub(crate) struct RankedTopKPackedOutput {
 pub(crate) struct CategoricalLogitsPackedOutput {
     /// Each row is packed as `[token_index_as_f32, full_softmax_logprob]`.
     pub(crate) packed: Tensor,
-    _workspace: Vec<Tensor>,
+    pub(crate) _workspace: Vec<Tensor>,
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]

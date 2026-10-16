@@ -610,6 +610,27 @@ cuda_kernel! {
         stream: i64,
     );
     topk_large_ranked_state_words_per_row = "topk_large_ranked_state_words_per_row"() -> usize;
+    sample_ranked_topk = "sample_ranked_topk"(
+        packed: *const f32,
+        params: *const f32,
+        tokens: *mut u32,
+        nrows: i32,
+        packed_k: i32,
+        stream: i64,
+    );
+    categorical_large_f32_packed_batched = "categorical_large_f32_packed_batched"(
+        input: *const f32,
+        inv_temperatures: *const f32,
+        uniforms: *const f32,
+        block_values: *mut f32,
+        block_sums: *mut f32,
+        packed_out: *mut f32,
+        nrows: i32,
+        ncols: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        stream: i64,
+    );
     topk_large_ranked_f32_packed_batched = "topk_large_ranked_f32_packed_batched"(
         input: *const f32,
         block_values: *mut f32,
