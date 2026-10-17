@@ -232,6 +232,17 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   target/release/mistralrs awaiting the next idle-window restart,
   backstop mistralrs.build25-flash (md5 51fa55078, the prior prod
   build) preserved via /proc/PID/exe.
+- PROD SWAP 2026-10-17 ~21:30 UTC: idle window verified (0
+  established connections on :1235), `systemctl --user restart
+  mistralrs-server` onto release build `b523e965b` (the pushed tip
+  606f8e039: x86 indexed MoE + preflight fix + fmt; binary rebuilt
+  from tip after the push so prod runs exactly what is on the
+  remote). Validation: clean boot, 0 errors; 35B hip sanity 75.2
+  tok/s; the LANDMINE TEST - 27B-cuda demand-load + a 540-token
+  (non-32-aligned) prompt, the exact shape that 500'd on the old
+  binary - PASSES at 901.5 tok/s prefill / 40.3 tok/s decode,
+  coherent output, no gather-workspace journal errors, 20.3GB VRAM.
+  The CUDA-role preflight landmine is closed in production.
 
 ## Week of Oct 14-15 (serving sized, retention closed, twins live)
 - 4B CUDA OOM root-caused: Utilization pool (15.4GB) fit but starved graphs;
