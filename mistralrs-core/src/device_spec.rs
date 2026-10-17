@@ -330,33 +330,11 @@ pub fn backend_caps(device: &Device) -> BackendCaps {
         Device::Cpu => BackendCaps {
             arch: None,
             graphs: false,
-            #[cfg(not(any(
-                all(feature = "cuda", target_family = "unix"),
-                feature = "rocm",
-                feature = "metal"
-            )))]
             paged_attention: true,
-            #[cfg(any(
-                all(feature = "cuda", target_family = "unix"),
-                feature = "rocm",
-                feature = "metal"
-            ))]
-            paged_attention: false,
             // The CPU GGUF loader (gguf::cpu) compiles unconditionally; the
             // old all-false caps refused it in every build shape.
             quantized_gguf: true,
-            #[cfg(not(any(
-                all(feature = "cuda", target_family = "unix"),
-                feature = "rocm",
-                feature = "metal"
-            )))]
             mtp: true,
-            #[cfg(any(
-                all(feature = "cuda", target_family = "unix"),
-                feature = "rocm",
-                feature = "metal"
-            ))]
-            mtp: false,
         },
         #[cfg(any(feature = "cuda", feature = "rocm"))]
         Device::Cuda(dev) => {

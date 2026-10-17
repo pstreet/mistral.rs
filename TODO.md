@@ -690,6 +690,20 @@ parity queue) now outranks it on impact.
         (d) accept 35B-on-3090 as a slow/capacity lane only (not
             viable at 0.15 tok/s).
       The hip iGPU lane (48-51 tok/s) remains the production 35B
+      
+  UPDATE 2026-10-17 (CPU PA + single-vendor CUDA MTP):
+    - CPU PagedAttention now works even in GPU builds: cpu module is
+      always compiled (mistralrs-paged-attn/src/cpu/), functions
+      dispatched at runtime via device.is_cpu() checks in
+      write_kv_cache and gather_kv_cache_for_layout. run_decode
+      already falls back to run_decode_gather_sdpa on CPU.
+    - backend_caps(Device::Cpu): paged_attention=true, mtp=true
+      in all builds (CPU backend now always compiled, functions
+      dispatched at runtime via device.is_cpu() checks).
+    - Single-vendor CUDA MTP: enabled (mtp=true in backend_caps).
+      Speculative rejection uses standard CUDA FFI (super::ffi),
+      GDN speculative paths use generic fallbacks in gdn.rs.
+      No gdn_cuda/ffi_cuda needed for single-vendor builds.
       lane until (a) or (b) lands. Note: the 35B's MTP head is also
       MoE (blk.40 has ffn_*_exps) so draft steps hit the same CPU
       bottleneck; MTP cannot help until the CPU path is fixed.
