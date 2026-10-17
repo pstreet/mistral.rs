@@ -709,9 +709,20 @@ parity queue) now outranks it on impact.
       overhead, not behavioral. NEW FINDING: solo-cuda auto-selects
       FlashInfer decode for this model (dual deliberately excludes
       it on the NVIDIA role per flashinfer/mod.rs; FlashInfer
-      rejects Q8_0 KV) - see the FlashInfer item below. REMAINING:
-      logprob top-k packed path still host-side on NVIDIA (untwinned
-      cuda_topk_logits_packed_batched family).
+      rejects Q8_0 KV) - see the FlashInfer item below. LOGPROB
+      TOP-K PACKED TWIN ALSO LANDED (2026-10-17, build 22, commit
+      bb6aec9f7): ops_cuda_role twin for cuda_topk_logits_packed_
+      batched + device route in the f32 wrapper; kernels were
+      already in the nvcc companion, only the bf16/f16 ffi_cuda
+      decls were missing. Path serves multi-choice batches
+      (n>1/best_of>1 without response logprobs - response-logprob
+      requests bail at cuda_batch_sampling_plan; single-seq
+      logprob keeps the per-seq twin). Measured A/B on the
+      qwen3.5-4b-cuda lane: n=2 request 76.9 tok/s (host fallback)
+      -> 104.5-105.0 tok/s (twin) = +36%; single-seq logprob
+      unchanged (~75-76); temp/greedy regressions clean (112.0/
+      112.3). Also un-breaks the dflash caller on CUDA-role
+      tensors in dual (previously refused loudly).
 - [ ] ~L FlashInfer decode on the NVIDIA role in DUAL builds (RE-SCOPED
       2026-10-16 after bench + plumbing audit; was ~M "maybe near-free"):
       the nvcc companion DOES build the kernels in dual

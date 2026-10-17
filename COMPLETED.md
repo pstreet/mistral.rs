@@ -86,6 +86,28 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   is justified by bigger 3090 residents + FA2/MLA paths, not the
   4B alone. The KV-dtype gate (adf0f48d9) and the per-pipeline
   wrapper's device awareness already solve the role-selection half.
+
+## Oct 17 (logprob top-k packed twin, sampling surface closed)
+- Batched logprob top-k packed twin (commit `bb6aec9f7`, build 22):
+  the last host-side NVIDIA sampling path. ops_cuda_role gained
+  cuda_topk_logits_packed_batched (fresh workspace allocs,
+  topk_large_{f32,bf16,f16}_packed_batched launches - kernels
+  already in the nvcc companion; the bf16/f16 ffi_cuda decls were
+  the only missing pieces) plus an up-front device route in the
+  shared f32 wrapper, and the dual host-fallback gate in the sync
+  batch path is gone. Path semantics clarified while validating:
+  it serves multi-choice batches (n>1/best_of>1 without response
+  logprobs; response-logprob requests bail at cuda_batch_sampling_
+  plan, single-seq logprob keeps the per-seq twin). Measured A/B on
+  the qwen3.5-4b-cuda lane: n=2 request 76.9 tok/s host fallback ->
+  104.5-105.0 tok/s twin = +36%; single-seq logprob unchanged
+  (~75-76); temp/greedy regressions clean (112.0/112.3); journal
+  clean. Also un-breaks the dflash caller on CUDA-role tensors in
+  dual. Rollback backstop: mistralrs.build22-logprobtwin.
+  With this, every sampling path the resident engine can reach is
+  served on-device on both roles; the only remaining NVIDIA-side
+  gap in ops_cuda_role is the dflash selector family (not on the
+  resident path).
 - Still host-side on NVIDIA (by design, unreachable on the resident
   path): the sync logprob top-k packed family
   (cuda_topk_logits_f32_packed_batched). Optional follow-up: a
