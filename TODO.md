@@ -657,8 +657,26 @@ parity queue) now outranks it on impact.
       placement in the MoE experts backend + cross-device dispatch per
       token (placement today is whole-layer only, verified: no
       lru/offload/evict machinery in `mistralrs-core/src/moe/`).
-      PLANNED 2026-10-17 (scoping pass over the live code; all load
-      paths read, nothing built yet):
+      STATUS 2026-10-17: BUILT (commit 18800233e) but BLOCKED on CPU throughput (see below):
+      ... (see above for full plan) ...
+      BUILT 2026-10-17 (commit 18800233e, ~500 lines, 30 files):
+      plumbing landed end to end; fast probe on the 35B (Q5_K_XL,
+      cuda:0, expert_device=cpu) loaded at ~2GB VRAM with experts in
+      RAM, paged attn stayed on, MTP attached (n_predict=2).
+      BLOCKER: CPU expert matmul throughput. The GGML indexed gemv
+      (qtensor.indexed_gemv) is the path; measured 0.15 tok/s
+      (6.7s/token) on the 35B — 984 gemv calls/step with high
+      per-call overhead. Theoretical bandwidth ceiling ~60-100 tok/s
+      at Q5; actual is 300x slower. Options:
+        (a) optimize the CPU path: rayon-parallelize across the 8
+            active experts per layer, or use try_grouped_gather_mm
+            with dequantized experts (2x RAM but faster GEMM).
+        (b) phase-2 hot-expert VRAM cache with router-predicted
+            prefetch (the differentiator; ~0.27GB/expert at Q5, 3090
+            holds dozens; prefetch overlaps with attention/GDN).
+        (c) accept 35B-on-3090 as a slow/capacity lane only.
+      The hip iGPU lane (48-51 tok/s) remains the production 35B
+      lane until (a) or (b) lands.
       VERIFIED FEASIBLE, CHEAPER THAN THE ~M SUGGESTED: every hard
       piece already ships in-tree. The Fast experts backend has a
       CPU/no-fused-ops gather branch (`forward_gather` else-arm in
