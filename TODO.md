@@ -756,9 +756,39 @@ parity queue) now outranks it on impact.
 - [ ] ~S UQFF vs GGUF shootout: same weights through the CLI
       `quantize`/`uqff` path, bench load + decode on this box.
       Unmeasured; native format may win both.
-- [ ] ~S MTP on the 4B: `Qwen3.5-4B-MTP-GGUF` carries the head but is
+- [x] ~S MTP on the 4B: `Qwen3.5-4B-MTP-GGUF` carries the head but is
       pinned `mtp=false` in prod. Small-model MTP is usually
       high-acceptance; bench before pinning.
+      LANDED 2026-10-17 (commit `02bfd9c21`, build 23, md5
+      b9a950e77bf96acc225266824ca1f657): built-in MTP for the
+      text-only Qwen3.5 path. The multimodal wrapper's machinery
+      moved onto Qwen3_5TextModel (mtp_n_predict/draft_lm_head/
+      pending tails + drafter forward/prefill/propose/prefill/
+      commit), full SpeculativeTargetMixin impl for the text model
+      (wrapper delegates, keeps DFlash-only branches), TextConfig
+      gains the injected _mistralrs_mtp flag, the text loader
+      passes cfg.mtp through, GGUF config synthesis maps
+      nextn_predict_layers -> mtp_num_hidden_layers, and the hybrid
+      cache config appends the MTP layer (qwen3_next pattern; KV
+      +32MB per 16k ctx = exactly one layer, ~500MB lane total
+      with head + Q4K draft lm_head).
+      MEASURED (release, same-binary A/B, essay 500 tok):
+      3090 lane 105.4 -> 149.7-150.6 tok/s (+42%), accept 54-59%
+      len ~2.1; hip iGPU 40.9 -> 50.7-54.9 (+24-34%), accept
+      53-63%. Prod live after the flip: cuda lane 151.3 tok/s
+      (vs 112 pre-flip, +34%), accept 56.7-64%, 3090 at 20.5GB
+      (3.5GB headroom), journal clean, hip lane attaches and
+      decodes healthy. n=2 pinned per-model (global is 3).
+      CORRECTNESS NOTE for future validations: greedy decode in
+      this stack is only approximately deterministic - no-MTP runs
+      flip near-tie tokens run-to-run (verified: same binary,
+      same payload, char-135 "Goal:" vs "Identify" flips both
+      with and without MTP). Token-exact greedy equivalence is
+      NOT a usable gate; use accept-rate + coherence + journal.
+      ALSO: hip-device probes must source .rocm-env.sh in the
+      probe env (hipblas dlopen), the cuda-only probes never
+      needed it. Follow-up candidate: qwen3-16b (Qwen3-16B-A3B)
+      if its file carries a nextn head - needs its own bench.
       ANSWERED 2026-10-13 (cuda-alone probe, solo-cuda binary):
       the pin is LOAD-BEARING, not a choice - the Qwen3.5 model
       class never overrides `SpeculativeTargetMixin::attach_speculative`

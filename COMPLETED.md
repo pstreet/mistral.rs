@@ -87,7 +87,7 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   4B alone. The KV-dtype gate (adf0f48d9) and the per-pipeline
   wrapper's device awareness already solve the role-selection half.
 
-## Oct 17 (logprob top-k packed twin, sampling surface closed)
+## Oct 17 (logprob top-k packed twin, sampling surface closed; MTP on the 4B)
 - Batched logprob top-k packed twin (commit `bb6aec9f7`, build 22):
   the last host-side NVIDIA sampling path. ops_cuda_role gained
   cuda_topk_logits_packed_batched (fresh workspace allocs,
@@ -108,10 +108,28 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   served on-device on both roles; the only remaining NVIDIA-side
   gap in ops_cuda_role is the dflash selector family (not on the
   resident path).
-- Still host-side on NVIDIA (by design, unreachable on the resident
-  path): the sync logprob top-k packed family
-  (cuda_topk_logits_f32_packed_batched). Optional follow-up: a
-  chained-step counter for per-step engagement visibility.
+- Built-in MTP on the 4B, both GPU lanes live (commit `02bfd9c21`,
+  build 23, md5 b9a950e77bf96acc225266824ca1f657): the text-only
+  Qwen3.5 path got the multimodal wrapper's MTP machinery moved
+  onto Qwen3_5TextModel + full SpeculativeTargetMixin (wrapper
+  delegates, keeps DFlash-only branches), TextConfig gains the
+  injected _mistralrs_mtp flag, the text loader passes cfg.mtp
+  through, GGUF synthesis maps nextn_predict_layers ->
+  mtp_num_hidden_layers, and the hybrid cache appends the MTP
+  layer (qwen3_next pattern; +32MB KV per 16k ctx, ~500MB lane
+  total with head + Q4K draft lm_head). Release same-binary A/B
+  (essay 500 tok): 3090 105.4 -> 149.7-150.6 tok/s (+42%),
+  accept 54-59% len ~2.1; hip iGPU 40.9 -> 50.7-54.9 (+24-34%),
+  accept 53-63%. Prod live: cuda lane 151.3 tok/s vs 112
+  pre-flip, accept 56.7-64%, 3090 20.5GB (3.5GB headroom), hip
+  lane attaches + decodes healthy, journal clean. n=2 pinned
+  per-model (global is 3); CPU entry stays pinned (no
+  PagedAttention). Methodology finds for next time: greedy is
+  only approximately deterministic here (no-MTP flips near-ties
+  run-to-run; token-exact equivalence is not a usable gate) and
+  hip-device probes must source .rocm-env.sh (hipblas dlopen).
+  Backstop: mistralrs.build23-mtp4b. Follow-up candidate:
+  qwen3-16b if its file carries a nextn head.
 
 ## Week of Oct 14-15 (serving sized, retention closed, twins live)
 - 4B CUDA OOM root-caused: Utilization pool (15.4GB) fit but starved graphs;
