@@ -772,6 +772,27 @@ parity queue) now outranks it on impact.
       Baseline recorded while probing: 4B solo-cuda no-MTP essay
       125.21 tok/s (thinking-trace decode, F16 KV, 2k-budget
       sanity 391 CORRECT).
+      VERIFIED 2026-10-17 (file + routing audit, gguf-dump):
+      the Q8_0 FILE IS MTP-COMPLETE. qwen35.nextn_predict_layers=1;
+      blk.32.nextn.{eh_proj[5120x2560],enorm,hnorm,shared_head_
+      norm} on the last block, which per the llama.cpp convention
+      IS the MTP layer body (block_count=33 = 32 main + 1 MTP;
+      tied embeddings, shared head). Same convention as the 35B
+      (qwen35moe: block_count=41 = 40 main + 1 MTP at blk.40 with
+      the same 4 nextn tensors). CLASS ROUTING: arch qwen35moe
+      (35B) -> models/qwen3_next.rs (full attach_speculative
+      override; MTP live in prod, accept ~57-74% at n_predict=2);
+      arch qwen35 text-only (4B) -> vision_models/qwen3_5/text.rs
+      Qwen3_5TextModel (recurrent-state overrides only, attach =
+      default bail). KEY FINDING: the Qwen3.5 family ALREADY HAS
+      the MTP wiring written for its multimodal wrapper
+      (vision_models/qwen3_5/speculative.rs, Qwen3_5Model) - the
+      4B item is exposing/reusing that in-tree machinery for the
+      text-only path, not a port from qwen3_next. No cross-model
+      draft mechanism exists anywhere in the stack (no draft_model
+      config; mtp_draft_* keys configure the draft HEAD's ISQ), so
+      "4B as draft for larger models" is not a thing here - each
+      MTP model carries its own head.
 - [ ] ~M FA2 path proof on the cuda role (compute 8.6: FA v2 yes, v3
       no): confirm the kernels actually dispatch there; try the
       `cudnn` feature as challenger. Pairs with the cuda-MTP port.
