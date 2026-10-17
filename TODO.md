@@ -657,6 +657,75 @@ parity queue) now outranks it on impact.
       placement in the MoE experts backend + cross-device dispatch per
       token (placement today is whole-layer only, verified: no
       lru/offload/evict machinery in `mistralrs-core/src/moe/`).
+      PLANNED 2026-10-17 (scoping pass over the live code; all load
+      paths read, nothing built yet):
+      VERIFIED FEASIBLE, CHEAPER THAN THE ~M SUGGESTED: every hard
+      piece already ships in-tree. The Fast experts backend has a
+      CPU/no-fused-ops gather branch (`forward_gather` else-arm in
+      moe/experts/backends.rs) that runs `cpu_indexed_moe_forward` ->
+      `qtensor.indexed_moe_forward` -> `QTensor::indexed_gemv`
+      (mistralrs-quant/src/gguf/{mod,cpu}.rs) in every build shape -
+      it is the CPU-only-build MoE path. GGUF prequantized expert
+      loading honors the VarBuilder device, so placement is "load the
+      experts vb on CPU". Router/topk stays on GPU (caller-side,
+      untouched). Backend selection keys on xs.device() so a
+      CPU-resident xs automatically takes the CPU gather path with no
+      backend changes.
+      35B STRUCTURE (from the GGUF dump): ALL 41 blocks incl. the MTP
+      block (blk.40) are MoE (ffn_*_exps + _shexp + gate_inp); 30 GDN
+      + 10 full-attn stay on GPU; expert mass = 93.1% of the file,
+      GPU-resident slice ~7% (attn/router/norms/embed 6.6% + shared
+      0.4% + mtp extras ~0%).
+      DESIGN: per-model toml knob `expert_device = "cpu"` -> (mirror
+      the mtp chain exactly) GGUFSpecificConfig -> NormalPipeline ->
+      config-JSON injection `_mistralrs_expert_device` ->
+      qwen3_next::Config -> MoEExpertsConfig.expert_device. Placement
+      in MoEExperts::new/new_direct: experts vb at
+      cfg.expert_device.unwrap_or(layer_device); router gate, shared
+      expert, shared gate stay on layer_device. Forward choke point in
+      MoEExperts::forward: when expert device != xs device, move
+      xs_flat + topk_weights + topk_ids over, run backend, move ys
+      back. Graphs: supports_cuda_decode_graphs must return false for
+      qwen3_next when the split is on (CPU matmul mid-step breaks
+      capture; the hip lane's +69% graphs win does not transfer).
+      MTP stays ON: the MTP block is also MoE and also splits; the
+      verify step amortizes expert reads across n+1 positions.
+      Guard: bail loudly if expert_device and ISQ are both set.
+      BUDGET (Q5_K_XL, 26G file): 3090 weights ~1.8GB + huge KV/GDN
+      pool headroom; RAM experts ~24.2GB (107GB avail). Decode:
+      expert reads 3.0GB/step (8/64 of expert mass, amortized over
+      MTP positions) at ~180-220GB/s effective DDR5 = 14-17ms + GPU
+      hot ~5ms + 41x2 small device crossings ~2ms = 21-24ms/step; at
+      accept ~2.2 that is ~90-105 tok/s theoretical. First-cut target
+      only: match-or-beat the hip lane (48-51 tok/s); CPU GEMV
+      throughput is the biggest unknown, measure early in the probe.
+      Prefill is the ugly number: a 2k-token chunk reads ~all 64
+      experts per layer on CPU (~2-4s/chunk one-shot, llama.cpp
+      --cpu-moe behaves the same); accepted for phase 1. Q8_0
+      experts (33.5GB RAM, 4.2GB/step) is the quality-upside data
+      point. CONTENDS for DDR5 with the iGPU lanes: 35B-hip +
+      35B-cuda running concurrently halve each other; they are
+      alternative lanes, not additive capacity.
+      FILES (~500 lines): cli config ModelEntry + GGUFSpecificConfig
+      + the three gguf.rs builder sites; loaders/mod.rs inject
+      helper + normal.rs injection; qwen3_next.rs (Config field,
+      SparseMoeBlock::load, graphs gate, ISQ guard);
+      moe/experts/config.rs (MoEExpertsConfig field); moe/experts/
+      mod.rs (placement + choke point). mistralrs-quant: NOTHING.
+      VALIDATION: shapes x4 + tests; fast probe :1244 35B cuda:0
+      expert_device=cpu (load, prefill, decode x3, accept, CPU%
+      during decode to confirm threadpool saturation); greedy sanity
+      vs hip-35B output (approximate-determinism caveat: coherence +
+      accept, NOT token-exact); release probe -> rate decision ->
+      if >= hip lane, add a LAZY prod alias qwen3.6-35b-cuda (loads
+      on demand, hip lane untouched, zero-risk rollout).
+      PHASE 2 (only if numbers justify): hot-expert VRAM cache with
+      router-predicted async prefetch (the real differentiator;
+      ~0.27GB/expert at Q5, the 3090 could hold dozens; router names
+      the 8 experts before the FFN runs so prefetch overlaps the
+      attention/GDN work); prefill acceleration (stream the touched
+      experts per layer over PCIe for prefill chunks); per-layer
+      graph subgraphs.
 - [ ] ~S Solo-rocm loud fallbacks: fused FP8 GLU quantize (unfused
       path today), gemv -> plain GEMM, HQQ CPU bitpack-at-load.
       Pure wins, no architecture risk.
