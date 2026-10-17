@@ -341,17 +341,33 @@ fn write_kv_cache(
                         unreachable!("FlashInfer cache is only available with CUDA")
                     }
                 }
-                AttentionBackendKind::Standard => reshape_and_cache(
-                    key,
-                    value,
-                    scales.k,
-                    scales.v,
-                    key_cache,
-                    value_cache,
-                    slot_mapping,
-                    true,
-                    true,
-                ),
+                AttentionBackendKind::Standard => {
+                    if key_cache.device().is_cpu() {
+                        mistralrs_paged_attn::cpu::reshape_and_cache(
+                            key,
+                            value,
+                            scales.k,
+                            scales.v,
+                            key_cache,
+                            value_cache,
+                            slot_mapping,
+                            true,
+                            true,
+                        )
+                    } else {
+                        reshape_and_cache(
+                            key,
+                            value,
+                            scales.k,
+                            scales.v,
+                            key_cache,
+                            value_cache,
+                            slot_mapping,
+                            true,
+                            true,
+                        )
+                    }
+                }
             }
         }
         (KvSideWriter::Q8, KvSideWriter::Q8) => reshape_and_cache_q8(
@@ -501,20 +517,37 @@ fn gather_kv_cache_for_layout(
                 Some(bq) => (bq.k.as_ref(), bq.v.as_ref()),
                 None => (scales.k, scales.v),
             };
-            gather_kv_cache(
-                key_cache,
-                value_cache,
-                k,
-                v,
-                bq_scales.as_ref().and_then(|bq| bq.k_res.as_ref()),
-                bq_scales.as_ref().and_then(|bq| bq.v_res.as_ref()),
-                block_tables,
-                cu_kv,
-                num_tokens,
-                dtype,
-                k_quant,
-                v_quant,
-            )
+            if key_cache.device().is_cpu() {
+                mistralrs_paged_attn::cpu::gather_kv_cache(
+                    key_cache,
+                    value_cache,
+                    k,
+                    v,
+                    bq_scales.as_ref().and_then(|bq| bq.k_res.as_ref()),
+                    bq_scales.as_ref().and_then(|bq| bq.v_res.as_ref()),
+                    block_tables,
+                    cu_kv,
+                    num_tokens,
+                    dtype,
+                    k_quant,
+                    v_quant,
+                )
+            } else {
+                gather_kv_cache(
+                    key_cache,
+                    value_cache,
+                    k,
+                    v,
+                    bq_scales.as_ref().and_then(|bq| bq.k_res.as_ref()),
+                    bq_scales.as_ref().and_then(|bq| bq.v_res.as_ref()),
+                    block_tables,
+                    cu_kv,
+                    num_tokens,
+                    dtype,
+                    k_quant,
+                    v_quant,
+                )
+            }
         }
     }
 }

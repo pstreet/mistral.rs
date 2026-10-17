@@ -362,18 +362,17 @@ pub fn backend_caps(device: &Device) -> BackendCaps {
         Device::Cuda(dev) => {
             #[cfg(all(feature = "cuda", not(feature = "rocm")))]
             {
-                // Single-vendor cuda: the fork's full serving stack. The
-                // NVIDIA role keeps mtp off (speculative kernels are
-                // hip-side; mirrors the dual NVIDIA row). Enabling mtp on
-                // single-vendor would require porting gdn_cuda + ffi_cuda
-                // (currently gated on dual builds) to single-vendor builds.
+                // Single-vendor cuda: the fork's full serving stack. Speculative
+                // rejection uses the standard CUDA FFI (super::ffi); GDN
+                // speculative paths fall through to the generic fallbacks in
+                // gdn.rs. MTP works, just without the nvcc-companion kernels.
                 let arch = GpuArch::resolve(dev).ok();
                 BackendCaps {
                     arch,
                     graphs: true,
                     paged_attention: true,
                     quantized_gguf: true,
-                    mtp: false,
+                    mtp: true,
                 }
             }
             #[cfg(all(feature = "cuda", feature = "rocm"))]
