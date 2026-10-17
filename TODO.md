@@ -2233,6 +2233,15 @@ parity queue) now outranks it on impact.
       flat (GDN-hybrid mix: ~1 in 4 blocks full attention; decode rides the
       paged kernels; CK requires seq_len>1). Big FA payoff stays contingent
       on a dense/MLA model landing on the 3090.
+      VALIDATED LIVE 2026-10-17 (build 51fa55078, cuda,rocm,flash-attn,
+      restarted in a verified idle window; backstops: build23-mtp4b,
+      build24-cpupa): 35B hip 63.6 tok/s decode (from 48-51, +25-32%),
+      accept 77.4%; 4B cuda 195.1 tok/s (from 151.3, +29%), accept 80.0%;
+      4B CPU PA+MTP end-to-end (dtype fix verified): 26.5 tok/s (from
+      19.4 eager, +37%), accept 81.8%; zero journal errors. Decode gains
+      came from CK/FA2 firing on multi-token MTP verify steps
+      (seq_len>1) plus prefill - bigger than the predicted flat decode.
+      Binary grew ~130MB -> ~379MB (CUTLASS kernel set, static).
       DUAL-SERVING BRING-UP + 27B BENCHMARK 2026-09-30 (committed 94e1171c5):
       restarting prod for an orcarouter-27B benchmark revealed the
       Sep 28 16:20 rebuild had put the DUAL binary into prod (boot log:
