@@ -2242,6 +2242,14 @@ parity queue) now outranks it on impact.
       came from CK/FA2 firing on multi-token MTP verify steps
       (seq_len>1) plus prefill - bigger than the predicted flat decode.
       Binary grew ~130MB -> ~379MB (CUTLASS kernel set, static).
+      Prefill (4.4k-token prompts): 35B hip 1440 tok/s, 4B cuda
+      5067 tok/s, 27B dense hip 396 / 3090 1104 tok/s (dense 27B is
+      the FA sweet spot: every block pays attention; ~2.8x hip->cuda).
+      OPERATIONAL: 27B hip load while 35B + 4B-cpu resident
+      OOM-killed the server (load transient beat the evict estimate);
+      systemd self-healed in ~6s. 35B+27B coexist (~64GB); the
+      ~6GB 4B-cpu lane is the marginal one - unload it when both
+      big lanes run.
       DUAL-SERVING BRING-UP + 27B BENCHMARK 2026-09-30 (committed 94e1171c5):
       restarting prod for an orcarouter-27B benchmark revealed the
       Sep 28 16:20 rebuild had put the DUAL binary into prod (boot log:

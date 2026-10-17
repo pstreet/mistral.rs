@@ -141,6 +141,50 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   parallel, (c) phase-2 hot-expert VRAM cache. The hip iGPU lane
   (48-51 tok/s) stays production 35B lane. Prod toml unchanged.
 
+## Oct 17 continued (CPU PagedAttention + MTP live; flash-attn role-agnostic in prod)
+- CPU PagedAttention backend + CPU MTP live (commits cefdc5cbe,
+  3eabf2e62, bb6eef000, cd5ac4113): mistralrs-paged-attn gained a cpu
+  backend (reshape_and_cache via per-token element scatter_set;
+  gather_kv_cache via dtype-preserving index_select; read_int_vec
+  dispatches I64/U32/I32 - prod builds block tables + cu_seq_lens as
+  U32; cross-dtype writes convert input->cache dtype), always compiled
+  and dispatched at runtime via device.is_cpu() checks so CPU PA works
+  in every build shape alongside GPU roles. The stale
+  CPU-disables-PagedAttention gates in normal.rs + multimodal.rs were
+  dropped (they predated the backend and forced CPU lanes into eager
+  attention with no cache engine, which also blocked MTP attach).
+  qwen3.5-4b-cpu flipped mtp=true. Live: 26.5 tok/s decode (from
+  19.4 eager), MTP accept 81.8% (len 2.64), zero errors. The lane
+  costs ~6GB system RAM resident.
+- flash-attn is role-agnostic and live in prod (commits 2f55fd62f,
+  c1c9cedfa; build 51fa55078, --features cuda,rocm,flash-attn, binary
+  ~379MB): the feature no longer forces the NVIDIA role (un-chained
+  in 5 crates - core, cli, server-core, mistralrs, pyo3); ON enables
+  FA on every GPU role present (Cuda via CUTLASS FA2 kernels incl. the
+  FA2 paged-prefill path now dual-compiled for the 3090; Hip via the
+  ROCm-native CK flash path, re-gated from solo-rocm-only to
+  using_flash_attn()); OFF disables it on both roles. DFlash drafter
+  tightened to solo-cuda (76 gates - its CUDA-graph + flashinfer
+  windowed-KV sections bind NVIDIA-solo APIs absent in dual; eager
+  core stays dual; begin_capture updated to the fork's 0-arg
+  THREAD_LOCAL API). mistralrs-flash-attn build.rs now emits
+  rustc-link-search for the toolkit lib dir (mold could not find
+  cudart). 7/7 build shapes compile clean. Live: 35B hip decode
+  48-51 -> 63.6 tok/s (+25-32%), accept 77.4%; 4B cuda 151.3 ->
+  195.1 tok/s (+29%), accept 80.0%; decode gains come from CK/FA2
+  firing on multi-token MTP verify steps plus prefill. Prefill:
+  35B hip 1440 tok/s, 4B cuda 5067 tok/s, 27B dense hip 396 /
+  cuda (3090) 1104 tok/s at 4.4k-token prompts. Backstops:
+  build23-mtp4b, build24-cpupa.
+- OPERATIONAL NOTE (kernel OOM, 2026-10-17): the first 27B hip load
+  OOM-killed the server while the 35B (24GB hip RAM) + 4B-cpu (~6GB)
+  lanes were resident - the load transient (mmap + staging + hip
+  copy) exceeded the estimate despite the evict check passing
+  (73GB available vs 41GB needed). systemd auto-restarted in ~6s and
+  all lazy lanes self-healed. 35B + 27B coexist fine (~64GB); the
+  4B-cpu lane is the marginal consumer - keep it unloaded when both
+  big lanes run.
+
 ## Week of Oct 14-15 (serving sized, retention closed, twins live)
 - 4B CUDA OOM root-caused: Utilization pool (15.4GB) fit but starved graphs;
   ISQ-aware `estimate_load_bytes` (scale by target/source bits, clamp to
