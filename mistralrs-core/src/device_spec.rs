@@ -405,10 +405,26 @@ pub fn backend_caps(device: &Device) -> BackendCaps {
         Device::Metal(_) => BackendCaps {
             arch: None,
             graphs: false,
+            paged_attention: true,
+            quantized_gguf: true,
+            mtp: false,
+        },"oldString">
+Device::Metal(_) => BackendCaps {
+            arch: None,
+            graphs: false,
+            paged_attention: true,
+            quantized_gguf: true,
+            mtp: true,
+        },"path">
+/home/pstreet/LocalAI/mistral.rs/mistralrs-core/src/device_spec.rs"oldString">
+Device::Metal(_) => BackendCaps {
+            arch: None,
+            graphs: false,
             paged_attention: false,
             quantized_gguf: true,
             mtp: false,
-        },
+        },"path">
+/home/pstreet/LocalAI/mistral.rs/mistralrs-core/src/device_spec.rs
         // CPU-only builds: the Cuda variant exists in the enum but no GPU
         // backend is compiled, so such a device can never be constructed.
         #[cfg(not(any(feature = "cuda", feature = "rocm")))]
