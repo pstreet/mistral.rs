@@ -34,11 +34,26 @@ GPU-facing changes (`cargo check` never links - build or test the touched
 shape too):
 
 ```bash
-cargo check -p mistralrs-cli                        # CPU-only (unconditional)
-cargo check -p mistralrs-cli --features rocm        # AMD - the prod shape
-cargo check -p mistralrs-cli --features cuda        # NVIDIA (revival queued)
-cargo check -p mistralrs-cli --features cuda,rocm   # dual-vendor
+cargo check -p mistralrs-cli                                  # CPU-only (unconditional)
+cargo check -p mistralrs-cli --features cuda                   # NVIDIA
+cargo check -p mistralrs-cli --features rocm                   # AMD
+cargo check -p mistralrs-cli --features cuda,rocm              # dual-vendor
+cargo check -p mistralrs-cli --features cuda,rocm,flash-attn   # prod shape
 ```
+
+Prod build (dual-vendor host):
+
+```bash
+cargo build --release --package mistralrs-cli --features cuda,rocm,flash-attn
+```
+
+`flash-attn` is role-agnostic: ON enables flash attention on every GPU
+role in the build (Cuda role -> mistralrs-flash-attn CUTLASS kernels;
+Hip role -> ROCm-native CK flash). OFF disables it on both roles (eager
+fallback everywhere on GPU). Single-vendor shapes carry it the same way
+(`cuda,flash-attn`, `rocm,flash-attn`) - it never forces a role on.
+FlashAttention, PagedAttention, and MTP compose freely on GPU: the
+capability gates are conjunctive, never either/or.
 
 Build profiles: iterate with `--profile fast` (parallel codegen, no LTO) for
 test binaries and link gates - several times faster than `release`; reserve

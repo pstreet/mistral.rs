@@ -150,9 +150,17 @@ The CI pipeline is defined in `.github/workflows/ci.yml` and includes:
   `is_culib_present()` probe; a future `vulkan` backend adds
   `--features rocm,cuda,vulkan` with no new compounds). No compound feature
   names. The production binary on a dual-vendor host is always the dual
-  shape (`--features cuda,rocm`): a rocm-only build silently drops the
-  NVIDIA role (cuda entries fall through to hip devices, and the binary
-  shrinks ~25%). Every GPU build is portable: drivers
+  shape with flash attention (`--features cuda,rocm,flash-attn`): a
+  rocm-only build silently drops the NVIDIA role (cuda entries fall
+  through to hip devices, and the binary shrinks ~25%). `flash-attn` is
+  role-agnostic: when present it enables flash attention on every GPU
+  role in the build (Cuda role via the mistralrs-flash-attn CUTLASS
+  kernels, Hip role via the ROCm-native CK flash path); when absent no
+  GPU role gets it and all GPU attention falls back to eager.
+  Single-vendor shapes carry it the same way (`cuda,flash-attn`,
+  `rocm,flash-attn`); it never forces a role on. FlashAttention,
+  PagedAttention, and MTP compose freely on GPU - their capability
+  gates are conjunctive, never either/or. Every GPU build is portable: drivers
   resolve via dlopen and kernel sets load from companion libraries, all
   probe-gated, so the binary starts with no GPU runtimes installed.
 - Update `/docs/src/content/docs/` and examples when adding features or breaking changes.
