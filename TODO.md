@@ -663,11 +663,36 @@ parity queue) now outranks it on impact.
       plumbing landed end to end; fast probe on the 35B (Q5_K_XL,
       cuda:0, expert_device=cpu) loaded at ~2GB VRAM with experts in
       RAM, paged attn stayed on, MTP attached (n_predict=2).
-      BLOCKER: CPU expert matmul throughput. The GGML indexed gemv
-      (qtensor.indexed_gemv) is the path; measured 0.15 tok/s
-      (6.7s/token) on the 35B — 984 gemv calls/step with high
-      per-call overhead. Theoretical bandwidth ceiling ~60-100 tok/s
-      at Q5; actual is 300x slower. Options:
+      BLOCKER: CPU expert matmul throughput. ROOT CAUSE FOUND:
+      candle's QTensor::indexed_gemv (candle-core/src/quantized/
+      mod.rs:1197) is `#[cfg(target_arch = "aarch64")]` only — on
+      x86_64 it returns Ok(None) immediately. So qtensor_indexed_moe_
+      forward (mistralrs-quant/src/gguf/cpu.rs:144) falls through to
+      dequantize ALL 64 experts to F32 per layer per step (33.5GB Q5
+      -> 134GB of F32 allocs at Q8 scale; ~800KB -> 3.2MB per
+      layer), then try_grouped_gather_mm on the F32 weights. That
+      dequant-per-step is the 300x slowdown (measured 0.15 tok/s =
+      6.7s/token; 984 gemv calls/step). The aarch64 path (repacked
+      per-expert kernels) is the fast one and is not ported to x86.
+      Options:
+        (a) port indexed_gemv to x86_64 (AVX2/AVX512 repacked
+            per-expert gemv in candle's repack module + mod.rs) —
+            the real fix; brings CPU path to the bandwidth ceiling
+            (~60-100 tok/s at Q5).
+        (b) cache dequantized F32 weights (dequantize once at load,
+            keep in RAM) + rayon-parallelize the grouped gather across
+            experts — avoids per-step dequant; trades 4x RAM (35GB ->
+            140GB for experts, exceeds 122GB avail at Q5; would need
+            Q4 or a subset). Net ~10-20 tok/s.
+        (c) phase-2 hot-expert VRAM cache with router-predicted async
+            prefetch (the differentiator; ~0.27GB/expert at Q5, 3090
+            holds dozens; prefetch overlaps with attention/GDN).
+        (d) accept 35B-on-3090 as a slow/capacity lane only (not
+            viable at 0.15 tok/s).
+      The hip iGPU lane (48-51 tok/s) remains the production 35B
+      lane until (a) or (b) lands. Note: the 35B's MTP head is also
+      MoE (blk.40 has ffn_*_exps) so draft steps hit the same CPU
+      bottleneck; MTP cannot help until the CPU path is fixed.
         (a) optimize the CPU path: rayon-parallelize across the 8
             active experts per layer, or use try_grouped_gather_mm
             with dequantized experts (2x RAM but faster GEMM).

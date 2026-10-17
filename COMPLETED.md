@@ -131,6 +131,15 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   Backstop: mistralrs.build23-mtp4b. Follow-up answered
   2026-10-17: qwen3-16b has NO head (arch qwen3moe, 48 uniform
   blocks, no nextn tensors or metadata; the pin stays false).
+- Expert-split MoE probe (commit 18800233e): plumbing functional
+  (35B loads on 3090 at ~2GB VRAM, paged attn on, MTP attaches)
+  but BLOCKED on CPU expert throughput — 0.15 tok/s. Root cause:
+  candle's QTensor::indexed_gemv is aarch64-only; on x86_64 it
+  returns Ok(None), falling through to dequantize-all-64-experts-
+  to-F32-per-layer-per-step (300x slowdown). Options: (a) port
+  indexed_gemv to x86, (b) cache dequantized weights + rayon
+  parallel, (c) phase-2 hot-expert VRAM cache. The hip iGPU lane
+  (48-51 tok/s) stays production 35B lane. Prod toml unchanged.
 
 ## Week of Oct 14-15 (serving sized, retention closed, twins live)
 - 4B CUDA OOM root-caused: Utilization pool (15.4GB) fit but starved graphs;
