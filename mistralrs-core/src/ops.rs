@@ -1684,6 +1684,18 @@ pub(crate) fn cuda_topk_logits_f32_packed_batched(
     k: usize,
     inverse_temperatures: &Tensor,
 ) -> Result<TopKLogitsPackedOutput> {
+    // Dual NVIDIA role: the hip-typed path below cannot serve Cuda
+    // tensors, so route to the nvcc-companion twin up front. Other
+    // shapes keep their exact current behavior.
+    #[cfg(all(feature = "cuda", feature = "rocm"))]
+    if input.device().is_cuda() {
+        return crate::cuda::ops_cuda_role::cuda_topk_logits_f32_packed_batched(
+            input,
+            k,
+            inverse_temperatures,
+        );
+    }
+
     if input.dtype() != DType::F32 {
         candle_core::bail!("cuda_topk_logits_f32_packed_batched requires F32 logits");
     }

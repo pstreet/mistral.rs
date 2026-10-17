@@ -4,10 +4,10 @@
 //! Same contracts and names, bound to `cuda_backend`, with kernels resolved
 //! through the nvcc companion (`ffi_cuda`). Dual dispatch happens in `ops.rs`.
 //! Also twinned: the categorical packed sampler (default-temperature path),
-//! and the topk sampling submit (`sample_ranked_topk`).
+//! the topk sampling submit (`sample_ranked_topk`), and the batched
+//! logprob top-k packed family (`topk_large_*_packed_batched`).
 //! Still NOT twinned - not on the builtin-MTP path; they refuse
-//! loudly if reached on this role: the dflash selectors,
-//! and the caller-less `cuda_topk_logits_packed_batched` family.
+//! loudly if reached on this role: the dflash selectors.
 #[allow(dead_code)]
 use crate::cuda::ffi_cuda as ffi;
 use crate::ops::{
@@ -1579,6 +1579,231 @@ pub(crate) fn cuda_topk_logits_f32_packed(
         k,
         _workspace: workspace,
     })
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_topk_logits_packed_batched(
+    input: &Tensor,
+    k: usize,
+    inverse_temperatures: &Tensor,
+) -> Result<TopKLogitsPackedOutput> {
+    use candle_core::backend::BackendStorage;
+    use role_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+    use role_backend::CudaStorageSlice;
+    use std::ffi::c_void;
+
+    const OP: &str = "cuda_topk_logits_packed_batched";
+
+    if !matches!(input.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        candle_core::bail!("{OP} requires BF16, F16, or F32 logits");
+    }
+    if inverse_temperatures.dtype() != DType::F32 {
+        candle_core::bail!("{OP} requires F32 inverse temperatures");
+    }
+    if !input.is_contiguous() || !inverse_temperatures.is_contiguous() {
+        return Err(candle_core::Error::RequiresContiguous { op: OP });
+    }
+    if !input.device().same_device(inverse_temperatures.device()) {
+        candle_core::bail!("{OP} tensors must be on the same CUDA device");
+    }
+
+    let vocab =
+        input.dims().last().copied().ok_or_else(|| {
+            candle_core::Error::Msg(format!("{OP} requires logits with rank >= 1"))
+        })?;
+    if vocab == 0 {
+        candle_core::bail!("{OP} got an empty vocabulary");
+    }
+    let batch = input.elem_count() / vocab;
+    if batch == 0 {
+        candle_core::bail!("{OP} got an empty batch");
+    }
+    if inverse_temperatures.dims() != [batch] {
+        candle_core::bail!(
+            "{OP} expected inverse temperatures with shape [{batch}], got {:?}",
+            inverse_temperatures.dims()
+        );
+    }
+    let k = k.min(vocab);
+    if k == 0 || k > CUDA_TOPK_MAX_K {
+        candle_core::bail!("{OP} k={k} must be in [1, {}]", CUDA_TOPK_MAX_K.min(vocab));
+    }
+    if vocab > CUDA_TOPK_MAX_EXACT_PACKED_VOCAB {
+        candle_core::bail!(
+            "{OP} vocabulary size {vocab} cannot be represented exactly by packed F32 indices"
+        );
+    }
+    if batch > CUDA_TOPK_MAX_GRID_Y {
+        candle_core::bail!("{OP} batch is too large for a 2D CUDA launch: {batch}");
+    }
+
+    let nblocks = vocab.div_ceil(CUDA_TOPK_CHUNK_SIZE);
+    let candidates_per_row = nblocks
+        .checked_mul(k)
+        .ok_or_else(|| candle_core::Error::Msg(format!("{OP} candidate count overflow")))?;
+    if candidates_per_row > CUDA_TOPK_MAX_STAGE2_CANDIDATES {
+        candle_core::bail!("{OP} workspace too large: {candidates_per_row} candidates per row");
+    }
+    let workspace_elems = batch
+        .checked_mul(candidates_per_row)
+        .ok_or_else(|| candle_core::Error::Msg(format!("{OP} candidate workspace overflow")))?;
+    let block_elems = batch
+        .checked_mul(nblocks)
+        .ok_or_else(|| candle_core::Error::Msg(format!("{OP} block workspace overflow")))?;
+    let packed_width = k
+        .checked_mul(2)
+        .and_then(|width| width.checked_add(2))
+        .ok_or_else(|| candle_core::Error::Msg(format!("{OP} packed width overflow")))?;
+    let packed_elems = batch
+        .checked_mul(packed_width)
+        .ok_or_else(|| candle_core::Error::Msg(format!("{OP} packed output overflow")))?;
+
+    let nrows_i32 = i32::try_from(batch).map_err(candle_core::Error::wrap)?;
+    let ncols_i32 = i32::try_from(vocab).map_err(candle_core::Error::wrap)?;
+    let k_i32 = i32::try_from(k).map_err(candle_core::Error::wrap)?;
+    let chunk_size_i32 = i32::try_from(CUDA_TOPK_CHUNK_SIZE).map_err(candle_core::Error::wrap)?;
+    let nblocks_i32 = i32::try_from(nblocks).map_err(candle_core::Error::wrap)?;
+
+    let (input_storage, input_layout) = input.storage_and_layout();
+    let candle_core::Storage::Cuda(input_storage) = &*input_storage else {
+        candle_core::bail!("{OP} requires CUDA logits");
+    };
+    let (temperature_storage, temperature_layout) = inverse_temperatures.storage_and_layout();
+    let candle_core::Storage::Cuda(temperature_storage) = &*temperature_storage else {
+        candle_core::bail!("{OP} requires CUDA inverse temperatures");
+    };
+    let CudaStorageSlice::F32(temperature_slice) = &temperature_storage.slice else {
+        candle_core::bail!("{OP} only supports F32 inverse temperatures");
+    };
+
+    let dev = input_storage.device();
+    let stream = dev.cuda_stream();
+    let mut block_values = unsafe { dev.alloc::<f32>(workspace_elems) }?;
+    let mut block_indices = unsafe { dev.alloc::<u32>(workspace_elems) }?;
+    let mut block_maxes = unsafe { dev.alloc::<f32>(block_elems) }?;
+    let mut block_sums = unsafe { dev.alloc::<f32>(block_elems) }?;
+    let mut packed_dst = unsafe { dev.alloc::<f32>(packed_elems) }?;
+
+    macro_rules! input_ptr {
+        ($slice:expr, $ty:ty) => {{
+            let (ptr, guard) = $slice.device_ptr(&stream);
+            let ptr =
+                unsafe { (ptr as *const $ty).add(input_layout.start_offset()) as *const c_void };
+            (ptr, guard)
+        }};
+    }
+    let (input_ptr, input_guard) = match &input_storage.slice {
+        CudaStorageSlice::F32(slice) => input_ptr!(slice, f32),
+        CudaStorageSlice::BF16(slice) => input_ptr!(slice, half::bf16),
+        CudaStorageSlice::F16(slice) => input_ptr!(slice, half::f16),
+        _ => candle_core::bail!("{OP} logits dtype mismatch"),
+    };
+    let (temperature_ptr, temperature_guard) = temperature_slice.device_ptr(&stream);
+    let (block_values_ptr, block_values_guard) = block_values.device_ptr_mut(&stream);
+    let (block_indices_ptr, block_indices_guard) = block_indices.device_ptr_mut(&stream);
+    let (block_maxes_ptr, block_maxes_guard) = block_maxes.device_ptr_mut(&stream);
+    let (block_sums_ptr, block_sums_guard) = block_sums.device_ptr_mut(&stream);
+    let (packed_ptr, packed_guard) = packed_dst.device_ptr_mut(&stream);
+    let temperature_ptr =
+        unsafe { (temperature_ptr as *const f32).add(temperature_layout.start_offset()) };
+
+    macro_rules! launch {
+        ($kernel:path, $input:expr) => {{
+            unsafe {
+                $kernel(
+                    $input,
+                    temperature_ptr,
+                    block_values_ptr as *mut f32,
+                    block_indices_ptr as *mut u32,
+                    block_maxes_ptr as *mut f32,
+                    block_sums_ptr as *mut f32,
+                    packed_ptr as *mut f32,
+                    nrows_i32,
+                    ncols_i32,
+                    k_i32,
+                    chunk_size_i32,
+                    nblocks_i32,
+                    stream.cu_stream() as i64,
+                );
+            }
+        }};
+    }
+    match input.dtype() {
+        DType::F32 => {
+            launch!(ffi::topk_large_f32_packed_batched, input_ptr.cast::<f32>());
+        }
+        DType::BF16 => {
+            launch!(ffi::topk_large_bf16_packed_batched, input_ptr);
+        }
+        DType::F16 => {
+            launch!(ffi::topk_large_f16_packed_batched, input_ptr);
+        }
+        _ => unreachable!(),
+    }
+
+    drop(input_guard);
+    drop(temperature_guard);
+    drop(block_values_guard);
+    drop(block_indices_guard);
+    drop(block_maxes_guard);
+    drop(block_sums_guard);
+    drop(packed_guard);
+
+    let packed_storage = role_backend::CudaStorage {
+        slice: CudaStorageSlice::F32(packed_dst),
+        device: dev.clone(),
+    };
+    let workspace = vec![
+        Tensor::from((
+            role_storage(role_backend::CudaStorage {
+                slice: CudaStorageSlice::F32(block_values),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[workspace_elems]),
+        )),
+        Tensor::from((
+            role_storage(role_backend::CudaStorage {
+                slice: CudaStorageSlice::U32(block_indices),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[workspace_elems]),
+        )),
+        Tensor::from((
+            role_storage(role_backend::CudaStorage {
+                slice: CudaStorageSlice::F32(block_maxes),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[block_elems]),
+        )),
+        Tensor::from((
+            role_storage(role_backend::CudaStorage {
+                slice: CudaStorageSlice::F32(block_sums),
+                device: dev.clone(),
+            }),
+            Shape::from_dims(&[block_elems]),
+        )),
+    ];
+
+    Ok(TopKLogitsPackedOutput {
+        packed: Tensor::from((
+            role_storage(packed_storage),
+            Shape::from_dims(&[batch, packed_width]),
+        )),
+        k,
+        _workspace: workspace,
+    })
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+pub(crate) fn cuda_topk_logits_f32_packed_batched(
+    input: &Tensor,
+    k: usize,
+    inverse_temperatures: &Tensor,
+) -> Result<TopKLogitsPackedOutput> {
+    if input.dtype() != DType::F32 {
+        candle_core::bail!("cuda_topk_logits_f32_packed_batched requires F32 logits");
+    }
+    cuda_topk_logits_packed_batched(input, k, inverse_temperatures)
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
