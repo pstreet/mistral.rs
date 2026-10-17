@@ -179,11 +179,36 @@ mod cuda_build {
 
         println!("cargo::rustc-link-search={}", out_dir.display());
         println!("cargo::rustc-link-lib=flashattention");
+        // cudart sits in the toolkit's lib dir, which is not on the default
+        // linker search path; resolve it the same way nvcc is found.
+        if let Some(lib_dir) = cuda_toolkit_lib_dir() {
+            println!("cargo::rustc-link-search={}", lib_dir.display());
+        }
         println!("cargo::rustc-link-lib=dylib=cudart");
         if !is_target_msvc {
             println!("cargo::rustc-link-lib=dylib=stdc++");
         }
         Ok(())
+    }
+
+    fn cuda_toolkit_lib_dir() -> Option<PathBuf> {
+        let root = ["CUDA_HOME", "CUDA_PATH"]
+            .iter()
+            .find_map(|v| std::env::var(v).ok())
+            .map(PathBuf::from)
+            .or_else(|| {
+                let nvcc = std::env::var("PATH").ok()?.split(':').find_map(|dir| {
+                    let nvcc = Path::new(dir).join("nvcc");
+                    nvcc.is_file().then_some(nvcc)
+                })?;
+                nvcc.parent()?.parent().map(Path::to_path_buf)
+            })?;
+        let lib = if cfg!(target_os = "windows") {
+            root.join("lib")
+        } else {
+            root.join("lib64")
+        };
+        lib.is_dir().then_some(lib)
     }
 }
 
