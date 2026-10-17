@@ -222,19 +222,28 @@ quantized_file = "Qwen3-16B-A3B-Q4_K_M.gguf"
 model_id = "models/unsloth/Qwen3.5-4B-MTP-GGUF"
 alias = "qwen3.5-4b"
 lazy = true
-mtp = false
+# Built-in MTP head live (2026-10-17, build 23): text-only Qwen3.5 attach
+# wired; release probe on the cuda lane measured 150 vs 105.4 tok/s
+# (+42%) at accept 54-59% len ~2.1. n=2 pinned: the global is 3, the
+# probe validated 2.
+mtp = true
+mtp_n_predict = 2
 
 [models.format]
 quantized_file = "Qwen3.5-4B-Q8_0.gguf"
 
 # Three-backend exercise 2026-10-09: same 4B on every device class.
-# mtp=false mirrors the hip entry (clean 3-way comparison, no CPU
-# attach risk - the verify kernels are GPU-only).
+# GPU lanes run the MTP head; the CPU entry stays pinned mtp=false
+# (no PagedAttention there, and the verify kernels are GPU-only).
 [[models]]
 model_id = "models/unsloth/Qwen3.5-4B-MTP-GGUF"
 alias = "qwen3.5-4b-cuda"
 lazy = true
-mtp = false
+# MTP live (probe-validated n=2, see the hip entry above). The lane
+# costs ~500MB more: one paged KV layer + head + Q4K draft lm_head;
+# fit_ctx still guards a crowded 3090.
+mtp = true
+mtp_n_predict = 2
 device = "cuda:0"
 # Shrink-instead-of-fail if the 3090 is crowded when this demand-loads.
 fit_ctx = true
