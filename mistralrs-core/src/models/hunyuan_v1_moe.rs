@@ -654,6 +654,7 @@ impl MoeBlock {
 
         let moe_cfg = MoEExpertsConfig {
             num_experts,
+            expert_device: None,
             num_experts_per_tok: routing_mode.top_k(),
             hidden_size,
             moe_intermediate_size: intermediate_size,

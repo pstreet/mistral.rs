@@ -12,6 +12,9 @@ pub struct MoEExpertsConfig {
     pub hidden_size: usize,
     pub moe_intermediate_size: usize,
     pub expert_proj_names: ExpertProjNames,
+    /// Expert-split placement (llama.cpp `--cpu-moe` style); None keeps experts on
+    /// the layer device.
+    pub expert_device: Option<Device>,
 }
 
 /// One of the three expert projections.

@@ -42,6 +42,8 @@ pub struct MoEExperts {
     num_experts_per_tok: usize,
     all_reduce: SumAllReduce,
     world_size: usize,
+    // Expert-split placement; None when experts share the layer device
+    expert_device: Option<Device>,
 }
 
 enum MoEExpertsBackendImpl {
@@ -97,7 +99,11 @@ impl MoEExperts {
         quantization_config: &Option<QuantizedConfig>,
         act: Activation,
     ) -> Result<Self> {
-        let experts_vb = vb.pp("experts").set_device(layer_device.clone());
+        let expert_device = cfg
+            .expert_device
+            .clone()
+            .unwrap_or_else(|| layer_device.clone());
+        let experts_vb = vb.pp("experts").set_device(expert_device.clone());
         if let Some(fast) = FastExpertsWeights::from_weight_source(cfg, &experts_vb, comm)? {
             let lora_site = Self::register_lora_site(cfg, &experts_vb, comm, fast.sharded)?;
             return Ok(Self::from_backend(
@@ -110,7 +116,7 @@ impl MoEExperts {
         }
         check_isq_gather_support()?;
         let choice = BackendChoice::new(
-            layer_device,
+            expert_device.clone(),
             experts_vb.dtype(),
             loading_isq,
             quantization_config,
@@ -141,7 +147,7 @@ impl MoEExperts {
                 if experts_are_prequantized(quantization_config, &experts_vb) {
                     MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_prequantized(
                         cfg,
-                        vb,
+                        vb.set_device(expert_device.clone()),
                         quantization_config,
                     )?)
                 } else {
@@ -240,6 +246,11 @@ impl MoEExperts {
         comm: &Arc<mistralrs_quant::Comm>,
         act: Activation,
     ) -> Self {
+        if cfg.expert_device.is_some() {
+            mistralrs_quant::log::once_log_info(
+                "MoE expert-split: experts resident on CPU; router and shared experts stay on the GPU",
+            );
+        }
         Self {
             backend,
             lora_site,
@@ -248,6 +259,7 @@ impl MoEExperts {
             num_experts_per_tok: cfg.num_experts_per_tok,
             all_reduce: SumAllReduce::new(comm),
             world_size: comm.world_size(),
+            expert_device: cfg.expert_device.clone(),
         }
     }
 
@@ -306,7 +318,25 @@ impl MoEExperts {
     pub fn forward(&self, xs: &Tensor, topk_weights: Tensor, topk_ids: &Tensor) -> Result<Tensor> {
         let (batch_size, seq_len, hidden_dim) = xs.dims3()?;
         let shape = MoEForwardShape::new(batch_size, seq_len, hidden_dim);
-        let xs_flat = xs.reshape(shape.flat())?;
+        let original_device = xs.device().clone();
+        // Expert-split lanes bridge each MoE block over to the experts' device; routing
+        // (already computed by the caller) rides along as [num_tokens, top_k] tensors.
+        let (xs, xs_flat, topk_weights, topk_ids) = match &self.expert_device {
+            Some(dev) if !dev.same_device(&original_device) => {
+                let xs = xs.to_device(dev)?;
+                let xs_flat = xs.reshape(shape.flat())?;
+                (
+                    xs,
+                    xs_flat,
+                    topk_weights.to_device(dev)?,
+                    topk_ids.to_device(dev)?,
+                )
+            }
+            _ => {
+                let xs_flat = xs.reshape(shape.flat())?;
+                (xs.clone(), xs_flat, topk_weights, topk_ids.clone())
+            }
+        };
         let lora = self
             .lora_site
             .as_ref()
@@ -314,10 +344,10 @@ impl MoEExperts {
             .transpose()?
             .flatten();
         let forward = MoEForward {
-            xs,
+            xs: &xs,
             xs_flat: &xs_flat,
             topk_weights: &topk_weights,
-            topk_ids,
+            topk_ids: &topk_ids,
             original_dtype: xs.dtype(),
             shape,
             lora,
@@ -338,6 +368,9 @@ impl MoEExperts {
             ys = self.all_reduce.sum_all_reduce(&ys)?;
         }
 
+        if !ys.device().same_device(&original_device) {
+            ys = ys.to_device(&original_device)?;
+        }
         ys.reshape(forward.shape.output())
     }
 

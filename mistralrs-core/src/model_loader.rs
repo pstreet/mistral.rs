@@ -26,6 +26,7 @@ pub struct LoaderBuilder {
     max_model_len: Option<usize>,
     hf_config_overrides: Option<HfConfigOverrides>,
     mtp: bool,
+    expert_device: Option<String>,
     encoder_cache_memory_bytes: Option<usize>,
     prefill_chunk_size: Option<usize>,
 }
@@ -40,6 +41,7 @@ impl LoaderBuilder {
             max_model_len: None,
             hf_config_overrides: None,
             mtp: false,
+            expert_device: None,
             encoder_cache_memory_bytes: None,
             prefill_chunk_size: None,
         }
@@ -48,6 +50,11 @@ impl LoaderBuilder {
     /// Load the MTP head built into the checkpoint so it can drive speculative decoding.
     pub fn with_mtp(mut self, mtp: bool) -> Self {
         self.mtp = mtp;
+        self
+    }
+
+    pub fn with_expert_device(mut self, expert_device: Option<String>) -> Self {
+        self.expert_device = expert_device;
         self
     }
 
@@ -380,6 +387,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.jinja_explicit,
         )
         .with_mtp(args.mtp)
+        .with_expert_device(args.expert_device.clone())
         .build(arch)?,
         ModelSelected::Run {
             model_id,
@@ -713,6 +721,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     matformer_config_path,
                     matformer_slice_name,
                     mtp: args.mtp,
+                    expert_device: args.expert_device.clone(),
                 },
                 args.no_kv_cache,
                 args.jinja_explicit,

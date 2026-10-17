@@ -1055,6 +1055,7 @@ impl DecoderLayer {
             let moe_vb = mapper.set_device(layer_idx, vb.pp(moe_prefix), false);
             let moe_cfg = MoEExpertsConfig {
                 num_experts,
+                expert_device: None,
                 num_experts_per_tok: top_k,
                 hidden_size: cfg.hidden_size,
                 moe_intermediate_size: expert_inter,

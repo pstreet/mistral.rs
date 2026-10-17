@@ -485,6 +485,8 @@ pub struct ModelLoaderConfig {
     pub hf_config_overrides: Option<HfConfigOverrides>,
     /// Optional speculative decoding attachment to recreate after reload.
     pub mtp_config: Option<MtpConfig>,
+    /// MoE expert placement to recreate after reload.
+    pub expert_device: Option<String>,
     /// Optional logical tensor byte budget for multimodal encoder outputs.
     pub encoder_cache_memory_bytes: Option<usize>,
 }
@@ -3338,10 +3340,9 @@ impl MistralRs {
                     .is_some_and(MtpConfig::is_builtin),
             )
             .with_encoder_cache_memory_bytes(loader_config.encoder_cache_memory_bytes)
+            .with_expert_device(loader_config.expert_device.clone())
             .build()
             .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to build loader: {e}")))?;
-
-        // Load the model. The loader runs its own fit check against current
         // free memory, which can lag async eviction teardown; retry that
         // specific refusal until the demand-load wait budget lapses. The
         // fit check is the precise capacity oracle, so it also drives
@@ -4054,6 +4055,7 @@ mod tests {
             max_model_len: None,
             hf_config_overrides: None,
             mtp_config: None,
+            expert_device: None,
             encoder_cache_memory_bytes: None,
         }
     }

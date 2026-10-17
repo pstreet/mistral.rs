@@ -110,12 +110,26 @@ pub struct Config {
     /// Injected by the loader when the built-in MTP head should be loaded (see `MTP_CONFIG_KEY`).
     #[serde(default, rename = "_mistralrs_mtp")]
     pub mtp: bool,
+    /// Injected by the loader for expert-split placement (see `EXPERT_DEVICE_CONFIG_KEY`).
+    #[serde(default, rename = "_mistralrs_expert_device")]
+    pub expert_device: Option<String>,
 }
 
 impl Config {
     /// Whether to load the built-in MTP head and report its layer in the paged KV mask.
     pub fn mtp_layers(&self) -> usize {
         usize::from(self.mtp)
+    }
+
+    /// Expert-split placement device; only `"cpu"` is supported.
+    pub fn expert_split_device(&self) -> Result<Option<Device>> {
+        match &self.expert_device {
+            None => Ok(None),
+            Some(dev) if dev == "cpu" => Ok(Some(Device::Cpu)),
+            Some(dev) => {
+                candle_core::bail!("`expert_device = \"{dev}\"` is not supported; only \"cpu\"")
+            }
+        }
     }
 
     /// Paged-KV layers index of the MTP block (right after the main stack).
@@ -457,6 +471,7 @@ impl SparseMoeBlock {
 
         let moe_cfg = MoEExpertsConfig {
             num_experts: cfg.num_experts,
+            expert_device: cfg.expert_split_device()?,
             num_experts_per_tok: cfg.num_experts_per_tok,
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.moe_intermediate_size,
@@ -1514,6 +1529,7 @@ pub struct Model {
     max_seq_len: usize,
     mtp: Option<Qwen3NextMtpHead>,
     mtp_n_predict: AtomicUsize,
+    expert_device: Option<Device>,
     store_spec_hidden: AtomicBool,
     last_spec_capture: Mutex<Option<SpecCapture>>,
     last_full_capture: Mutex<Option<SpecCapture>>,
@@ -1532,6 +1548,15 @@ impl Model {
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let vb_lm_head = vb.pp("lm_head");
+
+        if cfg.expert_device.is_some()
+            && (normal_loading_metadata.loading_isq
+                || mistralrs_quant::get_immediate_isq().is_some())
+        {
+            candle_core::bail!(
+                "`expert_device` cannot be combined with in-situ quantization or immediate ISQ"
+            );
+        }
 
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
@@ -1780,6 +1805,7 @@ impl Model {
             max_seq_len: cfg.max_position_embeddings,
             mtp,
             mtp_n_predict: AtomicUsize::new(0),
+            expert_device: cfg.expert_split_device().unwrap_or(None),
             store_spec_hidden: AtomicBool::new(false),
             last_spec_capture: Mutex::new(None),
             last_full_capture: Mutex::new(None),
@@ -3551,7 +3577,8 @@ impl NormalModel for Model {
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn supports_cuda_decode_graphs(&self) -> bool {
-        true
+        // Expert-split puts a CPU matmul inside every block; capture cannot span it.
+        self.expert_device.is_none()
     }
 }
 

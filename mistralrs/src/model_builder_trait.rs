@@ -753,6 +753,7 @@ pub async fn build_text_pipeline(
         max_model_len: builder.max_model_len,
         hf_config_overrides: builder.hf_config_overrides.clone(),
         mtp_config: builder.mtp_config.clone(),
+        expert_device: None,
         encoder_cache_memory_bytes: None,
     };
 
@@ -908,6 +909,7 @@ pub async fn build_multimodal_pipeline(
         max_model_len: builder.max_model_len,
         hf_config_overrides: builder.hf_config_overrides.clone(),
         mtp_config: builder.mtp_config.clone(),
+        expert_device: None,
         encoder_cache_memory_bytes: builder.encoder_cache_memory_bytes,
     };
 
@@ -952,6 +954,7 @@ pub async fn build_gguf_pipeline(
             .mtp_config
             .as_ref()
             .is_some_and(MtpConfig::is_builtin),
+        expert_device: None,
     };
 
     maybe_initialize_logging(builder.with_logging);
@@ -1103,6 +1106,7 @@ pub async fn build_gguf_pipeline(
         max_model_len: builder.max_model_len,
         hf_config_overrides: None,
         mtp_config: builder.mtp_config.clone(),
+        expert_device: None,
         encoder_cache_memory_bytes: builder.encoder_cache_memory_bytes,
     };
 
@@ -1166,6 +1170,7 @@ pub async fn build_diffusion_pipeline(
         max_model_len: None,
         hf_config_overrides: None,
         mtp_config: None,
+        expert_device: None,
         encoder_cache_memory_bytes: None,
     };
 
@@ -1233,6 +1238,7 @@ pub async fn build_speech_pipeline(
         max_model_len: None,
         hf_config_overrides: None,
         mtp_config: None,
+        expert_device: None,
         encoder_cache_memory_bytes: None,
     };
 
@@ -1331,6 +1337,7 @@ pub async fn build_embedding_pipeline(
         max_model_len: None,
         hf_config_overrides: None,
         mtp_config: None,
+        expert_device: None,
         encoder_cache_memory_bytes: None,
     };
 
@@ -1514,6 +1521,7 @@ pub async fn build_auto_pipeline(
         max_model_len: builder.max_model_len,
         hf_config_overrides: builder.hf_config_overrides.clone(),
         mtp_config: builder.mtp_config.clone(),
+        expert_device: None,
         encoder_cache_memory_bytes: builder.encoder_cache_memory_bytes,
     };
 

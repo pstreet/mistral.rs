@@ -368,6 +368,7 @@ pub struct NormalLoader {
     hf_cache_path: Option<PathBuf>,
     prepared_source: Option<PreparedNormalSource>,
     mtp: bool,
+    expert_device: Option<String>,
 }
 
 #[derive(Clone)]
@@ -426,6 +427,7 @@ pub struct NormalLoaderBuilder {
     jinja_explicit: Option<String>,
     hf_cache_path: Option<PathBuf>,
     mtp: bool,
+    expert_device: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -470,6 +472,13 @@ impl NormalLoaderBuilder {
     /// Load the MTP head built into the checkpoint so it can drive speculative decoding.
     pub fn with_mtp(mut self, mtp: bool) -> Self {
         self.mtp = mtp;
+        self
+    }
+
+    /// Place MoE experts on the given device (e.g. `"cpu"` for expert-split), leaving the
+    /// attention/router/shared experts on the primary device.
+    pub fn with_expert_device(mut self, expert_device: Option<String>) -> Self {
+        self.expert_device = expert_device;
         self
     }
 
@@ -592,6 +601,7 @@ impl NormalLoaderBuilder {
             hf_cache_path: self.hf_cache_path,
             prepared_source,
             mtp: self.mtp,
+            expert_device: self.expert_device,
         })
     }
 
@@ -696,6 +706,10 @@ impl Loader for NormalLoader {
         } else {
             config
         };
+        let config = match &self.expert_device {
+            Some(dev) => super::loaders::inject_expert_device_config_flag(&config, dev)?,
+            None => config,
+        };
         let config = self
             .inner
             .runtime_config(&config, self.config.max_model_len)?
@@ -759,7 +773,12 @@ impl Loader for NormalLoader {
 
         // If auto, convert to Map if not using nccl
         let mut max_kv_tokens: Option<usize> = None;
-        if write_uqff {
+        // Expert-split models keep their experts on a separate device (CPU); the auto device
+        // map must not spill layers to that device based on the full (expert-heavy) weight
+        // size, or PagedAttention gets disabled. Force single-device placement.
+        if self.expert_device.is_some() {
+            mapper = DeviceMapSetting::dummy();
+        } else if write_uqff {
             mapper = DeviceMapSetting::dummy();
         } else if use_distributed {
             mapper = DeviceMapSetting::DummyNccl {

@@ -997,6 +997,7 @@ fn loader_from_selected(
                     matformer_config_path,
                     matformer_slice_name,
                     mtp: false,
+                    expert_device: None,
                 },
                 args.no_kv_cache,
                 args.jinja_explicit,

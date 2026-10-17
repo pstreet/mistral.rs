@@ -251,6 +251,12 @@ pub struct ModelEntry {
     /// `[runtime] mtp_n_predict`. Applies when this entry attaches MTP.
     #[serde(default)]
     pub mtp_n_predict: Option<usize>,
+    /// MoE expert placement: `None` keeps experts on the entry's device,
+    /// `Some("cpu")` puts the cold experts in system RAM while the
+    /// attention/router/shared experts stay on the GPU (llama.cpp
+    /// `--cpu-moe` style). Only `cpu` is supported.
+    #[serde(default)]
+    pub expert_device: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]

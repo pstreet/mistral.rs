@@ -181,6 +181,8 @@ pub struct GGUFSpecificConfig {
     pub matformer_config_path: Option<PathBuf>,
     pub matformer_slice_name: Option<String>,
     pub mtp: bool,
+    /// Set on the model config JSON when MoE experts should be placed on a different device.
+    pub expert_device: Option<String>,
 }
 
 impl GGUFSpecificConfig {
@@ -734,7 +736,8 @@ impl GGUFLoader {
             self.no_kv_cache,
             self.jinja_explicit.clone(),
         )
-        .with_mtp(self.config.mtp);
+        .with_mtp(self.config.mtp)
+        .with_expert_device(self.config.expert_device.clone());
         if let Some(dynamic_lora) = self.dynamic_lora.as_ref() {
             loader = loader.with_lora(dynamic_lora.adapters.clone(), dynamic_lora.runtime);
         }

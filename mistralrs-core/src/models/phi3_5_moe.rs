@@ -288,6 +288,7 @@ impl MoeMlp {
 
         let moe_cfg = MoEExpertsConfig {
             num_experts,
+            expert_device: None,
             // Sparsemixer routing is top-2 by construction.
             num_experts_per_tok: 2,
             hidden_size: cfg.hidden_size,

@@ -468,6 +468,9 @@ async fn build_model_configs(
         if let Some(mtp) = entry.mtp {
             config = config.with_mtp(mtp);
         }
+        if let Some(expert_device) = entry.expert_device.clone() {
+            config = config.with_expert_device(Some(expert_device));
+        }
         if let Some(cache_type) = entry.cache_type {
             config = config.with_cache_type(cache_type);
         }
