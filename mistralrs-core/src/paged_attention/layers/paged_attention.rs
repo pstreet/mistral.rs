@@ -1447,7 +1447,10 @@ impl PagedAttention {
                     })?;
                 if required > limit {
                     candle_core::bail!(
-                        "prompt KV gather requires {required} bytes, exceeding its preflight workspace limit of {limit} bytes"
+                        "prompt KV gather requires {required} bytes, exceeding its preflight workspace limit of {limit} bytes (query dims {:?}, seq_len {}, q_heads {}, query_lens {query_lens:?}, kv_lens {kv_lens:?})",
+                        tensors.query.dims(),
+                        ctx.dims.seq_len,
+                        ctx.dims.attention_heads
                     );
                 }
             }

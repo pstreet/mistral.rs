@@ -1749,8 +1749,35 @@ impl Engine {
                             let has_donor_cache_layers = model_metadata.as_deref().is_some_and(
                                 crate::paged_attention::plan::model_has_donor_paged_cache_layers,
                             );
+                            // CUDA-role pipelines chunk prompts internally (pipeline/mod
+                            // chunk_size gate); every continuation chunk gathers prior
+                            // KV, so a no-prefix batch that will still split needs the
+                            // gather workspace the chunk lens alone don't show.
+                            let internal_split_gathers = {
+                                let pipeline = get_mut_arcmutex!(self.pipeline);
+                                if pipeline.device().is_cuda() {
+                                    let chunk_cap = crate::pipeline::override_prefill_chunk_size()
+                                        .or(pipeline.get_metadata().paged_prefill_chunk_size)
+                                        .unwrap_or(
+                                            crate::pipeline::DEFAULT_PAGED_PREFILL_CHUNK_SIZE,
+                                        );
+                                    let hybrid = pipeline.cache().is_hybrid();
+                                    drop(pipeline);
+                                    query_lens
+                                        .iter()
+                                        .zip(&full_context_lens)
+                                        .any(|(query, full)| {
+                                            *query == *full
+                                                && (*full > chunk_cap
+                                                    || (hybrid && *full % block_size != 0))
+                                        })
+                                } else {
+                                    false
+                                }
+                            };
                             let requires_prefix_attention = has_noncausal_mm_context
                                 || has_donor_cache_layers
+                                || internal_split_gathers
                                 || query_lens
                                     .iter()
                                     .zip(&full_context_lens)
@@ -1784,6 +1811,11 @@ impl Engine {
                                         break;
                                     }
                                 };
+                            tracing::debug!(
+                                "prompt preflight: requires_prefix_attention={requires_prefix_attention} donor={has_donor_cache_layers} query_lens={query_lens:?} full_context_lens={full_context_lens:?} workspace_bytes={} gather_workspace_bytes={}",
+                                workspace.bytes,
+                                workspace.gather_workspace_bytes
+                            );
                             let workspace_bytes = workspace.bytes;
                             debug_assert!(cuda_decode_lease.is_none());
                             let memory_status = self.maintain_cuda_prompt_memory(
