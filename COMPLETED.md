@@ -243,6 +243,22 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   binary - PASSES at 901.5 tok/s prefill / 40.3 tok/s decode,
   coherent output, no gather-workspace journal errors, 20.3GB VRAM.
   The CUDA-role preflight landmine is closed in production.
+- Expert-dedup decode (candle commit `14f1348b`): a live census
+  (CANDLE_MOE_CENSUS=1) on the 35B split probe measured the real
+  decode pattern - ~23 pairs (3 MTP verify positions x 8 experts),
+  only 14-17 distinct experts, ~94 indexed calls per ~64ms step, gemv
+  ~32% of the step. The old per-pair units re-read shared experts for
+  every pair; decode now groups pairs by expert and serves up to
+  MAX_MT rows per tile read via row/dst indirection (no gather pass,
+  one barrier region), plus serial small-batch quantize/widen/narrow
+  and uninit output buffers (pool regions cost more than decode-sized
+  work). Bench at real Q8_0 shapes: overlap routing 2.3-2.5x faster,
+  distinct unchanged; fast probe A/B decode 36 -> 41 tok/s (+14%),
+  census 230 -> 200us/call. Release probe deferred until the candle
+  push so the on-disk release binary stays == the pushed tip prod
+  runs. Next lever is the ~68% serving overhead (per-call CPU<->GPU
+  crossings + Tensor bookkeeping in the mistralrs-core choke point),
+  then phase-2 hot-expert VRAM cache.
 
 ## Week of Oct 14-15 (serving sized, retention closed, twins live)
 - 4B CUDA OOM root-caused: Utilization pool (15.4GB) fit but starved graphs;

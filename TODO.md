@@ -712,6 +712,29 @@ parity queue) now outranks it on impact.
         read ~84GB/s/step vs ~200 DDR5 peak — remaining headroom is
         unit granularity / barrier overhead (768 tiny units per
         tensor per layer at decode), not kernel math.
+      DEDUP LANDED 2026-10-17 late (candle commit 14f1348b): a live
+        census (CANDLE_MOE_CENSUS=1, env-gated, 512-call stderr
+        windows) measured the real decode pattern: ~23 pairs (3 MTP
+        verify positions x 8), only 14-17 DISTINCT experts, and
+        ~94 indexed calls per 64ms step (~32% of the step in gemv;
+        ~68% is serving overhead). Decode now groups pairs by expert
+        and reads shared experts' tiles once for up to MAX_MT rows
+        via per-pair row/dst indirection (no gather/scratch, one
+        barrier region); quantize_lhs/widen/narrow go serial for
+        decode-sized batches and the output buffer is uninit. Bench
+        at the real Q8_0 shapes: overlapping routing 2.3-2.5x faster
+        (gate_up 0.890 -> 0.355 ms/call), distinct unchanged. Fast
+        probe A/B: decode 36 -> 41 tok/s (+14%), census avg 230 ->
+        200us/call. Release probe deferred until the candle push so
+        target/release/mistralrs stays == the pushed tip prod runs
+        (expect ~43 on release). NEXT LEVERS, in value order: (1)
+        the ~68% serving overhead - per-tensor-per-layer CPU<->GPU
+        crossings (~94 calls x 3 transfers), per-call Tensor
+        alloc/bookkeeping, scheduler syncs - a mistralrs-core choke
+        point batching task; (2) phase-2 hot-expert VRAM cache with
+        router-predicted prefetch (the differentiator; cuts the RAM
+        read entirely for hot experts); (3) further kernel work is
+        low-yield (gemv already ~145-175 GB/s at bench scale).
       BUG FOUND+FIXED 2026-10-17 (mistral.rs commit fc718e21a): the
         CUDA-role pipeline chunks prompts INTERNALLY (4096 cap,
         block-aligned to 32 for hybrid caches so recurrent
