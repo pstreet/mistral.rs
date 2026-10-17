@@ -255,7 +255,10 @@ quantized_file = "Qwen3.5-4B-Q8_0.gguf"
 model_id = "models/unsloth/Qwen3.5-4B-MTP-GGUF"
 alias = "qwen3.5-4b-cpu"
 lazy = true
-mtp = false
+# CPU PA landed (build 24): paged_attn serves on Cpu in all builds now,
+# so the MTP head can attach. Verify is gather+SDPA (no CUDA graphs).
+mtp = true
+mtp_n_predict = 2
 device = "cpu"
 # CPU cannot use the global Q8_0 block KV (GPU-only kernels). The
 # per-model BASE cache_type is what clears the inherited global - it

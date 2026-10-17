@@ -70,7 +70,12 @@ fn dflash_speculative_batch(batch: DFlashProposalBatch) -> Result<SpeculativePro
         DFlashProposalBatch::Tokens(tokens) => {
             tokens.into_iter().map(SpeculativeProposal::new).collect()
         }
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(all(
+    feature = "cuda",
+    not(feature = "rocm"),
+    feature = "flash-attn",
+    target_family = "unix"
+))]
         DFlashProposalBatch::DeviceTokens(tokens) => {
             let batch = tokens.dim(0)?;
             (0..batch)
@@ -1112,7 +1117,12 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         SpeculativeTargetMixin::speculative_graph_plans(&self.text)
     }
 
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(all(
+    feature = "cuda",
+    not(feature = "rocm"),
+    feature = "flash-attn",
+    target_family = "unix"
+))]
     fn precapture_speculative_cuda_graphs(&self) -> Result<()> {
         let Some(drafter) = self.dflash.lock().expect("dflash poisoned").clone() else {
             return Ok(());

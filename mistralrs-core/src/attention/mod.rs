@@ -319,12 +319,12 @@ impl Sdpa {
             let dbg = debug_ck();
 
             // CK kernels are hipcc-built; the launcher is Storage::Hip-
-            // shaped (the AMD role's storage in every rocm build). In
-            // dual builds the NVIDIA role must never reach these AMD
-            // binaries (is_hip() is false there), so CK fires in
-            // single-vendor rocm builds; dual hip prefill keeps its
-            // existing eager/flash path (unchanged - no regression).
-            if !cfg!(all(feature = "cuda", feature = "rocm"))
+            // shaped (the AMD role's storage in every rocm build). The
+            // NVIDIA role never reaches these binaries (is_hip() is false
+            // there). flash-attn is role-agnostic: it fires on the hip role
+            // in every build shape when the feature is compiled in, and
+            // no role gets flash attention when it is absent.
+            if crate::using_flash_attn()
                 && q.device().is_hip()
                 && q.dtype() == DType::BF16
                 && k.dtype() == DType::BF16

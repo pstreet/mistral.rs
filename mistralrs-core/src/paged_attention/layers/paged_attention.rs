@@ -18,7 +18,11 @@ use mistralrs_paged_attn::{
     reshape_and_cache_q8_auto as reshape_and_cache_q8,
 };
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(
+    feature = "cuda",
+    any(not(feature = "rocm"), feature = "flash-attn"),
+    target_family = "unix"
+))]
 use crate::attention::sliding_window_left;
 #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
 use crate::flashinfer::{

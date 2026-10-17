@@ -149,7 +149,11 @@ metal = [
     "mistralrs-paged-attn/metal",
     "dep:objc2-metal"
 ]
-flash-attn = ["cuda", "dep:mistralrs-flash-attn", "mistralrs-flash-attn/cuda"]
+# Role-agnostic flash attention: ON enables FA on every GPU role present in
+# the build (Cuda role -> the CUTLASS kernels below; Hip role -> the in-tree
+# ROCm-native CK flash path, gated on using_flash_attn()). OFF disables it
+# on both roles. Never forces a role on: `rocm,flash-attn` stays solo-rocm.
+flash-attn = ["dep:mistralrs-flash-attn", "mistralrs-flash-attn/cuda"]
 flash-attn-v3 = ["cuda", "dep:candle-flash-attn-v3"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "mistralrs-quant/accelerate"]
 mkl = ["candle-core/mkl", "candle-nn/mkl"]
