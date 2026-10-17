@@ -128,8 +128,9 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   only approximately deterministic here (no-MTP flips near-ties
   run-to-run; token-exact equivalence is not a usable gate) and
   hip-device probes must source .rocm-env.sh (hipblas dlopen).
-  Backstop: mistralrs.build23-mtp4b. Follow-up candidate:
-  qwen3-16b if its file carries a nextn head.
+  Backstop: mistralrs.build23-mtp4b. Follow-up answered
+  2026-10-17: qwen3-16b has NO head (arch qwen3moe, 48 uniform
+  blocks, no nextn tensors or metadata; the pin stays false).
 
 ## Week of Oct 14-15 (serving sized, retention closed, twins live)
 - 4B CUDA OOM root-caused: Utilization pool (15.4GB) fit but starved graphs;

@@ -787,8 +787,13 @@ parity queue) now outranks it on impact.
       NOT a usable gate; use accept-rate + coherence + journal.
       ALSO: hip-device probes must source .rocm-env.sh in the
       probe env (hipblas dlopen), the cuda-only probes never
-      needed it. Follow-up candidate: qwen3-16b (Qwen3-16B-A3B)
-      if its file carries a nextn head - needs its own bench.
+      needed it. Follow-up ANSWERED 2026-10-17: qwen3-16b
+      (Qwen3-16B-A3B) has NO MTP head - arch qwen3moe, 48 uniform
+      12-tensor blocks, zero nextn.* tensors and no nextn_predict_
+      layers metadata (the Qwen3 MoE line predates MTP heads).
+      Its mtp=false pin is correct as-is; a hypothetical head would
+      also need a qwen3_moe.rs wiring port (that class takes the
+      default mixin bail).
       ANSWERED 2026-10-13 (cuda-alone probe, solo-cuda binary):
       the pin is LOAD-BEARING, not a choice - the Qwen3.5 model
       class never overrides `SpeculativeTargetMixin::attach_speculative`
