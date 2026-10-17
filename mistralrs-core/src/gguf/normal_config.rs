@@ -1893,6 +1893,13 @@ fn build_qwen35(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
     config.insert("linear_num_key_heads".into(), json!(key_head_count));
     config.insert("linear_num_value_heads".into(), json!(value_head_count));
     config.insert(GDN_V_HEAD_LAYOUT_CONFIG_KEY.into(), json!("tiled"));
+    // The head loader validates the count; 0 means the checkpoint ships no MTP head.
+    config.insert(
+        "mtp_num_hidden_layers".into(),
+        json!(metadata
+            .optional_usize("nextn_predict_layers")?
+            .unwrap_or(0)),
+    );
     Ok(JsonValue::Object(config))
 }
 

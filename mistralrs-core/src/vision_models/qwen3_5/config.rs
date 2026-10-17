@@ -257,6 +257,9 @@ pub struct TextConfig {
     pub mtp_num_hidden_layers: usize,
     #[serde(default)]
     pub mtp_use_dedicated_embeddings: bool,
+    /// Injected by the loader when the built-in MTP head should be loaded (see `MTP_CONFIG_KEY`).
+    #[serde(default, rename = "_mistralrs_mtp")]
+    pub mtp: bool,
 }
 
 impl TextConfig {

@@ -5989,7 +5989,7 @@ impl NormalModelLoader for Qwen3_5TextLoader {
                 &cfg,
                 vb,
                 cfg.tie_word_embeddings,
-                false,
+                cfg.mtp,
                 normal_loading_metadata,
                 attention_mechanism,
             )?,

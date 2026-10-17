@@ -3,7 +3,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex, OnceLock,
     },
 };
@@ -1258,6 +1258,12 @@ pub struct Qwen3_5TextModel {
     pub(super) max_seq_len: usize,
     weight_prefix: TextWeightPrefix,
     pub(super) mtp: Option<Qwen3_5MtpHead>,
+    // Draft tokens per speculative step; 0 while MTP is not attached
+    pub(super) mtp_n_predict: AtomicUsize,
+    // Draft-only lm_head at the base ISQ type; the target verifies with the promoted head
+    pub(super) draft_lm_head: Mutex<Option<Arc<dyn QuantMethod>>>,
+    // Last prompt row per sequence, handed to the drafter once its next token is sampled
+    pub(super) pending_prompt_tails: Mutex<HashMap<usize, super::speculative::PendingPromptTail>>,
     store_spec_hidden: AtomicBool,
     // Rows the logits were reduced to (decode: all rows, prompt: the last one)
     last_spec_capture: Mutex<Option<SpecCapture>>,
@@ -1453,14 +1459,18 @@ impl Qwen3_5TextModel {
             embed_tokens.clone()
         };
 
-        // Create pipeline hybrid cache
-        let pipeline_layer_types: Vec<HybridLayerType> = layer_types
+        // Create pipeline hybrid cache; the MTP head's attention layer lives past the main stack.
+        let mut pipeline_layer_types: Vec<HybridLayerType> = layer_types
             .iter()
             .map(|lt| match lt {
                 LayerType::FullAttention => HybridLayerType::Attention,
                 LayerType::LinearAttention => HybridLayerType::Recurrent,
             })
             .collect();
+        pipeline_layer_types.extend(std::iter::repeat_n(
+            HybridLayerType::Attention,
+            cfg.mtp_layers(mtp.is_some()),
+        ));
 
         let hybrid_cache_config = HybridCacheConfig {
             layer_types: pipeline_layer_types,
@@ -1516,6 +1526,9 @@ impl Qwen3_5TextModel {
             mapper,
             weight_prefix,
             mtp,
+            mtp_n_predict: AtomicUsize::new(0),
+            draft_lm_head: Mutex::new(None),
+            pending_prompt_tails: Mutex::new(HashMap::new()),
             store_spec_hidden: AtomicBool::new(false),
             last_spec_capture: Mutex::new(None),
             last_full_capture: Mutex::new(None),
@@ -2826,40 +2839,6 @@ impl IsqModel for Qwen3_5TextModel {
         }
 
         uvb.to_safetensors()
-    }
-}
-
-impl crate::speculative::SpeculativeTargetMixin for Qwen3_5TextModel {
-    fn supports_recurrent_speculative_checkpoints(&self) -> bool {
-        Qwen3_5TextModel::supports_recurrent_speculative_checkpoints(self)
-    }
-
-    fn supports_recurrent_speculative_transitions(&self) -> bool {
-        Qwen3_5TextModel::supports_recurrent_speculative_transitions(self)
-    }
-
-    fn reserve_recurrent_speculative_transition_storage(&self) -> Result<bool> {
-        self.reserve_recurrent_transition_storage()
-    }
-
-    fn reserve_recurrent_decode_deferred_storage(&self) -> Result<bool> {
-        Qwen3_5TextModel::reserve_recurrent_decode_deferred_storage(self)
-    }
-
-    fn disable_recurrent_decode_deferred_storage(&self) -> Result<bool> {
-        Qwen3_5TextModel::disable_recurrent_decode_deferred_storage(self)
-    }
-
-    fn apply_recurrent_speculative_transitions_for_current_batch(&self) -> Result<bool> {
-        self.apply_current_recurrent_transitions()
-    }
-
-    fn flush_recurrent_state_for_current_batch(&self) -> Result<()> {
-        self.flush_current_recurrent_state()
-    }
-
-    fn flush_recurrent_speculative_transitions(&self, seq_ids: &[usize]) -> Result<()> {
-        self.flush_recurrent_transitions_for_sequences(seq_ids)
     }
 }
 
