@@ -689,6 +689,57 @@ parity queue) now outranks it on impact.
             holds dozens; prefetch overlaps with attention/GDN).
         (d) accept 35B-on-3090 as a slow/capacity lane only (not
             viable at 0.15 tok/s).
+      OPTION (A) LANDED 2026-10-17 (candle commit 87aff026):
+        indexed_gemv ported onto the repack_x86 tile machinery —
+        try_indexed_gemv decodes at one shared matmul unit per
+        (pair, expert n-tile) at m=1, >=32 pairs bucket by expert
+        into one tiled matmul per expert tile range (nt0 threaded
+        through matmul_tiles); TileQ5K + pack/kernels (512/256-bit)
+        added; all four tile packs now barrier-pool parallel (tens of
+        GB pack would otherwise stall first touch); indexed_gemv in
+        mod.rs drops the aarch64 gate. Tested vs dequant+q8k-lhs
+        reference (Q4K/Q5K/Q6K/Q8_0 x decode/shared-lhs/bucket/bf16)
+        at native AVX512VNNI + forced AVX2/AVXVNNI: 54/54 green.
+        FINDING: the 35B Q5_K_XL experts are ALL Q8_0 (123 tensors,
+        ~35GB — unsloth's UD-XL keeps MoE at high precision), so the
+        pre-existing Q8_0 tiles (1.0x RAM) serve the 35B; the new Q5K
+        tiles cover other quant arms/models. MEASURED (release, prod
+        shape, probe :1244): decode 35.0 tok/s (fast build 33-36),
+        MTP accept 62-90% len 2.2-2.8, prefill 189-263 tok/s, ~4.6GB
+        VRAM, ~60GB process RSS (35GB tiles + resident mmap). That is
+        220x over the broken path but 55% of the hip lane (63.6 with
+        flash) and under the 48-51 match-or-beat bar. Effective expert
+        read ~84GB/s/step vs ~200 DDR5 peak — remaining headroom is
+        unit granularity / barrier overhead (768 tiny units per
+        tensor per layer at decode), not kernel math.
+      BUG FOUND+FIXED 2026-10-17 (mistral.rs commit fc718e21a): the
+        CUDA-role pipeline chunks prompts INTERNALLY (4096 cap,
+        block-aligned to 32 for hybrid caches so recurrent
+        checkpoints land on block boundaries); the tail chunk gathers
+        prior KV, but the engine preflight reserved ZERO gather
+        workspace for a no-prefix first batch — every prompt with
+        len % 32 != 0 (or > cap) failed 100% with "prompt KV gather
+        requires N bytes, exceeding its preflight workspace limit of
+        0 bytes". Latent in EVERY cuda-role lane incl. prod's current
+        binary (hip lanes never see it: their engine chunks are block
+        aligned; the unexplained 4B 1009-token pass on prod may be
+        FA2-paged prefill serving the tail — unverified). The preflight
+        now reserves the tail gather when the pipeline device is CUDA
+        and the batch would split; the bail names query dims + lens.
+        Validated on the release probe: 355/567/695/1217-token
+        prompts pass with mtp on and off.
+      PHASE-1 VERDICT: mechanism proven end-to-end (MTP + paged attn +
+        indexed experts, 220x), but the lane LOSES to the hip iGPU as
+        a primary (35 vs 63.6 tok/s) and costs ~60GB RAM + shared DDR5
+        (the CONTENDS note: alternative lanes, not additive). Park as
+        a lazy capacity alias only if ever needed; the path to
+        beating hip is (c) phase-2 hot-expert VRAM cache with
+        router-predicted prefetch (cuts the RAM read for hot experts
+        entirely), optionally + unit-granularity tuning in
+        try_indexed_gemv. OPERATIONAL: the split probe does NOT
+        coexist with a loaded prod lane + a build (0GB avail -> OOM
+        risk); probe kills are PID-file only (see COMPLETED outage
+        note).
       The hip iGPU lane (48-51 tok/s) remains the production 35B
       
   UPDATE 2026-10-17 (CPU PA + single-vendor CUDA MTP):
@@ -954,9 +1005,15 @@ parity queue) now outranks it on impact.
       config; mtp_draft_* keys configure the draft HEAD's ISQ), so
       "4B as draft for larger models" is not a thing here - each
       MTP model carries its own head.
-- [ ] ~M FA2 path proof on the cuda role (compute 8.6: FA v2 yes, v3
+- [x] ~M FA2 path proof on the cuda role (compute 8.6: FA v2 yes, v3
       no): confirm the kernels actually dispatch there; try the
       `cudnn` feature as challenger. Pairs with the cuda-MTP port.
+      CLOSED 2026-10-17 by the flash-attn landing (build 51fa55078):
+      role-agnostic FA puts the CUTLASS FA2 kernels on the 3090 and
+      they dispatch live - 4B decode 151.3 -> 195.1 tok/s (+29%,
+      accept 80%), 27B dense prefill 1104 tok/s, prefill gains
+      confirmed on every cuda-role probe. The `cudnn` challenger stays
+      unexplored (optional, not blocking anything).
 - [ ] ~L Split prefill/decode across the two GPUs (prefill-hungry on
       one device, latency decode on the other). Only if single-device
       saturates; most complex item here.

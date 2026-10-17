@@ -185,6 +185,54 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   4B-cpu lane is the marginal consumer - keep it unloaded when both
   big lanes run.
 
+## Oct 17 night (expert-split phase 1: x86 indexed MoE landed at 220x; CUDA-role preflight landmine fixed; a self-inflicted prod outage)
+- x86_64 indexed (MoE) gemv (candle commit `87aff026`): QTensor::
+  indexed_gemv was aarch64-only, so the GGUF MoE gather path fell
+  through to dequantizing every expert per step on x86 (0.15 tok/s).
+  Ported onto the repack_x86 tile machinery: decode dispatches one
+  shared matmul unit per (pair, expert n-tile) at m=1; >=32 pairs
+  bucket by expert into one tiled matmul per expert tile range
+  (nt0 param); TileQ5K + pack/kernels (512/256-bit twins) added; all
+  four tile packs barrier-pool parallel; the arch gate dropped from
+  mod.rs. Tests vs dequant+q8k-lhs reference green at three SIMD
+  levels. The 35B Q5_K_XL experts turned out to be ALL Q8_0 (~35GB)
+  so the pre-existing Q8_0 tiles serve it; Q5K tiles cover other
+  quant arms. Measured (release, prod shape): decode 35.0 tok/s,
+  accept 62-90%, prefill 189-263 tok/s, 4.6GB VRAM, ~60GB RSS —
+  220x over the broken path, 55% of the hip lane. Phase-1 verdict:
+  mechanism proven, loses to hip as a primary, parked as a lazy
+  capacity alias; phase-2 hot-expert VRAM cache is the differentiator.
+- CUDA-role prompt preflight landmine (mistral.rs commit `fc718e21a`):
+  the pipeline chunks prompts internally on CUDA roles (4096 cap,
+  32-block-aligned for hybrid recurrent checkpoints) and the tail
+  chunk gathers prior KV, but the engine preflight reserved zero
+  gather workspace for no-prefix first batches — every prompt with
+  len % 32 != 0 failed 100% ("preflight workspace limit of 0 bytes").
+  Latent in every cuda-role lane including prod's current binary
+  (hip lanes are immune: aligned engine chunks). Fix: the preflight
+  reserves the tail gather when the pipeline device is CUDA and the
+  batch would split; the bail now names query dims + per-seq lens.
+  Validated 355/567/695/1217-token prompts, mtp on and off. Ships to
+  prod with the next binary (`3c1bb0518`).
+- OPERATIONAL NOTE (prod outage, self-inflicted, 2026-10-17 ~14:38-
+  15:33 UTC): restarting the :1244 probe via `pgrep -x mistralrs |
+  xargs kill` matched PROD's identically-named binary and killed it
+  too; SIGTERM is a clean exit so Restart=on-failure did not re-arm,
+  and prod sat down for ~55 minutes until noticed and restarted.
+  Rules now in the probe launcher (moe-split-launch.sh): the server
+  PID goes to scratch/moe-split-probe.pid and ONLY that PID is ever
+  signalled; never pgrep/pkill by binary name on this box (two
+  mistralrs processes are the norm). Also: the expert-split probe
+  (~60GB RSS) does not coexist with a loaded prod lane + a build —
+  free RAM hit 0GB during the release build and the probe had to be
+  killed to keep the box clear of the OOM killer (this morning's
+  kernel OOM already demonstrated the failure mode).
+- Prod state after the night: restarted at 15:33, sanity clean;
+  release binary `3c1bb0518` (indexed MoE + preflight fix) now at
+  target/release/mistralrs awaiting the next idle-window restart,
+  backstop mistralrs.build25-flash (md5 51fa55078, the prior prod
+  build) preserved via /proc/PID/exe.
+
 ## Week of Oct 14-15 (serving sized, retention closed, twins live)
 - 4B CUDA OOM root-caused: Utilization pool (15.4GB) fit but starved graphs;
   ISQ-aware `estimate_load_bytes` (scale by target/source bits, clamp to

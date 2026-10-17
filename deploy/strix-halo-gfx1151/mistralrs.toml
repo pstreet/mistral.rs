@@ -100,12 +100,6 @@ mtp_n_predict = 2
 quantized_file = "Qwen3.8-27B-Uncensored-Q6_K.gguf"
 mmproj = "mmproj-Qwen3.8-27B-Uncensored-f16.gguf"
 
-# ------------------------------------------------------------
-# 27B on the 3090, sizing probe (2026-10-08): measure VRAM timeline
-# across ISQ+load to find the ~8GB transient. Keep until fit-ctx
-# validation passes.
-# ------------------------------------------------------------
-
 [[models]]
 model_id = "models/orcarouter/Qwen3.8-27B-Uncensored-GGUF"
 alias = "qwen3.8-27b-cuda"
