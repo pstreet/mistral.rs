@@ -2220,6 +2220,19 @@ parity queue) now outranks it on impact.
       still picks Hip as serving role; FlashInfer's build-shape gate
       means dual+3090 will not claim it (device-aware refinement =
       follow-up); FA2 buildable (flash-attn feature), FA3 not (Hopper).
+      UPDATE 2026-10-17 (commit 2f55fd62f): flash-attn is now ROLE-AGNOSTIC
+      and part of the prod shape (cuda,rocm,flash-attn). The feature no
+      longer forces the NVIDIA role (5 crates un-chained); ON enables FA on
+      every GPU role present - Cuda via CUTLASS FA2 kernels (incl. the FA2
+      paged-prefill path, now dual-compiled for the 3090), Hip via the
+      ROCm-native CK flash path re-gated from solo-rocm-only to
+      using_flash_attn(); OFF disables it on both roles (solo-rocm no longer
+      gets CK for free). DFlash drafter tightened to solo-cuda (its graph +
+      flashinfer windowed-KV sections bind NVIDIA-solo APIs; eager core
+      stays dual). Expectation: prefill/TTFT gains on both roles, decode
+      flat (GDN-hybrid mix: ~1 in 4 blocks full attention; decode rides the
+      paged kernels; CK requires seq_len>1). Big FA payoff stays contingent
+      on a dense/MLA model landing on the 3090.
       DUAL-SERVING BRING-UP + 27B BENCHMARK 2026-09-30 (committed 94e1171c5):
       restarting prod for an orcarouter-27B benchmark revealed the
       Sep 28 16:20 rebuild had put the DUAL binary into prod (boot log:
