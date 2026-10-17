@@ -1763,14 +1763,13 @@ impl Engine {
                                         );
                                     let hybrid = pipeline.cache().is_hybrid();
                                     drop(pipeline);
-                                    query_lens
-                                        .iter()
-                                        .zip(&full_context_lens)
-                                        .any(|(query, full)| {
+                                    query_lens.iter().zip(&full_context_lens).any(
+                                        |(query, full)| {
                                             *query == *full
                                                 && (*full > chunk_cap
                                                     || (hybrid && *full % block_size != 0))
-                                        })
+                                        },
+                                    )
                                 } else {
                                     false
                                 }
