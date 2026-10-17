@@ -330,10 +330,32 @@ pub fn backend_caps(device: &Device) -> BackendCaps {
         Device::Cpu => BackendCaps {
             arch: None,
             graphs: false,
+            #[cfg(not(any(
+                all(feature = "cuda", target_family = "unix"),
+                feature = "rocm",
+                feature = "metal"
+            )))]
+            paged_attention: true,
+            #[cfg(any(
+                all(feature = "cuda", target_family = "unix"),
+                feature = "rocm",
+                feature = "metal"
+            ))]
             paged_attention: false,
             // The CPU GGUF loader (gguf::cpu) compiles unconditionally; the
             // old all-false caps refused it in every build shape.
             quantized_gguf: true,
+            #[cfg(not(any(
+                all(feature = "cuda", target_family = "unix"),
+                feature = "rocm",
+                feature = "metal"
+            )))]
+            mtp: true,
+            #[cfg(any(
+                all(feature = "cuda", target_family = "unix"),
+                feature = "rocm",
+                feature = "metal"
+            ))]
             mtp: false,
         },
         #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -342,7 +364,9 @@ pub fn backend_caps(device: &Device) -> BackendCaps {
             {
                 // Single-vendor cuda: the fork's full serving stack. The
                 // NVIDIA role keeps mtp off (speculative kernels are
-                // hip-side; mirrors the dual NVIDIA row).
+                // hip-side; mirrors the dual NVIDIA row). Enabling mtp on
+                // single-vendor would require porting gdn_cuda + ffi_cuda
+                // (currently gated on dual builds) to single-vendor builds.
                 let arch = GpuArch::resolve(dev).ok();
                 BackendCaps {
                     arch,
@@ -408,23 +432,7 @@ pub fn backend_caps(device: &Device) -> BackendCaps {
             paged_attention: true,
             quantized_gguf: true,
             mtp: false,
-        },"oldString">
-Device::Metal(_) => BackendCaps {
-            arch: None,
-            graphs: false,
-            paged_attention: true,
-            quantized_gguf: true,
-            mtp: true,
-        },"path">
-/home/pstreet/LocalAI/mistral.rs/mistralrs-core/src/device_spec.rs"oldString">
-Device::Metal(_) => BackendCaps {
-            arch: None,
-            graphs: false,
-            paged_attention: false,
-            quantized_gguf: true,
-            mtp: false,
-        },"path">
-/home/pstreet/LocalAI/mistral.rs/mistralrs-core/src/device_spec.rs
+        },
         // CPU-only builds: the Cuda variant exists in the enum but no GPU
         // backend is compiled, so such a device can never be constructed.
         #[cfg(not(any(feature = "cuda", feature = "rocm")))]

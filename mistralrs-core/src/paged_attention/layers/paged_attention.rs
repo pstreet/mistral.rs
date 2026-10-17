@@ -1950,6 +1950,16 @@ impl PagedAttention {
         let dev = query.device().location();
         let key_cache_ref = key_cache.as_ref().unwrap();
         let value_cache_ref = value_cache.as_ref().unwrap();
+        if query.device().is_cpu() {
+            return self.run_decode_gather_sdpa(
+                ctx,
+                &query,
+                key_cache_ref,
+                value_cache_ref,
+                &dev,
+                tensors.attention_mask,
+            );
+        }
         if tensors.attention_mask.is_custom() {
             return self.run_decode_gather_sdpa(
                 ctx,

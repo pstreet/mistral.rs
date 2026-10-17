@@ -60,3 +60,16 @@ pub use cuda::*;
 mod metal;
 #[cfg(feature = "metal")]
 pub use metal::*;
+
+#[cfg(not(any(
+    all(feature = "cuda", target_family = "unix"),
+    feature = "rocm",
+    feature = "metal"
+)))]
+mod cpu;
+#[cfg(not(any(
+    all(feature = "cuda", target_family = "unix"),
+    feature = "rocm",
+    feature = "metal"
+)))]
+pub use cpu::*;
