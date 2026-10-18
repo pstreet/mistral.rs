@@ -260,6 +260,27 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   crossings + Tensor bookkeeping in the mistralrs-core choke point),
   then phase-2 hot-expert VRAM cache.
 
+- PHASE-2 HOT-EXPERT VRAM CACHE (mistral.rs commit fa996df07,
+  34 files, +620 lines): HotExpertCache per MoE block - BF16 VRAM
+  slots (6.66MB/slot at 256 experts, inter=512, hidden=2048), LRU
+  eviction, use-count-2 admission, async fill worker, split forward
+  (hot pairs on GPU via candle matmul, cold pairs through the CPU
+  gather path, partial weighted sums merged). Plumbing:
+  expert_hot_cache_mb (MB) per [[models]] entry. Disabled by default
+  (mb=0 / None -> no cache, no regression).
+- PHASE-2 MEASUREMENT (2026-10-18): the cache fills VRAM correctly
+  (~12GB at 12000MB, 46 slots/layer) and output stays coherent, but
+  the split is 3x SLOWER (12.2 vs 36 tok/s). Root cause: the cold
+  path runs per (layer, tensor) with high fixed overhead (1.69ms/call
+  x 123 calls = 208ms/step) - 6x the original path's per-call cost.
+  The hot path (6ms) is swamped. The infrastructure is sound; the
+  integration is the bottleneck.
+- GATE DATA (census, storage-keyed, 256-expert scale): 123 tensors,
+  top-44 coverage 0.76-0.98 (p50 0.83-1.00) - the popularity skew is
+  real and the cache would pay IF the cold-path overhead were fixed.
+  Phase-2b (prefetch prediction) and the crossing/alloc overhead work
+  remain.
+
 ## Week of Oct 14-15 (serving sized, retention closed, twins live)
 - 4B CUDA OOM root-caused: Utilization pool (15.4GB) fit but starved graphs;
   ISQ-aware `estimate_load_bytes` (scale by target/source bits, clamp to

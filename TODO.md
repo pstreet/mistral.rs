@@ -763,6 +763,72 @@ parity queue) now outranks it on impact.
         coexist with a loaded prod lane + a build (0GB avail -> OOM
         risk); probe kills are PID-file only (see COMPLETED outage
         note).
+      PHASE-2 INFRA LANDED 2026-10-18 (mistral.rs commit fa996df07,
+        34 files, +620 lines): HotExpertCache per MoE block - BF16
+        VRAM slots (6.66MB/slot at 256 experts, inter=512, hidden=
+        2048), LRU eviction, use-count-2 admission, async fill worker
+        (dequant + H2D + splice), split forward (hot pairs on GPU via
+        candle matmul, cold pairs through the CPU gather path, partial
+        weighted sums merged). Plumbing: expert_hot_cache_mb (MB) per
+        [[models]] entry following the expert_device chain. Disabled
+        by default (mb=0 / None -> no cache, no regression).
+      PHASE-2 MEASUREMENT: the cache fills VRAM correctly (~12GB at
+        12000MB, 46 slots/layer) and output stays coherent, but the
+        split is 3x SLOWER (12.2 vs 36 tok/s). Root cause: the cold
+        path runs per (layer, tensor) with high fixed overhead
+        (1.69ms/call x 123 calls = 208ms/step) - the per-call overhead
+        is 6x the original path's (0.4ms) because each cold call
+        processes 3-4 pairs but pays the same tensor-op + pool-sync
+        overhead. The hot path (6ms) is swamped. The infrastructure
+        is sound; the integration is the bottleneck.
+      GATE DATA (census, storage-keyed, 256-expert scale): 123 tensors,
+        top-44 coverage 0.76-0.98 (p50 0.83-1.00) - the popularity
+        skew is real and the cache would pay IF the cold-path overhead
+        were fixed. Phase-2b (prefetch prediction) and the crossing/
+        alloc overhead work remain.
+      RECOMMENDED NEXT (in value order):
+        1. Reduce cold-path per-call overhead: fuse gate+up+down in
+           mistralrs-quant's gather path (or a direct indexed_gemv
+           call bypassing forward_gather's tensor ops). This is the
+           same 68% serving-overhead lever that helps the non-split
+           lane too.
+        2. Phase-2b: router-predicted async prefetch (currently
+           admission is count-based/reactive).
+        3. Only then re-enable the cache and re-measure.
+
+      PHASE-2 INFRA LANDED 2026-10-18 (mistral.rs commit fa996df07,
+        34 files, +620 lines): HotExpertCache per MoE block - BF16
+        VRAM slots (6.66MB/slot at 256 experts, inter=512, hidden=
+        2048), LRU eviction, use-count-2 admission, async fill worker
+        (dequant + H2D + splice), split forward (hot pairs on GPU via
+        candle matmul, cold pairs through the CPU gather path, partial
+        weighted sums merged). Plumbing: expert_hot_cache_mb (MB) per
+        [[models]] entry following the expert_device chain. Disabled
+        by default (mb=0 / None -> no cache, no regression).
+      PHASE-2 MEASUREMENT: the cache fills VRAM correctly (~12GB at
+        12000MB, 46 slots/layer) and output stays coherent, but the
+        split is 3x SLOWER (12.2 vs 36 tok/s). Root cause: the cold
+        path runs per (layer, tensor) with high fixed overhead
+        (1.69ms/call x 123 calls = 208ms/step) - the per-call overhead
+        is 6x the original path's (0.4ms) because each cold call
+        processes 3-4 pairs but pays the same tensor-op + pool-sync
+        overhead. The hot path (6ms) is swamped. The infrastructure
+        is sound; the integration is the bottleneck.
+      GATE DATA (census, storage-keyed, 256-expert scale): 123 tensors,
+        top-44 coverage 0.76-0.98 (p50 0.83-1.00) - the popularity
+        skew is real and the cache would pay IF the cold-path overhead
+        were fixed. Phase-2b (prefetch prediction) and the crossing/
+        alloc overhead work remain.
+      RECOMMENDED NEXT (in value order):
+        1. Reduce cold-path per-call overhead: fuse gate+up+down in
+           mistralrs-quant's gather path (or a direct indexed_gemv
+           call bypassing forward_gather's tensor ops). This is the
+           same 68% serving-overhead lever that helps the non-split
+           lane too.
+        2. Phase-2b: router-predicted async prefetch (currently
+           admission is count-based/reactive).
+        3. Only then re-enable the cache and re-measure.
+
       The hip iGPU lane (48-51 tok/s) remains the production 35B
       
   UPDATE 2026-10-17 (CPU PA + single-vendor CUDA MTP):
