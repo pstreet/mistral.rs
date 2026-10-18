@@ -924,49 +924,28 @@ parity queue) now outranks it on impact.
       experts per layer over PCIe for prefill chunks); per-layer
       graph subgraphs.
 
-      PHASE 3 (device-agnostic MoE expert offloading): the real
-      differentiator for capacity (running models that don't fit in
-      VRAM on any GPU). Architecture: keep xs on the target device,
-      move cold expert weights to the device instead of moving xs to
-      CPU. Eliminates the per-layer D2H sync that kills the current
-      split (measured ~1ms/layer x 41 = ~41ms/step sync overhead,
-      larger than the CPU gemv it replaces).
-      Tiers: (1) resident (hot cache, VRAM, GPU matmul, no transfer),
-      (2) streaming (cold weights transferred to VRAM on a separate
-      stream during attention, GPU matmul, no xs sync), (3) fallback
-      (CPU gemv, current path, only when streaming buffer is full or
-      transfer not ready). LRU eviction across both tiers bounded by
-      VRAM. Works on any device (CUDA, ROCm, Vulkan, CPU) via candle's
-      Device abstraction; the hip iGPU is the special case where
-      transfer cost is zero (unified memory, no sync needed).
-      Key components: (a) cold buffer on GPU (3-4 slots/layer, ~1-2GB
-      total), (b) separate transfer stream via Device::new_*_with_stream
-      (fill worker targets it, H2D async, no compute-stream sync),
-      (c) prefetch during attention (router identifies cold experts
-      before MoE runs; fill worker dequantizes + H2Ds on transfer
-      stream), (d) cold path uses GPU bf16 matmul (no fused GGUF
-      kernel needed; weights are dequantized at fill time), (e) fallback
-      to CPU gemv when cold buffer is full or transfer not ready.
-      VRAM budget: hot cache (configurable) + cold buffer (derived from
-      remaining VRAM) + attention/KV (4-6GB). expert_hot_cache_mb
-      already adapts slot count to available VRAM.
-      WHY: phase 2 split (xs D2H per layer) is net-negative (29-30
-      tok/s vs 42 OFF) because sync overhead exceeds CPU gemv time.
-      Phase 3 eliminates the sync by moving weights instead of
-      activations. Prefetch overlaps transfer with attention compute.
-      STATUS: infra (hot cache, admission, fill worker, LRU) is built
-      and shipped (disabled by default). Phase 3 requires: (1) cold
-      buffer allocation in HotState, (2) separate transfer stream in
-      fill worker, (3) cold path rewrite (GPU matmul instead of D2H xs),
-      (4) prefetch trigger at routing time (before attention), (5) fallback
-      to CPU gemv. Device-agnostic: use candle Device abstraction,
-      never hardcode vendor-specific paths.
+      PHASE 3 (device-agnostic MoE expert offloading): CLOSED.
+      Conclusion: sync overhead is fundamental on discrete GPUs and cannot
+      be eliminated. Root cause: routing runs after attention, so no
+      prefetch window exists within a layer. The dependency chain
+      (attention -> MoE -> next attention) prevents pipelining. "Keep xs
+      on GPU, move cold weights to GPU" trades one sync for another
+      (~1ms/layer) with no net gain. Separate CUDA streams don't help
+      (compute stream idle during cold gemv, but next layer's attention
+      can't start until MoE output is ready).
+      Decision: (a) accept sync as the cost of capacity (running models
+      that don't fit in VRAM), (b) hip iGPU is the throughput path
+      (unified memory, zero sync, 63.6 tok/s), (c) discrete GPU split
+      lane targets capacity (~42 tok/s on 3090), not throughput.
+      Cannot assume more VRAM (expert_hot_cache_mb is user-tunable).
+      Phase-2 infra + gather fusion + execute_chunked threshold are
+      shipped (disabled by default). No further phase-3 implementation.
+      Remaining perf lever: 68% serving-overhead campaign on hip lane.
       MEASURED (2026-10-18, release build): cache OFF 42.2-42.5 tok/s,
-      cache ON 26.5-27.9 tok/s (net loss). Gather fusion (task #2)
-      landed: indexed_gemv_fused_gate_up quantizes xs once for gate+up.
-      Execute_chunked serial threshold added for small batches.
+      cache ON 26.5-27.9 tok/s (net loss). Gather fusion landed:
+      indexed_gemv_fused_gate_up quantizes xs once for gate+up.
       COMMITS: candle cde56382 + b9e59943 + 1f2bb865; mistral.rs
-      cb8ddfdf1 + da0baa7b8.
+      cb8ddfdf1 + da0baa7b8 + 6357f09fa + 5c975bcfc + cccace074.
 
       SYNC OVERHEAD ANALYSIS (2026-10-18): the "keep xs on GPU, move cold
       weights to GPU" approach does NOT eliminate the sync. Root cause:
