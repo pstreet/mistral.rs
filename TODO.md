@@ -978,6 +978,49 @@ parity queue) now outranks it on impact.
       shipped (disabled by default). No further phase-3 implementation
       planned. The 68% serving-overhead campaign on the hip lane is the
       remaining perf lever.
+      SERVING-CAMPAIGN RE-SCOPE + PROFILE (2026-10-18, rocprofv3 on
+      :1246, release binary): the "68% serving overhead" census figure
+      was a CPU-split-lane result - the hip lane decode is KERNEL-TIME
+      bound (~97% GPU busy; 19.2ms/token batch=1 non-MTP, 13.6ms/
+      token-equiv MTP n=2). MTP kernel re-rank (4-request tail):
+      experts fused 31.9% (gate_up 19.4 + down 12.6, ~208GB/s
+      effective = measured DDR5 roof - no kernel headroom), lm_head
+      18.9% (659ms/window; output.weight 540MB Q8_0 streaming at
+      ~237GB/s = roof; ~3 launches/cycle = 2 draft proposals + 1
+      verify scoring), dense-verify plain_cuda3 22.8% (qkv 17MB@81us
+      = 220GB/s roof; ssm_out/gate/o_proj at 170-190GB/s), fused
+      qkv+glu 5.1%, router gemv+topk 3.5%, gdn_recurrence 3.6%,
+      paged_attention 3.1%, element/mask/copy chains ~10%. Byte
+      accounting per cycle: ~4.5GB stream (dense 1.47GB/verify pass +
+      experts 3x18.9MBx41 layers + head 2.3GB) = 128GB/s overall;
+      biggest slices already at roof.
+      GGUF MAP (parsed header): hidden 2048, vocab 248320, 41 MoE
+      layers (30 GDN + 11 full-attn incl nextn), 256 experts
+      inter=512 topk=8 + shared experts, output/token_embd 540MB Q8_0.
+      LM-HEAD DTYPE EXPERIMENT (2026-10-18): llama.cpp C-tool
+      requant (tensor-type-pinned dry-run verified 753 tensors, only
+      output.weight Q8_0->Q4_K; 5s runtime). A/B on :1244 same-day
+      (baseline reproduced: decode 71.1-71.3 / total 82.7-82.9
+      steady): headq4 decode 68.2 / total 79.5 = -4.3% NET. Failure
+      math: -19% head bytes saves ~6% of cycle; acceptance drops ~10%
+      relative (~6% fewer tokens/cycle) -> net loss. CORRECTION OF
+      PREMISE: for this model the GGUF draft reuses output.weight for
+      proposals AND verify scoring AND final sampling (the
+      draft_lm_head Option path is not populated for GGUF loads), so
+      the surgery perturbs the verify distribution itself, not just
+      proposal quality. VERDICT: lm_head stays Q8_0 (kernel is
+      roof-bound; only structural change - fewer launches/cycle -
+      could attack it, and n_predict=2 is already known-best). 27GB
+      experiment artifact deleted; probe artifacts (qflags.txt,
+      llama.cpp build, rocprof CSVs) kept in scratch/.
+      REMAINING MEASURED LEVERS (ranked): (a) dense batch-3 mmvq
+      micro-tune (gate/ssm_out/o_proj 170-190 -> 220GB/s: ~2-4%),
+      (b) elementwise/mask fusion around GDN + MTP accept machinery
+      (~2-3%), (c) expert dtype downtrade Q5K/Q6K -> lower (~4-5%,
+      quality tradeoff, USER SIGN-OFF required), (d) router topk
+      fusion (~1%). Campaign conclusion: hip MTP lane is at/near the
+      streaming roof on all big slices; levers are marginal singles,
+      not the imagined double-digit "serving overhead" windfall.
 - [ ] ~S Solo-rocm loud fallbacks: fused FP8 GLU quantize (unfused
       path today), gemv -> plain GEMM, HQQ CPU bitpack-at-load.
       Pure wins, no architecture risk.
