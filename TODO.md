@@ -986,10 +986,18 @@ parity queue) now outranks it on impact.
       sync, 63.6 tok/s). Phase 3 should focus on (1) and (3), not on
       eliminating sync. The "keep xs on GPU" rewrite is NOT worth the
       effort -- it trades one sync for another with no net gain.
-      REVISED PHASE 3: (a) maximize hot cache coverage via VRAM budget
-      tuning (expert_hot_cache_mb), (b) optimize CPU gemv further
-      (already at 70us for 4 pairs), (c) document the split lane as a
-      capacity feature, not a throughput feature.
+      FINAL PHASE 3 DECISION (2026-10-18): sync overhead is fundamental
+      and cannot be eliminated on discrete GPUs (no prefetch window
+      within a layer; dependency chain prevents pipelining). Cannot
+      assume more VRAM (expert_hot_cache_mb is user-tunable, not
+      guaranteed). Therefore: (a) accept sync as the cost of capacity
+      (running models that don't fit in VRAM), (b) hip iGPU is the
+      throughput path (unified memory, zero sync, 63.6 tok/s), (c)
+      discrete GPU split lane targets capacity, not throughput.
+      Phase-2 infra + gather fusion + execute_chunked threshold are
+      shipped (disabled by default). No further phase-3 implementation
+      planned. The 68% serving-overhead campaign on the hip lane is the
+      remaining perf lever.
 - [ ] ~S Solo-rocm loud fallbacks: fused FP8 GLU quantize (unfused
       path today), gemv -> plain GEMM, HQQ CPU bitpack-at-load.
       Pure wins, no architecture risk.
