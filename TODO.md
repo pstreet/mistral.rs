@@ -714,7 +714,8 @@ parity queue) now outranks it on impact.
         tensor per layer at decode), not kernel math.
       DEDUP LANDED 2026-10-17 late (candle commit 14f1348b): a live
         census (CANDLE_MOE_CENSUS=1, env-gated, 512-call stderr
-        windows) measured the real decode pattern: ~23 pairs (3 MTP
+        windows; STRIPPED 2026-10-18 after it delivered its gate data
+        — the env flag no longer exists in candle) measured the real decode pattern: ~23 pairs (3 MTP
         verify positions x 8), only 14-17 DISTINCT experts, and
         ~94 indexed calls per 64ms step (~32% of the step in gemv;
         ~68% is serving overhead). Decode now groups pairs by expert

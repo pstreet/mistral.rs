@@ -268,7 +268,9 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   coherent output, no gather-workspace journal errors, 20.3GB VRAM.
   The CUDA-role preflight landmine is closed in production.
 - Expert-dedup decode (candle commit `14f1348b`): a live census
-  (CANDLE_MOE_CENSUS=1) on the 35B split probe measured the real
+  (CANDLE_MOE_CENSUS=1; instrument stripped from candle 2026-10-18
+  after delivering its gate data - the env flag no longer exists) on
+  the 35B split probe measured the real
   decode pattern - ~23 pairs (3 MTP verify positions x 8 experts),
   only 14-17 distinct experts, ~94 indexed calls per ~64ms step, gemv
   ~32% of the step. The old per-pair units re-read shared experts for
