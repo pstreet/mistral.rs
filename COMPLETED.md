@@ -2,6 +2,24 @@
 
 Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
 
+## Oct 18 (phase-2 hot-expert cache: infra improved, still net-negative; task #2 gather fusion landed)
+- Phase-2 hot-expert VRAM cache rewrite (commit cb8ddfdf1): per-slot
+  immutable Arc<Tensor> weights (no 413MB whole-stack splice per admit);
+  batched bmm hot path (~10 kernels/layer vs ~70 per-slot storm);
+  fixed cold-path config (num_experts_per_tok: 1, was 8, caused shape
+  mismatch crash); fixed admit error path + premature slot publication.
+- Candle execute_chunked serial threshold (commit cde56382): small
+  batches (< 256 units) run serially, avoiding barrier wake/sleep.
+- Task #2 gather fusion (commits b9e59943 + da0baa7b8 + 1f2bb865):
+  QTensor::indexed_gemv_fused_gate_up quantizes xs once for gate+up;
+  wired into forward_gather CPU branch; test verifies equivalence.
+- Measured (release build): cache OFF 42.2-42.5 tok/s, cache ON
+  26.5-27.9 tok/s (net loss). Sync overhead (~1ms/layer x 41)
+  exceeds CPU gemv time it replaces. Cache stays disabled by default.
+- Phase 3 (keep xs on GPU, move cold weights to GPU) captured in
+  TODO.md. Hip iGPU remains the production target at 63.6 tok/s.
+- All 4 feature shapes compile clean; candle + mistral.rs pushed.
+
 ## Oct 16 (top-k submit twin live, lookahead engaged)
 - Resident top-k sampling submit twin (commit `384894552`, build 19):
   the last NVIDIA-role sampling gap in the resident decode path.
