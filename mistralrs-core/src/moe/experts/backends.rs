@@ -2021,20 +2021,61 @@ impl FastExpertsWeights {
             self.fused_down_proj
                 .gather_forward(&down_in, forward.topk_ids)?
         } else {
-            let xs = forward.xs.reshape((
+            let indices = forward.topk_ids.reshape((
+                forward.shape.batch_size,
+                forward.shape.seq_len,
+                config.num_experts_per_tok,
+            ))?;
+            let xs5 = forward.xs.reshape((
                 forward.shape.batch_size,
                 forward.shape.seq_len,
                 1,
                 1,
                 forward.shape.hidden_dim,
             ))?;
-            let indices = forward.topk_ids.reshape((
-                forward.shape.batch_size,
-                forward.shape.seq_len,
-                config.num_experts_per_tok,
-            ))?;
-            let gate = self.fused_gate_proj.gather_forward(&xs, &indices)?;
-            let up = self.fused_up_proj.gather_forward(&xs, &indices)?;
+            // Try fused gate+up (single xs quantization) on CPU.
+            let (gate, up) = match (
+                self.fused_gate_proj.get_qtensor(),
+                self.fused_up_proj.get_qtensor(),
+            ) {
+                (Some(gq), Some(uq)) => {
+                    let xs3 = forward.xs_flat.reshape((
+                        forward.shape.num_tokens,
+                        1,
+                        forward.shape.hidden_dim,
+                    ))?;
+                    match candle_core::quantized::QTensor::indexed_gemv_fused_gate_up(
+                        &gq, &uq, &xs3, forward.topk_ids,
+                    )? {
+                        Some((g, u)) => {
+                            // g, u: (num_tokens, topk, inter) -> (batch, seq, topk, inter)
+                            let g = g.reshape((
+                                forward.shape.batch_size,
+                                forward.shape.seq_len,
+                                config.num_experts_per_tok,
+                                g.dim(2)?,
+                            ))?;
+                            let u = u.reshape((
+                                forward.shape.batch_size,
+                                forward.shape.seq_len,
+                                config.num_experts_per_tok,
+                                u.dim(2)?,
+                            ))?;
+                            (g, u)
+                        }
+                        None => {
+                            let g = self.fused_gate_proj.gather_forward(&xs5, &indices)?;
+                            let u = self.fused_up_proj.gather_forward(&xs5, &indices)?;
+                            (g, u)
+                        }
+                    }
+                }
+                _ => {
+                    let g = self.fused_gate_proj.gather_forward(&xs5, &indices)?;
+                    let u = self.fused_up_proj.gather_forward(&xs5, &indices)?;
+                    (g, u)
+                }
+            };
             let down_in = (up * gate.apply(&config.act)?)?;
             let inter = down_in.dim(D::Minus1)?;
             self.fused_down_proj.process_routed_stats(
