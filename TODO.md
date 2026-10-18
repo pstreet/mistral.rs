@@ -941,7 +941,8 @@ parity queue) now outranks it on impact.
       Cannot assume more VRAM (expert_hot_cache_mb is user-tunable).
       Phase-2 infra + gather fusion + execute_chunked threshold are
       shipped (disabled by default). No further phase-3 implementation.
-      Remaining perf lever: 68% serving-overhead campaign on hip lane.
+      Remaining perf lever: 68% serving-overhead campaign on hip lane
+      (PARKED 2026-10-18, see SERVING-CAMPAIGN RE-SCOPE below).
       MEASURED (2026-10-18, release build): cache OFF 42.2-42.5 tok/s,
       cache ON 26.5-27.9 tok/s (net loss). Gather fusion landed:
       indexed_gemv_fused_gate_up quantizes xs once for gate+up.
@@ -977,7 +978,9 @@ parity queue) now outranks it on impact.
       Phase-2 infra + gather fusion + execute_chunked threshold are
       shipped (disabled by default). No further phase-3 implementation
       planned. The 68% serving-overhead campaign on the hip lane is the
-      remaining perf lever.
+      remaining perf lever (PARKED 2026-10-18, user call - see the
+      SERVING-CAMPAIGN RE-SCOPE block below for the profile, the
+      roof-bound conclusion, and the failed lm_head Q4_K experiment).
       SERVING-CAMPAIGN RE-SCOPE + PROFILE (2026-10-18, rocprofv3 on
       :1246, release binary): the "68% serving overhead" census figure
       was a CPU-split-lane result - the hip lane decode is KERNEL-TIME
@@ -1021,6 +1024,23 @@ parity queue) now outranks it on impact.
       fusion (~1%). Campaign conclusion: hip MTP lane is at/near the
       streaming roof on all big slices; levers are marginal singles,
       not the imagined double-digit "serving overhead" windfall.
+      PARKED 2026-10-18 (USER CALL, campaign closed): none of (a)-(d)
+      is economically viable for the effort at ~2-5% ceiling each.
+      Ship state carried: 35B prod lane = hip iGPU, Q5_K_XL, MTP
+      n=2 greedy, 71.3 tok/s decode / 82.8 total (validated twice
+      same-day); lm_head Q8_0 (Q4_K downtrade measured NET-NEGATIVE,
+      see LM-HEAD DTYPE EXPERIMENT); phase-2 hot-expert cache shipped
+      disabled (mb=0, default); expert split kept as capacity lane
+      only. Baselines for any future resumption are in Appendix A
+      territory: non-MTP hip probe 50.8 tok/s; MTP 71.3; rocprofv3
+      traces + parse scripts + llama.cpp requant tooling preserved in
+      LocalAI/scratch (rocprof-out/, qflags.txt, llama.cpp/ build).
+      Prod restarts only in verified idle windows iff a release build
+      should be picked up (no code changed in this campaign - none
+      needed). PUSH STATE AT PARKING: candle fully pushed (0 ahead);
+      mistral.rs pstreet-rocm ahead 2 = the two 2026-10-18 ledger
+      commits (beea6a8d7 + this PARKED commit), push is a user
+      action.
 - [ ] ~S Solo-rocm loud fallbacks: fused FP8 GLU quantize (unfused
       path today), gemv -> plain GEMM, HQQ CPU bitpack-at-load.
       Pure wins, no architecture risk.
