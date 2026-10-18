@@ -369,6 +369,7 @@ pub struct NormalLoader {
     prepared_source: Option<PreparedNormalSource>,
     mtp: bool,
     expert_device: Option<String>,
+    expert_hot_cache_mb: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -428,6 +429,7 @@ pub struct NormalLoaderBuilder {
     hf_cache_path: Option<PathBuf>,
     mtp: bool,
     expert_device: Option<String>,
+    expert_hot_cache_mb: Option<usize>,
 }
 
 #[derive(Clone, Default)]
@@ -479,6 +481,12 @@ impl NormalLoaderBuilder {
     /// attention/router/shared experts on the primary device.
     pub fn with_expert_device(mut self, expert_device: Option<String>) -> Self {
         self.expert_device = expert_device;
+        self
+    }
+
+    /// VRAM budget (MB) for the per-layer hot-expert cache of expert-split lanes.
+    pub fn with_expert_hot_cache_mb(mut self, expert_hot_cache_mb: Option<usize>) -> Self {
+        self.expert_hot_cache_mb = expert_hot_cache_mb;
         self
     }
 
@@ -602,6 +610,7 @@ impl NormalLoaderBuilder {
             prepared_source,
             mtp: self.mtp,
             expert_device: self.expert_device,
+            expert_hot_cache_mb: self.expert_hot_cache_mb,
         })
     }
 
@@ -708,6 +717,10 @@ impl Loader for NormalLoader {
         };
         let config = match &self.expert_device {
             Some(dev) => super::loaders::inject_expert_device_config_flag(&config, dev)?,
+            None => config,
+        };
+        let config = match self.expert_hot_cache_mb {
+            Some(mb) => super::loaders::inject_expert_hot_cache_config_flag(&config, mb)?,
             None => config,
         };
         let config = self

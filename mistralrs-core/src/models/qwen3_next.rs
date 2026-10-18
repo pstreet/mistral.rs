@@ -113,6 +113,10 @@ pub struct Config {
     /// Injected by the loader for expert-split placement (see `EXPERT_DEVICE_CONFIG_KEY`).
     #[serde(default, rename = "_mistralrs_expert_device")]
     pub expert_device: Option<String>,
+    /// Injected by the loader (see `EXPERT_HOT_CACHE_CONFIG_KEY`): VRAM budget in MB
+    /// for the per-layer hot-expert cache of split lanes.
+    #[serde(default, rename = "_mistralrs_expert_hot_cache_mb")]
+    pub expert_hot_cache_mb: Option<usize>,
 }
 
 impl Config {
@@ -130,6 +134,18 @@ impl Config {
                 candle_core::bail!("`expert_device = \"{dev}\"` is not supported; only \"cpu\"")
             }
         }
+    }
+
+    /// Hot-expert cache slots per MoE block derived from the MB budget; the slot
+    /// cost is the BF16 gate/up/down of one expert.
+    pub fn expert_hot_slots(&self) -> Option<usize> {
+        let mb = self.expert_hot_cache_mb?;
+        if mb == 0 {
+            return None;
+        }
+        let slot_bytes = 6 * self.moe_intermediate_size * self.hidden_size;
+        let blocks = self.num_hidden_layers + self.mtp_layers();
+        Some((mb * 1_000_000 / blocks / slot_bytes).max(1))
     }
 
     /// Paged-KV layers index of the MTP block (right after the main stack).
@@ -472,6 +488,7 @@ impl SparseMoeBlock {
         let moe_cfg = MoEExpertsConfig {
             num_experts: cfg.num_experts,
             expert_device: cfg.expert_split_device()?,
+            expert_hot_slots: cfg.expert_hot_slots(),
             num_experts_per_tok: cfg.num_experts_per_tok,
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.moe_intermediate_size,

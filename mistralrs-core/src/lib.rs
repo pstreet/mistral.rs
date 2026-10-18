@@ -487,6 +487,8 @@ pub struct ModelLoaderConfig {
     pub mtp_config: Option<MtpConfig>,
     /// MoE expert placement to recreate after reload.
     pub expert_device: Option<String>,
+    /// Hot-expert VRAM cache budget (MB) to recreate after reload.
+    pub expert_hot_cache_mb: Option<usize>,
     /// Optional logical tensor byte budget for multimodal encoder outputs.
     pub encoder_cache_memory_bytes: Option<usize>,
 }

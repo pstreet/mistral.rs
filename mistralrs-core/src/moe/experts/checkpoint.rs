@@ -682,6 +682,7 @@ mod tests {
         let cfg = super::super::config::MoEExpertsConfig {
             num_experts: E,
             expert_device: None,
+            expert_hot_slots: None,
             num_experts_per_tok: 2,
             hidden_size: HIDDEN,
             moe_intermediate_size: INTER,

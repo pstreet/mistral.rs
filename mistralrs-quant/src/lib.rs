@@ -1703,6 +1703,20 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         )
     }
 
+    /// Hot-expert cache fill source: dequantize stacked-expert rows
+    /// [expert * n_out, (expert + 1) * n_out) of the [E, N, K] weight into a
+    /// BF16 [n_out, k] tensor on `device`. None when the layer keeps no
+    /// per-expert quantized storage.
+    fn dequantize_expert_rows(
+        &self,
+        _expert: usize,
+        _n_out: usize,
+        _k: usize,
+        _device: &Device,
+    ) -> Result<Option<Tensor>> {
+        Ok(None)
+    }
+
     fn embedding_forward(&self, ids: &Tensor, output_dtype: DType) -> Result<Tensor> {
         self.embedding_forward_raw(ids)?.to_dtype(output_dtype)
     }

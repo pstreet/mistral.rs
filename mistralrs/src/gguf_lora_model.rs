@@ -60,6 +60,7 @@ impl GgufLoraModelBuilder {
                 .as_ref()
                 .is_some_and(mistralrs_core::MtpConfig::is_builtin),
             expert_device: None,
+            expert_hot_cache_mb: None,
         };
 
         maybe_initialize_logging(self.gguf_model.with_logging);

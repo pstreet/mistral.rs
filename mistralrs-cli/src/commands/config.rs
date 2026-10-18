@@ -471,6 +471,9 @@ async fn build_model_configs(
         if let Some(expert_device) = entry.expert_device.clone() {
             config = config.with_expert_device(Some(expert_device));
         }
+        if let Some(expert_hot_cache_mb) = entry.expert_hot_cache_mb {
+            config = config.with_expert_hot_cache_mb(Some(expert_hot_cache_mb));
+        }
         if let Some(cache_type) = entry.cache_type {
             config = config.with_cache_type(cache_type);
         }

@@ -91,6 +91,28 @@ pub(crate) fn inject_expert_device_config_flag(
     Ok(config.to_string())
 }
 
+/// Set on the model config JSON for the split-lane hot-expert VRAM cache budget (MB).
+pub const EXPERT_HOT_CACHE_CONFIG_KEY: &str = "_mistralrs_expert_hot_cache_mb";
+
+pub(crate) fn inject_expert_hot_cache_config_flag(
+    config: &str,
+    mb: usize,
+) -> anyhow::Result<String> {
+    let mut config: serde_json::Value = serde_json::from_str(config)?;
+    let object = config
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("model config must be a JSON object"))?;
+    object.insert(
+        EXPERT_HOT_CACHE_CONFIG_KEY.to_string(),
+        serde_json::Value::from(mb),
+    );
+    eprintln!(
+        "INJECT: inserted key, result contains it: {}",
+        config.to_string().contains(EXPERT_HOT_CACHE_CONFIG_KEY)
+    );
+    Ok(config.to_string())
+}
+
 pub(crate) fn qk_rope_layout_from_config(
     config: &str,
 ) -> Result<Option<crate::gguf::normal_registry::RopePairing>> {

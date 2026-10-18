@@ -183,6 +183,8 @@ pub struct GGUFSpecificConfig {
     pub mtp: bool,
     /// Set on the model config JSON when MoE experts should be placed on a different device.
     pub expert_device: Option<String>,
+    /// Set on the model config JSON for the split-lane hot-expert VRAM cache budget (MB).
+    pub expert_hot_cache_mb: Option<usize>,
 }
 
 impl GGUFSpecificConfig {
@@ -737,7 +739,8 @@ impl GGUFLoader {
             self.jinja_explicit.clone(),
         )
         .with_mtp(self.config.mtp)
-        .with_expert_device(self.config.expert_device.clone());
+        .with_expert_device(self.config.expert_device.clone())
+        .with_expert_hot_cache_mb(self.config.expert_hot_cache_mb);
         if let Some(dynamic_lora) = self.dynamic_lora.as_ref() {
             loader = loader.with_lora(dynamic_lora.adapters.clone(), dynamic_lora.runtime);
         }

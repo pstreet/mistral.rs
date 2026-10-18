@@ -9,6 +9,8 @@ mod checkpoint;
 pub(crate) use checkpoint::{expert_stack_available, rebuild_expert_projection};
 mod config;
 mod forward;
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+mod hot_cache;
 
 use candle_core::{Device, Result, Tensor};
 use mistralrs_quant::{
@@ -44,6 +46,12 @@ pub struct MoEExperts {
     world_size: usize,
     // Expert-split placement; None when experts share the layer device
     expert_device: Option<Device>,
+    expert_hot_slots: Option<usize>,
+    expert_inter: usize,
+    expert_hidden: usize,
+    // Hot-expert VRAM cache for split lanes, built lazily on the first forward
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    hot_cache: std::sync::OnceLock<Option<Arc<hot_cache::HotExpertCache>>>,
 }
 
 enum MoEExpertsBackendImpl {
@@ -260,6 +268,11 @@ impl MoEExperts {
             all_reduce: SumAllReduce::new(comm),
             world_size: comm.world_size(),
             expert_device: cfg.expert_device.clone(),
+            expert_hot_slots: cfg.expert_hot_slots,
+            expert_inter: cfg.moe_intermediate_size,
+            expert_hidden: cfg.hidden_size,
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
+            hot_cache: std::sync::OnceLock::new(),
         }
     }
 
@@ -319,6 +332,26 @@ impl MoEExperts {
         let (batch_size, seq_len, hidden_dim) = xs.dims3()?;
         let shape = MoEForwardShape::new(batch_size, seq_len, hidden_dim);
         let original_device = xs.device().clone();
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
+        if self.expert_hot_slots.is_some() && self.expert_device.is_some() {
+            if let Some(hot) = self.hot_cache(xs) {
+                let xs_flat_gpu = xs.reshape(shape.flat())?;
+                let MoEExpertsBackendImpl::Fast(cold) = &self.backend else {
+                    candle_core::bail!("expert hot cache requires the Fast backend");
+                };
+                if let Some(ys) = hot.try_forward_split(hot_cache::HotForward {
+                    xs,
+                    xs_flat: &xs_flat_gpu,
+                    topk_weights: &topk_weights,
+                    topk_ids,
+                    cold,
+                    config: self.forward_config(),
+                    shape,
+                })? {
+                    return Ok(ys.reshape(shape.output())?);
+                }
+            }
+        }
         // Expert-split lanes bridge each MoE block over to the experts' device; routing
         // (already computed by the caller) rides along as [num_tokens, top_k] tensors.
         let (xs, xs_flat, topk_weights, topk_ids) = match &self.expert_device {
@@ -379,6 +412,42 @@ impl MoEExperts {
             num_experts: self.num_experts,
             num_experts_per_tok: self.num_experts_per_tok,
             act: self.act,
+        }
+    }
+
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    fn hot_cache(&self, xs: &Tensor) -> Option<Arc<hot_cache::HotExpertCache>> {
+        self.hot_cache
+            .get_or_init(|| self.build_hot_cache(xs))
+            .clone()
+    }
+
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
+    fn build_hot_cache(&self, xs: &Tensor) -> Option<Arc<hot_cache::HotExpertCache>> {
+        let slots = self.expert_hot_slots?;
+        if self.world_size > 1 || self.lora_site.is_some() || !xs.device().is_cuda() {
+            return None;
+        }
+        let MoEExpertsBackendImpl::Fast(fast) = &self.backend else {
+            return None;
+        };
+        match hot_cache::HotExpertCache::new(
+            slots,
+            self.num_experts,
+            self.expert_inter,
+            self.expert_hidden,
+            xs.device(),
+            hot_cache::HotSources {
+                gate: fast.fused_gate_proj.clone(),
+                up: fast.fused_up_proj.clone(),
+                down: fast.fused_down_proj.clone(),
+            },
+        ) {
+            Ok(cache) => Some(Arc::new(cache)),
+            Err(err) => {
+                tracing::error!("expert hot cache unavailable: {err}");
+                None
+            }
         }
     }
 }

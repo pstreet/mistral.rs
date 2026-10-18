@@ -522,6 +522,25 @@ impl QuantMethod for GgufMatMul {
         }
     }
 
+    fn dequantize_expert_rows(
+        &self,
+        expert: usize,
+        n_out: usize,
+        k: usize,
+        device: &Device,
+    ) -> Result<Option<Tensor>> {
+        let QMatMul::QTensor(weight) = &self.w else {
+            candle_core::bail!("expert hot cache requires quantized (GGUF) expert weights");
+        };
+        let n_experts = weight.shape().dims()[0];
+        let rows = n_experts * n_out;
+        let ids: Vec<u32> = ((expert * n_out)..((expert + 1) * n_out))
+            .map(|r| r as u32)
+            .collect();
+        let rows = weight.dequantize_rows(&ids, rows, k, &Device::Cpu)?;
+        Ok(Some(rows.to_dtype(DType::BF16)?.to_device(device)?))
+    }
+
     fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
         self.w.embedding(ids)
     }

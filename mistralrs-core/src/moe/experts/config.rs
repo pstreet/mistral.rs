@@ -15,6 +15,8 @@ pub struct MoEExpertsConfig {
     /// Expert-split placement (llama.cpp `--cpu-moe` style); None keeps experts on
     /// the layer device.
     pub expert_device: Option<Device>,
+    /// Hot-expert VRAM cache slots per MoE block for split lanes; None disables.
+    pub expert_hot_slots: Option<usize>,
 }
 
 /// One of the three expert projections.

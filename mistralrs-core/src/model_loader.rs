@@ -27,6 +27,7 @@ pub struct LoaderBuilder {
     hf_config_overrides: Option<HfConfigOverrides>,
     mtp: bool,
     expert_device: Option<String>,
+    expert_hot_cache_mb: Option<usize>,
     encoder_cache_memory_bytes: Option<usize>,
     prefill_chunk_size: Option<usize>,
 }
@@ -42,6 +43,7 @@ impl LoaderBuilder {
             hf_config_overrides: None,
             mtp: false,
             expert_device: None,
+            expert_hot_cache_mb: None,
             encoder_cache_memory_bytes: None,
             prefill_chunk_size: None,
         }
@@ -55,6 +57,11 @@ impl LoaderBuilder {
 
     pub fn with_expert_device(mut self, expert_device: Option<String>) -> Self {
         self.expert_device = expert_device;
+        self
+    }
+
+    pub fn with_expert_hot_cache_mb(mut self, expert_hot_cache_mb: Option<usize>) -> Self {
+        self.expert_hot_cache_mb = expert_hot_cache_mb;
         self
     }
 
@@ -722,6 +729,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     matformer_slice_name,
                     mtp: args.mtp,
                     expert_device: args.expert_device.clone(),
+                    expert_hot_cache_mb: args.expert_hot_cache_mb,
                 },
                 args.no_kv_cache,
                 args.jinja_explicit,

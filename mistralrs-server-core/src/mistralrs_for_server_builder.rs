@@ -96,6 +96,9 @@ pub struct ModelConfig {
     /// `--cpu-moe` style). Only `cpu` is supported.
     #[serde(default)]
     pub expert_device: Option<String>,
+    /// Hot-expert VRAM cache budget (MB) for expert-split entries.
+    #[serde(default)]
+    pub expert_hot_cache_mb: Option<usize>,
 }
 
 impl ModelConfig {
@@ -123,6 +126,7 @@ impl ModelConfig {
             max_seqs: None,
             prefix_cache_n: None,
             expert_device: None,
+            expert_hot_cache_mb: None,
             mtp_n_predict: None,
         }
     }
@@ -193,6 +197,11 @@ impl ModelConfig {
 
     pub fn with_expert_device(mut self, expert_device: Option<String>) -> Self {
         self.expert_device = expert_device;
+        self
+    }
+
+    pub fn with_expert_hot_cache_mb(mut self, expert_hot_cache_mb: Option<usize>) -> Self {
+        self.expert_hot_cache_mb = expert_hot_cache_mb;
         self
     }
 
@@ -447,6 +456,8 @@ pub struct MistralRsForServerBuilder {
     mtp_config: Option<MtpConfig>,
     /// Optional expert-split device for the eager (first) model.
     expert_device: Option<String>,
+    /// Optional hot-expert VRAM cache budget (MB) for the eager (first) model.
+    expert_hot_cache_mb: Option<usize>,
     /// Fallback MTP config for per-entry `mtp = true` opt-ins when the
     /// global flag is off. Never applied to the seed or eager models; only
     /// lazy entries read it.
@@ -513,6 +524,7 @@ impl Default for MistralRsForServerBuilder {
             paged_v_cache_type: None,
             mtp_config: defaults::MTP_CONFIG,
             expert_device: None,
+            expert_hot_cache_mb: None,
             mtp_entry_fallback: None,
             router_policy: mistralrs_core::RouterPolicy::default(),
             encoder_cache_memory_bytes: None,
@@ -1141,6 +1153,7 @@ impl MistralRsForServerBuilder {
             .with_hf_config_overrides(self.hf_config_overrides)
             .with_mtp(self.mtp_config.as_ref().is_some_and(MtpConfig::is_builtin))
             .with_expert_device(self.expert_device.clone())
+            .with_expert_hot_cache_mb(self.expert_hot_cache_mb)
             .with_encoder_cache_memory_bytes(self.encoder_cache_memory_bytes)
             .build()?;
 
@@ -1208,6 +1221,7 @@ impl MistralRsForServerBuilder {
             hf_config_overrides: hf_config_overrides_for_config,
             mtp_config: self.mtp_config.clone(),
             expert_device: self.expert_device.clone(),
+            expert_hot_cache_mb: self.expert_hot_cache_mb,
             encoder_cache_memory_bytes: self.encoder_cache_memory_bytes,
         };
 
@@ -1431,6 +1445,7 @@ impl MistralRsForServerBuilder {
             // no-op for it).
             mtp_config: entry_mtp_config,
             expert_device: model_config.expert_device.clone(),
+            expert_hot_cache_mb: model_config.expert_hot_cache_mb,
             encoder_cache_memory_bytes: model_config
                 .encoder_cache_memory_bytes
                 .map(NonZeroUsize::get)
@@ -1550,6 +1565,7 @@ impl MistralRsForServerBuilder {
             .with_hf_config_overrides(first_hf_config_overrides.clone())
             .with_mtp(first_mtp_config.as_ref().is_some_and(MtpConfig::is_builtin))
             .with_expert_device(first_model.expert_device.clone())
+            .with_expert_hot_cache_mb(first_model.expert_hot_cache_mb)
             .with_encoder_cache_memory_bytes(first_encoder_cache_memory_bytes)
             .build()?;
 
@@ -1693,6 +1709,7 @@ impl MistralRsForServerBuilder {
             hf_config_overrides: first_hf_config_overrides,
             mtp_config: first_mtp_config.clone(),
             expert_device: None,
+            expert_hot_cache_mb: None,
             encoder_cache_memory_bytes: first_encoder_cache_memory_bytes,
         };
 
@@ -1815,6 +1832,7 @@ impl MistralRsForServerBuilder {
                 .with_max_model_len(max_model_len)
                 .with_hf_config_overrides(hf_config_overrides.clone())
                 .with_expert_device(model_config.expert_device.clone())
+                .with_expert_hot_cache_mb(model_config.expert_hot_cache_mb)
                 .with_encoder_cache_memory_bytes(
                     model_config
                         .encoder_cache_memory_bytes
@@ -1913,6 +1931,7 @@ impl MistralRsForServerBuilder {
                 hf_config_overrides,
                 mtp_config: None,
                 expert_device: None,
+                expert_hot_cache_mb: None,
                 encoder_cache_memory_bytes: model_config
                     .encoder_cache_memory_bytes
                     .map(NonZeroUsize::get)

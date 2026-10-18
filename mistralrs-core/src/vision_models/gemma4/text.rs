@@ -1056,6 +1056,7 @@ impl DecoderLayer {
             let moe_cfg = MoEExpertsConfig {
                 num_experts,
                 expert_device: None,
+                expert_hot_slots: None,
                 num_experts_per_tok: top_k,
                 hidden_size: cfg.hidden_size,
                 moe_intermediate_size: expert_inter,

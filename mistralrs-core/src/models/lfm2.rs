@@ -299,6 +299,7 @@ impl MoeMlp {
         let moe_cfg = MoEExpertsConfig {
             num_experts: cfg.num_experts,
             expert_device: None,
+            expert_hot_slots: None,
             num_experts_per_tok: cfg.num_experts_per_tok,
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.moe_intermediate_size,

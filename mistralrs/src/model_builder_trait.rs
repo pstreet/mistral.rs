@@ -754,6 +754,7 @@ pub async fn build_text_pipeline(
         hf_config_overrides: builder.hf_config_overrides.clone(),
         mtp_config: builder.mtp_config.clone(),
         expert_device: None,
+        expert_hot_cache_mb: None,
         encoder_cache_memory_bytes: None,
     };
 
@@ -910,6 +911,7 @@ pub async fn build_multimodal_pipeline(
         hf_config_overrides: builder.hf_config_overrides.clone(),
         mtp_config: builder.mtp_config.clone(),
         expert_device: None,
+        expert_hot_cache_mb: None,
         encoder_cache_memory_bytes: builder.encoder_cache_memory_bytes,
     };
 
@@ -955,6 +957,7 @@ pub async fn build_gguf_pipeline(
             .as_ref()
             .is_some_and(MtpConfig::is_builtin),
         expert_device: None,
+        expert_hot_cache_mb: None,
     };
 
     maybe_initialize_logging(builder.with_logging);
@@ -1107,6 +1110,7 @@ pub async fn build_gguf_pipeline(
         hf_config_overrides: None,
         mtp_config: builder.mtp_config.clone(),
         expert_device: None,
+        expert_hot_cache_mb: None,
         encoder_cache_memory_bytes: builder.encoder_cache_memory_bytes,
     };
 
@@ -1171,6 +1175,7 @@ pub async fn build_diffusion_pipeline(
         hf_config_overrides: None,
         mtp_config: None,
         expert_device: None,
+        expert_hot_cache_mb: None,
         encoder_cache_memory_bytes: None,
     };
 
@@ -1239,6 +1244,7 @@ pub async fn build_speech_pipeline(
         hf_config_overrides: None,
         mtp_config: None,
         expert_device: None,
+        expert_hot_cache_mb: None,
         encoder_cache_memory_bytes: None,
     };
 
@@ -1338,6 +1344,7 @@ pub async fn build_embedding_pipeline(
         hf_config_overrides: None,
         mtp_config: None,
         expert_device: None,
+        expert_hot_cache_mb: None,
         encoder_cache_memory_bytes: None,
     };
 
@@ -1522,6 +1529,7 @@ pub async fn build_auto_pipeline(
         hf_config_overrides: builder.hf_config_overrides.clone(),
         mtp_config: builder.mtp_config.clone(),
         expert_device: None,
+        expert_hot_cache_mb: None,
         encoder_cache_memory_bytes: builder.encoder_cache_memory_bytes,
     };
 

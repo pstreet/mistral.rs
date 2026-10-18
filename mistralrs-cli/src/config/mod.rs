@@ -257,6 +257,9 @@ pub struct ModelEntry {
     /// `--cpu-moe` style). Only `cpu` is supported.
     #[serde(default)]
     pub expert_device: Option<String>,
+    /// VRAM budget (MB) for the per-layer hot-expert cache of split lanes.
+    #[serde(default)]
+    pub expert_hot_cache_mb: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
