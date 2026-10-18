@@ -967,6 +967,29 @@ parity queue) now outranks it on impact.
       Execute_chunked serial threshold added for small batches.
       COMMITS: candle cde56382 + b9e59943 + 1f2bb865; mistral.rs
       cb8ddfdf1 + da0baa7b8.
+
+      SYNC OVERHEAD ANALYSIS (2026-10-18): the "keep xs on GPU, move cold
+      weights to GPU" approach does NOT eliminate the sync. Root cause:
+      dependency chain prevents prefetch. Routing runs AFTER attention (MoE
+      block starts with the gate, which needs attention output). So cold
+      expert weights are identified during the MoE, not before it. No
+      prefetch window exists within a layer. The D2H sync of xs (~1ms/layer)
+      is replaced by a weight H2D sync (~1ms/layer) -- same cost, not lower.
+      Separate CUDA streams don't help either: the CPU gemv for layer L
+      blocks attention L+1 (MoE output feeds next layer's attention input).
+      The ONLY way to eliminate sync is to have ALL experts on GPU (model
+      fits in VRAM). For models that don't fit, sync overhead is
+      fundamental. Therefore: (1) maximize hot cache coverage (more VRAM
+      slots = fewer cold pairs = fewer syncs), (2) accept remaining sync
+      cost as the price of capacity (running larger models on small GPUs),
+      (3) hip iGPU remains the throughput champion (unified memory = zero
+      sync, 63.6 tok/s). Phase 3 should focus on (1) and (3), not on
+      eliminating sync. The "keep xs on GPU" rewrite is NOT worth the
+      effort -- it trades one sync for another with no net gain.
+      REVISED PHASE 3: (a) maximize hot cache coverage via VRAM budget
+      tuning (expert_hot_cache_mb), (b) optimize CPU gemv further
+      (already at 70us for 4 pairs), (c) document the split lane as a
+      capacity feature, not a throughput feature.
 - [ ] ~S Solo-rocm loud fallbacks: fused FP8 GLU quantize (unfused
       path today), gemv -> plain GEMM, HQQ CPU bitpack-at-load.
       Pure wins, no architecture risk.

@@ -16,8 +16,15 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
 - Measured (release build): cache OFF 42.2-42.5 tok/s, cache ON
   26.5-27.9 tok/s (net loss). Sync overhead (~1ms/layer x 41)
   exceeds CPU gemv time it replaces. Cache stays disabled by default.
-- Phase 3 (keep xs on GPU, move cold weights to GPU) captured in
-  TODO.md. Hip iGPU remains the production target at 63.6 tok/s.
+- Phase 3 sync-overhead analysis (2026-10-18): "keep xs on GPU,
+  move cold weights to GPU" does NOT eliminate the sync. Dependency
+  chain prevents prefetch (routing runs after attention, no prefetch
+  window within a layer). Weight H2D sync (~1ms/layer) replaces xs D2H
+  sync (~1ms/layer) -- same cost. Separate streams don't help (CPU gemv
+  for layer L blocks attention L+1). Revised Phase 3: maximize hot cache
+  coverage (more VRAM = fewer cold pairs), accept sync as capacity cost,
+  hip iGPU remains throughput champion. Phase-2 infra stays disabled by
+  default. All commits pushed.
 - All 4 feature shapes compile clean; candle + mistral.rs pushed.
 
 ## Oct 16 (top-k submit twin live, lookahead engaged)
