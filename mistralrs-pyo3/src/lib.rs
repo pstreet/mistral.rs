@@ -660,6 +660,8 @@ fn parse_which(
                     matformer_config_path,
                     matformer_slice_name,
                     mtp: false,
+                    expert_device: None,
+                    expert_hot_cache_mb: None,
                 },
                 no_kv_cache,
                 jinja_explicit,
@@ -3303,6 +3305,12 @@ mod mtp_reservation_tests {
         let dir = tempdir()?;
         let path = dir.path().join("model.safetensors");
         let data = [0u8; 2];
+        // peek_config requires a config.json to identify the drafter; a non-DFlash
+        // architectures list keeps the reservation on the plain checkpoint-bytes path.
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"architectures": ["Qwen3ForCausalLM"]}"#,
+        )?;
         serialize_to_file(
             HashMap::from([("weight", TensorView::new(SafeDtype::BF16, vec![1], &data)?)]),
             None,
