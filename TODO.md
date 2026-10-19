@@ -1285,6 +1285,17 @@ parity queue) now outranks it on impact.
       needs model_id at the ST repo (modules.json + Dense
       safetensors load from there), bare-GGUF matches llama.cpp
       --embeddings instead (documented in use-embeddings.mdx).
+      FOLLOW-UPS 2026-10-19: (1) EmbeddingModelBuilder::
+      with_quantized_file threads the GGUF arm through the Rust SDK
+      (Vec filenames -> ModelSelected join ';', reload path included,
+      2 builder tests); (2) mistralrs-pyo3 compiles in the default
+      shape again - the 2026-10-18 expert_device/expert_hot_cache_mb
+      fields never reached the pyo3 GGUFSpecificConfig site; the fix
+      exposed a latent UPSTREAM test bug (48be6c1e2: the MTP
+      reservation test's tempdir ships no config.json while its own
+      peek_config requires one; pyo3 tests are not in upstream CI) -
+      the test now writes a non-DFlash config.json. pyo3 9/9,
+      mistralrs 17/17, cli 152/152; 4 shapes checked; docs updated.
 - [ ] ~L multi-backend runtime: CPU + NVIDIA + AMD + Intel in ONE
       process, per-model device assignment. Design agreed 2026-09-26;
       UPDATE 2026-10-01: an RTX 3090 eGPU (sm86, 24GB, CUDA 13.3 UMD) is

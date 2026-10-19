@@ -1272,7 +1272,7 @@ pub async fn build_embedding_pipeline(
         from_uqff: builder.from_uqff.clone(),
         imatrix: builder.imatrix.clone(),
         calibration_file: builder.calibration_file.clone(),
-        quantized_filenames: None,
+        quantized_filenames: builder.quantized_file.clone(),
         hf_cache_path: builder.hf_cache_path.clone(),
     };
 
@@ -1329,7 +1329,10 @@ pub async fn build_embedding_pipeline(
             from_uqff: from_uqff_str,
             imatrix: None,
             calibration_file: None,
-            quantized_filename: None,
+            quantized_filename: builder
+                .quantized_file
+                .as_ref()
+                .map(|files| files.join(GGUF_MULTI_FILE_DELIMITER)),
             hf_cache_path: builder.hf_cache_path.clone(),
         },
         token_source: builder.token_source.clone(),

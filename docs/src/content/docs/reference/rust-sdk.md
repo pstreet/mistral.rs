@@ -75,10 +75,12 @@ async fn generate_embeddings(&self, request: EmbeddingRequestBuilder) -> Result<
 ```
 One embedding vector per input, in insertion order. Example: [embeddings](/examples/rust/advanced/embeddings/).
 
-`EmbeddingModelBuilder` loads safetensors checkpoints. GGUF embedding models are
-served through the CLI or server config
-([guide](/guides/models/use-embeddings/)); the builder has no `quantized_file`
-arm yet.
+`EmbeddingModelBuilder::new(model_id)` loads the safetensors checkpoint from
+`model_id`. Call `.with_quantized_file(vec!["file.gguf"])` to load a GGUF
+checkpoint resolved within `model_id` instead, with the same pooling and asset
+rules as the CLI lane ([guide](/guides/models/use-embeddings/)). ISQ, UQFF,
+imatrix, and topology mapping are rejected for GGUF embedding models at load
+time.
 
 ```rust
 async fn generate_embedding(&self, prompt: impl ToString) -> Result<Vec<f32>>

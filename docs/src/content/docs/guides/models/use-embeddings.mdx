@@ -47,6 +47,15 @@ Or from the CLI:
 mistralrs serve embedding -m Qwen/Qwen3-Embedding-0.6B-GGUF -f Qwen3-Embedding-0.6B-Q8_0.gguf
 ```
 
+Or from the Rust SDK:
+
+```rust
+let model = EmbeddingModelBuilder::new("Qwen/Qwen3-Embedding-0.6B-GGUF")
+    .with_quantized_file(vec!["Qwen3-Embedding-0.6B-Q8_0.gguf"])
+    .build()
+    .await?;
+```
+
 Supported GGUF architectures are `qwen3` (Qwen3-Embedding) and `gemma3`
 (EmbeddingGemma). The loader reuses the model discovery rules of the text GGUF
 lane: tokenizer, `config.json`, and sentence-transformers assets come from

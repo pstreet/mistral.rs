@@ -20,6 +20,7 @@ pub struct EmbeddingModelBuilder {
     pub(crate) write_uqff: Option<UqffWriteConfig>,
     pub(crate) from_uqff: Option<Vec<PathBuf>>,
     pub(crate) tokenizer_json: Option<String>,
+    pub(crate) quantized_file: Option<Vec<String>>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) hf_cache_path: Option<PathBuf>,
     pub(crate) device: Option<Device>,
@@ -53,6 +54,7 @@ impl EmbeddingModelBuilder {
             write_uqff: None,
             from_uqff: None,
             tokenizer_json: None,
+            quantized_file: None,
             loader_type: None,
             dtype: ModelDType::Auto,
             force_cpu: false,
@@ -97,6 +99,16 @@ impl EmbeddingModelBuilder {
     /// Path to a discrete `tokenizer.json` file.
     pub fn with_tokenizer_json(mut self, tokenizer_json: impl ToString) -> Self {
         self.tokenizer_json = Some(tokenizer_json.to_string());
+        self
+    }
+
+    /// GGUF filename(s) to load, resolved within the model repository or local `model_id`
+    /// directory. Loads the safetensors checkpoint when unset.
+    ///
+    /// Supports the `qwen3` and `gemma3` GGUF architectures; ISQ, UQFF, imatrix, and
+    /// topology mapping are rejected for GGUF embedding models at load time.
+    pub fn with_quantized_file(mut self, files: Vec<impl ToString>) -> Self {
+        self.quantized_file = Some(files.into_iter().map(|f| f.to_string()).collect());
         self
     }
 
@@ -271,5 +283,32 @@ impl DerefMut for UqffEmbeddingModelBuilder {
 impl From<UqffEmbeddingModelBuilder> for EmbeddingModelBuilder {
     fn from(value: UqffEmbeddingModelBuilder) -> Self {
         value.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EmbeddingModelBuilder;
+
+    #[test]
+    fn quantized_file_preserves_files() {
+        let builder = EmbeddingModelBuilder::new("Qwen/Qwen3-Embedding-0.6B-GGUF")
+            .with_quantized_file(vec![
+                "Qwen3-Embedding-0.6B-00001-of-00002.gguf",
+                "Qwen3-Embedding-0.6B-00002-of-00002.gguf",
+            ]);
+        assert_eq!(
+            builder.quantized_file,
+            Some(vec![
+                "Qwen3-Embedding-0.6B-00001-of-00002.gguf".to_string(),
+                "Qwen3-Embedding-0.6B-00002-of-00002.gguf".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn quantized_file_defaults_to_safetensors() {
+        let builder = EmbeddingModelBuilder::new("Qwen/Qwen3-Embedding-0.6B");
+        assert!(builder.quantized_file.is_none());
     }
 }
