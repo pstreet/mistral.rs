@@ -75,6 +75,11 @@ async fn generate_embeddings(&self, request: EmbeddingRequestBuilder) -> Result<
 ```
 One embedding vector per input, in insertion order. Example: [embeddings](/examples/rust/advanced/embeddings/).
 
+`EmbeddingModelBuilder` loads safetensors checkpoints. GGUF embedding models are
+served through the CLI or server config
+([guide](/guides/models/use-embeddings/)); the builder has no `quantized_file`
+arm yet.
+
 ```rust
 async fn generate_embedding(&self, prompt: impl ToString) -> Result<Vec<f32>>
 ```

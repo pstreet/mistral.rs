@@ -58,6 +58,11 @@ mistralrs run -m owner/repo \
 
 Local shards supplied without `-m` must all be in the same directory.
 
+Embedding checkpoints (Qwen3-Embedding, EmbeddingGemma) are the one family served
+through `kind = "embedding"` / the `embedding` subcommand instead of this page's
+text flow; see [use embedding models](/guides/models/use-embeddings/) for
+`-f` on the embedding lane, pooling rules, and asset resolution.
+
 ## Python and Rust
 
 The SDKs select an exact GGUF artifact:

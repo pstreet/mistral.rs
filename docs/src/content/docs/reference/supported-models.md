@@ -101,6 +101,11 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | `Gemma3TextModel` | EmbeddingGemma | <details><summary><code>google/embeddinggemma-300m</code></summary><code>mistralrs run -m google/embeddinggemma-300m</code></details> |
 | `Qwen3ForCausalLM` | Qwen3 Embedding | <details><summary><code>Qwen/Qwen3-Embedding-0.6B</code></summary><code>mistralrs run -m Qwen/Qwen3-Embedding-0.6B</code></details> |
 
+Both loaders also accept GGUF checkpoints of the `gemma3` and `qwen3` GGUF
+architectures via `-f`/`quantized_file`; see
+[the embeddings guide](/guides/models/use-embeddings/) for the pooling and
+asset rules.
+
 ## Format and quantization notes
 
 Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. See [GGUF support](/reference/gguf-support/) for GGUF compatibility; availability of [UQFF](/reference/uqff-format/), GPTQ, and AWQ artifacts varies by model on Hugging Face.
