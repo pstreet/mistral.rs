@@ -225,6 +225,9 @@ macro_rules! get_embedding_paths {
                 $this.model_id
             );
             $crate::api_get_file!(api, "tekken.json", model_id, &revision)
+        } else if $quantized_filename.is_some() {
+            // GGUF lane: fall back to the tokenizer embedded in the GGUF at load time.
+            PathBuf::new()
         } else {
             tracing::trace!("Loading `tokenizer.json` at `{}`", $this.model_id);
             $crate::api_get_file!(api, "tokenizer.json", model_id, &revision)
@@ -235,6 +238,12 @@ macro_rules! get_embedding_paths {
                 $this.model_id
             );
             $crate::api_get_file!(api, "params.json", model_id, &revision)
+        } else if emb_dir_list.contains(&"config.json".to_string()) {
+            tracing::trace!("Loading `config.json` at `{}`", $this.model_id);
+            $crate::api_get_file!(api, "config.json", model_id, &revision)
+        } else if $quantized_filename.is_some() {
+            // GGUF lane: synthesize the config from GGUF metadata at load time.
+            PathBuf::new()
         } else {
             tracing::trace!("Loading `config.json` at `{}`", $this.model_id);
             $crate::api_get_file!(api, "config.json", model_id, &revision)
@@ -254,8 +263,10 @@ macro_rules! get_embedding_paths {
         let is_local = std::path::Path::new(&$this.model_id).exists();
         let modules_path = if is_local {
             model_id.join("modules.json")
-        } else {
+        } else if emb_dir_list.contains(&"modules.json".to_string()) {
             $crate::api_get_file!(api, "modules.json", model_id, &revision)
+        } else {
+            PathBuf::new()
         };
 
         if modules_path.exists() {

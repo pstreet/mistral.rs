@@ -500,6 +500,7 @@ fn parse_which(
                 }),
                 imatrix,
                 calibration_file,
+                quantized_filenames: None,
                 hf_cache_path,
             },
             tokenizer_json,

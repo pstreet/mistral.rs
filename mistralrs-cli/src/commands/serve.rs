@@ -524,9 +524,21 @@ pub(crate) fn convert_to_model_selected(
             cache: _,
         } => {
             validate_mmproj_format(format)?;
-            if !matches!(format.format, None | Some(ModelFormat::Plain)) {
-                anyhow::bail!("Embedding models do not support GGUF or GGML format");
+            if format.mmproj.is_some() {
+                anyhow::bail!("Embedding models do not support multimodal projectors");
             }
+            let quantized_filename = match format.format {
+                None | Some(ModelFormat::Plain) => None,
+                Some(ModelFormat::Gguf) => Some(
+                    format
+                        .quantized_file
+                        .clone()
+                        .context("GGUF embedding models require `--quantized-file`/`-f`")?,
+                ),
+                Some(ModelFormat::Ggml) => {
+                    anyhow::bail!("Embedding models do not support GGML format")
+                }
+            };
             Ok(ModelSelected::Embedding {
                 model_id: model.model_id.clone(),
                 tokenizer_json: model
@@ -543,6 +555,7 @@ pub(crate) fn convert_to_model_selected(
                 from_uqff: quantization.from_uqff.clone(),
                 imatrix: quantization.imatrix.clone(),
                 calibration_file: quantization.calibration_file.clone(),
+                quantized_filename,
                 hf_cache_path: device.hf_cache.clone(),
             })
         }
@@ -2584,7 +2597,73 @@ mod tests {
     }
 
     #[test]
-    fn embedding_rejects_gguf_format() {
+    fn embedding_rejects_ggml_format() {
+        let model_type = ModelType::Embedding {
+            model: test_model(),
+            format: FormatOptions {
+                format: Some(ModelFormat::Ggml),
+                quantized_file: Some("model.ggml".to_string()),
+                mmproj: None,
+                ..FormatOptions::default()
+            },
+            quantization: QuantizationOptions::default(),
+            device: DeviceOptions::default(),
+            cache: crate::args::CacheOptions::default(),
+        };
+        let error =
+            convert_to_model_selected(&model_type, &MatformerSelection::default()).unwrap_err();
+
+        assert!(error.to_string().contains("GGML"));
+    }
+
+    #[test]
+    fn embedding_gguf_requires_quantized_file() {
+        let model_type = ModelType::Embedding {
+            model: test_model(),
+            format: FormatOptions {
+                format: Some(ModelFormat::Gguf),
+                quantized_file: None,
+                mmproj: None,
+                ..FormatOptions::default()
+            },
+            quantization: QuantizationOptions::default(),
+            device: DeviceOptions::default(),
+            cache: crate::args::CacheOptions::default(),
+        };
+        let error =
+            convert_to_model_selected(&model_type, &MatformerSelection::default()).unwrap_err();
+
+        assert!(error.to_string().contains("quantized-file"));
+    }
+
+    #[test]
+    fn embedding_gguf_routes_with_quantized_filename() {
+        let model_type = ModelType::Embedding {
+            model: test_model(),
+            format: FormatOptions {
+                format: Some(ModelFormat::Gguf),
+                quantized_file: Some("model-Q8_0.gguf".to_string()),
+                mmproj: None,
+                ..FormatOptions::default()
+            },
+            quantization: QuantizationOptions::default(),
+            device: DeviceOptions::default(),
+            cache: crate::args::CacheOptions::default(),
+        };
+        let selected =
+            convert_to_model_selected(&model_type, &MatformerSelection::default()).unwrap();
+
+        let ModelSelected::Embedding {
+            quantized_filename, ..
+        } = selected
+        else {
+            panic!("expected an embedding selection");
+        };
+        assert_eq!(quantized_filename.as_deref(), Some("model-Q8_0.gguf"));
+    }
+
+    #[test]
+    fn embedding_rejects_mmproj() {
         let model_type = ModelType::Embedding {
             model: test_model(),
             format: FormatOptions {
@@ -2600,7 +2679,7 @@ mod tests {
         let error =
             convert_to_model_selected(&model_type, &MatformerSelection::default()).unwrap_err();
 
-        assert!(error.to_string().contains("Embedding models"));
+        assert!(error.to_string().contains("projectors"));
     }
 
     #[test]

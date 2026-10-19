@@ -24,6 +24,53 @@ Use `Qwen/Qwen3-Embedding-0.6B` the same way:
 mistralrs serve -m Qwen/Qwen3-Embedding-0.6B
 ```
 
+## Loading a GGUF embedding model
+
+Quantized embedding checkpoints load through the same `kind = "embedding"` entry
+as safetensors models: add a `[models.format]` section with `quantized_file`,
+resolved inside `model_id` (a local directory or a Hugging Face repository).
+
+```toml
+command = "serve"
+
+[[models]]
+model_id = "unsloth/Qwen3-Embedding-0.6B-GGUF"
+kind = "embedding"
+
+[models.format]
+quantized_file = "Qwen3-Embedding-0.6B-Q8_0.gguf"
+```
+
+Or from the CLI:
+
+```bash
+mistralrs serve embedding -m unsloth/Qwen3-Embedding-0.6B-GGUF -f Qwen3-Embedding-0.6B-Q8_0.gguf
+```
+
+Supported GGUF architectures are `qwen3` (Qwen3-Embedding) and `gemma3`
+(EmbeddingGemma). The loader reuses the model discovery rules of the text GGUF
+lane: tokenizer, `config.json`, and sentence-transformers assets come from
+`model_id` when present, otherwise the tokenizer embedded in the GGUF and a
+config synthesized from its metadata are used.
+
+Pooling follows the sentence-transformers `modules.json` layout when the
+repository ships one. Without it, pooling comes from the GGUF
+`{arch}.pooling_type` metadata that llama.cpp converters write (mean or
+last-token), followed by normalization; a missing value defaults to last-token
+for Qwen3-Embedding and mean for EmbeddingGemma.
+
+Two caveats:
+
+- GGUF embedding models do not support ISQ-on-load, UQFF/imatrix flows, tensor
+  parallelism, or topology device mapping. Requantize the GGUF externally if you
+  need a different quantization.
+- EmbeddingGemma's reference layout includes two trained `Dense` projection
+  heads after pooling, which are not part of the GGUF checkpoint. For
+  sentence-transformers parity, point `model_id` at the original repository
+  (its `modules.json` and Dense weights load from there) and keep the GGUF file
+  alongside; loading the bare GGUF matches llama.cpp `--embeddings` behavior
+  instead.
+
 ## Requesting an embedding
 
 <Tabs>

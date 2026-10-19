@@ -859,6 +859,12 @@ pub enum ModelSelected {
         #[serde(default)]
         calibration_file: Option<PathBuf>,
 
+        /// GGUF filename(s) within `model_id` to load embedding weights from.
+        /// Semicolon-separated for multiple files.
+        #[arg(long)]
+        #[serde(default)]
+        quantized_filename: Option<String>,
+
         /// Cache path for Hugging Face models downloaded locally
         #[arg(long)]
         #[serde(default)]

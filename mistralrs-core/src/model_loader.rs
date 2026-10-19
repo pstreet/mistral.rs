@@ -464,6 +464,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     }),
                     imatrix,
                     calibration_file,
+                    quantized_filenames: None,
                     hf_cache_path: hf_cache_path.clone(),
                 },
                 args.chat_template,
@@ -670,6 +671,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                         from_uqff,
                         imatrix,
                         calibration_file,
+                        quantized_filenames: None,
                         hf_cache_path: hf_cache_path.clone(),
                     },
                     args.chat_template,
@@ -915,6 +917,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             from_uqff,
             imatrix,
             calibration_file,
+            quantized_filename,
             hf_cache_path,
         } => EmbeddingLoaderBuilder::new(
             EmbeddingSpecificConfig {
@@ -928,6 +931,12 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 }),
                 imatrix,
                 calibration_file,
+                quantized_filenames: quantized_filename.map(|filenames| {
+                    filenames
+                        .split(GGUF_MULTI_FILE_DELIMITER)
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<_>>()
+                }),
                 hf_cache_path,
             },
             tokenizer_json,

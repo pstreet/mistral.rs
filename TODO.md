@@ -1234,7 +1234,7 @@ parity queue) now outranks it on impact.
       router's own placement. Deliberately deferred: first-available
       is deterministic and debuggable; surprising placement is worse
       than predictable placement until the policy questions are settled.
-- [ ] ~M GGUF support for embedding models (opened 2026-10-09, found while
+- [x] ~M GGUF support for embedding models (opened 2026-10-09, found while
       wiring open-webui RAG to mistral.rs): the embedding pipeline
       (mistralrs-core/src/pipeline/embedding.rs, EmbeddingGemma +
       Qwen3Embedding loaders) consumes safetensors only
@@ -1255,8 +1255,36 @@ parity queue) now outranks it on impact.
       sourcing. SHIPPED 2026-10-09: probe re-ran clean with correct
       env (1024-dim, deterministic, batched, cosine 0.68/0.24),
       Engine::new unreachable!() fix cut to prod, RAG live in prod
-      (webui rows set, bypass flipped by user). Only the GGUF loader
-      arm above remains open.
+      (webui rows set, bypass flipped by user).
+      GGUF ARM SHIPPED 2026-10-19 (native-lane design, not the
+      MmapedGguf sketch above): `kind = "embedding"` + `format.
+      quantized_file` threads ModelSelected::Embedding through a new
+      GGUF arm in the embedding pipeline that reuses the fork's
+      native GGUF machinery (GgufWeightSource + GgufBindingMap, NOT
+      legacy gguf pipelines): arch mapping qwen3/gemma3 -> the two
+      embedding loaders, config synthesized from GGUF metadata
+      (reuse synthesize_normal_config for qwen3, prepare_gemma3_
+      text_config + architectures/use_bidirectional_attention
+      stamps for gemma3), bindings = normal tables with the `model.`
+      prefix stripped, pooling from `{arch}.pooling_type` (llama.cpp
+      value space; mean/last only; defaults last for qwen3, mean for
+      embeddinggemma) + Normalize when modules.json is absent,
+      embedded-GGUF tokenizer with `tokenizer.ggml.add_eos_token`
+      honored via an EOS-append post-processor (llama.cpp embed
+      semantics; REQUIRED for Qwen3-Embedding last-token pooling
+      parity - without it cosines to the safetensors lane sit at
+      0.73-0.87, with it 0.996+). Bails loudly on ISQ-on-GGUF,
+      UQFF/imatrix, topology, tensor parallelism. GGML still
+      rejected; mmproj rejected. Validated end-to-end on :1244
+      (CPU fast build): official Qwen/Qwen3-Embedding-0.6B-GGUF
+      Q8_0 (bare repo, fully synthesized path) vs safetensors
+      baseline: per-input cosine 0.996-0.997, retrieval ranking
+      identical; synth-GGUF E2E unit test + 7 component tests in
+      tree; 4 shapes checked. EmbeddingGemma caveat: its ST layout
+      has 2 trained Dense heads NOT in the GGUF - full parity
+      needs model_id at the ST repo (modules.json + Dense
+      safetensors load from there), bare-GGUF matches llama.cpp
+      --embeddings instead (documented in use-embeddings.mdx).
 - [ ] ~L multi-backend runtime: CPU + NVIDIA + AMD + Intel in ONE
       process, per-model device assignment. Design agreed 2026-09-26;
       UPDATE 2026-10-01: an RTX 3090 eGPU (sm86, 24GB, CUDA 13.3 UMD) is

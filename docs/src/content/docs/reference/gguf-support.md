@@ -127,5 +127,7 @@ adjacent rotary order: `llama`, `mistral3`, `deepseek2`, `glm4`, `smollm3`, `gra
 routed through those architectures, including Idefics3, Mistral 3/Pixtral, Llama 4, and Muse
 Glimmer. Base-model loading is unaffected.
 
-GGUF support covers text generation and the multimodal families listed above. GGUF is not a
-loading format for embedding, speech, diffusion, or image-generation pipelines.
+GGUF support covers text generation, the multimodal families listed above, and the
+embedding models described in [the embeddings guide](/guides/models/use-embeddings/)
+(`qwen3` and `gemma3` architectures). GGUF is not a loading format for speech,
+diffusion, or image-generation pipelines.

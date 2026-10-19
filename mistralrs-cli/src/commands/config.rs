@@ -625,6 +625,79 @@ lora = [
     }
 
     #[tokio::test]
+    async fn from_config_accepts_gguf_for_embedding_kind() {
+        let root =
+            std::env::temp_dir().join(format!("mistralrs-emb-gguf-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("model-Q8_0.gguf"), []).unwrap();
+        let input = format!(
+            r#"
+command = "serve"
+
+[[models]]
+model_id = "{}"
+kind = "embedding"
+
+[models.format]
+quantized_file = "model-Q8_0.gguf"
+"#,
+            root.display()
+        );
+        let config: CliConfig = toml::from_str(&input).unwrap();
+        let CliConfig::Serve(config) = config else {
+            unreachable!()
+        };
+
+        let (models, _) = build_model_configs(
+            &config.models,
+            &config.runtime,
+            &mistralrs_core::TokenSource::None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(models.len(), 1);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn from_config_rejects_ggml_for_embedding_kind() {
+        let root =
+            std::env::temp_dir().join(format!("mistralrs-emb-ggml-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("model.ggml"), []).unwrap();
+        let input = format!(
+            r#"
+command = "serve"
+
+[[models]]
+model_id = "{}"
+kind = "embedding"
+
+[models.format]
+quantized_file = "model.ggml"
+"#,
+            root.display()
+        );
+        let config: CliConfig = toml::from_str(&input).unwrap();
+        let CliConfig::Serve(config) = config else {
+            unreachable!()
+        };
+
+        let error = build_model_configs(
+            &config.models,
+            &config.runtime,
+            &mistralrs_core::TokenSource::None,
+        )
+        .await
+        .err()
+        .expect("GGML embedding config should be rejected");
+        assert!(error.to_string().contains("GGML"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn from_config_threads_per_model_cache_types() {
         let root = std::env::temp_dir().join(format!("mistralrs-gguf-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();

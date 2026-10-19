@@ -265,6 +265,10 @@ mmproj = "mmproj-BF16.gguf"
 tok_model_id = "google/gemma-4-E4B-it"
 ```
 
+`quantized_file` also works for `kind = "embedding"` entries (Qwen3-Embedding and
+EmbeddingGemma GGUF checkpoints); see [the embeddings guide](/guides/models/use-embeddings/)
+for the pooling and asset rules.
+
 ## Validation
 
 Invalid configs abort startup with a message identifying the problem:

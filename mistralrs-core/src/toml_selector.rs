@@ -1240,6 +1240,7 @@ fn loader_from_selected(
                 }),
                 imatrix: None,
                 calibration_file: None,
+                quantized_filenames: None,
                 hf_cache_path,
             },
             tokenizer_json,

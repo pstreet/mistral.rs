@@ -1,6 +1,7 @@
 pub(crate) mod base_model;
 mod chat_template;
 mod content;
+pub(crate) mod embedding;
 pub(crate) mod gemma3_bindings;
 pub(crate) mod gemma3_config;
 pub(crate) mod gemma3n_bindings;

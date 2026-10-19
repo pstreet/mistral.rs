@@ -1272,6 +1272,7 @@ pub async fn build_embedding_pipeline(
         from_uqff: builder.from_uqff.clone(),
         imatrix: builder.imatrix.clone(),
         calibration_file: builder.calibration_file.clone(),
+        quantized_filenames: None,
         hf_cache_path: builder.hf_cache_path.clone(),
     };
 
@@ -1282,7 +1283,7 @@ pub async fn build_embedding_pipeline(
         builder.tokenizer_json.clone(),
         Some(builder.model_id.clone()),
     )
-    .build(builder.loader_type.clone());
+    .build(builder.loader_type);
 
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
     let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;
@@ -1328,6 +1329,7 @@ pub async fn build_embedding_pipeline(
             from_uqff: from_uqff_str,
             imatrix: None,
             calibration_file: None,
+            quantized_filename: None,
             hf_cache_path: builder.hf_cache_path.clone(),
         },
         token_source: builder.token_source.clone(),
@@ -1410,6 +1412,7 @@ pub async fn build_auto_pipeline(
         from_uqff: builder.from_uqff.clone(),
         imatrix: builder.imatrix.clone(),
         calibration_file: builder.calibration_file.clone(),
+        quantized_filenames: None,
         hf_cache_path: builder.hf_cache_path.clone(),
     };
 

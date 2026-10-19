@@ -701,6 +701,7 @@ fn convert_to_model_selected(
                 from_uqff: None,
                 imatrix: quantization.imatrix.clone(),
                 calibration_file: quantization.calibration_file.clone(),
+                quantized_filename: None,
                 hf_cache_path: device.hf_cache.clone(),
             };
             Ok((model_selected, device.cpu, device.device_layers.clone()))
