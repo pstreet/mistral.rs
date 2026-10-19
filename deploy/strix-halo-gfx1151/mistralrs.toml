@@ -266,7 +266,10 @@ quantized_file = "Qwen3.5-4B-Q8_0.gguf"
 # ------------------------------------------------------------
 # Embeddings (open-webui RAG via /v1/embeddings, 2026-10-09).
 # Qwen3-Embedding-0.6B safetensors (1.2GB, 1024-dim, 32k ctx;
-# GGUF embedders unsupported by the embedding pipeline - backlog).
+# GGUF embedders supported since 2026-10-19 - `kind = "embedding"`
+# entries take [models.format] quantized_file, see
+# mistral.rs TODO.md + docs use-embeddings.mdx; this lane stays
+# safetensors until a GGUF flip is measured on the probe lane).
 # Validated on the probe lane (load <0.5s, deterministic, batched).
 # Pinned hip:0 so demand-loads never land it on the crowded 3090;
 # mtp=false stops the global mtp=true inherit. Lazy like the rest
