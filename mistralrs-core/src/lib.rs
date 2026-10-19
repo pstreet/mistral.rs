@@ -4058,6 +4058,7 @@ mod tests {
             hf_config_overrides: None,
             mtp_config: None,
             expert_device: None,
+            expert_hot_cache_mb: None,
             encoder_cache_memory_bytes: None,
         }
     }
