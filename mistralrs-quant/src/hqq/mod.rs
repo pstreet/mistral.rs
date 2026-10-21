@@ -511,13 +511,14 @@ impl HqqBits {
                     return Ok(Tensor::from((storage, output_shape)));
                 }
 
-                // CPU fallback implementation
-                let wq = if wq.device().is_metal() {
-                    // Metal doesn't support direct U32 to I32 conversion, use CPU as intermediate
-                    let cpu_wq = wq.to_device(&Device::Cpu)?;
-                    cpu_wq.to_dtype(DType::I32)?.to_device(wq.device())?
-                } else {
+                // CPU packing: candle's GPU backends have no f32/u32 -> i32 cast,
+                // so pack on CPU and return to the origin device.
+                let origin = wq.device();
+                let wq = if origin.is_cpu() {
                     wq.to_dtype(DType::I32)?
+                } else {
+                    warn_bitpack_fallback(origin);
+                    wq.to_device(&Device::Cpu)?.to_dtype(DType::I32)?
                 };
                 let step = (wq.dims()[0] as f64 / 10.) as usize;
 
@@ -532,7 +533,8 @@ impl HqqBits {
                 let i = wq.narrow(0, step * 8, step)?;
                 let j = wq.narrow(0, step * 9, step)?;
 
-                a.leftshift(27)?
+                let packed = a
+                    .leftshift(27)?
                     .bitwise_or(&b.leftshift(24)?)?
                     .bitwise_or(&c.leftshift(21)?)?
                     .bitwise_or(&d.leftshift(18)?)?
@@ -541,7 +543,12 @@ impl HqqBits {
                     .bitwise_or(&g.leftshift(9)?)?
                     .bitwise_or(&h.leftshift(6)?)?
                     .bitwise_or(&i.leftshift(3)?)?
-                    .bitwise_or(&j)
+                    .bitwise_or(&j)?;
+                if origin.is_cpu() {
+                    Ok(packed)
+                } else {
+                    Ok(packed.to_device(origin)?)
+                }
             },
             Self::One => |wq_in: Tensor| -> Result<Tensor> {
                 let device = wq_in.device();
