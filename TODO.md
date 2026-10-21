@@ -1296,6 +1296,35 @@ parity queue) now outranks it on impact.
       peek_config requires one; pyo3 tests are not in upstream CI) -
       the test now writes a non-DFlash config.json. pyo3 9/9,
       mistralrs 17/17, cli 152/152; 4 shapes checked; docs updated.
+      PROD ADOPTION 2026-10-21: the embedding lane flipped safetensors
+      -> GGUF Q8_0 (same model_id dir; tokenizer/config/modules.json
+      still from the ST repo so pooling is unchanged; the safetensors
+      file stays on disk, unused). Measured before the flip on the
+      probe lane with the EXACT prod layout: per-input cosine vs
+      safetensors 0.993-0.998 (one short-input 0.9928 outlier; the
+      broader 32-input retrieval set stayed >=0.996), designed-
+      relevant docs at identical top-1/rank on all 8 test queries
+      (only irrelevant-tail near-ties shuffled, margins ~0.004),
+      embeds ~3.3x faster (singles ~110ms -> ~25ms on the CPU probe).
+      INCIDENT (config-before-binary): the first flip attempt hit the
+      still-running Oct 18 binary (pre-feature) - its dry-run gate
+      rejects quantized_file on embedding ("Embedding models do not
+      support GGUF or GGML format") and the unit crash-looped 28x
+      (~4 min outage, zero traffic, restored in 1s on revert; commit
+      6f37d03a3). LESSON: ship the binary BEFORE the config. Fixed
+      order: release build (cuda,rocm,flash-attn, 16m35s, md5
+      242c4c5f, old binary backstopped as mistralrs.pre-gguf-emb),
+      dry-run validated against the flipped toml, then stop/swap/
+      flip/start. LIVE: demand-load via the reload machinery
+      ("reloaded successfully" - also end-to-end-validates the
+      ModelSelected::Embedding quantized_filename threading), first
+      request 803ms incl. load, singles ~22ms on hip:0, GTT delta
+      +168MB at load, prod-vs-probe cosines 0.995-0.998 (cross
+      device), prod-vs-safetensors-baseline min 0.998, dmesg +
+      journal clean. NOTE: hip normalize yields norms 1.000 +/-0.005
+      (CPU lanes are exact 1.0) - device kernel property, harmless
+      for cosine retrieval; whether the old safetensors-on-hip lane
+      was exactly 1.0 was never measured, so this may be pre-existing.
 - [ ] ~M Reranker lane + /v1/rerank endpoint (opened 2026-10-19, user
       demand: openwebui's Reranking Model slot wants a Jina/Cohere-
       style rerank endpoint; today only llama.cpp --reranking fills

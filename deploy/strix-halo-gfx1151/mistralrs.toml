@@ -145,6 +145,24 @@ quantized_file = "Qwen3.8-27B-Uncensored-Q6_K.gguf"
 mmproj = "mmproj-Qwen3.8-27B-Uncensored-f16.gguf"
 
 # ============================================================
+# Qwen3.8 Flash-Next MoE (lazy, demand-loaded)
+# ============================================================
+
+[[models]]
+model_id = "models/orcarouter/Qwen3.8-Flash-Next-Uncensored-GGUF"
+alias = "qwen3.8-flash-next"
+lazy = true
+# IQ4_XS-MTP 3-shard split: quantized_file names part 1, the loader finds the rest.
+k_cache_type = "Q8_0"
+v_cache_type = "Q8_0"
+# n=2 mirrors the 27B pin (global 3 is the 35B's); Flash-Next sweep pending.
+mtp_n_predict = 2
+
+[models.format]
+quantized_file = "Qwen3.8-Flash-Next-Uncensored-IQ4_XS-MTP-00001-of-00003.gguf"
+mmproj = "mmproj-Qwen3.8-Flash-Next-Uncensored-F16.gguf"
+
+# ============================================================
 # Everything below is lazy: registered at boot, loaded on first request.
 # NOTE: lazy models inherit the global MTP flag unless pinned `mtp = false`
 # (all entries below are pinned: two residents at once must fit VRAM, and
@@ -265,13 +283,17 @@ quantized_file = "Qwen3.5-4B-Q8_0.gguf"
 
 # ------------------------------------------------------------
 # Embeddings (open-webui RAG via /v1/embeddings, 2026-10-09).
-# Qwen3-Embedding-0.6B safetensors (1.2GB, 1024-dim, 32k ctx).
-# GGUF flip PENDING binary upgrade: the running build predates the
-# 2026-10-19 GGUF-embedding feature, so [models.format] quantized_file
-# fails config validation and crash-loops the unit (2026-10-21
-# lesson: ship the binary BEFORE the config). Flip re-apply steps +
-# probe measurements are in mistral.rs TODO.md.
-# Validated on the probe lane (load <0.5s, deterministic, batched).
+# Qwen3-Embedding-0.6B, GGUF Q8_0 since 2026-10-21 (was safetensors
+# bf16 1.2GB): [models.format] quantized_file picks the Q8_0 GGUF
+# in the same dir; tokenizer/config/modules.json still load from
+# model_id so the pooling layout is unchanged, weights come from
+# the GGUF (safetensors file stays on disk, unused). Flip measured
+# on the probe lane (exact prod layout): cosines 0.993-0.998 vs
+# safetensors, relevant-doc rankings identical on all test queries
+# (only irrelevant-tail near-ties shuffled), embeds ~3.3x faster,
+# device footprint halved to 0.6GB on hip:0. Requires the
+# 2026-10-21 binary (md5 242c4c5f); the Oct 18 build rejects this
+# stanza (crash-looped the unit once - binary before config).
 # Pinned hip:0 so demand-loads never land it on the crowded 3090;
 # mtp=false stops the global mtp=true inherit. Lazy like the rest
 # of the fleet - embedding demand-load untested, fall back to eager
@@ -285,3 +307,6 @@ kind = "embedding"
 lazy = true
 mtp = false
 device = "hip:0"
+
+[models.format]
+quantized_file = "Qwen3-Embedding-0.6B-Q8_0.gguf"
