@@ -712,6 +712,12 @@ parity queue) now outranks it on impact.
         read ~84GB/s/step vs ~200 DDR5 peak — remaining headroom is
         unit granularity / barrier overhead (768 tiny units per
         tensor per layer at decode), not kernel math.
+      GUARD FIX 2026-10-21: the x86 try_indexed_gemv wrapper
+      quantized the lhs BEFORE its select() guard, so k%256!=0
+      (expert-bias widths) hit the Q8K assert - fixed via shared
+      indexed_supported() before every quantize_lhs; root cause of
+      the expert-bias/stacked-shard test failures (detail: the
+      loud-fallbacks close note).
       DEDUP LANDED 2026-10-17 late (candle commit 14f1348b): a live
         census (CANDLE_MOE_CENSUS=1, env-gated, 512-call stderr
         windows; STRIPPED 2026-10-18 after it delivered its gate data
@@ -1067,6 +1073,46 @@ parity queue) now outranks it on impact.
       routed_lora_bench (stale LoraExecutionArena methods) - both
       stash-verified on the clean tree; dual --lib is the runnable
       gate for this crate.
+      ALL OF THEM FIXED SAME DAY (2026-10-21):
+      (1) CANDLE REAL BUG from the 2026-10-17 indexed_gemv port:
+      repack_x86 try_indexed_gemv quantized the lhs BEFORE the
+      select() guard, so k not divisible by 256 (expert-bias sizes
+      like 64) hit BlockQ8K::from_float's assert - debug builds
+      panicked, release computes over ZERO blocks (silent wrong
+      results). Fix: shared indexed_supported() checked before
+      every quantize_lhs (wrapper, _q head, fused gate/up). This
+      was the root cause of the whole expert-bias/stacked-shard
+      failure family (dual --lib 4: gguf uqff_shards +
+      rank_three_concat + mxfp4 + hqq-3bit; core trio in
+      gpt_oss/isq_flow) - dual --lib now 345/0, core 1541/0.
+      (2) hqq 3-bit on GPU: to_dtype(I32) has NO GPU cast kernel
+      (candle rejects i16/i32 on GPU backends) - the Three-bit
+      closure now packs on CPU and returns to the origin device
+      (subsumes the old metal-only special case); the hqq 4th
+      failure (test_quantize_hqq on hip) green.
+      (3) Test-target compile repairs: rotary dual_cuda_capture
+      tests gated all(test, cuda); the two gguf/cpu grouped tests
+      gated any(cuda,rocm); routed_lora_cuda_tests +
+      routed_lora_bench gated all(cuda, not(rocm)) (API is
+      solo-cuda-cfg'd) - they RUN again, 11/11 on the 3090;
+      grouped_mmq_packed_cuda_tests PORTED off the dead pre-split
+      API to the current NVIDIA-role names (grouped_*_cuda tensors
+      + moe_dispatch_build_cuda exported from cuda_role) - 1/1 on
+      the 3090 in dual, compiles in solo-cuda too;
+      indexed_moe_lora_cuda_tests re-homed to solo-rocm (its API
+      IS the gguf::cuda hip lane; as_hip_device/Storage::Hip
+      idiom) - 3/3 on the iGPU; candle examples/ptx_probe gated
+      to cuda (was breaking candle-core --all-targets in every
+      non-cuda shape).
+      (4) supported-models golden: the 2026-10-19 hand-added GGUF
+      embedding note broke model_metadata byte-parity - the
+      GENERATOR now emits it (survives regeneration).
+      (5) embedding.rs fmt nit (from the feature commit) fixed in
+      isolation; the 5 known-unformatted pre-existing files left
+      alone. Bars after: all 4 shapes compile ALL targets +
+      examples; default quant 303/1 (the 1 = the documented fp8
+      roundtrip); candle quantized_tests 55/0, candle-core
+      --all-targets 0 errors.
 - [x] ~M Dual NVIDIA-role device sampling (LANDED 2026-10-16,
       builds 15-18): device_sampling_supported dual arm, categorical
       packed twin, single-seq f32_packed twin, sampler single-seq
