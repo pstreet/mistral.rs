@@ -73,6 +73,7 @@ static DEEPGEMM_FP8_PROVIDER_LOG: std::sync::Once = std::sync::Once::new();
     has_deepgemm_fp8_sm90_provider
 ))]
 static DEEPGEMM_FP8_FALLBACK_LOG: std::sync::Once = std::sync::Once::new();
+static BLOCKWISE_FP8_DEQUANT_FALLBACK_LOG: std::sync::Once = std::sync::Once::new();
 #[cfg(all(
     feature = "cuda",
     not(feature = "rocm"),
@@ -313,6 +314,13 @@ impl QuantMethod for BlockwiseFP8Linear {
         }
 
         // Fallback: dequantize and use unquantized matmul
+        if !x.device().is_cpu() {
+            BLOCKWISE_FP8_DEQUANT_FALLBACK_LOG.call_once(|| {
+                tracing::warn!(
+                    "blockwise FP8 has no native matmul on this device role; dequantizing weights per forward"
+                );
+            });
+        }
         let weight = self.dequantize_w()?;
         // Dispatch to unquant. This uses some cublaslt for bias & on cuda always, so it is better
         let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
@@ -350,6 +358,13 @@ impl QuantMethod for BlockwiseFP8Linear {
         }
 
         // Fallback: dequantize weights and compute manually
+        if !x.device().is_cpu() {
+            BLOCKWISE_FP8_DEQUANT_FALLBACK_LOG.call_once(|| {
+                tracing::warn!(
+                    "blockwise FP8 has no native matmul on this device role; dequantizing weights per forward"
+                );
+            });
+        }
         let weight = self.dequantize_w()?;
 
         // Expected shapes:

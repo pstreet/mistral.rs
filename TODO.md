@@ -1041,9 +1041,32 @@ parity queue) now outranks it on impact.
       mistral.rs pstreet-rocm ahead 2 = the two 2026-10-18 ledger
       commits (beea6a8d7 + this PARKED commit), push is a user
       action.
-- [ ] ~S Solo-rocm loud fallbacks: fused FP8 GLU quantize (unfused
+- [x] ~S Solo-rocm loud fallbacks: fused FP8 GLU quantize (unfused
       path today), gemv -> plain GEMM, HQQ CPU bitpack-at-load.
       Pure wins, no architecture risk.
+      CLOSED 2026-10-21 (logging-only; all three fallbacks already
+      WORKED silently): (1) blockwise FP8 forward/gather dequant
+      fallbacks now warn once when serving a GPU-resident input
+      ("no native matmul on this device role") - fires for solo-rocm
+      hip, dual hip, and sm-less NVIDIA, all honest cases; (2) solo-
+      rocm should_use_gemv warns once on the first GPU-role query
+      before returning false (plain GEMM serves), and the stale gemv
+      bail text ("needs S2" - S2 shipped 2026-09-28) now states the
+      gate; (3) HQQ bitpack tails (8/4/2/1-bit) warn once when the
+      tensor-op packing fallback serves a GPU device (Three-bit has
+      no kernel anywhere - universal path, left silent). Pattern =
+      the file's existing DEEPGEMM_*_LOG Once + tracing::warn. Zero
+      behavior change. Verified: 4 shapes check clean, fmt/clippy
+      clean, dual --lib bar 341 passed / 4 failed IDENTICAL with the
+      change stashed (the 4 = the documented expert-bias/stacked-
+      shard family + its hqq/mxfp4 mirrors - pre-existing, do not
+      chase). NEW pre-existing breakage recorded while verifying:
+      mistralrs-quant default-shape LIB TESTS do not compile (test
+      code references test_gpu_device/cuda_backend ungated) and the
+      dual shape cannot compile routed_lora_cuda_tests +
+      routed_lora_bench (stale LoraExecutionArena methods) - both
+      stash-verified on the clean tree; dual --lib is the runnable
+      gate for this crate.
 - [x] ~M Dual NVIDIA-role device sampling (LANDED 2026-10-16,
       builds 15-18): device_sampling_supported dual arm, categorical
       packed twin, single-seq f32_packed twin, sampler single-seq

@@ -215,12 +215,22 @@ impl TryFrom<usize> for HqqBits {
     }
 }
 
+fn warn_bitpack_fallback(device: &Device) {
+    static HQQ_BITPACK_FALLBACK_LOG: std::sync::Once = std::sync::Once::new();
+    if !device.is_cpu() {
+        HQQ_BITPACK_FALLBACK_LOG.call_once(|| {
+            tracing::warn!(
+                "HQQ bitpack has no kernel for this device role; packing via tensor-op fallback at load"
+            );
+        });
+    }
+}
+
 impl HqqBits {
     // https://github.com/mobiusml/hqq/blob/306e30d9400629523c8e0af70101d8d7073cb3d5/hqq/core/bitpack.py#L10
     pub(crate) fn bitpack_type(&self) -> impl Fn(Tensor) -> Result<Tensor> {
         match self {
             Self::Eight => |wq: Tensor| -> Result<Tensor> {
-                #[allow(unused_variables)]
                 let device = wq.device();
 
                 #[cfg(all(feature = "cuda", not(feature = "rocm")))]
@@ -300,10 +310,10 @@ impl HqqBits {
                     return Ok(Tensor::from((storage, output_shape)));
                 }
 
+                warn_bitpack_fallback(device);
                 wq.to_dtype(DType::U8)
             },
             Self::Four => |wq_in: Tensor| -> Result<Tensor> {
-                #[allow(unused_variables)]
                 let device = wq_in.device();
 
                 #[cfg(all(feature = "cuda", not(feature = "rocm")))]
@@ -389,6 +399,7 @@ impl HqqBits {
                 }
 
                 // CPU fallback
+                warn_bitpack_fallback(device);
                 let wq = wq_in.to_dtype(DType::U8)?;
                 let step = (wq.dims()[0] as f64 / 2.) as usize;
 
@@ -397,7 +408,6 @@ impl HqqBits {
                 a.leftshift(4)?.bitwise_or(&b)
             },
             Self::Two => |wq_in: Tensor| -> Result<Tensor> {
-                #[allow(unused_variables)]
                 let device = wq_in.device();
 
                 #[cfg(all(feature = "cuda", not(feature = "rocm")))]
@@ -439,6 +449,7 @@ impl HqqBits {
                 // CPU fallback (also serves hip and cpu: the kernel block
                 // above is cuda-only).
                 {
+                    warn_bitpack_fallback(device);
                     let wq = wq_in.to_dtype(DType::U8)?;
                     let step = (wq.dims()[0] as f64 / 4.) as usize;
 
@@ -533,7 +544,6 @@ impl HqqBits {
                     .bitwise_or(&j)
             },
             Self::One => |wq_in: Tensor| -> Result<Tensor> {
-                #[allow(unused_variables)]
                 let device = wq_in.device();
 
                 #[cfg(all(feature = "cuda", not(feature = "rocm")))]
@@ -575,6 +585,7 @@ impl HqqBits {
                 // CPU fallback (also serves hip and cpu: the kernel block
                 // above is cuda-only).
                 {
+                    warn_bitpack_fallback(device);
                     let wq = wq_in.to_dtype(DType::U8)?;
                     let step = (wq.dims()[0] as f64 / 8.) as usize;
 

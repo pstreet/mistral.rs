@@ -167,6 +167,14 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
     // unquantized linear there.
     #[cfg(all(feature = "rocm", not(feature = "cuda")))]
     {
+        static GEMV_HIP_FALLBACK_LOG: std::sync::Once = std::sync::Once::new();
+        if x.device().is_cuda() {
+            GEMV_HIP_FALLBACK_LOG.call_once(|| {
+                tracing::warn!(
+                    "solo-rocm builds have no gemv route on the hip role; unquantized linear falls back to plain GEMM"
+                );
+            });
+        }
         let _ = (x, w);
         return false;
     }
@@ -245,7 +253,7 @@ pub fn should_use_gemv(_x: &candle_core::Tensor, _w: &candle_core::Tensor) -> bo
 #[cfg(all(feature = "rocm", not(feature = "cuda")))]
 pub fn gemv(_x: &Tensor, _w: &Tensor, _bias: Option<&Tensor>) -> Result<Tensor> {
     candle_core::bail!(
-        "gemv on the Hip backend needs S2; unquantized linear falls back to plain GEMM"
+        "gemv is not available on the hip role; should_use_gemv gates it off and unquantized linear falls back to plain GEMM"
     )
 }
 #[cfg(feature = "cuda")]
