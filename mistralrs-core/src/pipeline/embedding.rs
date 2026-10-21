@@ -1289,7 +1289,9 @@ mod gguf_load_tests {
         };
 
         // `add_eos_token` must append the EOS so last-token pooling reads it.
-        let tokenizer = pipeline.tokenizer().expect("embedding pipeline has a tokenizer");
+        let tokenizer = pipeline
+            .tokenizer()
+            .expect("embedding pipeline has a tokenizer");
         let ids = tokenizer.encode("a b", true).unwrap().get_ids().to_vec();
         assert_eq!(ids.last(), Some(&3), "EOS must be appended: {ids:?}");
 

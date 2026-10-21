@@ -578,6 +578,12 @@ pub fn render_supported_models_markdown() -> String {
         &mut md,
         EmbeddingLoaderType::iter().map(|t| (t.config_arch().to_string(), t.arch_metadata())),
     );
+    md.push_str(
+        "Both loaders also accept GGUF checkpoints of the `gemma3` and `qwen3` GGUF\n\
+         architectures via `-f`/`quantized_file`; see\n\
+         [the embeddings guide](/guides/models/use-embeddings/) for the pooling and\n\
+         asset rules.\n\n",
+    );
 
     md.push_str(FOOTER);
     md
