@@ -364,6 +364,7 @@ mod grouped_gather_tests {
         Ok(())
     }
 
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn grouped_large_scale_matches_cpu() -> Result<()> {
         // Prefill scale on the serving GPU role (1138 tokens, 8 slots,
@@ -394,6 +395,7 @@ mod grouped_gather_tests {
         compare(&gpu, &cpu, "large-scale gpu vs cpu")
     }
 
+    #[cfg(any(feature = "cuda", feature = "rocm"))]
     #[test]
     fn grouped_gather_serves_test_gpu() -> Result<()> {
         // The same kernel bar on the serving GPU role of this build shape

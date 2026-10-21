@@ -1931,7 +1931,7 @@ mod tensor_rope_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cuda"))]
 mod dual_cuda_capture_tests {
     use super::*;
 

@@ -1,4 +1,4 @@
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 mod cuda_bench {
     use std::{env, sync::Arc, time::Instant};
 
@@ -1038,12 +1038,12 @@ mod cuda_bench {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
 fn main() -> candle_core::Result<()> {
     cuda_bench::main()
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(all(feature = "cuda", not(feature = "rocm"))))]
 fn main() {
-    eprintln!("routed_lora_bench requires the cuda feature");
+    eprintln!("routed_lora_bench requires a solo-cuda build");
 }

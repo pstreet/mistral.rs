@@ -1,4 +1,4 @@
-#![cfg(feature = "cuda")]
+#![cfg(all(feature = "rocm", not(feature = "cuda")))]
 
 use candle_core::{
     quantized::GgmlDType, quantized::QTensor, DType, Device, Result, Storage, Tensor,
@@ -64,7 +64,7 @@ fn check_route_outputs(
     const TOPK: usize = 2;
 
     let cuda = Device::new_cuda(0)?;
-    let dev = cuda.as_cuda_device()?;
+    let dev = cuda.as_hip_device()?;
     let gate_cpu = tensor((NUM_EXPERTS, intermediate, hidden), 0.1)?;
     let up_cpu = tensor((NUM_EXPERTS, intermediate, hidden), 0.7)?;
     let down_cpu = tensor((NUM_EXPERTS, hidden, intermediate), 1.3)?;
@@ -76,7 +76,7 @@ fn check_route_outputs(
     let ids_tensor = Tensor::from_slice(&ids, (BATCH, TOPK), &cuda)?;
     let (ids_storage, ids_layout) = ids_tensor.storage_and_layout();
     assert_eq!(ids_layout.start_offset(), 0);
-    let Storage::Cuda(ids_cuda) = &*ids_storage else {
+    let Storage::Hip(ids_cuda) = &*ids_storage else {
         unreachable!()
     };
     let ids_slice = ids_cuda.as_cuda_slice::<u32>()?;
@@ -144,7 +144,7 @@ fn invalid_expert_routes_are_zeroed() -> Result<()> {
     const TOPK: usize = 2;
 
     let cuda = Device::new_cuda(0)?;
-    let dev = cuda.as_cuda_device()?;
+    let dev = cuda.as_hip_device()?;
     let gate = QTensor::quantize_onto(
         &tensor((NUM_EXPERTS, INTERMEDIATE, HIDDEN), 0.1)?,
         GgmlDType::Q4_0,
@@ -162,7 +162,7 @@ fn invalid_expert_routes_are_zeroed() -> Result<()> {
     )?;
     let ids = Tensor::from_slice(&[0u32, u32::MAX], (1, TOPK), &cuda)?;
     let (ids_storage, _) = ids.storage_and_layout();
-    let Storage::Cuda(ids_cuda) = &*ids_storage else {
+    let Storage::Hip(ids_cuda) = &*ids_storage else {
         unreachable!()
     };
     let routing =

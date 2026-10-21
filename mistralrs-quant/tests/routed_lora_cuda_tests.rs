@@ -1,4 +1,5 @@
 #![cfg(feature = "cuda")]
+#![cfg(all(feature = "cuda", not(feature = "rocm")))]
 
 use std::sync::Arc;
 

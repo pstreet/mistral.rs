@@ -2,11 +2,14 @@
 
 use candle_core::{
     quantized::{GgmlDType, QTensor},
-    Device, Result, Storage, Tensor,
+    Device, Result, Tensor,
 };
 use mistralrs_quant::{
-    grouped_moe_mmq, grouped_moe_mmq_from_glu_packed, grouped_moe_mmq_from_glu_sorted_pair,
-    grouped_moe_mmq_pair_packed, moe_dispatch_build, GluActivationType,
+    grouped_cuda as grouped_moe_mmq,
+    grouped_from_glu_packed_cuda as grouped_moe_mmq_from_glu_packed,
+    grouped_from_glu_sorted_pair_cuda as grouped_moe_mmq_from_glu_sorted_pair,
+    grouped_pair_packed_cuda as grouped_moe_mmq_pair_packed, moe_dispatch_build_cuda,
+    GluActivationType,
 };
 
 const NUM_EXPERTS: usize = 3;
@@ -61,7 +64,6 @@ fn assert_close(actual: &Tensor, expected: &Tensor) -> Result<()> {
 #[test]
 fn packed_gate_up_and_sorted_pair_glu_preserve_route_order() -> Result<()> {
     let cuda = Device::new_cuda(0)?;
-    let dev = cuda.as_cuda_device()?;
     let xs = patterned((NUM_TOKENS, HIDDEN), 3, 0.7)?.to_device(&cuda)?;
     let gate = QTensor::quantize_onto(
         &patterned((NUM_EXPERTS, INTERMEDIATE, HIDDEN), 11, 0.11)?,
@@ -82,16 +84,10 @@ fn packed_gate_up_and_sorted_pair_glu_preserve_route_order() -> Result<()> {
     let route_experts = [2u32, 0, 1, 2, 0, 1, 2, 1];
     let topk_ids = Tensor::from_slice(&route_experts, (NUM_TOKENS, TOPK), &cuda)?;
     let topk_ids = topk_ids.flatten_all()?.contiguous()?;
-    let (topk_storage, topk_layout) = topk_ids.storage_and_layout();
-    assert_eq!(topk_layout.start_offset(), 0);
-    let Storage::Cuda(topk_cuda) = &*topk_storage else {
-        unreachable!()
-    };
-    let topk_slice = topk_cuda.as_cuda_slice::<u32>()?;
     let (expert_bounds, sorted_token_ids, sorted_source_ids) =
-        moe_dispatch_build(topk_slice, TOTAL_ASSIGNMENTS, NUM_EXPERTS, TOPK, dev)?;
+        moe_dispatch_build_cuda(&topk_ids, TOTAL_ASSIGNMENTS, NUM_EXPERTS, TOPK)?;
 
-    let sorted_routes = dev.clone_dtoh(&sorted_token_ids)?;
+    let sorted_routes = sorted_token_ids.to_vec1::<u32>()?;
     assert_ne!(
         sorted_routes,
         (0..TOTAL_ASSIGNMENTS as u32).collect::<Vec<_>>()
@@ -114,7 +110,6 @@ fn packed_gate_up_and_sorted_pair_glu_preserve_route_order() -> Result<()> {
         TOTAL_ASSIGNMENTS,
         TOPK,
         NUM_EXPERTS,
-        dev,
     )?;
     assert_eq!(packed.dims2()?, (TOTAL_ASSIGNMENTS, 2 * INTERMEDIATE));
     assert!(packed.is_contiguous());
@@ -128,7 +123,6 @@ fn packed_gate_up_and_sorted_pair_glu_preserve_route_order() -> Result<()> {
         TOTAL_ASSIGNMENTS,
         NUM_TOKENS,
         NUM_EXPERTS,
-        dev,
     )?;
     let up_flat = grouped_moe_mmq(
         &up,
@@ -139,7 +133,6 @@ fn packed_gate_up_and_sorted_pair_glu_preserve_route_order() -> Result<()> {
         TOTAL_ASSIGNMENTS,
         NUM_TOKENS,
         NUM_EXPERTS,
-        dev,
     )?;
     let packed_gate = packed.narrow(1, 0, INTERMEDIATE)?;
     let packed_up = packed.narrow(1, INTERMEDIATE, INTERMEDIATE)?;
@@ -156,33 +149,25 @@ fn packed_gate_up_and_sorted_pair_glu_preserve_route_order() -> Result<()> {
         (TOTAL_ASSIGNMENTS,),
         &cuda,
     )?;
-    let (identity_storage, identity_layout) = identity.storage_and_layout();
-    assert_eq!(identity_layout.start_offset(), 0);
-    let Storage::Cuda(identity_cuda) = &*identity_storage else {
-        unreachable!()
-    };
-    let identity_slice = identity_cuda.as_cuda_slice::<u32>()?;
     let gate_sorted = grouped_moe_mmq(
         &gate,
         &xs,
         &sorted_source_ids,
-        identity_slice,
+        &identity,
         &expert_bounds,
         TOTAL_ASSIGNMENTS,
         NUM_TOKENS,
         NUM_EXPERTS,
-        dev,
     )?;
     let up_sorted = grouped_moe_mmq(
         &up,
         &xs,
         &sorted_source_ids,
-        identity_slice,
+        &identity,
         &expert_bounds,
         TOTAL_ASSIGNMENTS,
         NUM_TOKENS,
         NUM_EXPERTS,
-        dev,
     )?;
 
     let down_from_packed = grouped_moe_mmq_from_glu_packed(
@@ -195,7 +180,6 @@ fn packed_gate_up_and_sorted_pair_glu_preserve_route_order() -> Result<()> {
         NUM_TOKENS,
         NUM_EXPERTS,
         GluActivationType::Silu as i32,
-        dev,
     )?;
     let down_from_sorted_pair = grouped_moe_mmq_from_glu_sorted_pair(
         &down,
@@ -207,7 +191,6 @@ fn packed_gate_up_and_sorted_pair_glu_preserve_route_order() -> Result<()> {
         NUM_TOKENS,
         NUM_EXPERTS,
         GluActivationType::Silu as i32,
-        dev,
     )?;
     assert_close(&down_from_sorted_pair, &down_from_packed)
 }
