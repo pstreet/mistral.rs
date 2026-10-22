@@ -115,7 +115,7 @@ Each entry includes `id`, `object`, `created`, `owned_by`, plus optional `status
 
 ## Unloading and reloading on demand
 
-`POST /v1/models/unload` frees a model's memory, `POST /v1/models/reload` brings it back, and `POST /v1/models/status` queries its state; each takes `{"model_id": "..."}`. Request and response schemas are in the [generated HTTP API reference](/reference/http-api-generated/).
+`POST /v1/models/unload` frees a model's memory (returned to the driver, not just the process pool, so it is available for the next load), `POST /v1/models/reload` brings it back, and `POST /v1/models/status` queries its state; each takes `{"model_id": "..."}`. Request and response schemas are in the [generated HTTP API reference](/reference/http-api-generated/).
 
 ## Multi-model from code (Rust)
 

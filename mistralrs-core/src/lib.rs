@@ -3198,7 +3198,7 @@ impl MistralRs {
             .loader_config
             .clone()
             .ok_or_else(|| MistralRsError::NoLoaderConfig(resolved_model_id.clone()))?;
-        let engine_instance = engines
+        let mut engine_instance = engines
             .remove(&resolved_model_id)
             .expect("engine was present while holding the write lock");
 
@@ -3226,6 +3226,18 @@ impl MistralRs {
         let _ = engine_instance.sender.try_send(Request::Terminate);
 
         drop(engines);
+
+        // Wait for the engine thread to exit, then drop the engine instance
+        // (which frees CUDA graphs and the last pipeline Arc -> tensors) and
+        // only THEN trim the device caching pool back to the driver. Trimming
+        // before the tensors are freed releases nothing, which is why the
+        // previous attempt left the RTX 3090 (and the AMD pool) holding memory.
+        engine_instance.join();
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
+        let device = engine_instance.config.device.clone();
+        drop(engine_instance);
+        #[cfg(any(feature = "cuda", feature = "rocm"))]
+        settle_device_after_teardown(&device);
 
         // Store the unloaded state
         let mut unloaded = self
