@@ -1440,6 +1440,56 @@ parity queue) now outranks it on impact.
       classification head, different loader), custom instruction
       field (llama.cpp lacks it too; Qwen's eval says custom
       instruct adds only 1-5%).
+- [ ] ~L qwen4exp model-arch port: serve Qwen3.8-Flash-Next (opened
+      2026-10-21, user demand: the orcarouter uncensored GGUF is
+      already on disk - 95GB on a 98%-full disk carrying it until
+      this lands - and currently unloadable). EVIDENCE: shard-1 GGUF
+      header parsed directly - general.architecture=qwen4exp, GGUF
+      v3, 317 tensors across the split; normal_registry.rs
+      (CanonicalGgufArchitecture, 26 archs, tops out at
+      qwen3next/qwen35/qwen35moe) rejects it with
+      UnknownArchitecture on demand-load (lazy alias fails clean
+      per-request, fleet unaffected); repo-wide "qwen4" grep = 0
+      hits; upstream EricLBuehler master ALSO lacks it (models/
+      ends at qwen3_next.rs, checked 2026-10-21) - no rebase
+      shortcut, the port is ours. ASSETS IN PLACE:
+      models/orcarouter/Qwen3.8-Flash-Next-Uncensored-GGUF/ -
+      IQ4_XS-MTP 3-shard split + mmproj-F16, sizes byte-verified
+      vs repo metadata; lazy alias qwen3.8-flash-next registered in
+      mistralrs.toml (Q8_0 KV, mtp_n_predict=2 placeholder
+      mirroring the 27B, sweep after port; rode into commit
+      fd4a9a829). FAMILY PRECEDENT: third iteration of the
+      qwen3next -> qwen35moe hybrid pattern. REUSABLE (proven
+      in-tree): GDN kernels (mistralrs-core/src/gdn/ + packed
+      hipcc GDN build), hybrid LayerImpl::LinearAttention
+      (GatedDeltaNet) wiring (models/qwen3_next.rs,
+      vision_models/qwen3_5_moe/text.rs), stacked-expert MoE,
+      MTP attach lanes (live on 35B/27B/4B), mmproj family
+      registry (multimodal_config.rs). NEW PIECES: (1) registry
+      entry + builder; (2) QSA micro-block sparse attention; (3)
+      HyperConnections replacing layer norms; (4) PLE n-gram hash
+      embeddings - per_layer_token_embd [160, 320001536], 51.2B
+      params, quant axis 160 NOT 256-divisible so the tensor stays
+      Q8_0 even in K-quant builds (loader must take the mixed
+      Q8_0 tensor; same quirk is why Q6_K/Q8_0 splits carry a
+      ~54GB PLE shard over CloudFront's 50GB single-request cap);
+      (5) MTP: self-speculation path for -MTP files, or pair a
+      plain quant with the repo's separate MTP-draft.gguf (~4GB)
+      via the existing spec-draft-model machinery; (6) mmproj
+      family entry for vision; (7) multi-part split support: none
+      of the fleet GGUFs are sharded - verify our loader handles
+      the llama.cpp -00001-of-000NN convention or add it before
+      anything else matters. REFS: llama.cpp #27742 (arch, in
+      mainline since 2026-08-27) + #27880 follow-up; #27836 +
+      #30592 (MTP self-speculation; ~0.77 draft acceptance on
+      this IQ4_XS-MTP file per the orcarouter README). SERVING
+      SHAPE: 512 experts, 10+1 active/token - decode is cheap but
+      all 95GB weights must sit in RAM/VRAM or be mmap'd, so the
+      natural lane is the expert-split + HotExpertCache infra
+      (18800233e, fa996df07) proven on the 35B. VALIDATION: probe
+      lane first (policy), output-parity A/B vs llama.cpp master
+      (which supports it today), then release probe + the single
+      prod restart batch rule.
 - [ ] ~L multi-backend runtime: CPU + NVIDIA + AMD + Intel in ONE
       process, per-model device assignment. Design agreed 2026-09-26;
       UPDATE 2026-10-01: an RTX 3090 eGPU (sm86, 24GB, CUDA 13.3 UMD) is
