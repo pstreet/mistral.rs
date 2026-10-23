@@ -865,6 +865,32 @@ parity queue) now outranks it on impact.
               probe decode loop) before more code changes.
         2. Phase-2b: router-predicted async prefetch (currently
            admission is count-based/reactive).
+           LANDED 2026-10-23 (fe6ae612c): admission now fills an EMPTY
+           slot on the router's first selection (fill overlaps the
+           step's compute); evicting a warm LRU slot still needs the
+           use-count-2 gate; duplicate ids no longer double-admit;
+           empty slots preferred over eviction.
+           MEASURED 2026-10-23 (same harness as the no-cache baseline,
+           35B Q5_K_XL cuda:0 + cpu experts, essay 256tok, warmup + 3):
+           4000MB (~15 slots/layer): 19.9-20.2 tok/s; 6000MB (~22
+           slots/layer): 18.0-20.1 tok/s; 8000MB: CUDA OOM during
+           decode (3090 ceiling between 6-8GB with weights+KV+graphs).
+           VERDICT: hot cache is ~37% SLOWER than no-cache (31.7-31.9
+           tok/s) and MORE SLOTS DO NOT HELP - the split's fixed
+           overhead (per-layer hot/cold partitioning, per-slot GPU
+           gathers, cold_xs index_select + index_add scatter,
+           hot_partial accumulation) dominates, not coverage. With
+           forward_indexed serving cold pairs cheaply, the bandwidth
+           saved on hot pairs no longer pays for the orchestration.
+           The path to a paying cache is an integration rewrite: batch
+           the hot path across ALL slots into one matmul per layer
+           (not per-slot gathers) and fold the scatter into it (~L,
+           new item). Until then the cache stays disabled by default
+           (expert_hot_cache_mb unset). OOM CAVEAT (user-observed
+           2026-10-23): an in-request CUDA OOM does NOT free VRAM -
+           the caching allocator retains pool blocks in-process, so an
+           OOM'd lane holds its VRAM (serving nothing) until explicit
+           /v1/models/unload (trims per 18d04d953) or process exit.
         3. Only then re-enable the cache and re-measure.
 
       PHASE-2 INFRA LANDED 2026-10-18 (mistral.rs commit fa996df07,
@@ -952,6 +978,32 @@ parity queue) now outranks it on impact.
               probe decode loop) before more code changes.
         2. Phase-2b: router-predicted async prefetch (currently
            admission is count-based/reactive).
+           LANDED 2026-10-23 (fe6ae612c): admission now fills an EMPTY
+           slot on the router's first selection (fill overlaps the
+           step's compute); evicting a warm LRU slot still needs the
+           use-count-2 gate; duplicate ids no longer double-admit;
+           empty slots preferred over eviction.
+           MEASURED 2026-10-23 (same harness as the no-cache baseline,
+           35B Q5_K_XL cuda:0 + cpu experts, essay 256tok, warmup + 3):
+           4000MB (~15 slots/layer): 19.9-20.2 tok/s; 6000MB (~22
+           slots/layer): 18.0-20.1 tok/s; 8000MB: CUDA OOM during
+           decode (3090 ceiling between 6-8GB with weights+KV+graphs).
+           VERDICT: hot cache is ~37% SLOWER than no-cache (31.7-31.9
+           tok/s) and MORE SLOTS DO NOT HELP - the split's fixed
+           overhead (per-layer hot/cold partitioning, per-slot GPU
+           gathers, cold_xs index_select + index_add scatter,
+           hot_partial accumulation) dominates, not coverage. With
+           forward_indexed serving cold pairs cheaply, the bandwidth
+           saved on hot pairs no longer pays for the orchestration.
+           The path to a paying cache is an integration rewrite: batch
+           the hot path across ALL slots into one matmul per layer
+           (not per-slot gathers) and fold the scatter into it (~L,
+           new item). Until then the cache stays disabled by default
+           (expert_hot_cache_mb unset). OOM CAVEAT (user-observed
+           2026-10-23): an in-request CUDA OOM does NOT free VRAM -
+           the caching allocator retains pool blocks in-process, so an
+           OOM'd lane holds its VRAM (serving nothing) until explicit
+           /v1/models/unload (trims per 18d04d953) or process exit.
         3. Only then re-enable the cache and re-measure.
 
       UPDATE 2026-10-23 (later same day): cold-path fast path implemented
