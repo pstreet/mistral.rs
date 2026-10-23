@@ -852,6 +852,17 @@ parity queue) now outranks it on impact.
               A/B needs a before-binary built from the pre-change tip
               with the same harness. The ~1.4x target still rides on
               subtask D (per-layer batching) + phase-2b prefetch.
+              POST-D MEASURED 2026-10-23 (same harness, same prompt,
+              post forward_indexed): 31.7-31.9 tok/s x3, zero errors.
+              Flat vs post-A+B+C (31.3-33.5): the wrapper-level opts
+              (A-D) are all correctness-preserving and safe (moe
+              tests 25/0 dual, 4-shape compile clean) but the decode
+              wall is NOT the gather_forward wrapper overhead. The
+              68% serving overhead lives deeper: per-step scheduler
+              syncs, MTP verify machinery, allocator behavior. Next
+              lever for this lane is phase-2b prefetch + a profile
+              of where the 68% actually goes (perf flamegraph on the
+              probe decode loop) before more code changes.
         2. Phase-2b: router-predicted async prefetch (currently
            admission is count-based/reactive).
         3. Only then re-enable the cache and re-measure.
@@ -928,6 +939,17 @@ parity queue) now outranks it on impact.
               A/B needs a before-binary built from the pre-change tip
               with the same harness. The ~1.4x target still rides on
               subtask D (per-layer batching) + phase-2b prefetch.
+              POST-D MEASURED 2026-10-23 (same harness, same prompt,
+              post forward_indexed): 31.7-31.9 tok/s x3, zero errors.
+              Flat vs post-A+B+C (31.3-33.5): the wrapper-level opts
+              (A-D) are all correctness-preserving and safe (moe
+              tests 25/0 dual, 4-shape compile clean) but the decode
+              wall is NOT the gather_forward wrapper overhead. The
+              68% serving overhead lives deeper: per-step scheduler
+              syncs, MTP verify machinery, allocator behavior. Next
+              lever for this lane is phase-2b prefetch + a profile
+              of where the 68% actually goes (perf flamegraph on the
+              probe decode loop) before more code changes.
         2. Phase-2b: router-predicted async prefetch (currently
            admission is count-based/reactive).
         3. Only then re-enable the cache and re-measure.
