@@ -28,7 +28,7 @@ quant = "4"
 | Field | Type | Applies to | Purpose |
 |---|---|---|---|
 | `command` | string | both | `"serve"` or `"run"`. |
-| `default_model_id` | string | serve | Model id treated as the default. Must match one of the `[[models]]` entries. |
+| `default_model_id` | string | serve | Model id (or alias) treated as the default. When omitted, the first configured model is the default. Must match one of the `[[models]]` entries when set. |
 | `thinking` | bool | run | Legacy thinking toggle (alias: `enable_thinking`). If both reasoning controls are omitted, thinking defaults on. Maps to `--thinking` on `mistralrs run`. |
 | `reasoning_effort` | string | run | `off`, `low`, `medium`, `high`, or `xhigh`; `none` aliases `off`. Omit to leave effort unspecified. Maps to `--reasoning-effort`. |
 
