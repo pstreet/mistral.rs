@@ -2083,10 +2083,16 @@ impl FastExpertsWeights {
             ))?
         };
 
-        ys.to_dtype(DType::F32)?
-            .broadcast_mul(&forward.topk_weights.unsqueeze(D::Minus1)?)?
-            .sum(D::Minus2)?
-            .to_dtype(forward.original_dtype)
+        // For topk=1 (common in the split/cold path) the sum over the
+        // expert axis is an identity, so skip it (cheaper than a reduction).
+        let ys = ys.to_dtype(DType::F32)?;
+        let ys = ys.broadcast_mul(&forward.topk_weights.unsqueeze(D::Minus1)?)?;
+        let ys = if config.num_experts_per_tok == 1 {
+            ys.squeeze(D::Minus2)?
+        } else {
+            ys.sum(D::Minus2)?
+        };
+        ys.to_dtype(forward.original_dtype)
     }
 
     /// Fast cold-path for the hot-expert cache: runs gate+up+down directly
