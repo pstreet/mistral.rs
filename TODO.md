@@ -826,6 +826,15 @@ parity queue) now outranks it on impact.
               3 gather_forward calls (gate, up, down) into a single
               indexed pass where possible; reduce scheduler syncs.
               Location: mistralrs-core/src/moe/experts/mod.rs:331.
+              IMPLEMENTED 2026-10-23: FastExpertsWeights::forward_indexed
+              (backends.rs) runs gate+up through the fused kernel and down
+              through indexed_gemv directly in the flat (num_tokens, topk,
+              .) form, skipping the gather_forward wrapper (4D shape
+              normalization, per-call bookkeeping) for every projection.
+              forward_gather's CPU branch tries it first; the old 4D
+              pipeline remains as fallback. hot_cache cold path now uses
+              the same forward_indexed + inline weighting (supersedes the
+              forward_cold_indexed duplicate, deleted).
            E. Measurement + validation: benchmark before/after on the
               3090 split lane (target ~1.4x: 35->~49 tok/s); verify
               output coherence vs forward_gather reference.
@@ -893,6 +902,15 @@ parity queue) now outranks it on impact.
               3 gather_forward calls (gate, up, down) into a single
               indexed pass where possible; reduce scheduler syncs.
               Location: mistralrs-core/src/moe/experts/mod.rs:331.
+              IMPLEMENTED 2026-10-23: FastExpertsWeights::forward_indexed
+              (backends.rs) runs gate+up through the fused kernel and down
+              through indexed_gemv directly in the flat (num_tokens, topk,
+              .) form, skipping the gather_forward wrapper (4D shape
+              normalization, per-call bookkeeping) for every projection.
+              forward_gather's CPU branch tries it first; the old 4D
+              pipeline remains as fallback. hot_cache cold path now uses
+              the same forward_indexed + inline weighting (supersedes the
+              forward_cold_indexed duplicate, deleted).
            E. Measurement + validation: benchmark before/after on the
               3090 split lane (target ~1.4x: 35->~49 tok/s); verify
               output coherence vs forward_gather reference.
