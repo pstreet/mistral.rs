@@ -911,6 +911,35 @@ parity queue) now outranks it on impact.
            theory: nsys/perf flamegraph of the probe decode loop to
            place the 68% serving overhead before any further code
            change on this lane.
+           PROFILE DONE 2026-10-23 (nsys, 30s windows, one 256-tok
+           generation each, hot=4000MB vs no-cache; reports discarded
+           after extraction, numbers preserved here):
+           - Per-op CUDA churn IS the serving overhead, both paths:
+             ~368-394K kernel launches, 1.25-1.4M event records,
+             2.2-2.4M stream-waits per window. Candle pays ~5 API
+             calls per tensor op.
+           - THE SPLIT'S DELTA: cuMemcpyDtoHAsync 23,355 calls / 4.20s
+             API time (avg 180us) hot vs 16,093 / 0.45s (avg 28us)
+             no-cache - a 9.4x TIME difference for only +7K calls.
+             The hot path's per-layer to_vec1 host reads of topk_ids/
+             topk_weights are PAGEABLE async copies, which the driver
+             executes synchronously via staging - each one waits for
+             the GPU queue to drain (mid-step = deep queue). ~2 drains
+             x 41 layers/step ~= 10ms/step of pipeline lockstep: the
+             measured split cost.
+           - CONFOUND: the hot window contained the FIRST request
+             (warmup), so its 10.6s GPU-side HtoD time (vs 0.10s
+             no-cache) is mostly the FILL WORKER's pageable 6.3MB/
+             expert uploads during cache warm, not steady-state.
+           - CONCLUSION: the fix is GPU-SIDE PARTITIONING - build
+             batch_idx/pair_w/slot mapping with GPU ops from topk_ids
+             (argsort machinery already exists; asort kernels are in
+             the trace) so serving never reads routing to the host;
+             zero per-layer DtoH in the hot path. Fill uploads should
+             use pinned staging (pageable 6.3MB copies run ~100x
+             slower than the no-cache path's 1.3us avg HtoD). Both
+             are the concrete next ~L on this lane; do partitioning
+             first.
         3. Only then re-enable the cache and re-measure.
 
       PHASE-2 INFRA LANDED 2026-10-18 (mistral.rs commit fa996df07,
@@ -1044,6 +1073,35 @@ parity queue) now outranks it on impact.
            theory: nsys/perf flamegraph of the probe decode loop to
            place the 68% serving overhead before any further code
            change on this lane.
+           PROFILE DONE 2026-10-23 (nsys, 30s windows, one 256-tok
+           generation each, hot=4000MB vs no-cache; reports discarded
+           after extraction, numbers preserved here):
+           - Per-op CUDA churn IS the serving overhead, both paths:
+             ~368-394K kernel launches, 1.25-1.4M event records,
+             2.2-2.4M stream-waits per window. Candle pays ~5 API
+             calls per tensor op.
+           - THE SPLIT'S DELTA: cuMemcpyDtoHAsync 23,355 calls / 4.20s
+             API time (avg 180us) hot vs 16,093 / 0.45s (avg 28us)
+             no-cache - a 9.4x TIME difference for only +7K calls.
+             The hot path's per-layer to_vec1 host reads of topk_ids/
+             topk_weights are PAGEABLE async copies, which the driver
+             executes synchronously via staging - each one waits for
+             the GPU queue to drain (mid-step = deep queue). ~2 drains
+             x 41 layers/step ~= 10ms/step of pipeline lockstep: the
+             measured split cost.
+           - CONFOUND: the hot window contained the FIRST request
+             (warmup), so its 10.6s GPU-side HtoD time (vs 0.10s
+             no-cache) is mostly the FILL WORKER's pageable 6.3MB/
+             expert uploads during cache warm, not steady-state.
+           - CONCLUSION: the fix is GPU-SIDE PARTITIONING - build
+             batch_idx/pair_w/slot mapping with GPU ops from topk_ids
+             (argsort machinery already exists; asort kernels are in
+             the trace) so serving never reads routing to the host;
+             zero per-layer DtoH in the hot path. Fill uploads should
+             use pinned staging (pageable 6.3MB copies run ~100x
+             slower than the no-cache path's 1.3us avg HtoD). Both
+             are the concrete next ~L on this lane; do partitioning
+             first.
         3. Only then re-enable the cache and re-measure.
 
       UPDATE 2026-10-23 (later same day): cold-path fast path implemented
