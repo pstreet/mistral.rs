@@ -829,6 +829,20 @@ parity queue) now outranks it on impact.
            E. Measurement + validation: benchmark before/after on the
               3090 split lane (target ~1.4x: 35->~49 tok/s); verify
               output coherence vs forward_gather reference.
+              MEASURED 2026-10-23 (post A+B+C, release probe :1244,
+              35B Q5_K_XL cuda:0 + expert_device=cpu, no hot cache):
+              essay 256tok x3 via /v1/chat/completions = 31.3-33.5
+              tok/s (thinking model, HTTP overhead included); metrics-
+              counter window on a reasoning-heavy count prompt = 18.7
+              tok/s. Baseline (TODO, different harness): 35.0 tok/s
+              release. NOT directly comparable (methodology differs:
+              thinking tokens, MTP acceptance variance, prompt shape).
+              Verdict: A+B+C are correctness-preserving micro-opts
+              (no-op removal, squeeze-vs-sum, ids-conversion skip);
+              gain is within measurement noise for these alone. A true
+              A/B needs a before-binary built from the pre-change tip
+              with the same harness. The ~1.4x target still rides on
+              subtask D (per-layer batching) + phase-2b prefetch.
         2. Phase-2b: router-predicted async prefetch (currently
            admission is count-based/reactive).
         3. Only then re-enable the cache and re-measure.
@@ -882,6 +896,20 @@ parity queue) now outranks it on impact.
            E. Measurement + validation: benchmark before/after on the
               3090 split lane (target ~1.4x: 35->~49 tok/s); verify
               output coherence vs forward_gather reference.
+              MEASURED 2026-10-23 (post A+B+C, release probe :1244,
+              35B Q5_K_XL cuda:0 + expert_device=cpu, no hot cache):
+              essay 256tok x3 via /v1/chat/completions = 31.3-33.5
+              tok/s (thinking model, HTTP overhead included); metrics-
+              counter window on a reasoning-heavy count prompt = 18.7
+              tok/s. Baseline (TODO, different harness): 35.0 tok/s
+              release. NOT directly comparable (methodology differs:
+              thinking tokens, MTP acceptance variance, prompt shape).
+              Verdict: A+B+C are correctness-preserving micro-opts
+              (no-op removal, squeeze-vs-sum, ids-conversion skip);
+              gain is within measurement noise for these alone. A true
+              A/B needs a before-binary built from the pre-change tip
+              with the same harness. The ~1.4x target still rides on
+              subtask D (per-layer batching) + phase-2b prefetch.
         2. Phase-2b: router-predicted async prefetch (currently
            admission is count-based/reactive).
         3. Only then re-enable the cache and re-measure.
