@@ -1065,9 +1065,6 @@ pub fn call_afq_qmm(
             (group_dims, grid_dims)
         }
     } else {
-        /*if b < 4 && d >= 1024 {
-            todo!("qvm_split_k");
-        } else */
         if b < qmv_limit {
             name.push_str("qvm");
             let bo = 64;
