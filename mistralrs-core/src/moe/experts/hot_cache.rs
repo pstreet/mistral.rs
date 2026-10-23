@@ -186,7 +186,7 @@ impl HotExpertCache {
                     }
                 }
             }
-            self.admit(&mut state, &topk_ids_host, tick);
+            self.admit(&mut state, &topk_ids_host);
             (slot_of_pair, anchor)
         };
         // No filled slot means nothing to serve from VRAM this step.
@@ -326,16 +326,39 @@ impl HotExpertCache {
         Ok(Some((&hot_partial + &scattered)?))
     }
 
-    fn admit(&self, state: &mut HotState, ids: &[u32], tick: u64) {
-        for &e in ids {
+    fn admit(&self, state: &mut HotState, ids: &[u32]) {
+        // One admission attempt per distinct expert per step: routing ids
+        // contain duplicates (several pairs often select the same expert)
+        // and the slot is only bound on fill completion, so a repeat id
+        // would double-admit and evict an extra victim.
+        let mut unique = ids.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        for &e in &unique {
             let e = e as usize;
-            if state.use_count[e] < HOT_ADMISSION_USES {
-                continue;
-            }
             if state.slot_of_expert[e].is_some() {
                 continue;
             }
-            // Free LRU slot.
+            // Prefetch: the router already selected this expert, so start
+            // the fill (dequant + H2D) now and overlap it with this step's
+            // compute. Empty slots are free; evicting a warm slot for a
+            // possibly one-off expert needs the stronger use-count gate.
+            if let Some(slot) =
+                (0..self.shared.slots).find(|&s| matches!(state.slot_kind[s], HotSlot::Empty))
+            {
+                state.slot_kind[slot] = HotSlot::Filling;
+                state.slot_expert[slot] = e as u32;
+                let _ = fill_sender().send(FillJob {
+                    shared: self.shared.clone(),
+                    slot,
+                    expert: e,
+                });
+                continue;
+            }
+            if state.use_count[e] < HOT_ADMISSION_USES {
+                continue;
+            }
+            // All slots busy: evict the LRU filled slot.
             if let Some(slot) = (0..self.shared.slots)
                 .min_by_key(|&s| {
                     if matches!(state.slot_kind[s], HotSlot::Filled) {
@@ -357,19 +380,6 @@ impl HotExpertCache {
                     slot,
                     expert: e,
                 });
-            } else {
-                // No filled slot to evict: try an empty slot.
-                if let Some(slot) =
-                    (0..self.shared.slots).find(|&s| matches!(state.slot_kind[s], HotSlot::Empty))
-                {
-                    state.slot_kind[slot] = HotSlot::Filling;
-                    state.slot_expert[slot] = e as u32;
-                    let _ = fill_sender().send(FillJob {
-                        shared: self.shared.clone(),
-                        slot,
-                        expert: e,
-                    });
-                }
             }
         }
     }
