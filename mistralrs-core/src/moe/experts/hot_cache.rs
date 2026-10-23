@@ -22,12 +22,6 @@ enum HotSlot {
     Filled,
 }
 
-#[derive(Clone)]
-struct SlotWeights {
-    gate_up: Arc<Tensor>,
-    down: Arc<Tensor>,
-}
-
 struct HotState {
     slot_kind: Vec<HotSlot>,
     slot_expert: Vec<u32>,
@@ -35,7 +29,11 @@ struct HotState {
     last_used: Vec<u64>,
     use_count: Vec<u32>,
     tick: u64,
-    slot_weights: Vec<Option<SlotWeights>>,
+    // The only expert-weight storage: slot s's rows live in slice [s..s+1].
+    // Fills write in place (Tensor::slice_set) so serving never re-copies
+    // weights; the hot matmul runs over ALL slots each step.
+    stacked_gate_up: Tensor,
+    stacked_down: Tensor,
 }
 
 struct HotShared {
@@ -98,11 +96,12 @@ fn run_fill(job: &FillJob) -> Result<()> {
     // Small per-expert tensors only; no whole-stack splice.
     let gate_up = Tensor::cat(&[gate, up], 0)?.unsqueeze(0)?.contiguous()?;
     let down = down.unsqueeze(0)?.contiguous()?;
+    // Write the slot slice in place, then publish. The write lands on the
+    // device stream, so a concurrent step either sees the previous slice
+    // (this slot is Filling: its rows carry zero weight) or the new one.
     let mut state = shared.state.lock().unwrap();
-    state.slot_weights[slot] = Some(SlotWeights {
-        gate_up: Arc::new(gate_up),
-        down: Arc::new(down),
-    });
+    state.stacked_gate_up.slice_set(&gate_up, 0, slot)?;
+    state.stacked_down.slice_set(&down, 0, slot)?;
     state.slot_kind[slot] = HotSlot::Filled;
     state.slot_expert[slot] = expert as u32;
     state.slot_of_expert[expert] = Some(slot as u32);
@@ -135,6 +134,8 @@ impl HotExpertCache {
         if slots == 0 || !device.is_cuda() {
             candle_core::bail!("expert hot cache requires cuda and at least one slot");
         }
+        let stacked_gate_up = Tensor::zeros((slots, 2 * inter, hidden), DType::BF16, device)?;
+        let stacked_down = Tensor::zeros((slots, hidden, inter), DType::BF16, device)?;
         let shared = Arc::new(HotShared {
             state: Mutex::new(HotState {
                 slot_kind: vec![HotSlot::Empty; slots],
@@ -143,7 +144,8 @@ impl HotExpertCache {
                 last_used: vec![0; slots],
                 use_count: vec![0; num_experts],
                 tick: 0,
-                slot_weights: vec![None; slots],
+                stacked_gate_up,
+                stacked_down,
             }),
             sources,
             device: device.clone(),
@@ -169,7 +171,7 @@ impl HotExpertCache {
         let weights_host: Vec<f32> = f.topk_weights.flatten_all()?.to_vec1::<f32>()?;
         let n_pairs = topk_ids_host.len();
 
-        let (slot_of_pair, anchor) = {
+        let (slot_of_pair, anchor, stacked_gate_up, stacked_down) = {
             let mut state = shared.state.lock().unwrap();
             state.tick += 1;
             let tick = state.tick;
@@ -187,7 +189,11 @@ impl HotExpertCache {
                 }
             }
             self.admit(&mut state, &topk_ids_host);
-            (slot_of_pair, anchor)
+            // Arc bumps: the matmuls below run outside the lock. The fill
+            // worker writes slots in place on the device stream; a slot being
+            // written is Filling, so its rows carry zero weight this step.
+            let (gu, dn) = (state.stacked_gate_up.clone(), state.stacked_down.clone());
+            (slot_of_pair, anchor, gu, dn)
         };
         // No filled slot means nothing to serve from VRAM this step.
         if anchor.is_none() {
@@ -207,123 +213,100 @@ impl HotExpertCache {
             .filter(|s| !slot_pairs[*s].is_empty())
             .collect();
 
-        let mut hot_partial = Tensor::zeros((tokens, hidden), f.xs.dtype(), &dev_t)?;
-        if !active.is_empty() {
-            let s = active.len();
-            let max_m = active
-                .iter()
-                .map(|sl| slot_pairs[*sl].len())
-                .max()
-                .unwrap_or(0);
-            let rows = s * max_m;
-            let mut batch_idx: Vec<u32> = Vec::with_capacity(rows);
-            let mut pair_w: Vec<f32> = Vec::with_capacity(rows);
-            for sl in &active {
-                let pairs = &slot_pairs[*sl];
-                for &pair in pairs {
-                    batch_idx.push((pair / topk) as u32);
-                    pair_w.push(weights_host[pair]);
-                }
-                for _ in pairs.len()..max_m {
-                    // Pad slots map to token 0 with zero weight (no contribution).
-                    batch_idx.push(0);
-                    pair_w.push(0.0);
-                }
+        // Hot rows: one bmm over ALL slots against the persistent stacked
+        // weights - no per-step weight copies. Inactive/Filling slots and
+        // row pads carry zero weight, so their output rows never
+        // contribute to the scatter.
+        let max_m = active
+            .iter()
+            .map(|sl| slot_pairs[*sl].len())
+            .max()
+            .unwrap_or(0);
+        let rows = shared.slots * max_m;
+        let mut batch_idx: Vec<u32> = Vec::with_capacity(rows);
+        let mut pair_w: Vec<f32> = Vec::with_capacity(rows);
+        for sl in 0..shared.slots {
+            let pairs = &slot_pairs[sl];
+            for &pair in pairs {
+                batch_idx.push((pair / topk) as u32);
+                pair_w.push(weights_host[pair]);
             }
-            // Pull active slot weights under the mutex; cat outside the lock.
-            let (gu_list, dn_list): (Vec<Arc<Tensor>>, Vec<Arc<Tensor>>) = {
-                let state = shared.state.lock().unwrap();
-                let mut gus = Vec::with_capacity(s);
-                let mut dns = Vec::with_capacity(s);
-                for sl in &active {
-                    if let Some(w) = &state.slot_weights[*sl] {
-                        gus.push(w.gate_up.clone());
-                        dns.push(w.down.clone());
-                    }
-                }
-                (gus, dns)
-            };
-            if gu_list.len() == active.len() {
-                let idx_t = Tensor::from_vec(batch_idx, rows, &dev)?;
-                let xs_rows = f
-                    .xs_flat
-                    .to_dtype(DType::BF16)?
-                    .index_select(&idx_t, 0)?
-                    .reshape((s, max_m, hidden))?;
-                let gu_cat =
-                    Tensor::cat(&gu_list.iter().map(|a| a.as_ref()).collect::<Vec<_>>(), 0)?;
-                let dn_cat =
-                    Tensor::cat(&dn_list.iter().map(|a| a.as_ref()).collect::<Vec<_>>(), 0)?;
-                let gate_up_t = gu_cat.transpose(1, 2)?; // [s, h, 2i] view
-                let down_t = dn_cat.transpose(1, 2)?; // [s, inter, h] view
-                let gu_out = xs_rows.matmul(&gate_up_t)?; // [s, max_m, 2i]
-                let gate = gu_out.narrow(2, 0, inter)?;
-                let up = gu_out.narrow(2, inter, inter)?;
-                let down_in = (up * gate.apply(&f.config.act)?)?; // [s, max_m, inter]
-                let hot_out = down_in.matmul(&down_t)?; // [s, max_m, hidden]
-                let w_t = Tensor::from_vec(pair_w, (rows, 1), &dev_t)?.to_dtype(f.xs.dtype())?;
-                let flat_out = hot_out.reshape((rows, hidden))?;
-                let weighted = flat_out.broadcast_mul(&w_t)?;
-                hot_partial = hot_partial.index_add(&idx_t, &weighted, 0)?;
+            for _ in pairs.len()..max_m {
+                batch_idx.push(0);
+                pair_w.push(0.0);
             }
         }
-        if cold_pairs.is_empty() {
-            return Ok(Some(hot_partial));
-        }
+        let idx_t = Tensor::from_vec(batch_idx, rows, &dev)?;
+        let xs_rows = f
+            .xs_flat
+            .to_dtype(DType::BF16)?
+            .index_select(&idx_t, 0)?
+            .reshape((shared.slots, max_m, hidden))?;
+        let gate_up_t = stacked_gate_up.transpose(1, 2)?; // [slots, h, 2i] view
+        let down_t = stacked_down.transpose(1, 2)?; // [slots, inter, h] view
+        let gu_out = xs_rows.matmul(&gate_up_t)?; // [slots, max_m, 2i]
+        let gate = gu_out.narrow(2, 0, inter)?;
+        let up = gu_out.narrow(2, inter, inter)?;
+        let down_in = (up * gate.apply(&f.config.act)?)?; // [slots, max_m, inter]
+        let hot_out = down_in.matmul(&down_t)?; // [slots, max_m, hidden]
+        let w_t = Tensor::from_vec(pair_w, (rows, 1), &dev_t)?.to_dtype(f.xs.dtype())?;
+        let hot_rows = hot_out.reshape((rows, hidden))?.broadcast_mul(&w_t)?;
+
         // Cold path: CPU gather for the pairs whose experts are not cached.
-        let n_cold = cold_pairs.len();
-        let cold_tokens: Vec<u32> = cold_pairs.iter().map(|&p| p / topk as u32).collect();
-        let cold_ids: Vec<u32> = cold_pairs
-            .iter()
-            .map(|&p| topk_ids_host[p as usize])
-            .collect();
-        let cold_weights: Vec<f32> = cold_pairs
-            .iter()
-            .map(|&p| weights_host[p as usize])
-            .collect();
-        let cold_ids = Tensor::from_vec(cold_ids, (n_cold, 1), &Device::Cpu)?;
-        let cold_weights = Tensor::from_vec(cold_weights, (n_cold, 1), &Device::Cpu)?;
-        let token_idx_cpu = Tensor::from_vec(cold_tokens.clone(), n_cold, &Device::Cpu)?;
-        let xs_cpu = f.xs.to_device(&Device::Cpu)?;
-        let cold_xs = xs_cpu
-            .reshape((tokens, hidden))?
-            .index_select(&token_idx_cpu, 0)?
-            .reshape((n_cold, 1, hidden))?;
-        let cold_flat = cold_xs.reshape((n_cold, hidden))?;
-        let cold_forward = MoEForward {
-            xs: &cold_xs,
-            xs_flat: &cold_flat,
-            topk_weights: &cold_weights,
-            topk_ids: &cold_ids,
-            original_dtype: f.xs.dtype(),
-            shape: MoEForwardShape::new(n_cold, 1, hidden),
-            lora: None,
+        let (all_idx, all_rows) = if cold_pairs.is_empty() {
+            (idx_t, hot_rows)
+        } else {
+            let n_cold = cold_pairs.len();
+            let cold_tokens: Vec<u32> = cold_pairs.iter().map(|&p| p / topk as u32).collect();
+            let cold_ids: Vec<u32> = cold_pairs
+                .iter()
+                .map(|&p| topk_ids_host[p as usize])
+                .collect();
+            let cold_weights: Vec<f32> = cold_pairs
+                .iter()
+                .map(|&p| weights_host[p as usize])
+                .collect();
+            let cold_ids = Tensor::from_vec(cold_ids, (n_cold, 1), &Device::Cpu)?;
+            let cold_weights = Tensor::from_vec(cold_weights, (n_cold, 1), &Device::Cpu)?;
+            let token_idx_cpu = Tensor::from_vec(cold_tokens, n_cold, &Device::Cpu)?;
+            let xs_cpu = f.xs.to_device(&Device::Cpu)?;
+            let cold_xs = xs_cpu
+                .reshape((tokens, hidden))?
+                .index_select(&token_idx_cpu, 0)?
+                .reshape((n_cold, 1, hidden))?;
+            let cold_flat = cold_xs.reshape((n_cold, hidden))?;
+            let cold_forward = MoEForward {
+                xs: &cold_xs,
+                xs_flat: &cold_flat,
+                topk_weights: &cold_weights,
+                topk_ids: &cold_ids,
+                original_dtype: f.xs.dtype(),
+                shape: MoEForwardShape::new(n_cold, 1, hidden),
+                lora: None,
+            };
+            let cold_forward_config = MoEForwardConfig {
+                num_experts: f.config.num_experts,
+                num_experts_per_tok: 1,
+                act: f.config.act,
+            };
+            let cold_out = match f.cold.forward_indexed(&cold_forward, cold_forward_config)? {
+                Some(down) => {
+                    let input_dtype = f.xs.dtype();
+                    let down = down.squeeze(1)?.to_dtype(DType::F32)?; // [n, hidden]
+                    let w = cold_weights.to_dtype(DType::F32)?; // [n, 1]
+                    down.broadcast_mul(&w)?.to_dtype(input_dtype)?
+                }
+                None => f.cold.forward_gather(&cold_forward, cold_forward_config)?,
+            };
+            let cold_idx_dev = token_idx_cpu.to_device(&dev_t)?;
+            let cold_rows_dev = cold_out.to_device(&dev_t)?;
+            let all_idx = Tensor::cat(&[&idx_t, &cold_idx_dev], 0)?;
+            let all_rows = Tensor::cat(&[&hot_rows, &cold_rows_dev], 0)?;
+            (all_idx, all_rows)
         };
-        // Fast path: the shared direct indexed pass (gate+up fused, down via
-        // indexed_gemv) skips forward_gather's per-call tensor-op overhead.
-        // Weighting runs in F32 to match forward_gather's precision; the
-        // expert axis is size 1 here, so no sum is needed.
-        let cold_forward_config = MoEForwardConfig {
-            num_experts: f.config.num_experts,
-            num_experts_per_tok: 1,
-            act: f.config.act,
-        };
-        let cold_out = match f.cold.forward_indexed(&cold_forward, cold_forward_config)? {
-            Some(down) => {
-                let input_dtype = f.xs.dtype();
-                let down = down.squeeze(1)?.to_dtype(DType::F32)?; // [n, hidden]
-                let w = cold_weights.to_dtype(DType::F32)?; // [n, 1]
-                down.broadcast_mul(&w)?.to_dtype(input_dtype)?
-            }
-            None => f.cold.forward_gather(&cold_forward, cold_forward_config)?,
-        };
-        let token_idx_dev = token_idx_cpu.to_device(&dev_t)?;
-        let scattered = Tensor::zeros((tokens, hidden), f.xs.dtype(), &dev_t)?.index_add(
-            &token_idx_dev,
-            &cold_out.to_device(&dev_t)?,
-            0,
-        )?;
-        Ok(Some((&hot_partial + &scattered)?))
+        let ys = Tensor::zeros((tokens, hidden), f.xs.dtype(), &dev_t)?
+            .index_add(&all_idx, &all_rows, 0)?;
+        Ok(Some(ys))
     }
 
     fn admit(&self, state: &mut HotState, ids: &[u32]) {

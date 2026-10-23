@@ -891,6 +891,26 @@ parity queue) now outranks it on impact.
            the caching allocator retains pool blocks in-process, so an
            OOM'd lane holds its VRAM (serving nothing) until explicit
            /v1/models/unload (trims per 18d04d953) or process exit.
+           STACKED REWRITE LANDED + MEASURED 2026-10-23 (flat again):
+           slot storage is now ONE persistent stacked tensor per cache
+           ([slots, 2i, h] gate_up + [slots, h, i] down, BF16); fills
+           write in place via Tensor::slice_set (no per-step weight
+           cat, no double VRAM, fills never re-copy the stack); the
+           hot bmm runs over ALL slots (inactive/Filling rows carry
+           zero weight); hot+cold fold into ONE index_add; the second
+           per-step state lock is gone. Verified coherent output, 0
+           fill failures, moe tests 25/0 dual, 4 shapes clean. YET
+           4000MB measures 18.2-20.3 tok/s (warmup 19.1) - flat vs
+           the cat design (19.9-20.2). TWO theories now falsified
+           (wrapper overhead, per-step weight cat). PRIME SUSPECT for
+           the remaining ~0.45ms/layer: the hot path's 2 BLOCKING
+           D2H syncs per layer (topk_ids + topk_weights to_vec1,
+           ~82 pipeline-draining syncs/step) which the no-cache path
+           does not have (it moves ids to CPU via async to_device and
+           reads CPU storage). NEXT STEP IS A PROFILE, not more
+           theory: nsys/perf flamegraph of the probe decode loop to
+           place the 68% serving overhead before any further code
+           change on this lane.
         3. Only then re-enable the cache and re-measure.
 
       PHASE-2 INFRA LANDED 2026-10-18 (mistral.rs commit fa996df07,
@@ -1004,6 +1024,26 @@ parity queue) now outranks it on impact.
            the caching allocator retains pool blocks in-process, so an
            OOM'd lane holds its VRAM (serving nothing) until explicit
            /v1/models/unload (trims per 18d04d953) or process exit.
+           STACKED REWRITE LANDED + MEASURED 2026-10-23 (flat again):
+           slot storage is now ONE persistent stacked tensor per cache
+           ([slots, 2i, h] gate_up + [slots, h, i] down, BF16); fills
+           write in place via Tensor::slice_set (no per-step weight
+           cat, no double VRAM, fills never re-copy the stack); the
+           hot bmm runs over ALL slots (inactive/Filling rows carry
+           zero weight); hot+cold fold into ONE index_add; the second
+           per-step state lock is gone. Verified coherent output, 0
+           fill failures, moe tests 25/0 dual, 4 shapes clean. YET
+           4000MB measures 18.2-20.3 tok/s (warmup 19.1) - flat vs
+           the cat design (19.9-20.2). TWO theories now falsified
+           (wrapper overhead, per-step weight cat). PRIME SUSPECT for
+           the remaining ~0.45ms/layer: the hot path's 2 BLOCKING
+           D2H syncs per layer (topk_ids + topk_weights to_vec1,
+           ~82 pipeline-draining syncs/step) which the no-cache path
+           does not have (it moves ids to CPU via async to_device and
+           reads CPU storage). NEXT STEP IS A PROFILE, not more
+           theory: nsys/perf flamegraph of the probe decode loop to
+           place the 68% serving overhead before any further code
+           change on this lane.
         3. Only then re-enable the cache and re-measure.
 
       UPDATE 2026-10-23 (later same day): cold-path fast path implemented
