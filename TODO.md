@@ -846,6 +846,15 @@ parity queue) now outranks it on impact.
            admission is count-based/reactive).
         3. Only then re-enable the cache and re-measure.
 
+      UPDATE 2026-10-23 (later same day): cold-path fast path implemented
+      (mistral.rs a9cc884a1) — forward_cold_indexed bypasses
+      forward_gather's per-call tensor-op overhead by running gate+up+down
+      directly through candle's indexed_gemv kernels (fused gate+up lhs
+      quantization, activation, weighted sum), with fallback to
+      forward_gather on unsupported layouts. Verified end-to-end on a 3090
+      probe (expert_hot_cache_mb=4000): requests complete with no errors,
+      no OOM, no dtype mismatch. Lane remains parked (mechanism proven,
+      perf optimization pending phase-2b prefetch + cold-path batching).
       PARKED 2026-10-23 (user decision): the expert-split MoE lane is
       usable as-is (~35 tok/s on the 3090, ~4.6GB VRAM, ~60GB RSS)
       and provides optionality/flexibility for running MoE models on
