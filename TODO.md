@@ -965,6 +965,24 @@ parity queue) now outranks it on impact.
              That is a candle-core/cudarc task, fleet-wide in scope,
              and the highest-value remaining lever for BOTH lanes (the
              no-cache 68% overhead lives in the same machinery).
+           POOLED-EVENT LANDED 2026-10-23 (candle 487ff1df, both cudarc
+             forks): same-stream uses skip the launch/DevicePtr tracking
+             waits+records (capture keeps byte-identical graph
+             structure; cross-stream users and the load-bearing
+             SyncOnDrop host-read sync untouched); per-slice sync events
+             recycle through a context freelist (cap 1024;
+             capture-recorded events never pooled; never-recorded events
+             skip the drop wait). MEASURED (same harness): no-cache
+             31.7 -> 32.0-34.5 tok/s (median ~33, +3-5% - most of the
+             removed API time overlapped GPU execution, only the
+             non-overlapped part converts to wall-clock); hot-cache
+             lane flat ~20 (its wall is the per-layer DtoH drain
+             reads). moe 57/0, cuda_graph 31/0 dual. VERDICT: keep
+             (strict improvement, millions fewer driver calls); the
+             68% overhead is NOT primarily the event API time - it is
+             GPU-side op granularity + launch/alloc costs that overlap
+             execution. Lane status: no-cache ~33 = the 3090 serving
+             mode; hot cache stays off by default (net-negative).
         3. Only then re-enable the cache and re-measure.
 
       PHASE-2 INFRA LANDED 2026-10-18 (mistral.rs commit fa996df07,
@@ -1152,6 +1170,24 @@ parity queue) now outranks it on impact.
              That is a candle-core/cudarc task, fleet-wide in scope,
              and the highest-value remaining lever for BOTH lanes (the
              no-cache 68% overhead lives in the same machinery).
+           POOLED-EVENT LANDED 2026-10-23 (candle 487ff1df, both cudarc
+             forks): same-stream uses skip the launch/DevicePtr tracking
+             waits+records (capture keeps byte-identical graph
+             structure; cross-stream users and the load-bearing
+             SyncOnDrop host-read sync untouched); per-slice sync events
+             recycle through a context freelist (cap 1024;
+             capture-recorded events never pooled; never-recorded events
+             skip the drop wait). MEASURED (same harness): no-cache
+             31.7 -> 32.0-34.5 tok/s (median ~33, +3-5% - most of the
+             removed API time overlapped GPU execution, only the
+             non-overlapped part converts to wall-clock); hot-cache
+             lane flat ~20 (its wall is the per-layer DtoH drain
+             reads). moe 57/0, cuda_graph 31/0 dual. VERDICT: keep
+             (strict improvement, millions fewer driver calls); the
+             68% overhead is NOT primarily the event API time - it is
+             GPU-side op granularity + launch/alloc costs that overlap
+             execution. Lane status: no-cache ~33 = the 3090 serving
+             mode; hot cache stays off by default (net-negative).
         3. Only then re-enable the cache and re-measure.
 
       UPDATE 2026-10-23 (later same day): cold-path fast path implemented
