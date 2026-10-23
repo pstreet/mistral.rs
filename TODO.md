@@ -846,6 +846,28 @@ parity queue) now outranks it on impact.
            admission is count-based/reactive).
         3. Only then re-enable the cache and re-measure.
 
+      PARKED 2026-10-23 (user decision): the expert-split MoE lane is
+      usable as-is (~35 tok/s on the 3090, ~4.6GB VRAM, ~60GB RSS)
+      and provides optionality/flexibility for running MoE models on
+      the CUDA path, but it loses to the hip iGPU lane (63.6 tok/s)
+      and the remaining lever (cold-path per-call overhead, ~68% of
+      step time) is a substantial mistralrs-core refactor of
+      MoEExperts::forward_gather for ~1.4x gain (~35->~49 tok/s).
+      The mechanism is proven end-to-end (MTP + paged attn + indexed
+      experts on x86); the bottleneck is mistralrs-core orchestration:
+      per-tensor-per-layer CPU<->GPU crossings (~94 calls x 3
+      transfers), per-call Tensor alloc/bookkeeping, scheduler syncs.
+      forward_gather makes 3 gather_forward calls per layer (gate, up,
+      down); gate+up already fused via indexed_gemv_fused_gate_up;
+      down has a different input so it cannot be fused into the same
+      kernel. The real win is amortizing per-call bookkeeping across
+      all experts in a layer (single indexed_gemv-style call or
+      batching transfers/syncs in mistralrs-core). Revisit when there
+      is bandwidth; the path to beating hip is phase-2 hot-expert VRAM
+      cache with router-predicted prefetch. Current config: 35B MoE
+      entries use cuda:0 + expert_device=cpu (expert_hot_cache_mb unset
+      = disabled by default).
+
       The hip iGPU lane (48-51 tok/s) remains the production 35B
       
   UPDATE 2026-10-17 (CPU PA + single-vendor CUDA MTP):
