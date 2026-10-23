@@ -1,5 +1,25 @@
 # COMPLETED: candle + mistral.rs fork work
 
+## Oct 23 (fleet config simplification, /v1/models default entry, fp8 roundtrip fix, housekeeping)
+- Fleet config simplified per model cards + user tuning (mistral.rs a3d7ab3e9):
+  hip:0 default device, MoE 35B on cuda:0 with expert offload to CPU, MTP on
+  by default (n=2) with per-model pins 27B->3 and 4B->6 (card recs), draft
+  sampling auto, draft lm_head ISQ off, no ISQ anywhere, no cpu preferred
+  device, no default_model_id, no cuda/cpu alias entries, qwen3-coder-next
+  retired, models.ini deleted, stale comments cleaned.
+- /v1/models no longer synthesizes a 'default' pseudo-entry (mistral.rs
+  99a5775bf, b544bdc4c): listing shows only real models by alias/id;
+  'model="default"' routing preserved (first model / configured default).
+- fp8 roundtrip test fixed: gated on feature=rocm (a52bfcae5); default quant
+  suite now 303/0 (was 303/1); verified passing on rocm and dual builds.
+- Housekeeping: candle book rocm README mangled sentence + nonexistent knob
+  ref fixed (a4651d9e); cudarc-hip cuMemPoolTrimTo marked as downstream-
+  facing FFI (b6016fbd); feature-table indentation normalized in 3
+  Cargo.toml files (d8024a20); dead commented-out qvm_split_k metal todo
+  removed (a6075cafd). All commits pushed.
+- Prod swapped to new build + config (Oct 23 05:25 UTC); verified
+  /v1/models shows 11 real aliases, no 'default' entry.
+
 Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
 
 ## Oct 18 (phase-2 hot-expert cache: infra improved, still net-negative; task #2 gather fusion landed)

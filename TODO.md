@@ -20,6 +20,16 @@ twin parameterization + hip gates; on-device eviction; kernel test-env
 failures (19 gated, q4k fixed, 2 FA3 gated); arena estimator tests; 27B/4B
 live verifications; docs sync.
 
+Oct 23 session: fleet config simplification + user tuning (a3d7ab3e9:
+hip:0 default, MoE 35B on cuda:0 with expert offload, MTP on n=2 with
+per-model pins 27B->3/4B->6, no ISQ, no cpu device, no default_model_id,
+no cuda/cpu aliases, qwen3-coder-next retired, models.ini deleted); /v1/models
+no longer synthesizes a 'default' entry (99a5775bf, b544bdc4c); fp8
+roundtrip test fixed and gated on rocm (a52bfcae5, 303/0); candle book
+rocm README + cudarc-hip FFI marking + Cargo.toml indentation + dead
+metal todo cleanup (a4651d9e, b6016fbd, d8024a20, a6075cafd). Prod
+swapped to new build + config (Oct 23 05:25 UTC), all commits pushed.
+
 # ==== OPERATING RULES (2026-10-14, user directive) ====
 # NEVER modify other tools or applications to bypass an issue in this
 # stack. The openwebui webui.db capability patch (builtin_tools=false)
@@ -1110,8 +1120,9 @@ parity queue) now outranks it on impact.
       (5) embedding.rs fmt nit (from the feature commit) fixed in
       isolation; the 5 known-unformatted pre-existing files left
       alone. Bars after: all 4 shapes compile ALL targets +
-      examples; default quant 303/1 (the 1 = the documented fp8
-      roundtrip); candle quantized_tests 55/0, candle-core
+      examples; default quant 303/0 (fp8 roundtrip fixed 2026-10-23:
+      gated on feature=rocm, the only shape where scalar FP8 kernels
+      are built); candle quantized_tests 55/0, candle-core
       --all-targets 0 errors.
 - [x] ~M Dual NVIDIA-role device sampling (LANDED 2026-10-16,
       builds 15-18): device_sampling_supported dual arm, categorical
@@ -1623,9 +1634,9 @@ parity queue) now outranks it on impact.
       device_map/debug/memory_usage/normal/multimodal/execution/
       sampling/ops Hip arms or role bindings), and mistralrs-cli
       green in all three shapes (dual, rocm, default).
-      VERIFICATION: full regression bar green - quant 316/317
-      (1 = documented pre-existing fp8 roundtrip, clean-tree
-      verified), fast_mmq 5/5, gdn 55/55, cuda_graph 31+8,
+      VERIFICATION: full regression bar green - quant 317/317
+      (fp8 roundtrip fixed 2026-10-23, gated on feature=rocm),
+      fast_mmq 5/5, gdn 55/55, cuda_graph 31+8,
       paged-attn 8/8, mmq bench, candle default/rocm/dual checks
       zero-error with dual tests 5/5, clippy parity on every
       changed crate (core 3=3, quant 5=5, paged-attn 2<=3).
