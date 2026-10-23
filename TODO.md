@@ -940,6 +940,31 @@ parity queue) now outranks it on impact.
              slower than the no-cache path's 1.3us avg HtoD). Both
              are the concrete next ~L on this lane; do partitioning
              first.
+           STAGE 1 MEASURED FLAT 2026-10-23: routing reads switched to
+             the cheap to_device(Cpu) mechanism (the no-cache lane's
+             pattern) + admission policy (use counts, admit, fills)
+             moved OFF the serving thread to a dedicated cache worker
+             fed per-step ids via channel - 19.4-20.0 tok/s, flat.
+             Read mechanism and policy placement are NOT the wall.
+           EVENT-TRACKING EXPERIMENT (REVERTED, 2026-10-23): root-caused
+             the per-op churn to cudarc's CudaSlice use-tracking (event
+             create/record/wait/destroy per use; candle's single
+             dedicated stream is created via new_stream(), which flips
+             num_streams>0 = "multi-stream mode" and activates the
+             tracking). Tried disable_event_tracking() at device init
+             (candle 70de65bc, reverted same day): hot lane CRASHED to
+             10.8-11.4 tok/s (output stayed coherent; a slow fallback
+             path, not garbage). LESSON: the event machinery is
+             load-bearing for more than cross-stream order - it is
+             also cudarc's HOST-READ completion sync (the DtoH path
+             records + waits an event before the host touches the
+             buffer). Blanket disable is WRONG. The finer fix (future
+             candle item): keep read-sync events but stop the per-op
+             create/destroy churn (reuse pooled events), i.e. attack
+             the 816K creates / 2.4M waits volume, not the sync itself.
+             That is a candle-core/cudarc task, fleet-wide in scope,
+             and the highest-value remaining lever for BOTH lanes (the
+             no-cache 68% overhead lives in the same machinery).
         3. Only then re-enable the cache and re-measure.
 
       PHASE-2 INFRA LANDED 2026-10-18 (mistral.rs commit fa996df07,
@@ -1102,6 +1127,31 @@ parity queue) now outranks it on impact.
              slower than the no-cache path's 1.3us avg HtoD). Both
              are the concrete next ~L on this lane; do partitioning
              first.
+           STAGE 1 MEASURED FLAT 2026-10-23: routing reads switched to
+             the cheap to_device(Cpu) mechanism (the no-cache lane's
+             pattern) + admission policy (use counts, admit, fills)
+             moved OFF the serving thread to a dedicated cache worker
+             fed per-step ids via channel - 19.4-20.0 tok/s, flat.
+             Read mechanism and policy placement are NOT the wall.
+           EVENT-TRACKING EXPERIMENT (REVERTED, 2026-10-23): root-caused
+             the per-op churn to cudarc's CudaSlice use-tracking (event
+             create/record/wait/destroy per use; candle's single
+             dedicated stream is created via new_stream(), which flips
+             num_streams>0 = "multi-stream mode" and activates the
+             tracking). Tried disable_event_tracking() at device init
+             (candle 70de65bc, reverted same day): hot lane CRASHED to
+             10.8-11.4 tok/s (output stayed coherent; a slow fallback
+             path, not garbage). LESSON: the event machinery is
+             load-bearing for more than cross-stream order - it is
+             also cudarc's HOST-READ completion sync (the DtoH path
+             records + waits an event before the host touches the
+             buffer). Blanket disable is WRONG. The finer fix (future
+             candle item): keep read-sync events but stop the per-op
+             create/destroy churn (reuse pooled events), i.e. attack
+             the 816K creates / 2.4M waits volume, not the sync itself.
+             That is a candle-core/cudarc task, fleet-wide in scope,
+             and the highest-value remaining lever for BOTH lanes (the
+             no-cache 68% overhead lives in the same machinery).
         3. Only then re-enable the cache and re-measure.
 
       UPDATE 2026-10-23 (later same day): cold-path fast path implemented

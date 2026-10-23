@@ -52,23 +52,49 @@ struct FillJob {
     expert: usize,
 }
 
-// Single worker for every layer cache: fills are ~ms each and must never stall a decode step.
-fn fill_sender() -> &'static mpsc::Sender<FillJob> {
-    static SENDER: OnceLock<mpsc::Sender<FillJob>> = OnceLock::new();
+// The cache worker owns everything that must never touch the serving
+// thread: admission policy (use counts) from deferred per-step routing
+// snapshots, and slot fills (dequant + upload). Serving sends each
+// step's CPU-resident ids here; the worker reads them at its own pace.
+enum CacheMsg {
+    Route { shared: Arc<HotShared>, ids: Tensor },
+    Fill(FillJob),
+}
+
+fn cache_sender() -> &'static mpsc::Sender<CacheMsg> {
+    static SENDER: OnceLock<mpsc::Sender<CacheMsg>> = OnceLock::new();
     SENDER.get_or_init(|| {
-        let (tx, rx) = mpsc::channel::<FillJob>();
+        let (tx, rx) = mpsc::channel::<CacheMsg>();
         std::thread::spawn(move || {
-            for job in rx {
-                if let Err(err) = run_fill(&job) {
-                    tracing::error!("expert hot cache fill failed: {err}");
-                    let mut state = job.shared.state.lock().unwrap();
-                    let slot = job.slot;
-                    let expert = state.slot_expert[slot];
-                    if expert != u32::MAX {
-                        state.slot_of_expert[expert as usize] = None;
+            for msg in rx {
+                match msg {
+                    CacheMsg::Route { shared, ids } => {
+                        let Ok(ids_host) = ids.to_vec1::<u32>() else {
+                            continue;
+                        };
+                        let mut state = shared.state.lock().unwrap();
+                        for &e in &ids_host {
+                            state.use_count[e as usize] =
+                                state.use_count[e as usize].saturating_add(1);
+                        }
+                        let cache = HotExpertCache {
+                            shared: shared.clone(),
+                        };
+                        cache.admit(&mut state, &ids_host);
                     }
-                    state.slot_kind[slot] = HotSlot::Empty;
-                    state.slot_expert[slot] = u32::MAX;
+                    CacheMsg::Fill(job) => {
+                        if let Err(err) = run_fill(&job) {
+                            tracing::error!("expert hot cache fill failed: {err}");
+                            let mut state = job.shared.state.lock().unwrap();
+                            let slot = job.slot;
+                            let expert = state.slot_expert[slot];
+                            if expert != u32::MAX {
+                                state.slot_of_expert[expert as usize] = None;
+                            }
+                            state.slot_kind[slot] = HotSlot::Empty;
+                            state.slot_expert[slot] = u32::MAX;
+                        }
+                    }
                 }
             }
         });
@@ -163,13 +189,24 @@ impl HotExpertCache {
         let inter = shared.inter;
         let dev = f.xs.device().clone();
         let dev_t = dev.clone();
-        let topk_ids_host: Vec<u32> = f
+        // Routing reads go through the cheap device-to-host copy path (the
+        // same mechanism the no-cache lane uses): enqueue both copies so
+        // the second overlaps the first host read. The admission policy no
+        // longer runs on the serving thread - this step's ids ship to the
+        // cache worker, which owns use counts, admission, and fills.
+        let ids_cpu = f
             .topk_ids
-            .to_dtype(DType::U32)?
             .flatten_all()?
-            .to_vec1::<u32>()?;
-        let weights_host: Vec<f32> = f.topk_weights.flatten_all()?.to_vec1::<f32>()?;
+            .to_dtype(DType::U32)?
+            .to_device(&Device::Cpu)?;
+        let weights_cpu = f.topk_weights.flatten_all()?.to_device(&Device::Cpu)?;
+        let topk_ids_host: Vec<u32> = ids_cpu.to_vec1()?;
+        let weights_host: Vec<f32> = weights_cpu.to_vec1()?;
         let n_pairs = topk_ids_host.len();
+        let _ = cache_sender().send(CacheMsg::Route {
+            shared: shared.clone(),
+            ids: ids_cpu,
+        });
 
         let (slot_of_pair, anchor, stacked_gate_up, stacked_down) = {
             let mut state = shared.state.lock().unwrap();
@@ -179,7 +216,6 @@ impl HotExpertCache {
             let mut anchor = None;
             for (pair, &e) in topk_ids_host.iter().enumerate() {
                 let e = e as usize;
-                state.use_count[e] = state.use_count[e].saturating_add(1);
                 if let Some(slot) = state.slot_of_expert[e] {
                     slot_of_pair[pair] = slot;
                     state.last_used[slot as usize] = tick;
@@ -188,7 +224,6 @@ impl HotExpertCache {
                     }
                 }
             }
-            self.admit(&mut state, &topk_ids_host);
             // Arc bumps: the matmuls below run outside the lock. The fill
             // worker writes slots in place on the device stream; a slot being
             // written is Filling, so its rows carry zero weight this step.
@@ -331,11 +366,11 @@ impl HotExpertCache {
             {
                 state.slot_kind[slot] = HotSlot::Filling;
                 state.slot_expert[slot] = e as u32;
-                let _ = fill_sender().send(FillJob {
+                let _ = cache_sender().send(CacheMsg::Fill(FillJob {
                     shared: self.shared.clone(),
                     slot,
                     expert: e,
-                });
+                }));
                 continue;
             }
             if state.use_count[e] < HOT_ADMISSION_USES {
@@ -358,11 +393,11 @@ impl HotExpertCache {
                 }
                 state.slot_kind[slot] = HotSlot::Filling;
                 state.slot_expert[slot] = e as u32;
-                let _ = fill_sender().send(FillJob {
+                let _ = cache_sender().send(CacheMsg::Fill(FillJob {
                     shared: self.shared.clone(),
                     slot,
                     expert: e,
-                });
+                }));
             }
         }
     }
