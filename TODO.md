@@ -809,6 +809,26 @@ parity queue) now outranks it on impact.
            call bypassing forward_gather's tensor ops). This is the
            same 68% serving-overhead lever that helps the non-split
            lane too.
+           SUBTASKS (cold-path batching refactor):
+           A. Reduce per-call overhead in candle's QTensor::indexed_gemv:
+              cache ids conversion (avoid to_vec1 per call), reuse dst
+              buffer (avoid alloc per call), minimize storage guard.
+              Location: candle/candle-core/src/quantized/mod.rs:1222.
+           B. Reduce per-call overhead in mistralrs-quant's
+              qtensor_indexed_moe_forward: avoid redundant shape
+              normalization, cache ids dtype check, minimize allocs.
+              Location: mistralrs-quant/src/gguf/cpu.rs.
+           C. Reduce per-call overhead in FastExpertsWeights::forward_gather:
+              eliminate process_routed_stats (no-ops), skip broadcast_mul/
+              sum/to_dtype for topk=1 (split path), reuse intermediate
+              tensors. Location: mistralrs-core/src/moe/experts/backends.rs:2001.
+           D. Amortize mistralrs-core per-layer orchestration: batch the
+              3 gather_forward calls (gate, up, down) into a single
+              indexed pass where possible; reduce scheduler syncs.
+              Location: mistralrs-core/src/moe/experts/mod.rs:331.
+           E. Measurement + validation: benchmark before/after on the
+              3090 split lane (target ~1.4x: 35->~49 tok/s); verify
+              output coherence vs forward_gather reference.
         2. Phase-2b: router-predicted async prefetch (currently
            admission is count-based/reactive).
         3. Only then re-enable the cache and re-measure.
@@ -842,6 +862,26 @@ parity queue) now outranks it on impact.
            call bypassing forward_gather's tensor ops). This is the
            same 68% serving-overhead lever that helps the non-split
            lane too.
+           SUBTASKS (cold-path batching refactor):
+           A. Reduce per-call overhead in candle's QTensor::indexed_gemv:
+              cache ids conversion (avoid to_vec1 per call), reuse dst
+              buffer (avoid alloc per call), minimize storage guard.
+              Location: candle/candle-core/src/quantized/mod.rs:1222.
+           B. Reduce per-call overhead in mistralrs-quant's
+              qtensor_indexed_moe_forward: avoid redundant shape
+              normalization, cache ids dtype check, minimize allocs.
+              Location: mistralrs-quant/src/gguf/cpu.rs.
+           C. Reduce per-call overhead in FastExpertsWeights::forward_gather:
+              eliminate process_routed_stats (no-ops), skip broadcast_mul/
+              sum/to_dtype for topk=1 (split path), reuse intermediate
+              tensors. Location: mistralrs-core/src/moe/experts/backends.rs:2001.
+           D. Amortize mistralrs-core per-layer orchestration: batch the
+              3 gather_forward calls (gate, up, down) into a single
+              indexed pass where possible; reduce scheduler syncs.
+              Location: mistralrs-core/src/moe/experts/mod.rs:331.
+           E. Measurement + validation: benchmark before/after on the
+              3090 split lane (target ~1.4x: 35->~49 tok/s); verify
+              output coherence vs forward_gather reference.
         2. Phase-2b: router-predicted async prefetch (currently
            admission is count-based/reactive).
         3. Only then re-enable the cache and re-measure.

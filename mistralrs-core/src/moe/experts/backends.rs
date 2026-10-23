@@ -2004,10 +2004,6 @@ impl FastExpertsWeights {
     ) -> Result<Tensor> {
         // Routed stats are fed here: only the block knows the token-to-expert pairing.
         let ids = forward.topk_ids;
-        self.fused_gate_proj
-            .process_routed_stats(forward.xs_flat, ids)?;
-        self.fused_up_proj
-            .process_routed_stats(forward.xs_flat, ids)?;
         let ys = if mistralrs_quant::device_has_fused_ops(forward.xs.device()) {
             let xs =
                 forward
@@ -2016,7 +2012,6 @@ impl FastExpertsWeights {
             let gate = self.fused_gate_proj.gather_forward(&xs, forward.topk_ids)?;
             let up = self.fused_up_proj.gather_forward(&xs, forward.topk_ids)?;
             let down_in = (up * gate.apply(&config.act)?)?;
-            self.fused_down_proj.process_routed_stats(&down_in, ids)?;
             self.fused_down_proj
                 .gather_forward(&down_in, forward.topk_ids)?
         } else {
@@ -2080,10 +2075,6 @@ impl FastExpertsWeights {
             };
             let down_in = (up * gate.apply(&config.act)?)?;
             let inter = down_in.dim(D::Minus1)?;
-            self.fused_down_proj.process_routed_stats(
-                &down_in.reshape((forward.shape.num_tokens, config.num_experts_per_tok, inter))?,
-                ids,
-            )?;
             let xs = self.fused_down_proj.gather_forward(&down_in, &indices)?;
             xs.squeeze(D::Minus2)?.reshape((
                 forward.shape.num_tokens,
@@ -2161,10 +2152,6 @@ impl FastExpertsWeights {
         let ids = forward.topk_ids;
         let num_tokens = forward.shape.num_tokens;
         let top_k = config.num_experts_per_tok;
-        self.fused_gate_proj
-            .process_routed_stats(forward.xs_flat, ids)?;
-        self.fused_up_proj
-            .process_routed_stats(forward.xs_flat, ids)?;
 
         let (gather_input, gather_ids) =
             if mistralrs_quant::device_has_fused_ops(forward.xs.device()) {
@@ -2201,8 +2188,6 @@ impl FastExpertsWeights {
         let gate_up_base = Tensor::cat(&[&gate_base, &up_base], D::Minus1)?;
         let (gate, up) = lora.add_gate_up_delta_owned(forward.xs_flat, gate_up_base, ids)?;
         let down_input = crate::ops::mul_and_act(&gate, &up, config.act)?;
-        self.fused_down_proj
-            .process_routed_stats(&down_input, ids)?;
         let down_base = if mistralrs_quant::device_has_fused_ops(forward.xs.device()) {
             self.fused_down_proj.gather_forward(&down_input, ids)?
         } else {
