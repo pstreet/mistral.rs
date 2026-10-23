@@ -8,7 +8,6 @@ use mistralrs_quant::{
 use std::sync::Arc;
 
 use crate::cuda::moe;
-#[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::layers::Activation;
 
 use super::checkpoint::ExpertCheckpoint;
@@ -2045,7 +2044,10 @@ impl FastExpertsWeights {
                         forward.shape.hidden_dim,
                     ))?;
                     match candle_core::quantized::QTensor::indexed_gemv_fused_gate_up(
-                        &gq, &uq, &xs3, forward.topk_ids,
+                        &gq,
+                        &uq,
+                        &xs3,
+                        forward.topk_ids,
                     )? {
                         Some((g, u)) => {
                             // g, u: (num_tokens, topk, inter) -> (batch, seq, topk, inter)
@@ -2094,6 +2096,61 @@ impl FastExpertsWeights {
             .broadcast_mul(&forward.topk_weights.unsqueeze(D::Minus1)?)?
             .sum(D::Minus2)?
             .to_dtype(forward.original_dtype)
+    }
+
+    /// Fast cold-path for the hot-expert cache: runs gate+up+down directly
+    /// through the candle indexed_gemv kernels, bypassing forward_gather's
+    /// per-call tensor-op overhead (shape normalization, process_routed_stats,
+    /// to_dtype casts, broadcast_mul/sum). Returns None when the indexed path
+    /// cannot serve the layout, so callers fall back to forward_gather.
+    ///
+    /// `xs` is [n, 1, hidden], `ids` is [n, 1] (U32), `weights` is [n, 1].
+    /// Returns the weighted output [n, hidden] in `xs`'s dtype, or None.
+    pub(super) fn forward_cold_indexed(
+        &self,
+        xs: &Tensor,
+        ids: &Tensor,
+        weights: &Tensor,
+        act: &crate::layers::Activation,
+    ) -> Result<Option<Tensor>> {
+        let gq = match self.fused_gate_proj.get_qtensor() {
+            Some(q) => q,
+            None => return Ok(None),
+        };
+        let uq = match self.fused_up_proj.get_qtensor() {
+            Some(q) => q,
+            None => return Ok(None),
+        };
+        let dq = match self.fused_down_proj.get_qtensor() {
+            Some(q) => q,
+            None => return Ok(None),
+        };
+
+        // Gate + up (fused lhs quantization).
+        let (gate, up) =
+            match candle_core::quantized::QTensor::indexed_gemv_fused_gate_up(&gq, &uq, xs, ids)? {
+                Some(pair) => pair,
+                None => return Ok(None),
+            };
+        // gate, up: [n, 1, inter]
+        let gate = gate.squeeze(1)?;
+        let up = up.squeeze(1)?;
+        let down_in = (up * gate.apply(act)?)?; // [n, inter]
+        let down_in = down_in.unsqueeze(1)?; // [n, 1, inter]
+
+        let down = match dq.indexed_gemv(&down_in, ids)? {
+            Some(d) => d, // [n, 1, hidden]
+            None => return Ok(None),
+        };
+        let down = down.squeeze(1)?; // [n, hidden]
+
+        // Weighted sum (topk=1, so just multiply). Run in F32 to match
+        // forward_gather's precision, then restore the input dtype.
+        let input_dtype = xs.dtype();
+        let down = down.to_dtype(DType::F32)?;
+        let w = weights.squeeze(1)?.to_dtype(DType::F32)?; // [n]
+        let out = down.broadcast_mul(&w.unsqueeze(1)?)?; // [n, hidden]
+        Ok(Some(out.to_dtype(input_dtype)?))
     }
 
     fn forward_gather_lora(

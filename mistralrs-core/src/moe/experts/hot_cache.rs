@@ -299,14 +299,25 @@ impl HotExpertCache {
             shape: MoEForwardShape::new(n_cold, 1, hidden),
             lora: None,
         };
-        let cold_out = f.cold.forward_gather(
-            &cold_forward,
-            MoEForwardConfig {
-                num_experts: f.config.num_experts,
-                num_experts_per_tok: 1,
-                act: f.config.act,
-            },
-        )?;
+        // Fast path: bypass forward_gather's per-call tensor-op overhead by
+        // running gate+up+down directly through candle's indexed_gemv kernels.
+        // Falls back to forward_gather when the indexed path cannot serve
+        // the layout (returns None).
+        let cold_out =
+            match f
+                .cold
+                .forward_cold_indexed(&cold_xs, &cold_ids, &cold_weights, &f.config.act)?
+            {
+                Some(out) => out,
+                None => f.cold.forward_gather(
+                    &cold_forward,
+                    MoEForwardConfig {
+                        num_experts: f.config.num_experts,
+                        num_experts_per_tok: 1,
+                        act: f.config.act,
+                    },
+                )?,
+            };
         let token_idx_dev = token_idx_cpu.to_device(&dev_t)?;
         let scattered = Tensor::zeros((tokens, hidden), f.xs.dtype(), &dev_t)?.index_add(
             &token_idx_dev,
