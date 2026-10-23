@@ -53,22 +53,6 @@ pub async fn models(State(state): ExtractedMistralRsState) -> Response {
         Err(error) => return openai_error_from_error(&error, ApiErrorKind::Internal),
     };
 
-    if !models_with_status.is_empty() {
-        model_objects.push(ModelObject {
-            id: "default".to_string(),
-            object: "model",
-            created: state.get_creation_time(),
-            owned_by: "local",
-            root: Some("default".to_string()),
-            parent: None,
-            adapter_generation: None,
-            status: None,
-            tools_available: None,
-            mcp_tools_count: None,
-            mcp_servers_connected: None,
-        });
-    }
-
     for (model_id, status) in models_with_status {
         let (tools_available, mcp_tools_count, mcp_servers_connected) =
             if status == CoreModelStatus::Loaded {
