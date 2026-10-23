@@ -1,23 +1,24 @@
-# mistralrs.toml - mistral.rs config mirroring models.ini
+# mistralrs.toml - mistral.rs config for Strix Halo (gfx1151)
 #
-# Loaded by: mistralrs from-config -f <this file> (see ~/.config/mistralrs-server-wrapper.sh)
-# Model paths below are relative to $LOCALAI_ROOT (the service sets
-# WorkingDirectory there and the wrapper cds there; cd there for manual runs).
+# Loaded by: mistralrs from-config -f <this file>
+# Model paths are relative to $LOCALAI_ROOT.
+# Global defaults: hip:0 device, Q8_0 KV cache, MTP on (n=2), auto eviction.
 
 command = "serve"
-# Single active model -> clients address it as "default".
-default_model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
+# No default model: clients must specify model by alias.
 
 [server]
 host = "127.0.0.1"
 port = 1235
 no_ui = true
 
+[global]
+# Default device: iGPU (Hip). MoE 35B and -cuda lanes override to cuda:0.
+device = "hip:0"
+
 [paged_attn]
 cache_type = "Q8_0"
 
-# Demand-load policy for lazy models (router commits 7ba9f430f-1ea83644c).
-# Values below are the code defaults, pinned explicitly.
 [router]
 auto_evict = true
 evict_headroom_mb = 2048
@@ -27,55 +28,44 @@ idle_ttl_secs = 1800
 
 [runtime]
 mtp = true
-mtp_n_predict = 3
-mtp_draft_sampling = "greedy"
-# Draft-only Q4K lm_head copy: smaller draft reads cut proposer latency,
-# the target still verifies with the checkpoint head (+2.6% decode
-# measured on the 35B, quality-neutral). Applies to every MTP attach.
-mtp_draft_lm_head_isq = "Q4K"
+mtp_n_predict = 2
+mtp_draft_sampling = "auto"
+# Draft lm_head ISQ disabled 2026-10-23 (memory envelope on 3090).
+# Re-enable for +2.6% decode on the 35B: mtp_draft_lm_head_isq = "Q4K"
 max_prefill_chunk_tokens = 2048
-# Prefix cache depth (probe-validated 2026-10-09: identical 3.8k prompt
-# 12s -> 0.3s MTP-on). Per-entry `prefix_cache_n` overrides this.
-prefix_cache_n = 4
+# prefix_cache_n: code default 16.
 
 # ============================================================
-# Qwen3.6 35B MoE (lazy; the entry default)
+# Qwen3.6 35B MoE (lazy; primary model)
 # ============================================================
+# MoE: 256 experts, 8 active. Runs on cuda:0 with cold experts in CPU RAM.
+# Context: 262K native. MTP n=2 (unsloth recommends 2 for Qwen3.6).
+# V=Q8_0: V=Q4_0 reverted 2026-10-14 (all-NaN trigger on empty-GTT
+# loads with multi-chunk tools prompts). Re-enabled only on 27B (user intent).
+# Q4 bench arm below for Q5 vs Q4 comparison at equal KV.
 
 [[models]]
 model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
 alias = "qwen3.6-35b-q5"
-mtp = true
 lazy = true
-mtp_n_predict = 2
-# Split KV (2026-10-12 bench batch): K stays Q8_0, V drops Q8_0 -> Q4_0
-# (the 27B's split, proven in prod). Decode is bandwidth-bound: fewer
-# V bytes per token = less read traffic if quality holds.
-# REVERTED 2026-10-14: V=Q4_0 is the openwebui all-NaN outage trigger.
-# Probe A/B (deterministic, empty-GTT load regime): V=Q4_0 + multi-chunk
-# prefill (>=2048 tok) => all-NaN first-sample logits 5/5; V=Q8_0 => 3/3
-# clean, same binaries/env/config. Only bites when the model loads into
-# EMPTY GTT (prod's every-boot regime) - the 27B entries were masked by
-# loading on demand alongside the resident 35B. Revert everywhere until
-# the Q4_0 V kernel path is fixed; TODO.md has the full evidence chain.
+device = "cuda:0"
+expert_device = "cpu"
+fit_ctx = true
+max_seqs = 2
 k_cache_type = "Q8_0"
 v_cache_type = "Q8_0"
 
 [models.format]
 quantized_file = "Qwen3.6-35B-A3B-UD-Q5_K_XL.gguf"
 
-# Q4_K_XL bench arm (2026-10-12): same model, same KV split so the
-# Q5-vs-Q4 comparison is at equal KV. Duplicate model_id is legal:
-# the config key registers its FIRST entry (the q5 above, so the
-# default model is unchanged); this entry is reachable by alias.
-# Benched by demand-load with auto_evict swapping it against q5.
-
 [[models]]
 model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
 alias = "qwen3.6-35b-q4"
-mtp = true
 lazy = true
-mtp_n_predict = 2
+device = "cuda:0"
+expert_device = "cpu"
+fit_ctx = true
+max_seqs = 2
 k_cache_type = "Q8_0"
 v_cache_type = "Q8_0"
 
@@ -83,62 +73,31 @@ v_cache_type = "Q8_0"
 quantized_file = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
 
 # ============================================================
-# Qwen3.8 27B (lazy, demand-loaded)
+# Qwen3.8 27B dense (lazy, demand-loaded)
 # ============================================================
+# Dense 27B. Context: 262K. MTP n=3 (model card recommendation).
+# KV: K=Q8_0 V=Q4_0 (user intent; model card recommends Q4_0/Q4_0).
 
 [[models]]
 model_id = "models/orcarouter/Qwen3.8-27B-Uncensored-GGUF"
 alias = "qwen3.8-27b"
 lazy = true
-# Per-model split KV: K=Q8_0 V=Q4_0 while the global default stays Q8_0.
 k_cache_type = "Q8_0"
-v_cache_type = "Q8_0"
-# MTP n=2 locked by sweep (global n=3 is for the 35B).
-mtp_n_predict = 2
+v_cache_type = "Q4_0"
+mtp_n_predict = 3
 
 [models.format]
 quantized_file = "Qwen3.8-27B-Uncensored-Q6_K.gguf"
 mmproj = "mmproj-Qwen3.8-27B-Uncensored-f16.gguf"
 
-[[models]]
-model_id = "models/orcarouter/Qwen3.8-27B-Uncensored-GGUF"
-alias = "qwen3.8-27b-cuda"
-device = "cuda:0"
-lazy = true
-# Per-model fit history: context_len was the manual attach clamp until
-# pool sizing learned to reserve the draft-lm-head ISQ envelope (2026-10-15).
-max_seqs = 2
-# Shrink-instead-of-fail if the 3090 is crowded when this demand-loads.
-fit_ctx = true
-# MTP n=2 locked by sweep (global n=3 is for the 35B).
-mtp_n_predict = 2
-k_cache_type = "Q8_0"
-v_cache_type = "Q8_0"
-
-[models.format]
-quantized_file = "Qwen3.8-27B-Uncensored-Q6_K.gguf"
-mmproj = "mmproj-Qwen3.8-27B-Uncensored-f16.gguf"
-
-[models.quantization]
-isq = "Q4K"
-
-# ISQ bench arm (2026-10-12): same Q6_K file, quantized to Q4K
-# in-flight at load - zero download. Mirrors the 27B's KV split and
-# MTP n=2 so the Q6_K vs Q4 comparison is at equal config.
-# Quality caveat: fp16 -> Q6_K -> Q4K double-quantizes (no imatrix),
-# so quality here is a LOWER bound vs a native Q4_K_M file; the
-# decode-speed arm is exact (same Q4K kernels and bytes).
-
+# Q4 bench arm: same Q6_K file, no ISQ (loads natively).
 [[models]]
 model_id = "models/orcarouter/Qwen3.8-27B-Uncensored-GGUF"
 alias = "qwen3.8-27b-q4"
 lazy = true
 k_cache_type = "Q8_0"
-v_cache_type = "Q8_0"
-mtp_n_predict = 2
-
-[models.quantization]
-isq = "Q4K"
+v_cache_type = "Q4_0"
+mtp_n_predict = 3
 
 [models.format]
 quantized_file = "Qwen3.8-27B-Uncensored-Q6_K.gguf"
@@ -147,15 +106,15 @@ mmproj = "mmproj-Qwen3.8-27B-Uncensored-f16.gguf"
 # ============================================================
 # Qwen3.8 Flash-Next MoE (lazy, demand-loaded)
 # ============================================================
+# New arch (qwen4exp), port pending. 512 experts, 10+1 active.
+# Context: 262K. MTP self-speculation. n=2 (sweep pending).
 
 [[models]]
 model_id = "models/orcarouter/Qwen3.8-Flash-Next-Uncensored-GGUF"
 alias = "qwen3.8-flash-next"
 lazy = true
-# IQ4_XS-MTP 3-shard split: quantized_file names part 1, the loader finds the rest.
 k_cache_type = "Q8_0"
 v_cache_type = "Q8_0"
-# n=2 mirrors the 27B pin (global 3 is the 35B's); Flash-Next sweep pending.
 mtp_n_predict = 2
 
 [models.format]
@@ -164,17 +123,12 @@ mmproj = "mmproj-Qwen3.8-Flash-Next-Uncensored-F16.gguf"
 
 # ============================================================
 # Everything below is lazy: registered at boot, loaded on first request.
-# NOTE: lazy models inherit the global MTP flag unless pinned `mtp = false`
-# (all entries below are pinned: two residents at once must fit VRAM, and
-# the MTP draft head adds footprint).
 # ============================================================
 
 # ------------------------------------------------------------
-# Muse Glimmer 30B (vision). Standalone: no tok_model_id; config/tokenizer
-# are synthesized from the GGUF. NOTE: qwen3_5 standalone builder is proven;
-# a non-qwen3_5 vision arch may need its own builder before this lazy-loads.
+# Muse Glimmer 30B (vision). MoE, 128 experts.
+# Context: ~256K. Q4_K_XL recommended. No MTP.
 # ------------------------------------------------------------
-
 [[models]]
 model_id = "models/unsloth/Muse-Glimmer-30B-GGUF"
 alias = "Muse-glimmer-30b"
@@ -188,16 +142,6 @@ mmproj = "mmproj-Muse-Glimmer-30B-Q8_0.gguf"
 # ------------------------------------------------------------
 # Large coder / general
 # ------------------------------------------------------------
-
-[[models]]
-model_id = "models/unsloth/Qwen3-Coder-Next-GGUF"
-alias = "qwen3-coder-next"
-lazy = true
-mtp = false
-
-[models.format]
-quantized_file = "Qwen3-Coder-Next-MXFP4_MOE.gguf"
-
 [[models]]
 model_id = "models/unsloth/gemma-4-26B-A4B-it-GGUF"
 alias = "gemma-4-26b"
@@ -220,7 +164,6 @@ quantized_file = "Llama3.2-30B-A3B-II-Dark-Champion-INSTRUCT-Heretic-Abliterated
 # ------------------------------------------------------------
 # Small / fast
 # ------------------------------------------------------------
-
 [[models]]
 model_id = "models/unsloth/Qwen3-16B-A3B-GGUF"
 alias = "qwen3-16b"
@@ -234,79 +177,22 @@ quantized_file = "Qwen3-16B-A3B-Q4_K_M.gguf"
 model_id = "models/unsloth/Qwen3.5-4B-MTP-GGUF"
 alias = "qwen3.5-4b"
 lazy = true
-# Built-in MTP head live (2026-10-17, build 23): text-only Qwen3.5 attach
-# wired; release probe on the cuda lane measured 150 vs 105.4 tok/s
-# (+42%) at accept 54-59% len ~2.1. n=2 pinned: the global is 3, the
-# probe validated 2.
-mtp = true
-mtp_n_predict = 2
-
-[models.format]
-quantized_file = "Qwen3.5-4B-Q8_0.gguf"
-
-# Three-backend exercise 2026-10-09: same 4B on every device class.
-# GPU lanes run the MTP head; the CPU entry stays pinned mtp=false
-# (no PagedAttention there, and the verify kernels are GPU-only).
-[[models]]
-model_id = "models/unsloth/Qwen3.5-4B-MTP-GGUF"
-alias = "qwen3.5-4b-cuda"
-lazy = true
-# MTP live (probe-validated n=2, see the hip entry above). The lane
-# costs ~500MB more: one paged KV layer + head + Q4K draft lm_head;
-# fit_ctx still guards a crowded 3090.
-mtp = true
-mtp_n_predict = 2
-device = "cuda:0"
-# Shrink-instead-of-fail if the 3090 is crowded when this demand-loads.
-fit_ctx = true
-
-[models.format]
-quantized_file = "Qwen3.5-4B-Q8_0.gguf"
-
-[[models]]
-model_id = "models/unsloth/Qwen3.5-4B-MTP-GGUF"
-alias = "qwen3.5-4b-cpu"
-lazy = true
-# CPU PA landed (build 24): paged_attn serves on Cpu in all builds now,
-# so the MTP head can attach. Verify is gather+SDPA (no CUDA graphs).
-mtp = true
-mtp_n_predict = 2
-device = "cpu"
-# CPU cannot use the global Q8_0 block KV (GPU-only kernels). The
-# per-model BASE cache_type is what clears the inherited global - it
-# resets the k/v sides too (resolve_entry_cache_config). TOML takes
-# PascalCase variants, unlike the CLI's lowercase strings.
-cache_type = "Auto"
+# MTP head live. n=6 (model card recommendation).
+mtp_n_predict = 6
 
 [models.format]
 quantized_file = "Qwen3.5-4B-Q8_0.gguf"
 
 # ------------------------------------------------------------
-# Embeddings (open-webui RAG via /v1/embeddings, 2026-10-09).
-# Qwen3-Embedding-0.6B, GGUF Q8_0 since 2026-10-21 (was safetensors
-# bf16 1.2GB): [models.format] quantized_file picks the Q8_0 GGUF
-# in the same dir; tokenizer/config/modules.json still load from
-# model_id so the pooling layout is unchanged, weights come from
-# the GGUF (safetensors file stays on disk, unused). Flip measured
-# on the probe lane (exact prod layout): cosines 0.993-0.998 vs
-# safetensors, relevant-doc rankings identical on all test queries
-# (only irrelevant-tail near-ties shuffled), embeds ~3.3x faster,
-# device footprint halved to 0.6GB on hip:0. Requires the
-# 2026-10-21 binary (md5 242c4c5f); the Oct 18 build rejects this
-# stanza (crash-looped the unit once - binary before config).
-# Pinned hip:0 so demand-loads never land it on the crowded 3090;
-# mtp=false stops the global mtp=true inherit. Lazy like the rest
-# of the fleet - embedding demand-load untested, fall back to eager
-# (drop the lazy line) if the router balks. Live at next restart.
+# Embeddings (open-webui RAG via /v1/embeddings)
+# GGUF Q8_0 since 2026-10-21. pooling layout from model_id dir.
 # ------------------------------------------------------------
-
 [[models]]
 model_id = "models/Qwen/Qwen3-Embedding-0.6B"
 alias = "qwen3-embedding-0.6b"
 kind = "embedding"
 lazy = true
 mtp = false
-device = "hip:0"
 
 [models.format]
 quantized_file = "Qwen3-Embedding-0.6B-Q8_0.gguf"
