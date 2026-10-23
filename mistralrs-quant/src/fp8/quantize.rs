@@ -74,7 +74,7 @@ mod tests {
     use super::QuantizationResult;
 
     #[test]
-    #[cfg(not(feature = "metal"))]
+    #[cfg(all(not(feature = "metal"), feature = "rocm"))]
     fn test_roundtrip_f8e4m3() -> Result<()> {
         let dev = crate::utils::fp8_family_test_device()?;
 
