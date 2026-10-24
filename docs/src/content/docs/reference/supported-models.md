@@ -106,18 +106,6 @@ architectures via `-f`/`quantized_file`; see
 [the embeddings guide](/guides/models/use-embeddings/) for the pooling and
 asset rules.
 
-## Reranker
-
-| Architecture | Model families | Example |
-|---|---|---|
-| `Qwen3ForCausalLM` | Qwen3 Reranker | <details><summary><code>Qwen/Qwen3-Reranker-0.6B</code></summary><code>mistralrs run -m Qwen/Qwen3-Reranker-0.6B</code></details> |
-
-Rerankers load from GGUF checkpoints of the `qwen3` GGUF architecture via
-`-f`/`quantized_file` (the checkpoint must carry `qwen3.pooling_type = RANK`
-and `qwen3.classifier.output_labels`); see
-[the rerankers guide](/guides/models/use-rerankers/) for the scoring and
-asset rules. `/v1/embeddings` refuses reranker checkpoints.
-
 ## Format and quantization notes
 
 Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. See [GGUF support](/reference/gguf-support/) for GGUF compatibility; availability of [UQFF](/reference/uqff-format/), GPTQ, and AWQ artifacts varies by model on Hugging Face.
