@@ -116,6 +116,11 @@ CUDA prompts are chunked from the batch-wide token budget. The per-sequence chun
 divided by the admitted prompt batch size, so peak prefill work stays bounded as concurrency grows.
 Chunking is internal and does not change the visible prompt, logits, or generated text.
 
+On dual-vendor `cuda,rocm` builds the fast-path selection is per serving device: models served on
+an NVIDIA device use the FlashInfer paths above, while models served on an AMD (HIP) device use the
+generic fallback. The FA3 FP8 prefill path additionally requires an SM90 (Hopper) build target; on
+other targets those kernels are not built and the path stays dormant.
+
 `f8e4m3` stores K and V at half the bytes of BF16. CUDA accepts FP16, BF16, or FP32 activations and
 converts at cache-write time; FlashInfer decode applies the K scale to logits and the V scale to
 outputs without gathering a full-precision cache. Scales are immutable for the cache lifetime, so

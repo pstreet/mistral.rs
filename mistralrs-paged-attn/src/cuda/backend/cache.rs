@@ -478,7 +478,7 @@ mod tests {
 
     #[test]
     fn copy_blocks_uses_device_metadata_and_view_offsets() -> Result<()> {
-        let Ok(device) = Device::new_cuda(0) else {
+        let Some(device) = crate::cuda::backend::role_test_device() else {
             return Ok(());
         };
         let key_base = Tensor::from_vec(
@@ -531,7 +531,7 @@ mod tests {
 
     #[test]
     fn copy_blocks_rejects_alternate_allocation_streams() -> Result<()> {
-        let Ok(device) = Device::new_cuda(0) else {
+        let Some(device) = crate::cuda::backend::role_test_device() else {
             return Ok(());
         };
         let dev = device

@@ -67,42 +67,6 @@ pub struct Fa3Fp8DecodeParams {
 use crate::kernel_decl::declare_kernel;
 
 declare_kernel! {
-    #[cfg(has_fa3_fp8_paged)]
-    fa3_fp8_paged_materialize_metadata(
-        paged_kv_indptr: *const c_int,
-        paged_kv_indices: *const c_int,
-        paged_kv_last_page_len: *const c_int,
-        page_table: *mut c_int,
-        seqused_k: *mut c_int,
-        batch_size: c_int,
-        source_rows_per_sequence: c_int,
-        source_row_offset: c_int,
-        page_table_batch_stride: c_int,
-        page_size: c_int,
-        stream: CUstream,
-    ) -> c_int;
-
-    #[cfg(has_fa3_fp8_paged)]
-    fa3_fp8_decode_prepare(
-        params: *const Fa3Fp8DecodeScheduleParams,
-        stream: CUstream,
-    ) -> c_int;
-
-    #[cfg(has_fa3_fp8_paged)]
-    fa3_fp8_decode_run(params: *const Fa3Fp8DecodeParams, stream: CUstream) -> c_int;
-
-    #[cfg(has_fa3_fp8_paged)]
-    fa3_bf16_to_e4m3_static(
-        input: *const c_void,
-        output: *mut c_void,
-        rows: c_int,
-        columns: c_int,
-        input_row_stride: i64,
-        output_row_stride: i64,
-        descale: *const f32,
-        stream: CUstream,
-    ) -> c_int;
-
     reshape_and_cache(
         key: *const c_void,
         value: *const c_void,

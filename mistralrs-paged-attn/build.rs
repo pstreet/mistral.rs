@@ -528,6 +528,85 @@ fn build_cuda_companion() -> Result<()> {
         "cargo:rustc-env=MISTRALRS_PAGED_ATTN_CUDA_PLUGIN={}",
         so.display()
     );
+
+    // FA3 paged attention: SM90a-only kernels (CUTLASS + flash-attention),
+    // so the companion builds them solely for a 90-series target and every
+    // other machine skips both the compile and the `has_fa3_fp8_paged` cfg.
+    if cap == 90 {
+        let fa3_header_hash = cuda_header_hash("third_party/flash-attention", &[])?
+            .wrapping_mul(0x100000001b3)
+            ^ cuda_header_hash("src/cuda/fa3", &[])?;
+        let fa3_header_hash_arg = format!("-DMISTRALRS_FA3_HEADER_HASH={fa3_header_hash:016x}");
+        let fa3_build_dir = cuda_build_dir(&out_dir, "fa3");
+        let mut fa3_builder = cudaforge::KernelBuilder::new()
+            .source_files(FA3_SOURCES)
+            .out_dir(&fa3_build_dir)
+            .compute_cap_arch("90a")
+            .with_cutlass(Some(FA3_CUTLASS_COMMIT))
+            .include_path("src/cuda/fa3")
+            .include_path("third_party/flash-attention/hopper")
+            .watch(["src/cuda/fa3", "third_party/flash-attention"])
+            .arg("-std=c++17")
+            .arg("-O3")
+            .arg("--expt-relaxed-constexpr")
+            .arg("--expt-extended-lambda")
+            .arg("--use_fast_math")
+            .arg("-diag-suppress")
+            .arg("20013")
+            .arg("-DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED")
+            .arg("-DCUTLASS_ENABLE_GDC_FOR_SM90")
+            .arg("-DCUTLASS_DEBUG_TRACE_LEVEL=0")
+            .arg("-DNDEBUG")
+            .arg("-DFLASHATTENTION_DISABLE_BACKWARD")
+            .arg("-DFLASHATTENTION_DISABLE_CLUSTER")
+            .arg("-DFLASHATTENTION_DISABLE_SM8x")
+            .arg("-DFLASHATTENTION_DISABLE_LOCAL")
+            .arg("-DFLASHATTENTION_DISABLE_APPENDKV")
+            .arg("-DFLASHATTENTION_DISABLE_SOFTCAP")
+            .arg("-DFLASHATTENTION_PACKGQA_ONLY")
+            .arg("-DFLASHATTENTION_VARLEN_ONLY")
+            .arg("-Xcompiler")
+            .arg("-fPIC")
+            .arg("-Xcompiler")
+            .arg("-fvisibility=hidden")
+            .arg(&fa3_header_hash_arg)
+            .max_threads(1)
+            .nvcc_thread_patterns(
+                &["flash_fwd", "flash_prepare_scheduler", "fa3_decode_api"],
+                4,
+            );
+        if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
+            fa3_builder = fa3_builder
+                .arg("--compiler-options")
+                .arg(cuda_nvcc_flags_env);
+        }
+        fa3_builder
+            .build_lib(out_dir.join("libmistralrsfa3paged.a"))
+            .expect("Build FA3 FP8 paged attention lib failed!");
+
+        let fa3_so = out_dir.join("libmistralrsfa3paged_cuda.so");
+        if fa3_so.exists() {
+            std::fs::remove_file(&fa3_so)?;
+        }
+        let status = Command::new(&nvcc)
+            .args(mold_link_args_for_nvcc())
+            .arg("--shared")
+            .arg("--cudart")
+            .arg("shared")
+            .arg("-o")
+            .arg(&fa3_so)
+            .arg(out_dir.join("libmistralrsfa3paged.a"))
+            .status()?;
+        anyhow::ensure!(
+            status.success(),
+            "nvcc failed to link libmistralrsfa3paged_cuda.so"
+        );
+        println!(
+            "cargo:rustc-env=MISTRALRS_FA3_CUDA_PLUGIN={}",
+            fa3_so.display()
+        );
+        println!("cargo::rustc-cfg=has_fa3_fp8_paged");
+    }
     Ok(())
 }
 
@@ -537,8 +616,9 @@ fn main() -> Result<()> {
     println!("cargo::rustc-check-cfg=cfg(has_fa3_fp8_paged)");
 
     // Dual cuda+rocm: hipcc block builds the hip companion AND nvcc builds
-    // the cuda companion (two dlopened .so files, nothing linked - no
-    // archive collision). Single-vendor shapes keep their static archive.
+    // the cuda companion (dlopened .so files, nothing linked - no archive
+    // collision). Every cuda shape (solo included) builds the nvcc
+    // companion; the FA3 slice rides along only for SM90 targets.
     #[cfg(all(feature = "cuda", target_family = "unix"))]
     {
         build_cuda_companion()?;

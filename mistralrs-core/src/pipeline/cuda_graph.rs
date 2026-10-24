@@ -36,6 +36,10 @@ use crate::{
         block_table_rows::BlockTableSnapshot, AttentionBackendKind, ModelConfigLike,
     },
 };
+#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+use mistralrs_paged_attn::fa3_prepare_decode_metadata;
+#[cfg(all(feature = "cuda", feature = "rocm", target_family = "unix"))]
+use mistralrs_paged_attn::fa3_prepare_decode_metadata_auto as fa3_prepare_decode_metadata;
 
 use crate::device_map::DeviceMapper;
 use crate::kv_cache::HybridCache;
@@ -629,7 +633,7 @@ pub(crate) fn cuda_graph_startup_capture_allowed(q_len: usize) -> bool {
     q_len > 0
 }
 
-#[cfg(not(feature = "rocm"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub(crate) fn prepare_fa3_decode_schedules(
     metadata: &PagedAttentionInputMetadata,
 ) -> candle_core::Result<()> {
@@ -637,7 +641,7 @@ pub(crate) fn prepare_fa3_decode_schedules(
         return Ok(());
     };
     flashinfer.for_each_fa3_decode_schedule(|prepare| {
-        mistralrs_paged_attn::fa3_prepare_decode_metadata(
+        fa3_prepare_decode_metadata(
             mistralrs_paged_attn::Fa3DecodeMetadata {
                 paged_kv_indptr: prepare.paged_kv_indptr,
                 paged_kv_indices: prepare.paged_kv_indices,
@@ -652,7 +656,7 @@ pub(crate) fn prepare_fa3_decode_schedules(
     })
 }
 
-#[cfg(feature = "rocm")]
+#[cfg(not(all(feature = "cuda", target_family = "unix")))]
 pub(crate) fn prepare_fa3_decode_schedules(
     _metadata: &PagedAttentionInputMetadata,
 ) -> candle_core::Result<()> {

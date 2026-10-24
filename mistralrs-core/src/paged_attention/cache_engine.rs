@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::block_scales::{register_block_scales, BlockQuantScales};
 use super::config::{KvCacheLayout, ModelConfigLike};
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::flashinfer::{register_fa3_prefill_caches, Fa3PrefillWorkspaceRegistration};
 
 #[cfg(feature = "rocm")]
@@ -25,15 +25,16 @@ fn cuda_supports_fp8(device: &Device) -> bool {
     if !device.is_cuda() || !mistralrs_paged_attn::USE_FP8 {
         return false;
     }
-    #[cfg(feature = "rocm")]
+    // The hip role has no compute-capability gate here (RDNA3+ FP8 KV goes
+    // through the AMD paged-attention path), so non-cuda shapes accept; the
+    // cuda role checks its major compute capability in every cuda shape.
+    #[cfg(not(all(feature = "cuda", target_family = "unix")))]
     {
-        // RDNA3+ handles FP8 KV through the AMD paged-attention path; the ROCm
-        // build compiles the FP8 kernels, so no compute-capability gate applies.
         return true;
     }
-    #[cfg(not(feature = "rocm"))]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     {
-        use candle_core::cuda::cudarc::driver::{result, sys};
+        use candle_core::cuda_backend::cudarc::driver::{result, sys};
         let Device::Cuda(cuda) = device else {
             return false;
         };
@@ -231,7 +232,7 @@ impl CacheConfig {
 pub type KVCache = (Tensor, Tensor);
 
 pub struct CacheEngine {
-    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     _fa3_prefill_workspaces: Fa3PrefillWorkspaceRegistration,
     fa3_prefill_num_sm_by_layer: Vec<Option<usize>>,
     gpu_cache: Arc<Mutex<Vec<KVCache>>>,
@@ -302,15 +303,15 @@ impl CacheEngine {
                 }
             }
         }
-        #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
         let fa3_prefill_workspaces = register_fa3_prefill_caches(&gpu_cache)?;
-        #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
         let fa3_prefill_num_sm_by_layer =
             Self::fa3_prefill_cache_coverage(model_config, cache_config, &gpu_cache)?;
-        #[cfg(not(all(feature = "cuda", not(feature = "rocm"), target_family = "unix")))]
+        #[cfg(not(all(feature = "cuda", target_family = "unix")))]
         let fa3_prefill_num_sm_by_layer = vec![None; model_config.num_layers()];
         Ok(Self {
-            #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+            #[cfg(all(feature = "cuda", target_family = "unix"))]
             _fa3_prefill_workspaces: fa3_prefill_workspaces,
             fa3_prefill_num_sm_by_layer,
             gpu_cache: Arc::new(Mutex::new(gpu_cache)),
@@ -747,7 +748,7 @@ impl CacheEngine {
         Ok((gpu_cache, q8_scales))
     }
 
-    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     fn fa3_prefill_cache_coverage(
         model_config: &dyn ModelConfigLike,
         cache_config: &CacheConfig,
@@ -985,7 +986,7 @@ mod tests {
         assert!(err.contains("only supported on CUDA"), "{err}");
     }
 
-    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     #[test]
     fn q8_0_validates_standard_layout_on_cuda() -> Result<()> {
         let Ok(device) = Device::new_cuda(0) else {
@@ -1030,7 +1031,7 @@ mod tests {
         assert!(err.contains("not supported for MLA layer 0"));
     }
 
-    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     #[test]
     fn fa3_prefill_coverage_requires_compatible_registered_caches() -> Result<()> {
         let Ok(device) = Device::new_cuda(0) else {

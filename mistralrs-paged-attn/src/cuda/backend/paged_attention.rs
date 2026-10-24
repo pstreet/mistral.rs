@@ -1836,7 +1836,7 @@ mod tests {
 
     #[test]
     fn reshape_gather_q8_roundtrip_matches_inputs() -> Result<()> {
-        let Ok(device) = candle::Device::new_cuda(0) else {
+        let Some(device) = crate::cuda::backend::role_test_device() else {
             return Ok(());
         };
         let (key, value, slots, block_table, cu_seq_lens) = test_inputs(&device)?;
@@ -1890,7 +1890,7 @@ mod tests {
 
     #[test]
     fn reshape_gather_q4_roundtrip_matches_inputs() -> Result<()> {
-        let Ok(device) = candle::Device::new_cuda(0) else {
+        let Some(device) = crate::cuda::backend::role_test_device() else {
             return Ok(());
         };
         let (key, value, slots, block_table, cu_seq_lens) = test_inputs(&device)?;
@@ -1947,7 +1947,7 @@ mod tests {
 
     #[test]
     fn reshape_gather_q4_qjl_roundtrip_matches_inputs() -> Result<()> {
-        let Ok(device) = candle::Device::new_cuda(0) else {
+        let Some(device) = crate::cuda::backend::role_test_device() else {
             return Ok(());
         };
         let (key, value, slots, block_table, cu_seq_lens) = test_inputs(&device)?;
@@ -2014,7 +2014,7 @@ mod tests {
 
     #[test]
     fn reshape_gather_native_f32_roundtrip_is_exact() -> Result<()> {
-        let Ok(device) = candle::Device::new_cuda(0) else {
+        let Some(device) = crate::cuda::backend::role_test_device() else {
             return Ok(());
         };
         let (key, value, slots, block_table, cu_seq_lens) = test_inputs(&device)?;

@@ -1326,7 +1326,9 @@ impl Loader for MultimodalLoader {
                 module.ct.resolve()?;
             }
         }
-        let model_metadata = model.model_config();
+        let model_metadata: Arc<dyn ModelConfigLike + Send + Sync> = Arc::new(
+            crate::paged_attention::DeviceGatedConfig::new(model.model_config(), device.is_cuda()),
+        );
         // Layers past the mapped stack (e.g. an MTP head) live on the non-mapped device.
         while layer_devices.len() < model_metadata.num_layers() {
             layer_devices.push(Some(device.clone()));
@@ -1423,6 +1425,13 @@ impl Loader for MultimodalLoader {
         super::synchronize_cuda_contexts(&device, pipeline_mapper.as_ref())?;
 
         let max_seq_len = model.max_seq_len();
+        if cache_config.is_some() {
+            tracing::info!(
+                "Paged attention backend for `{}`: {:?}",
+                self.model_id,
+                model_metadata.attention_backend_kind()
+            );
+        }
         let num_hidden_layers = match model.cache() {
             EitherCache::Full(full) => full.lock().len(),
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),

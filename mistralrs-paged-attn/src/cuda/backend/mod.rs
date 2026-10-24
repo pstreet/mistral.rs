@@ -44,6 +44,20 @@ pub use paged_attention::{
 #[cfg(not(feature = "rocm"))]
 pub use scale_update::kv_scale_update;
 
+/// The serving role's device for backend (hip-bound in dual) tests:
+/// `new_cuda` in solo builds, `new_hip` in dual, `None` when absent.
+#[cfg(test)]
+pub(crate) fn role_test_device() -> Option<candle_core::Device> {
+    #[cfg(feature = "rocm")]
+    {
+        candle_core::Device::new_hip(0).ok()
+    }
+    #[cfg(not(feature = "rocm"))]
+    {
+        candle_core::Device::new_cuda(0).ok()
+    }
+}
+
 fn cache_input_layout(
     layout: &Layout,
     name: &str,

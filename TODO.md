@@ -1576,36 +1576,70 @@ parity queue) now outranks it on impact.
       unchanged (~75-76); temp/greedy regressions clean (112.0/
       112.3). Also un-breaks the dflash caller on CUDA-role
       tensors in dual (previously refused loudly).
-- [ ] ~L FlashInfer decode on the NVIDIA role in DUAL builds (RE-SCOPED
-      2026-10-16 after bench + plumbing audit; was ~M "maybe near-free"):
-      the nvcc companion DOES build the kernels in dual
-      (PAGED_ATTN_CUDA_KERNELS is cfg'd on plain `feature = "cuda"`
-      and includes flashinfer_decode.cu), but the RUNTIME is
-      solo-cuda-only: all FlashInfer FFI decls and launch wrappers
-      are `cfg(not(feature = "rocm"))` because `ffi.rs`/`backend`
-      bind the hip companion in dual, which has no FlashInfer
-      symbols. Port surface: ~3.9k lines of backend launch
-      wrappers to twin onto cuda_backend/ffi_cuda
-      (flashinfer.rs 873 + fa3.rs 1320 + mla.rs 897 +
-      flash_attn_sinks.rs 385 + context_attention_mla.rs 435,
-      plus cache/scale parts), *_auto role dispatchers, and ~150
-      cfg sites in mistralrs-core (86 in flashinfer/, rest in
-      plan.rs/layers/cache_engine/attention_backend). Same port
-      unlocks FA2/sinks and the MLA paged path on dual-NVIDIA
-      (serves the FA2-proof item too). ROLE-AWARENESS already
-      solved: KvQuantGatedConfig wraps per-pipeline with the
-      device in scope, so the hip role can stay Standard while
-      the cuda role selects FlashInfer - the static
-      supports_layer cfg would lift to `feature = "cuda"`.
-      BENCH (solo-cuda probe, 4B Q8_0 weights, 3 warm runs):
-      FlashInfer+BF16 KV 117.5-117.8 tok/s vs Standard+Q8_0
-      112.1-112.2 = +4.9% decode, lookahead accounting exact
-      (876 = 4x219). Net for prod's dual 4B lane after the ~4.9%
-      dispatch overhead: roughly break-even vs today's lane rate,
-      so the 4B alone does NOT justify ~L; the real payoff is
-      FlashInfer on bigger future 3090 residents (27B+), the
-      FA2/MLA paths, and closing the last solo-vs-dual capability
-      gap. KV cost: BF16/F16 doubles KV VRAM per token vs Q8_0.
+- [x] ~L FlashInfer decode on the NVIDIA role in DUAL builds (RE-SCOPED
+      2026-10-16 after bench + plumbing audit; was ~M "maybe near-free").
+      LANDED 2026-10-24: the gate is now DEVICE-KEYED, not
+      build-shape-keyed, and the whole FlashInfer + FA3 paged
+      surface runs on the cuda role in dual builds.
+      Runtime gate: FlashInferAttentionBackend::supports_layer lifts
+      to `feature = "cuda"` (compiled availability only); the
+      serving-device decision lives in the new DeviceGatedConfig
+      wrapper (paged_attention/config.rs) applied at
+      build_normal_pipeline/build_multimodal_engine_pipeline where
+      the device is in scope - attention_backend_kind(_for_layer)
+      and kv_cache_layout(_for_layer) downgrade to Standard on
+      non-cuda devices. Layering: KvQuantGated(DeviceGated(base))
+      so KV-dtype and device gates compose.
+      Port surface (mistralrs-paged-attn): backend/flashinfer.rs
+      (873 ln) and backend/fa3.rs launch layers twinned onto
+      cuda_backend/ffi_cuda via scratch/gen_twin.py (checked in
+      spirit: rules live in scratch, rerun after backend edits);
+      cuda_role/{flashinfer,fa3}.rs; ffi_cuda.rs gains
+      cuda_flashinfer_* and cuda_fa3_* entries (dlopen from the
+      nvcc companion); fa3_types.rs hoists the pure FA3 planning
+      types so solo/dual share one type identity; role_dispatch.rs
+      gains flashinfer_decode_auto, {reshape_and_cache,
+      gather_kv_cache_flashinfer}_auto and
+      fa3_{fp8_decode,prepare_paged_metadata,
+      prepare_decode_metadata}_auto (non-cuda storage bails).
+      attention_backend::from_cache lifts to all(cuda, unix).
+      FA3 kernels: fa3_decode_api.cu extern-C APIs now carry
+      visibility("default") (the -fvisibility=hidden build would
+      hide them from dlsym); build_cuda_companion builds the fa3
+      archive + libmistralrsfa3paged_cuda.so ONLY for cap == 90
+      and prints MISTRALRS_FA3_CUDA_PLUGIN + has_fa3_fp8_paged;
+      fa3_cuda_plugin.rs resolves it at runtime (env then
+      exe-relative, no bake-time path since non-SM90 boxes never
+      build it). Compile-verified by force-printing the cfg on
+      this SM86 box (no SM90 hardware to run it; first H100-class
+      card lights it up automatically).
+      mistralrs-core: 136 cfg sites lifted from
+      all(cuda, not(rocm), unix) to all(cuda, unix) across
+      flashinfer/{mod,metadata}.rs, plan.rs, layers/
+      paged_attention.rs, cache_engine.rs, inputs_processor.rs,
+      cuda_graph.rs (prepare_fa3_decode_schedules), attention/
+      mod.rs (sliding_window_left); dual import arms alias the
+      _auto dispatchers. cuda_supports_fp8 now runs the real
+      cap>=8 check on the cuda role in dual (early-true is hip
+      only); cuda_sm_count probes the NVIDIA role in dual.
+      Tests: dual paged-attn suite green for the first time (was
+      test-compile-broken: twin begin_capture arity rot, fixed);
+      backend dense tests made role-aware via role_test_device()
+      (new_hip in dual, new_cuda in solo). Twin flashinfer kernel
+      tests pass ON the 3090 in the dual build (f16/bf16+fp8 HND
+      write/gather/decode parity).
+      PROBE (dual fast binary, one 4B per device, auto KV):
+      cuda:0 -> "Paged attention backend: FlashInfer", hip:0 ->
+      "Standard" in ONE process - the device-key A/B holds.
+      NOT ported (later slices, hip-only until then): MLA paged
+      (mla.rs 897 + context_attention_mla.rs 435) and
+      flash_attn_sinks (385). DFlash/dflash stays not(rocm).
+      BENCH context (solo-cuda, 4B): FlashInfer+BF16 KV 117.5
+      vs Standard+Q8_0 112.1 = +4.9% decode; KV cost doubles per
+      token vs Q8_0. Prod stays Standard by config
+      ([paged_attn] cache_type = Q8_0 gates it off); flip a cuda
+      lane to auto/BF16 KV to activate. Payoff is future 3090
+      residents (27B+) and closing the solo-vs-dual gap.
 - [ ] ~S UQFF vs GGUF shootout: same weights through the CLI
       `quantize`/`uqff` path, bench load + decode on this box.
       Unmeasured; native format may win both.

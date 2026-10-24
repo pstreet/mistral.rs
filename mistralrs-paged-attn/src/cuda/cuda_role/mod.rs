@@ -3,10 +3,17 @@
 //! (generated) - same entry shapes, CUDA-role storage and streams.
 
 mod cache;
+mod fa3;
+mod flashinfer;
 mod gather_kv;
 mod paged_attention;
 
 pub use cache::{copy_blocks, swap_blocks};
+pub use fa3::{fa3_fp8_decode, fa3_prepare_decode_metadata, fa3_prepare_paged_metadata};
+pub use flashinfer::{
+    flashinfer_decode, gather_kv_cache_flashinfer, is_flashinfer_cache,
+    reshape_and_cache_flashinfer, FlashInferDecodeScratch,
+};
 pub use gather_kv::gather_kv_cache;
 pub use paged_attention::{
     paged_attention, reshape_and_cache, reshape_and_cache_q4, reshape_and_cache_q8,

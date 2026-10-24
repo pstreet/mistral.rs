@@ -242,7 +242,7 @@ __global__ void bf16_to_e4m3_static_kernel(const __nv_bfloat16 *__restrict__ inp
 
 } // namespace
 
-extern "C" size_t fa3_fp8_decode_scheduler_metadata_i32(int32_t batch_size,
+extern "C" __attribute__((visibility("default"))) size_t fa3_fp8_decode_scheduler_metadata_i32(int32_t batch_size,
                                                           int32_t num_splits,
                                                           int32_t causal) {
     if (batch_size <= 0 || num_splits <= 1 || (causal != 0 && causal != 1)) {
@@ -251,7 +251,7 @@ extern "C" size_t fa3_fp8_decode_scheduler_metadata_i32(int32_t batch_size,
     return size_t((2 + causal) * round_up_4(batch_size) + 1);
 }
 
-extern "C" size_t fa3_fp8_decode_out_accum_f32(const Fa3Fp8DecodeParams *params) {
+extern "C" __attribute__((visibility("default"))) size_t fa3_fp8_decode_out_accum_f32(const Fa3Fp8DecodeParams *params) {
     if (params == nullptr || params->schedule.num_splits <= 0 ||
         params->schedule.num_q_heads <= 0 || params->schedule.total_q <= 0 ||
         params->schedule.head_dim <= 0) {
@@ -261,7 +261,7 @@ extern "C" size_t fa3_fp8_decode_out_accum_f32(const Fa3Fp8DecodeParams *params)
            params->schedule.total_q * params->schedule.head_dim;
 }
 
-extern "C" size_t fa3_fp8_decode_lse_accum_f32(const Fa3Fp8DecodeParams *params) {
+extern "C" __attribute__((visibility("default"))) size_t fa3_fp8_decode_lse_accum_f32(const Fa3Fp8DecodeParams *params) {
     if (params == nullptr || params->schedule.num_splits <= 0 ||
         params->schedule.num_q_heads <= 0 || params->schedule.total_q <= 0) {
         return 0;
@@ -270,7 +270,7 @@ extern "C" size_t fa3_fp8_decode_lse_accum_f32(const Fa3Fp8DecodeParams *params)
            params->schedule.total_q;
 }
 
-extern "C" int fa3_fp8_decode_materialize_paged_metadata(
+extern "C" __attribute__((visibility("default"))) int fa3_fp8_decode_materialize_paged_metadata(
     const int32_t *paged_kv_indptr, const int32_t *paged_kv_indices,
     const int32_t *paged_kv_last_page_len, int32_t *page_table,
     int32_t *seqused_k, int32_t batch_size, int32_t query_len,
@@ -281,7 +281,7 @@ extern "C" int fa3_fp8_decode_materialize_paged_metadata(
         page_table_batch_stride, page_size, stream);
 }
 
-extern "C" int fa3_fp8_paged_materialize_metadata(
+extern "C" __attribute__((visibility("default"))) int fa3_fp8_paged_materialize_metadata(
     const int32_t *paged_kv_indptr, const int32_t *paged_kv_indices,
     const int32_t *paged_kv_last_page_len, int32_t *page_table,
     int32_t *seqused_k, int32_t batch_size, int32_t source_rows_per_sequence,
@@ -302,7 +302,7 @@ extern "C" int fa3_fp8_paged_materialize_metadata(
     return cudaPeekAtLastError();
 }
 
-extern "C" int fa3_fp8_decode_prepare(const Fa3Fp8DecodeScheduleParams *params,
+extern "C" __attribute__((visibility("default"))) int fa3_fp8_decode_prepare(const Fa3Fp8DecodeScheduleParams *params,
                                         cudaStream_t stream) {
     const int validation = validate_schedule(params);
     if (validation != cudaSuccess) {
@@ -321,7 +321,7 @@ extern "C" int fa3_fp8_decode_prepare(const Fa3Fp8DecodeScheduleParams *params,
     return cudaPeekAtLastError();
 }
 
-extern "C" int fa3_fp8_decode_run(const Fa3Fp8DecodeParams *params,
+extern "C" __attribute__((visibility("default"))) int fa3_fp8_decode_run(const Fa3Fp8DecodeParams *params,
                                     cudaStream_t stream) {
     const int validation = validate_run(params);
     if (validation != cudaSuccess) {
@@ -341,7 +341,7 @@ extern "C" int fa3_fp8_decode_run(const Fa3Fp8DecodeParams *params,
     return cudaPeekAtLastError();
 }
 
-extern "C" int fa3_bf16_to_e4m3_static(const void *input, void *output,
+extern "C" __attribute__((visibility("default"))) int fa3_bf16_to_e4m3_static(const void *input, void *output,
                                          int32_t rows, int32_t columns,
                                          int64_t input_row_stride,
                                          int64_t output_row_stride,

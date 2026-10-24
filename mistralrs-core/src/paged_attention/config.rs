@@ -453,6 +453,133 @@ impl ModelConfigLike for KvQuantGatedConfig {
     }
 }
 
+/// Wraps a base config and gates FlashInfer on the serving device. In a dual
+/// (cuda,rocm) build the FlashInfer kernels are compiled, but only a cuda
+/// device may use them; a hip (or cpu) device must stay on Standard. This
+/// keeps the gate device-keyed rather than build-shape-keyed.
+#[derive(Clone)]
+pub struct DeviceGatedConfig {
+    base: Arc<dyn ModelConfigLike + Send + Sync>,
+    cuda: bool,
+}
+
+impl DeviceGatedConfig {
+    pub fn new(base: Arc<dyn ModelConfigLike + Send + Sync>, cuda: bool) -> Self {
+        Self { base, cuda }
+    }
+
+    pub fn is_cuda(&self) -> bool {
+        self.cuda
+    }
+}
+
+impl ModelConfigLike for DeviceGatedConfig {
+    fn max_seq_len(&self) -> usize {
+        self.base.max_seq_len()
+    }
+    fn num_layers(&self) -> usize {
+        self.base.num_layers()
+    }
+    fn hidden_size(&self) -> usize {
+        self.base.hidden_size()
+    }
+    fn num_kv_heads(&self) -> usize {
+        self.base.num_kv_heads()
+    }
+    fn num_attn_heads(&self) -> usize {
+        self.base.num_attn_heads()
+    }
+    fn k_head_dim(&self) -> usize {
+        self.base.k_head_dim()
+    }
+    fn v_head_dim(&self) -> usize {
+        self.base.v_head_dim()
+    }
+    fn num_attn_heads_for_layer(&self, layer_idx: usize) -> usize {
+        self.base.num_attn_heads_for_layer(layer_idx)
+    }
+    fn num_kv_heads_for_layer(&self, layer_idx: usize) -> usize {
+        self.base.num_kv_heads_for_layer(layer_idx)
+    }
+    fn k_head_dim_for_layer(&self, layer_idx: usize) -> usize {
+        self.base.k_head_dim_for_layer(layer_idx)
+    }
+    fn v_head_dim_for_layer(&self, layer_idx: usize) -> usize {
+        self.base.v_head_dim_for_layer(layer_idx)
+    }
+    fn has_kv_cache_sharing(&self) -> bool {
+        self.base.has_kv_cache_sharing()
+    }
+    fn kv_cache_topology(&self) -> KvCacheTopology {
+        self.base.kv_cache_topology()
+    }
+    fn uses_own_kv_cache_for_layer(&self, layer_idx: usize) -> bool {
+        self.base.uses_own_kv_cache_for_layer(layer_idx)
+    }
+    fn layer_has_paged_kv_cache(&self, layer_idx: usize) -> bool {
+        self.base.layer_has_paged_kv_cache(layer_idx)
+    }
+    fn layer_kv_cache_elements_per_token(&self, layer_idx: usize) -> Option<usize> {
+        self.base.layer_kv_cache_elements_per_token(layer_idx)
+    }
+    fn total_kv_cache_elements_per_token(&self) -> usize {
+        self.base.total_kv_cache_elements_per_token()
+    }
+    fn kv_cache_bytes_per_token(&self, k_bits_per_elem: usize, v_bits_per_elem: usize) -> usize {
+        self.base
+            .kv_cache_bytes_per_token(k_bits_per_elem, v_bits_per_elem)
+    }
+    fn kv_cache_group_ids(&self) -> Vec<u32> {
+        self.base.kv_cache_group_ids()
+    }
+    fn attention_layer_spec(&self, layer_idx: usize) -> AttentionLayerSpec {
+        self.base.attention_layer_spec(layer_idx)
+    }
+    fn kv_cache_elements_per_token(&self) -> usize {
+        self.base.kv_cache_elements_per_token()
+    }
+    fn prefix_prefill_attention_features(
+        &self,
+        layer_idx: usize,
+    ) -> Option<PrefixPrefillAttentionFeatures> {
+        self.base.prefix_prefill_attention_features(layer_idx)
+    }
+    fn attention_backend_kind(&self) -> AttentionBackendKind {
+        if self.cuda {
+            self.base.attention_backend_kind()
+        } else {
+            AttentionBackendKind::Standard
+        }
+    }
+    fn attention_backend_kind_for_layer(&self, layer_idx: usize) -> AttentionBackendKind {
+        if self.cuda {
+            self.base.attention_backend_kind_for_layer(layer_idx)
+        } else {
+            AttentionBackendKind::Standard
+        }
+    }
+    fn kv_cache_layout(&self) -> KvCacheLayout {
+        if self.cuda {
+            self.base.kv_cache_layout()
+        } else {
+            match self.base.kv_cache_layout() {
+                KvCacheLayout::FlashInferHnd => KvCacheLayout::Standard,
+                layout => layout,
+            }
+        }
+    }
+    fn kv_cache_layout_for_layer(&self, layer_idx: usize) -> KvCacheLayout {
+        if self.cuda {
+            self.base.kv_cache_layout_for_layer(layer_idx)
+        } else {
+            match self.base.kv_cache_layout_for_layer(layer_idx) {
+                KvCacheLayout::FlashInferHnd => KvCacheLayout::Standard,
+                layout => layout,
+            }
+        }
+    }
+}
+
 /// Base config plus a per-layer mask of which layers keep a paged KV cache.
 ///
 /// Hybrid models interleave attention layers with linear/recurrent ones that hold no paged cache.

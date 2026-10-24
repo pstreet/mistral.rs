@@ -1642,9 +1642,7 @@ mod tests {
             .bind_to_thread()
             .map_err(candle::Error::wrap)?;
         unsafe { stream.context().disable_event_tracking() };
-        stream
-            .begin_capture(candle_core::cuda_backend::cudarc::driver::sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
-            .map_err(candle::Error::wrap)?;
+        stream.begin_capture().map_err(candle::Error::wrap)?;
         reshape_and_cache(
             &key,
             &value,
@@ -1732,9 +1730,7 @@ mod tests {
         // pointer access, and cuEventCreate inside a capture window
         // invalidates it.
         unsafe { stream.context().disable_event_tracking() };
-        stream
-            .begin_capture(candle_core::cuda_backend::cudarc::driver::sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
-            .map_err(candle::Error::wrap)?;
+        stream.begin_capture().map_err(candle::Error::wrap)?;
         let (k_out, v_out) = (|| {
             reshape_and_cache(
                 &key,

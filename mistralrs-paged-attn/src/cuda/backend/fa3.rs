@@ -2,89 +2,10 @@
 use candle_core::DType;
 use candle_core::{Result, Tensor};
 
-pub const USE_FA3_FP8_PAGED: bool = cfg!(has_fa3_fp8_paged);
-pub const FA3_DECODE_MAX_QUERY_LEN: usize = 128;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Fa3DecodeSchedule {
-    pub batch_size: usize,
-    pub query_len: usize,
-    pub total_q: usize,
-    pub causal: bool,
-    pub q_heads: usize,
-    pub kv_heads: usize,
-    pub head_dim: usize,
-    pub page_size: usize,
-    pub max_seqlen_k: usize,
-    pub num_splits: usize,
-    pub num_sm: usize,
-    pub device_id: usize,
-}
-
-#[derive(Clone, Copy)]
-pub struct Fa3DecodeMetadata<'a> {
-    pub paged_kv_indptr: &'a Tensor,
-    pub paged_kv_indices: &'a Tensor,
-    pub paged_kv_last_page_len: &'a Tensor,
-    pub page_table: &'a Tensor,
-    pub seqused_k: &'a Tensor,
-    pub cu_seqlens_q: &'a Tensor,
-    pub scheduler_metadata: &'a Tensor,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Fa3PagedMetadataLayout {
-    pub source_rows_per_sequence: usize,
-    pub source_row_offset: usize,
-}
-
-impl Fa3PagedMetadataLayout {
-    pub const fn per_sequence() -> Self {
-        Self {
-            source_rows_per_sequence: 1,
-            source_row_offset: 0,
-        }
-    }
-
-    pub const fn decode(query_len: usize) -> Self {
-        Self {
-            source_rows_per_sequence: query_len,
-            source_row_offset: query_len.saturating_sub(1),
-        }
-    }
-
-    #[cfg(any(test, has_fa3_fp8_paged))]
-    fn source_rows(self, batch_size: usize) -> Option<usize> {
-        batch_size.checked_mul(self.source_rows_per_sequence)
-    }
-
-    #[cfg(any(test, has_fa3_fp8_paged))]
-    fn valid(self) -> bool {
-        self.source_rows_per_sequence > 0
-            && self.source_rows_per_sequence <= FA3_DECODE_MAX_QUERY_LEN
-            && self.source_row_offset < self.source_rows_per_sequence
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct Fa3DecodeParams<'a> {
-    pub query: &'a Tensor,
-    pub quantized_query: &'a Tensor,
-    pub key_cache: &'a Tensor,
-    pub value_cache: &'a Tensor,
-    pub page_table: &'a Tensor,
-    pub seqused_k: &'a Tensor,
-    pub cu_seqlens_q: &'a Tensor,
-    pub scheduler_metadata: &'a Tensor,
-    pub output_accum: &'a Tensor,
-    pub lse_accum: &'a Tensor,
-    pub output_lse: &'a Tensor,
-    pub q_descale: &'a Tensor,
-    pub k_descale: &'a Tensor,
-    pub v_descale: &'a Tensor,
-    pub schedule: Fa3DecodeSchedule,
-    pub softmax_scale: f32,
-}
+pub use crate::cuda::fa3_types::{
+    Fa3DecodeMetadata, Fa3DecodeParams, Fa3DecodeSchedule, Fa3PagedMetadataLayout,
+    FA3_DECODE_MAX_QUERY_LEN, USE_FA3_FP8_PAGED,
+};
 
 #[cfg(has_fa3_fp8_paged)]
 fn as_i32(value: usize, name: &str) -> Result<i32> {
@@ -111,8 +32,10 @@ pub fn fa3_prepare_paged_metadata(
     metadata_layout: Fa3PagedMetadataLayout,
 ) -> Result<()> {
     use crate::cuda::backend::slice_ptr_on_stream;
-    use crate::cuda::ffi::{
-        fa3_fp8_decode_prepare, fa3_fp8_paged_materialize_metadata, Fa3Fp8DecodeScheduleParams,
+    use crate::cuda::ffi::Fa3Fp8DecodeScheduleParams;
+    use crate::cuda::ffi_cuda::{
+        cuda_fa3_fp8_decode_prepare as fa3_fp8_decode_prepare,
+        cuda_fa3_fp8_paged_materialize_metadata as fa3_fp8_paged_materialize_metadata,
     };
     use crate::cuda::role_backend::CudaStorageSlice;
     use candle_core::backend::BackendStorage;
@@ -317,8 +240,10 @@ pub fn fa3_prepare_paged_metadata(
 #[cfg(has_fa3_fp8_paged)]
 pub fn fa3_fp8_decode(params: Fa3DecodeParams<'_>) -> Result<Tensor> {
     use crate::cuda::backend::slice_ptr_on_stream;
-    use crate::cuda::ffi::{
-        fa3_bf16_to_e4m3_static, fa3_fp8_decode_run, Fa3Fp8DecodeParams, Fa3Fp8DecodeScheduleParams,
+    use crate::cuda::ffi::{Fa3Fp8DecodeParams, Fa3Fp8DecodeScheduleParams};
+    use crate::cuda::ffi_cuda::{
+        cuda_fa3_bf16_to_e4m3_static as fa3_bf16_to_e4m3_static,
+        cuda_fa3_fp8_decode_run as fa3_fp8_decode_run,
     };
     use candle_core::backend::BackendStorage;
     use candle_core::Storage;

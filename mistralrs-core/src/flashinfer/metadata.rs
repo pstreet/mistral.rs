@@ -1,12 +1,12 @@
 use anyhow::Result;
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 use candle_core::cuda_backend::cudarc::driver::{CudaEvent, CudaStream};
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use candle_core::DType;
 use candle_core::{Device, Tensor};
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 use candle_core::{DeviceLocation, TensorId};
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, OnceLock, Weak},
@@ -18,13 +18,17 @@ use super::{
     DeviceTensorMap, FlashInferMetadata, FlashInferPagedAttentionView,
     FlashInferPagedAttentionViews, FlashInferPagedKv, FlashInferTilePlan,
 };
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 use super::{Fa3DecodeBuffers, Fa3DecodeScheduleKey, Fa3DecodeView, Fa3PagedScheduleShape};
 use crate::paged_attention::block_table_rows::BlockTableRows;
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::paged_attention::AttentionBackendKind;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::paged_attention::ModelConfigLike;
+#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+use mistralrs_paged_attn::fa3_prepare_paged_metadata;
+#[cfg(all(feature = "cuda", feature = "rocm", target_family = "unix"))]
+use mistralrs_paged_attn::fa3_prepare_paged_metadata_auto as fa3_prepare_paged_metadata;
 
 // Split-KV decode chunks each (sequence, kv head) context so the grid reaches about this many
 // blocks per SM; grids that are already full keep one 2048-token chunk and skip the partial merge.
@@ -33,10 +37,10 @@ const DECODE_SPLIT_MIN_TOKENS: usize = 256;
 const DECODE_SPLIT_MAX_TOKENS: usize = 2048;
 // Used when the SM count can't be queried; errs toward more, smaller chunks.
 const DECODE_SPLIT_FALLBACK_SM_COUNT: usize = 64;
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 const CUDA_STREAM_PER_THREAD_HANDLE: usize = 2;
 
-#[cfg(all(feature = "cuda", not(feature = "rocm")))]
+#[cfg(feature = "cuda")]
 fn cuda_sm_count() -> usize {
     use candle_core::cuda::cudarc::driver::{result, sys};
     static SM_COUNT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -57,10 +61,9 @@ fn cuda_sm_count() -> usize {
     })
 }
 
-// Also the dual-build arm: the FA3 sm probe above is NVIDIA-only, and the AMD
-// role's SM count is irrelevant to split planning served via hip (fallback
-// value until the S2 planner wires resolve_hip in).
-#[cfg(any(not(feature = "cuda"), all(feature = "cuda", feature = "rocm")))]
+// Non-cuda shapes (rocm-only, cpu): the SM probe above is NVIDIA-only, and
+// the AMD role's SM count never drives flashinfer split planning.
+#[cfg(not(feature = "cuda"))]
 fn cuda_sm_count() -> usize {
     DECODE_SPLIT_FALLBACK_SM_COUNT
 }
@@ -321,7 +324,7 @@ pub(crate) fn flashinfer_metadata(
     }
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub(crate) fn make_fa3_decode_state(
     metadata: &FlashInferMetadata,
     batch: usize,
@@ -404,7 +407,7 @@ pub(crate) fn make_fa3_decode_state(
     Ok(None)
 }
 
-#[cfg(feature = "rocm")]
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
 pub(crate) fn make_fa3_decode_state(
     _metadata: &FlashInferMetadata,
     _batch: usize,
@@ -416,7 +419,7 @@ pub(crate) fn make_fa3_decode_state(
     Ok(None)
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub(crate) fn fa3_device_num_sm(device: &Device) -> Option<usize> {
     use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
 
@@ -438,7 +441,7 @@ pub(crate) fn fa3_device_num_sm(device: &Device) -> Option<usize> {
         .filter(|count| *count > 0)
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub(crate) fn fa3_prefill_cache_num_sm(
     key_cache: &Tensor,
     value_cache: &Tensor,
@@ -474,7 +477,7 @@ pub(crate) fn fa3_prefill_cache_num_sm(
     Ok(fa3_device_num_sm(key_cache.device()))
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn fa3_view_capacity(
     view: &FlashInferPagedAttentionView,
     key: &Fa3DecodeScheduleKey,
@@ -485,7 +488,7 @@ fn fa3_view_capacity(
     fa3_view_capacity_for_rows(view, key.device, source_rows)
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn fa3_view_capacity_for_rows(
     view: &FlashInferPagedAttentionView,
     device: candle_core::DeviceLocation,
@@ -516,7 +519,7 @@ fn fa3_view_capacity_for_rows(
     Ok(Some(indices.elem_count() / source_rows))
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 #[derive(Default)]
 struct Fa3PrefillWorkspace {
     query: Option<Tensor>,
@@ -533,7 +536,7 @@ struct Fa3PrefillWorkspace {
     completion_pending: bool,
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct Fa3PrefillLaneKey {
     device: DeviceLocation,
@@ -542,26 +545,26 @@ struct Fa3PrefillLaneKey {
     thread: Option<std::thread::ThreadId>,
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 #[derive(Default)]
 struct Fa3PrefillWorkspacePool {
     lanes: Mutex<HashMap<Fa3PrefillLaneKey, Arc<Mutex<Fa3PrefillWorkspace>>>>,
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn fa3_prefill_registry() -> &'static Mutex<HashMap<TensorId, Weak<Fa3PrefillWorkspacePool>>> {
     static REGISTRY: OnceLock<Mutex<HashMap<TensorId, Weak<Fa3PrefillWorkspacePool>>>> =
         OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub(crate) struct Fa3PrefillWorkspaceRegistration {
     pool: Arc<Fa3PrefillWorkspacePool>,
     cache_ids: Vec<TensorId>,
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub(crate) fn register_fa3_prefill_caches(
     caches: &[(Tensor, Tensor)],
 ) -> candle_core::Result<Fa3PrefillWorkspaceRegistration> {
@@ -582,7 +585,7 @@ pub(crate) fn register_fa3_prefill_caches(
     Ok(Fa3PrefillWorkspaceRegistration { pool, cache_ids })
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 impl Drop for Fa3PrefillWorkspaceRegistration {
     fn drop(&mut self) {
         let Ok(mut registry) = fa3_prefill_registry().lock() else {
@@ -600,7 +603,7 @@ impl Drop for Fa3PrefillWorkspaceRegistration {
     }
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn fa3_prefill_pool(
     key_cache: &Tensor,
 ) -> candle_core::Result<Option<Arc<Fa3PrefillWorkspacePool>>> {
@@ -615,7 +618,7 @@ fn fa3_prefill_pool(
     Ok(pool)
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn checked_fa3_len(parts: &[usize], name: &str) -> candle_core::Result<usize> {
     parts.iter().try_fold(1usize, |len, part| {
         len.checked_mul(*part)
@@ -623,7 +626,7 @@ fn checked_fa3_len(parts: &[usize], name: &str) -> candle_core::Result<usize> {
     })
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn ensure_fa3_flat_buffer(
     tensor: &mut Option<Tensor>,
     len: usize,
@@ -640,12 +643,12 @@ fn ensure_fa3_flat_buffer(
     Ok(())
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn fa3_flat_view(tensor: &Tensor, len: usize) -> candle_core::Result<Tensor> {
     tensor.narrow(0, 0, len)
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 impl Fa3PrefillWorkspace {
     fn ensure_completion_event(&mut self, stream: &Arc<CudaStream>) -> candle_core::Result<()> {
         if let Some(owner_stream) = &self.owner_stream {
@@ -785,7 +788,7 @@ impl Fa3PrefillWorkspace {
     }
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 impl Drop for Fa3PrefillWorkspace {
     fn drop(&mut self) {
         if self.completion_pending {
@@ -796,7 +799,7 @@ impl Drop for Fa3PrefillWorkspace {
     }
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn fa3_prefill_lane_key(
     execution_device: &Device,
 ) -> candle_core::Result<(Fa3PrefillLaneKey, Arc<CudaStream>)> {
@@ -816,12 +819,12 @@ fn fa3_prefill_lane_key(
     ))
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn fa3_prefill_lane_thread(stream: usize) -> Option<std::thread::ThreadId> {
     (stream == CUDA_STREAM_PER_THREAD_HANDLE).then(|| std::thread::current().id())
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub(crate) fn with_fa3_prefill_workspace<R>(
     metadata: &FlashInferMetadata,
     key: Fa3DecodeScheduleKey,
@@ -876,7 +879,7 @@ pub(crate) fn with_fa3_prefill_workspace<R>(
     workspace.ensure_completion_event(&execution_stream)?;
     let buffers = workspace.buffers(execution_device, key, max_pages_per_sequence, num_sm)?;
     let result = (|| {
-        mistralrs_paged_attn::fa3_prepare_paged_metadata(
+        fa3_prepare_paged_metadata(
             mistralrs_paged_attn::Fa3DecodeMetadata {
                 paged_kv_indptr: indptr,
                 paged_kv_indices: indices,
@@ -899,7 +902,7 @@ pub(crate) fn with_fa3_prefill_workspace<R>(
     }
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn allocate_fa3_decode_buffers(
     device: &Device,
     key: Fa3DecodeScheduleKey,
@@ -944,7 +947,7 @@ fn allocate_fa3_decode_buffers(
     })
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn fa3_scheduler_metadata_len(batch: usize, causal: bool) -> usize {
     (2 + usize::from(causal)) * batch.div_ceil(4) * 4 + 1
 }
@@ -968,7 +971,7 @@ mod tests {
         assert!(decode_split_pages(32, 1, 4, 8192) >= decode_split_capacity_pages(32));
     }
 
-    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     #[test]
     fn fa3_scheduler_metadata_covers_rounded_batch_rows_and_semaphore() {
         assert_eq!(fa3_scheduler_metadata_len(1, false), 9);
@@ -980,7 +983,7 @@ mod tests {
         assert_eq!(fa3_scheduler_metadata_len(16, true), 49);
     }
 
-    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     #[test]
     fn fa3_prefill_workspace_lengths_are_checked() {
         assert_eq!(
@@ -990,7 +993,7 @@ mod tests {
         assert!(checked_fa3_len(&[usize::MAX, 2], "test").is_err());
     }
 
-    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     #[test]
     fn fa3_prefill_workspace_registration_controls_lifetime() -> candle_core::Result<()> {
         let Ok(device) = Device::new_cuda(0) else {
@@ -1005,7 +1008,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     #[test]
     fn fa3_prefill_workspace_lanes_follow_execution_streams() -> candle_core::Result<()> {
         let Ok(device) = Device::new_cuda(0) else {
@@ -1025,7 +1028,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     #[test]
     fn fa3_prefill_workspace_keys_per_thread_default_streams() {
         let current = fa3_prefill_lane_thread(CUDA_STREAM_PER_THREAD_HANDLE).unwrap();

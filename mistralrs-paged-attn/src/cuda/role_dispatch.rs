@@ -4,7 +4,9 @@
 //! `Storage::Cuda` (NVIDIA role) goes to the nvcc companion twin,
 //! anything else keeps the hip-role path (which bails loudly on
 //! non-Hip storage as today). Single-vendor builds call the plain
-//! entries directly and never see this module.
+//! entries directly and never see this module. The FlashInfer
+//! entries have no hip twin (RDNA lacks the kernels), so non-cuda
+//! storage bails here instead.
 
 use std::collections::HashMap;
 
@@ -17,12 +19,18 @@ use super::backend::{
     reshape_and_cache_q8 as hip_reshape_and_cache_q8,
 };
 use super::cuda_role::{
-    copy_blocks as cuda_copy_blocks, gather_kv_cache as cuda_gather_kv_cache,
+    copy_blocks as cuda_copy_blocks, fa3_fp8_decode as cuda_fa3_fp8_decode,
+    fa3_prepare_decode_metadata as cuda_fa3_prepare_decode_metadata,
+    fa3_prepare_paged_metadata as cuda_fa3_prepare_paged_metadata,
+    flashinfer_decode as cuda_flashinfer_decode, gather_kv_cache as cuda_gather_kv_cache,
+    gather_kv_cache_flashinfer as cuda_gather_kv_cache_flashinfer,
     paged_attention as cuda_paged_attention, reshape_and_cache as cuda_reshape_and_cache,
+    reshape_and_cache_flashinfer as cuda_reshape_and_cache_flashinfer,
     reshape_and_cache_q4 as cuda_reshape_and_cache_q4,
-    reshape_and_cache_q8 as cuda_reshape_and_cache_q8,
+    reshape_and_cache_q8 as cuda_reshape_and_cache_q8, FlashInferDecodeScratch,
 };
-use crate::BlockQuantKind;
+use crate::cuda::fa3_types::{Fa3DecodeMetadata, Fa3DecodeParams, Fa3DecodeSchedule};
+use crate::{BlockQuantKind, KvCacheScales};
 
 fn role_is_cuda(t: &Tensor) -> bool {
     matches!(&*t.storage_and_layout().0, Storage::Cuda(_))
@@ -270,5 +278,119 @@ pub fn copy_blocks_auto(
         cuda_copy_blocks(key_caches, value_caches, block_mapping)
     } else {
         hip_copy_blocks(key_caches, value_caches, block_mapping)
+    }
+}
+
+pub fn reshape_and_cache_flashinfer_auto(
+    key: &Tensor,
+    value: &Tensor,
+    key_cache: &Tensor,
+    value_cache: &Tensor,
+    slot_mapping: &Tensor,
+    scales: KvCacheScales,
+) -> Result<()> {
+    if role_is_cuda(key) {
+        cuda_reshape_and_cache_flashinfer(key, value, key_cache, value_cache, slot_mapping, scales)
+    } else {
+        candle_core::bail!("FlashInfer paged attention requires the NVIDIA role")
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn flashinfer_decode_auto(
+    query: &Tensor,
+    key_cache: &Tensor,
+    value_cache: &Tensor,
+    scales: KvCacheScales,
+    paged_kv_indptr: &Tensor,
+    paged_kv_indices: &Tensor,
+    paged_kv_last_page_len: &Tensor,
+    request_indices: &Tensor,
+    kv_tile_indices: &Tensor,
+    o_indptr: &Tensor,
+    kv_chunk_size: &Tensor,
+    block_valid_mask: &Tensor,
+    sm_scale: f32,
+    window_left: Option<usize>,
+    logits_soft_cap: Option<f32>,
+    scratch: Option<FlashInferDecodeScratch<'_>>,
+) -> Result<Tensor> {
+    if role_is_cuda(query) {
+        cuda_flashinfer_decode(
+            query,
+            key_cache,
+            value_cache,
+            scales,
+            paged_kv_indptr,
+            paged_kv_indices,
+            paged_kv_last_page_len,
+            request_indices,
+            kv_tile_indices,
+            o_indptr,
+            kv_chunk_size,
+            block_valid_mask,
+            sm_scale,
+            window_left,
+            logits_soft_cap,
+            scratch,
+        )
+    } else {
+        candle_core::bail!("FlashInfer paged attention requires the NVIDIA role")
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn gather_kv_cache_flashinfer_auto(
+    key_cache: &Tensor,
+    value_cache: &Tensor,
+    block_table: &Tensor,
+    cu_seq_lens: &Tensor,
+    num_tokens: usize,
+    out_dtype: DType,
+    scales: KvCacheScales,
+) -> Result<(Tensor, Tensor)> {
+    if role_is_cuda(key_cache) {
+        cuda_gather_kv_cache_flashinfer(
+            key_cache,
+            value_cache,
+            block_table,
+            cu_seq_lens,
+            num_tokens,
+            out_dtype,
+            scales,
+        )
+    } else {
+        candle_core::bail!("FlashInfer paged attention requires the NVIDIA role")
+    }
+}
+
+pub fn fa3_prepare_paged_metadata_auto(
+    metadata: Fa3DecodeMetadata<'_>,
+    schedule: Fa3DecodeSchedule,
+    metadata_layout: crate::cuda::fa3_types::Fa3PagedMetadataLayout,
+) -> Result<()> {
+    if role_is_cuda(metadata.paged_kv_indptr) {
+        cuda_fa3_prepare_paged_metadata(metadata, schedule, metadata_layout)
+    } else {
+        candle_core::bail!("FA3 paged attention requires the NVIDIA role")
+    }
+}
+
+pub fn fa3_prepare_decode_metadata_auto(
+    metadata: Fa3DecodeMetadata<'_>,
+    schedule: Fa3DecodeSchedule,
+) -> Result<()> {
+    if role_is_cuda(metadata.paged_kv_indptr) {
+        cuda_fa3_prepare_decode_metadata(metadata, schedule)
+    } else {
+        candle_core::bail!("FA3 paged attention requires the NVIDIA role")
+    }
+}
+
+pub fn fa3_fp8_decode_auto(params: Fa3DecodeParams<'_>) -> Result<Tensor> {
+    if role_is_cuda(params.query) {
+        cuda_fa3_fp8_decode(params)
+    } else {
+        candle_core::bail!("FA3 paged attention requires the NVIDIA role")
     }
 }
