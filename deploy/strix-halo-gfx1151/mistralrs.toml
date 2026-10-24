@@ -196,3 +196,17 @@ mtp = false
 
 [models.format]
 quantized_file = "Qwen3-Embedding-0.6B-Q8_0.gguf"
+
+# ------------------------------------------------------------
+# Reranker (open-webui Reranking Model slot via /v1/rerank)
+# Qwen3-Reranker-0.6B, GGUF Q8_0. Jina/Cohere-compatible endpoint.
+# ------------------------------------------------------------
+[[models]]
+model_id = "models/Qwen/Qwen3-Reranker-0.6B"
+alias = "qwen3-reranker-0.6b"
+kind = "reranker"
+lazy = true
+mtp = false
+
+[models.format]
+quantized_file = "qwen3-reranker-0.6b-q8_0.gguf"

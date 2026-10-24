@@ -139,7 +139,7 @@ Each entry defines one loaded model.
 
 | Field | Type | Required | Purpose |
 |---|---|---|---|
-| `kind` | enum | no | Defaults to `auto`. Set to `text`, `multimodal`, `diffusion`, `speech`, or `embedding` only to force a loader. |
+| `kind` | enum | no | Defaults to `auto`. Set to `text`, `multimodal`, `diffusion`, `speech`, `embedding`, or `reranker` only to force a loader. |
 | `model_id` | string | yes | Hugging Face id or local path. |
 | `tokenizer` | path | no | Local tokenizer.json. |
 | `arch` | enum | no | Architecture override (text models). |
@@ -266,8 +266,10 @@ tok_model_id = "google/gemma-4-E4B-it"
 ```
 
 `quantized_file` also works for `kind = "embedding"` entries (Qwen3-Embedding and
-EmbeddingGemma GGUF checkpoints); see [the embeddings guide](/guides/models/use-embeddings/)
-for the pooling and asset rules.
+EmbeddingGemma GGUF checkpoints) and `kind = "reranker"` entries
+(Qwen3-Reranker GGUF checkpoints); see [the embeddings guide](/guides/models/use-embeddings/)
+and [the rerankers guide](/guides/models/use-rerankers/) for the pooling and
+asset rules.
 
 ## Validation
 
