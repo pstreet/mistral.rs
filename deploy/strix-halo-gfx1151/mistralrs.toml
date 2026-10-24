@@ -3,9 +3,11 @@
 # Loaded by: mistralrs from-config -f <this file>
 # Model paths are relative to $LOCALAI_ROOT.
 # Global defaults: hip:0 device, Q8_0 KV cache, MTP on (n=2), auto eviction.
+# `-cuda` twin lanes override to cuda:0 (3090) with device-specific pins.
 
 command = "serve"
-# No default model: clients must specify model by alias.
+# No default_model_id set: `model="default"` (or an omitted model) resolves
+# to the first configured model of each category (chat -> qwen3.6-35b-a3b).
 
 [server]
 host = "127.0.0.1"
@@ -13,7 +15,7 @@ port = 1235
 no_ui = true
 
 [global]
-# Default device: iGPU (Hip). MoE 35B and -cuda lanes override to cuda:0.
+# Default device: iGPU (Hip). `-cuda` twin lanes override to cuda:0.
 device = "hip:0"
 
 [paged_attn]
@@ -30,37 +32,25 @@ idle_ttl_secs = 1800
 mtp = true
 mtp_n_predict = 2
 mtp_draft_sampling = "auto"
-# Draft lm_head ISQ disabled 2026-10-23 (memory envelope on 3090).
-# Re-enable for +2.6% decode on the 35B: mtp_draft_lm_head_isq = "Q4K"
 max_prefill_chunk_tokens = 2048
-# prefix_cache_n: code default 16.
-
-# ============================================================
-# Qwen3.6 35B MoE (lazy; primary model)
-# ============================================================
-# MoE: 256 experts, 8 active. Runs on cuda:0 with cold experts in CPU RAM.
-# Context: 262K native. MTP n=2 (unsloth recommends 2 for Qwen3.6).
-# V=Q8_0: V=Q4_0 reverted 2026-10-14 (all-NaN trigger on empty-GTT
-# loads with multi-chunk tools prompts). Re-enabled only on 27B (user intent).
-# Q4 bench arm below for Q5 vs Q4 comparison at equal KV.
 
 [[models]]
 model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
-alias = "qwen3.6-35b-q5"
+alias = "qwen3.6-35b-a3b"
 lazy = true
-device = "cuda:0"
-expert_device = "cpu"
 fit_ctx = true
-max_seqs = 2
 k_cache_type = "Q8_0"
 v_cache_type = "Q8_0"
 
 [models.format]
-quantized_file = "Qwen3.6-35B-A3B-UD-Q5_K_XL.gguf"
+quantized_file = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
 
+# 3090 premium lane: same weights, experts cold in CPU RAM.
+# V=Q4_0 stays banned on this model (all-NaN trigger on multi-chunk
+# tools prompts, 2026-10-14). Draft lm_head ISQ off (memory envelope).
 [[models]]
 model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
-alias = "qwen3.6-35b-q4"
+alias = "qwen3.6-35b-a3b-cuda"
 lazy = true
 device = "cuda:0"
 expert_device = "cpu"
@@ -90,19 +80,6 @@ mtp_n_predict = 3
 quantized_file = "Qwen3.8-27B-Uncensored-Q6_K.gguf"
 mmproj = "mmproj-Qwen3.8-27B-Uncensored-f16.gguf"
 
-# Q4 bench arm: same Q6_K file, no ISQ (loads natively).
-[[models]]
-model_id = "models/orcarouter/Qwen3.8-27B-Uncensored-GGUF"
-alias = "qwen3.8-27b-q4"
-lazy = true
-k_cache_type = "Q8_0"
-v_cache_type = "Q4_0"
-mtp_n_predict = 3
-
-[models.format]
-quantized_file = "Qwen3.8-27B-Uncensored-Q6_K.gguf"
-mmproj = "mmproj-Qwen3.8-27B-Uncensored-f16.gguf"
-
 # ============================================================
 # Qwen3.8 Flash-Next MoE (lazy, demand-loaded)
 # ============================================================
@@ -115,19 +92,16 @@ alias = "qwen3.8-flash-next"
 lazy = true
 k_cache_type = "Q8_0"
 v_cache_type = "Q8_0"
-mtp_n_predict = 2
 
 [models.format]
 quantized_file = "Qwen3.8-Flash-Next-Uncensored-IQ4_XS-MTP-00001-of-00003.gguf"
 mmproj = "mmproj-Qwen3.8-Flash-Next-Uncensored-F16.gguf"
 
-# ============================================================
-# Everything below is lazy: registered at boot, loaded on first request.
-# ============================================================
-
 # ------------------------------------------------------------
-# Muse Glimmer 30B (vision). MoE, 128 experts.
-# Context: ~256K. Q4_K_XL recommended. No MTP.
+# Muse Glimmer 30B (vision). Dense in this artifact (no _exps tensors
+# despite the MoE lineage); Q6_K_XL 26GB does not fit the 3090, so no
+# cuda lane. The DFlash drafter (dflash-kquant.gguf) stays hip-only.
+# Context: ~256K. No MTP.
 # ------------------------------------------------------------
 [[models]]
 model_id = "models/unsloth/Muse-Glimmer-30B-GGUF"
@@ -151,6 +125,8 @@ mtp = false
 [models.format]
 quantized_file = "gemma-4-26B-A4B-it-UD-Q6_K_XL.gguf"
 mmproj = "mmproj-F16.gguf"
+# No cuda lane: gemma4 does not implement the expert split (only the
+# qwen3_next family does), so 25GB Q6_K_XL cannot fit the 3090.
 
 [[models]]
 model_id = "models/mradermacher/Llama-3.2-30B-A3B-II-Dark-Champion-INSTRUCT-Heretic-Abliterated-Uncensored-GGUF"
@@ -173,12 +149,36 @@ mtp = false
 [models.format]
 quantized_file = "Qwen3-16B-A3B-Q4_K_M.gguf"
 
+# 3090 lane: 9.1GB fits whole on the card, experts on-GPU (no offload
+# latency). No MTP head (verified: no nextn.* tensors).
+[[models]]
+model_id = "models/unsloth/Qwen3-16B-A3B-GGUF"
+alias = "qwen3-16b-cuda"
+lazy = true
+device = "cuda:0"
+mtp = false
+
+[models.format]
+quantized_file = "Qwen3-16B-A3B-Q4_K_M.gguf"
+
 [[models]]
 model_id = "models/unsloth/Qwen3.5-4B-MTP-GGUF"
 alias = "qwen3.5-4b"
 lazy = true
 # MTP head live. n=6 (model card recommendation).
 mtp_n_predict = 6
+
+[models.format]
+quantized_file = "Qwen3.5-4B-Q8_0.gguf"
+
+# 3090 lane: proven 151 tok/s with MTP. n=2 pinned (sweep pending);
+# the hip twin keeps the card-recommended n=6.
+[[models]]
+model_id = "models/unsloth/Qwen3.5-4B-MTP-GGUF"
+alias = "qwen3.5-4b-cuda"
+lazy = true
+device = "cuda:0"
+mtp_n_predict = 2
 
 [models.format]
 quantized_file = "Qwen3.5-4B-Q8_0.gguf"
