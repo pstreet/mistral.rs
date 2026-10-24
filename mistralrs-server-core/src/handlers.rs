@@ -184,7 +184,7 @@ pub async fn re_isq(
             ));
         }
     };
-    let sender = match state.get_sender(None) {
+    let sender = match state.get_sender(None, None) {
         Ok(sender) => sender,
         Err(error) => return openai_error_from_error(&error, ApiErrorKind::Internal),
     };
@@ -212,7 +212,7 @@ async fn send_calibration(
         action,
         response: tx,
     });
-    let sender = match state.get_sender(None) {
+    let sender = match state.get_sender(None, None) {
         Ok(sender) => sender,
         Err(error) => return openai_error_from_error(&error, ApiErrorKind::Internal),
     };

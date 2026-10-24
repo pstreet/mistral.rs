@@ -1356,6 +1356,7 @@ impl MistralRsForServerBuilder {
         used_names.insert(primary_id.clone());
 
         let model = model_config.model.clone();
+        let model_category = model.category();
         let dtype = get_model_dtype(&model)?;
         let auto_device_map_params = get_auto_device_map_params(&model)?;
         let chat_template = model_config
@@ -1460,7 +1461,7 @@ impl MistralRsForServerBuilder {
                     scheduler_config,
                     engine_config,
                     mcp_client_config: self.mcp_client_config.clone(),
-                    category: None,
+                    category: Some(model_category),
                     mistralrs_config: None,
                 },
             )

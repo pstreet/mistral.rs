@@ -422,7 +422,7 @@ pub async fn send_request_with_model(
             request.model_id = Some(model_id.to_string());
         } else {
             return state
-                .get_sender(Some(model_id))?
+                .get_sender(Some(model_id), None)?
                 .send(request)
                 .await
                 .map_err(|_| MistralRsError::SenderPoisoned);

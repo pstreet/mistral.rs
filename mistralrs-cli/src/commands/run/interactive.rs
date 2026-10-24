@@ -266,7 +266,7 @@ async fn oneshot_text(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, text: String) 
         reasoning_effort,
         adapter,
     } = ctx;
-    let sender = mistralrs.get_sender(None).unwrap();
+    let sender = mistralrs.get_sender(None, None).unwrap();
     let sampling_params = interactive_sample_parameters(&mistralrs);
 
     let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
@@ -357,7 +357,7 @@ async fn oneshot_multimodal(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, input: O
         }
     };
 
-    let sender = mistralrs.get_sender(None).unwrap();
+    let sender = mistralrs.get_sender(None, None).unwrap();
     let sampling_params = interactive_sample_parameters(&mistralrs);
 
     let mut images = Vec::new();
@@ -877,7 +877,7 @@ async fn text_interactive_mode(
         reasoning_effort,
         mut adapter,
     } = config;
-    let sender = mistralrs.get_sender(None).unwrap();
+    let sender = mistralrs.get_sender(None, None).unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
     let tool_session_id = uuid::Uuid::new_v4().to_string();
 
@@ -1542,7 +1542,7 @@ async fn multimodal_interactive_mode(
     let audio_regex = Regex::new(AUDIO_REGEX).unwrap();
     let video_regex = Regex::new(VIDEO_REGEX).unwrap();
 
-    let sender = mistralrs.get_sender(None).unwrap();
+    let sender = mistralrs.get_sender(None, None).unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
     let mut images = Vec::new();
     let mut audios = Vec::new();
@@ -1866,7 +1866,7 @@ async fn diffusion_interactive_mode(
     agent_permission: AgentPermission,
     agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
 ) {
-    let sender = mistralrs.get_sender(None).unwrap();
+    let sender = mistralrs.get_sender(None, None).unwrap();
     let tool_session_id = uuid::Uuid::new_v4().to_string();
 
     let diffusion_params = DiffusionGenerationParams::default();
@@ -1991,7 +1991,7 @@ async fn speech_interactive_mode(
     agent_permission: AgentPermission,
     agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
 ) {
-    let sender = mistralrs.get_sender(None).unwrap();
+    let sender = mistralrs.get_sender(None, None).unwrap();
     let tool_session_id = uuid::Uuid::new_v4().to_string();
 
     info!("Starting interactive loop for speech");

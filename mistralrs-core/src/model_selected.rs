@@ -5,7 +5,7 @@ use clap::Subcommand;
 use crate::{
     pipeline::{
         AutoDeviceMapParams, EmbeddingLoaderType, IsqOrganization, MultimodalLoaderType,
-        NormalLoaderType, UqffWriteConfig,
+        ModelCategory, NormalLoaderType, UqffWriteConfig,
     },
     DiffusionLoaderType, LoraAdapterSpec, LoraRuntimeConfig, ModelDType, SpeechLoaderType,
 };
@@ -903,6 +903,21 @@ pub enum ModelSelected {
         #[serde(default)]
         hf_cache_path: Option<PathBuf>,
     },
+}
+
+
+impl ModelSelected {
+    /// Coarse category of the model, used for per-category default resolution
+    /// (e.g. which engine serves a `model="default"` rerank request).
+    pub fn category(&self) -> ModelCategory {
+        match self {
+            Self::Embedding { .. } => ModelCategory::Embedding,
+            Self::Reranker { .. } => ModelCategory::Reranker,
+            Self::DiffusionPlain { .. } => ModelCategory::Diffusion,
+            Self::Speech { .. } => ModelCategory::Speech,
+            _ => ModelCategory::Text,
+        }
+    }
 }
 
 #[cfg(test)]

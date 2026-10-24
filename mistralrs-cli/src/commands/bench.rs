@@ -447,7 +447,7 @@ async fn run_single_bench(
     let mut sampling_params = SamplingParams::deterministic();
     sampling_params.max_len = Some(gen_tokens);
 
-    let sender = mistralrs.get_sender(None).unwrap();
+    let sender = mistralrs.get_sender(None, None).unwrap();
     let (tx, mut rx) = channel(100);
 
     let tokens = bench_tokens(prompt_tokens, token_start);
