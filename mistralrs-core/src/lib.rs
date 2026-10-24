@@ -3875,15 +3875,25 @@ fn estimate_load_bytes(
     headroom_bytes: u64,
 ) -> Option<u64> {
     let on_disk = gguf_local_weight_bytes(&loader_config.model_selected)?;
+    // Expert-split lanes hold their MoE expert tensors in host RAM, so the
+    // device charge excludes them; the header scan keeps this gate in sync
+    // with the loader's own post-offload fit check. A failed scan keeps the
+    // full charge (refuses, never OOMs).
+    let expert_host = match loader_config.expert_device.as_deref() {
+        Some("cpu") => gguf_expert_host_bytes(&loader_config.model_selected),
+        _ => None,
+    };
     // ISQ quantizes in flight, so the device holds the target dtype, not the
     // file bytes. Scale down (never up: the transient can still hold
     // source-sized buffers, and overestimating only refuses, never OOMs).
     let weights = match loader_config.isq {
-        None => on_disk,
+        None => on_disk.saturating_sub(expert_host.unwrap_or(0)),
         Some(target) => {
             let ratio = isq_bits_per_weight(target)
                 / gguf_source_bits_per_weight(&loader_config.model_selected);
-            ((on_disk as f64 * ratio).ceil() as u64).min(on_disk)
+            let scaled = ((on_disk as f64 * ratio).ceil() as u64).min(on_disk);
+            let expert_scaled = (expert_host.unwrap_or(0) as f64 * ratio).ceil() as u64;
+            scaled.saturating_sub(expert_scaled)
         }
     };
     // NO_MMAP shards read straight into a host Vec while the device copy
@@ -4087,6 +4097,53 @@ fn gguf_local_weight_bytes(selected: &ModelSelected) -> Option<u64> {
         total = total.saturating_add(std::fs::metadata(base_path.join(name)).ok()?.len());
     }
     Some(total)
+}
+
+/// Bytes of GGUF expert tensors (the MoE roles the loader routes to
+/// `expert_device`): the canonical llama.cpp stacked names plus the
+/// Granite sparse-MoE form. `None` when the archive cannot be scanned,
+/// which callers treat as "charge everything" (refuse, never OOM).
+fn gguf_expert_host_bytes(selected: &ModelSelected) -> Option<u64> {
+    let (base, files) = match selected {
+        ModelSelected::GGUF {
+            quantized_model_id,
+            quantized_filename,
+            ..
+        } => (quantized_model_id, quantized_filename),
+        ModelSelected::XLoraGGUF {
+            quantized_model_id,
+            quantized_filename,
+            ..
+        }
+        | ModelSelected::LoraGGUF {
+            quantized_model_id,
+            quantized_filename,
+            ..
+        } => (quantized_model_id, quantized_filename),
+        _ => return None,
+    };
+    let base_path = std::path::Path::new(base);
+    if !base_path.is_dir() {
+        return None;
+    }
+    let mut total = 0u64;
+    for name in files.split(';') {
+        let archive = mistralrs_quant::GgufArchive::open_file(base_path.join(name)).ok()?;
+        for info in archive.tensors().values() {
+            if gguf_tensor_is_expert(info.name()) {
+                total = total.saturating_add(info.byte_len()? as u64);
+            }
+        }
+    }
+    Some(total)
+}
+
+fn gguf_tensor_is_expert(name: &str) -> bool {
+    name.contains("ffn_gate_exps")
+        || name.contains("ffn_up_exps")
+        || name.contains("ffn_down_exps")
+        || name.contains("ffn_gate_up_exps")
+        || name.contains("block_sparse_moe")
 }
 
 #[cfg(test)]
@@ -4322,6 +4379,86 @@ mod tests {
         assert_eq!(
             estimate_load_bytes(&cfg, u64::MAX, u64::MAX, EST_HEADROOM_BYTES),
             Some(scaled + EST_HEADROOM_BYTES)
+        );
+    }
+
+    /// Minimal single-file GGUF v3 writer for the estimator tests: the u32
+    /// alignment key plus F32 tensors laid out per the spec (offsets
+    /// aligned, data padded), so the archive scan is byte-exact.
+    fn write_min_gguf(path: &std::path::Path, tensors: &[(&str, usize)]) {
+        const ALIGN: usize = 32;
+        fn put_u32(out: &mut Vec<u8>, value: u32) {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        fn put_u64(out: &mut Vec<u8>, value: u64) {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        fn put_str(out: &mut Vec<u8>, value: &str) {
+            put_u64(out, value.len() as u64);
+            out.extend_from_slice(value.as_bytes());
+        }
+        let mut offsets = Vec::new();
+        let mut next = 0usize;
+        for &(_, bytes) in tensors {
+            offsets.push(next);
+            next += bytes.div_ceil(ALIGN) * ALIGN;
+        }
+        let mut out = Vec::new();
+        out.extend_from_slice(b"GGUF");
+        put_u32(&mut out, 3);
+        put_u64(&mut out, tensors.len() as u64);
+        put_u64(&mut out, 1); // metadata count
+        put_str(&mut out, "general.alignment");
+        put_u32(&mut out, 4); // U32
+        put_u32(&mut out, ALIGN as u32);
+        for ((name, bytes), offset) in tensors.iter().zip(&offsets) {
+            put_str(&mut out, name);
+            put_u32(&mut out, 1); // ndims
+            put_u64(&mut out, *bytes as u64 / 4); // F32 elems
+            put_u32(&mut out, 0); // F32
+            put_u64(&mut out, *offset as u64);
+        }
+        out.resize(out.len().div_ceil(ALIGN) * ALIGN, 0);
+        for &(_, bytes) in tensors {
+            out.extend(std::iter::repeat_n(0u8, bytes.div_ceil(ALIGN) * ALIGN));
+        }
+        std::fs::write(path, out).unwrap();
+    }
+
+    #[test]
+    fn estimate_excludes_expert_bytes_for_cpu_expert_split() {
+        let _lock = ESTIMATE_ENV_LOCK.lock().unwrap();
+        let _env = NoMmapEnv::set(None);
+        let dir = tempfile::tempdir().unwrap();
+        write_min_gguf(
+            &dir.path().join("w.gguf"),
+            &[
+                ("blk.0.attn_q.weight", 4 * 1024 * 1024),
+                ("blk.0.ffn_gate_exps.weight", 4 * 1024 * 1024),
+                ("blk.0.ffn_up_exps.weight", 2 * 1024 * 1024),
+            ],
+        );
+        let expert_bytes: u64 = 6 * 1024 * 1024;
+        let file_len = std::fs::metadata(dir.path().join("w.gguf")).unwrap().len();
+        let mut cfg = gguf_loader_config(dir.path(), "w.gguf", None, None);
+        // Without the split the whole file charges the device.
+        assert_eq!(
+            estimate_load_bytes(&cfg, u64::MAX, u64::MAX, EST_HEADROOM_BYTES),
+            Some(file_len + EST_HEADROOM_BYTES)
+        );
+        // With experts on the host only the dense share charges.
+        cfg.expert_device = Some("cpu".to_string());
+        assert_eq!(
+            estimate_load_bytes(&cfg, u64::MAX, u64::MAX, EST_HEADROOM_BYTES),
+            Some(file_len - expert_bytes + EST_HEADROOM_BYTES)
+        );
+        // An unscannable file keeps the full charge (refuses, never OOMs).
+        write_sized(dir.path(), "bad.gguf", EST_WEIGHT_BYTES as usize);
+        let mut cfg = gguf_loader_config(dir.path(), "bad.gguf", None, None);
+        cfg.expert_device = Some("cpu".to_string());
+        assert_eq!(
+            estimate_load_bytes(&cfg, u64::MAX, u64::MAX, EST_HEADROOM_BYTES),
+            Some(EST_WEIGHT_BYTES + EST_HEADROOM_BYTES)
         );
     }
 
