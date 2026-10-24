@@ -1794,52 +1794,30 @@ parity queue) now outranks it on impact.
       (CPU lanes are exact 1.0) - device kernel property, harmless
       for cosine retrieval; whether the old safetensors-on-hip lane
       was exactly 1.0 was never measured, so this may be pre-existing.
-- [ ] ~M Reranker lane + /v1/rerank endpoint (opened 2026-10-19, user
-      demand: openwebui's Reranking Model slot wants a Jina/Cohere-
-      style rerank endpoint; today only llama.cpp --reranking fills
-      it. mistral.rs has NO reranker support: no endpoint, no loader;
-      the only in-tree rerank is the agent web-search embedding
-      rerank (SearchEmbeddingModel = EmbeddingGemma300M only, BM25
-      pre-filter + cosine, a bi-encoder - not a cross-encoder, and
-      it stays in web-search). FIRST CUT: Qwen3-Reranker-0.6B, the
-      sibling of the shipped embedder (same 28-layer qwen3 arch, 32k
-      ctx, 100+ languages; safetensors loads via ST CrossEncoder;
-      known-good GGUF: ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF from
-      the official convert_hf_to_gguf.py). SCORING (llama.cpp
-      precedent): causal-LM forward per (query, doc) pair through
-      the rerank template (baked <Instruct>/<Query>/<Document> with
-      string substitution, default instruct hardcodes "Given a web
-      search query, retrieve relevant passages..."; score = softmax
-      over the yes/no token logits. GGUF stores the head as
-      cls.output.weight (extracted from lm_head by the official
-      converter), marks {arch}.pooling_type = RANK - the third
-      value of the SAME metadata key the embedding arm reads (we
-      punted on it there), and classifier.output_labels = yes/no.
-      GGUF FOOTGUN (llama.cpp#16407): naive community conversions
-      drop cls.output.weight/RANK metadata and emit garbage scores
-      (4.5e-23) - validate against known-good artifacts only.
-      SHAPE: new kind = "reranker" lane mirroring the embedding lane
-      (ModelSelected::Reranker + toml + CLI subcommand; GGUF arm
-      reuses the native machinery: arch mapping, config synthesis,
-      embedded tokenizer + add_eos, loud bails on ISQ/UQFF/topology),
-      pipeline forward = batched pair scoring (no pooling; reads
-      the head the embedder lane drops), /v1/rerank endpoint in
-      mistralrs-server-core ({model, query, documents, top_n} ->
-      index + relevance_score, Jina/Cohere-compatible so openwebui's
-      external reranker engine points straight at mistral.rs).
-      /v1/embeddings must refuse reranker checkpoints (llama.cpp
-      returns zeros there). QUANT BAR (community bench, MTEB
-      AskUbuntu on a 3090): Q8_0 -0.2% NDCG@10, Q4_K_M -0.3%, Q4_0
-      -2%, Q2_K unusable (-29%) - Q8_0/Q6_K/Q4_K_M all fine, below
-      Q4_K_M is a cliff (small rerankers are quant-sensitive).
-      VALIDATION: A/B vs llama-server --reranking on the probe lane
-      (same GGUF artifact, score + ranking parity), retrieval-
-      ranking comparison vs the Qwen3-Embedding lane, 4 shapes,
-      openwebui slot live test. LATER CUTS: 4B/8B rerankers (same
-      lane), bge-reranker class (XLMRoberta cross-encoder, true
-      classification head, different loader), custom instruction
-      field (llama.cpp lacks it too; Qwen's eval says custom
-      instruct adds only 1-5%).
+- [x] ~M Reranker lane + /v1/rerank endpoint (opened 2026-10-19, closed
+      2026-10-24). Qwen3-Reranker-0.6B first cut, GGUF-only lane mirroring
+      the embedding lane. A/B vs llama-server --reranking on the probe lane
+      (same ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF artifact): ranking parity
+      2/2 cases, scores within ~0.002 (mistral.rs 0.9922/0.9844/0.0674/0.0293
+      vs llama.cpp 0.9941/0.9836/0.0698/0.0316). /v1/embeddings refuses
+      reranker checkpoints (400 "incompatible for this model's category");
+      /v1/chat/completions and /v1/completions refused the same way.
+      GGUF metadata gotcha (caught live): llama.cpp writes the classifier
+      labels under the ARCH-PREFIXED key `qwen3.classifier.output_labels`
+      (and `qwen3.pooling_type` for RANK), not the unprefixed
+      `classifier.output_labels` the spec assumed - same convention as
+      pooling_type. Fixed in mistralrs-quant/src/gguf/embedding.rs.
+      Template gotcha (caught live): the official baked
+      `tokenizer.chat_template.rerank` carries an EMPTY think block
+      (`assistant\n<think>\n\n\n\n</think>\n\n\n`); the first cut
+      omitted it and scored 0.053 vs 0.994. format_rerank_prompt in
+      mistralrs-core/src/request.rs now reproduces the artifact byte-for-byte
+      (unit test `rerank_prompt_matches_official_gguf_template` locks it).
+      Synthetic GGUF e2e test (loads_qwen3_reranker_gguf_and_scores) +
+      refusal test + score-head binding test all pass; 4 shapes clean.
+      LATER CUTS (unchanged): 4B/8B rerankers, bge-reranker (XLMRoberta
+      cross-encoder, true classification head, different loader), custom
+      instruction field (llama.cpp lacks it too; Qwen eval says +1-5%).
 - [ ] ~L qwen4exp model-arch port: serve Qwen3.8-Flash-Next (opened
       2026-10-21, user demand: the orcarouter uncensored GGUF is
       already on disk - 95GB on a 98%-full disk carrying it until

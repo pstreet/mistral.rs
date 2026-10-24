@@ -3,4 +3,4 @@ pub(crate) mod inputs_processor;
 mod layers;
 pub(crate) mod qwen3_embedding;
 
-pub use layers::{Dense, DenseActivation, Normalize, Pooling};
+pub use layers::{Dense, DenseActivation, Normalize, Pooling, RerankScoreHead};

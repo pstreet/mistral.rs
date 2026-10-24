@@ -333,3 +333,41 @@ mistralrs bench embedding [OPTIONS] --model-id <MODEL_ID>
 | `--pa-k-cache-type <K_CACHE_TYPE>` |  | K cache quantization type override (`cache_type` when unset) |
 | `--pa-v-cache-type <V_CACHE_TYPE>` |  | V cache quantization type override (`cache_type` when unset) |
 
+## mistralrs bench reranker
+
+Reranker (cross-encoder) model, loaded from GGUF
+
+```
+mistralrs bench reranker [OPTIONS] --model-id <MODEL_ID>
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local path to model directory |
+| `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
+| `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
+| `--dtype <DTYPE>` | `auto` | Model data type |
+| `--hf-overrides <HF_OVERRIDES>` |  | Recursively merged JSON overrides for the Hugging Face model config |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Runtime model context length |
+| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified. Possible values: `plain`, `gguf`, `ggml`. |
+| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
+| `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
+| `--gqa <GQA>` | `1` | GQA value for GGML models |
+| `--cpu` | `false` | Force CPU-only execution |
+| `--device <DEVICE>` |  | Explicit device: "cpu", "cuda:<idx>", or "hip:<idx>". Omit to auto-select (native GPU serving this build, else CPU). The API qualifier is the vendor-API choice; the index is per-API |
+| `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
+| `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
+| `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
+| `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
+| `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA/ROCm, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
+| `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
+| `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
+| `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA/ROCm) |
+| `--fit-ctx` | `false` | Shrink-to-fit: when the configured KV pool does not fit post-load memory, cut it (loudly) instead of refusing to load. Off by default |
+| `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
+| `--pa-k-cache-type <K_CACHE_TYPE>` |  | K cache quantization type override (`cache_type` when unset) |
+| `--pa-v-cache-type <V_CACHE_TYPE>` |  | V cache quantization type override (`cache_type` when unset) |
+

@@ -191,7 +191,8 @@ impl Engine {
             | RequestMessage::ImageGeneration { .. }
             | RequestMessage::SpeechGeneration { .. }
             | RequestMessage::Embedding { .. }
-            | RequestMessage::EmbeddingTokens { .. } => None,
+            | RequestMessage::EmbeddingTokens { .. }
+            | RequestMessage::Rerank { .. } => None,
         };
         let truncate_sequence = request.truncate_sequence;
         if is_chat
@@ -228,6 +229,7 @@ impl Engine {
                 ModelCategory::Embedding,
                 RequestMessage::Embedding { .. } | RequestMessage::EmbeddingTokens { .. },
             ) => (),
+            (ModelCategory::Reranker, RequestMessage::Rerank { .. }) => (),
             _ => {
                 request
                     .response
@@ -289,7 +291,8 @@ impl Engine {
             RequestMessage::ImageGeneration { .. }
             | RequestMessage::SpeechGeneration { .. }
             | RequestMessage::Embedding { .. }
-            | RequestMessage::EmbeddingTokens { .. } => SeqStepType::OneShot,
+            | RequestMessage::EmbeddingTokens { .. }
+            | RequestMessage::Rerank { .. } => SeqStepType::OneShot,
             _ => SeqStepType::PromptAndDecode,
         };
 
@@ -376,6 +379,28 @@ impl Engine {
             }
             RequestMessage::ImageGeneration { prompt, .. }
             | RequestMessage::SpeechGeneration { prompt } => (vec![u32::MAX], prompt),
+            RequestMessage::Rerank { query, document } => {
+                let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
+                    request
+                        .response
+                        .send(Response::ValidationError(
+                            "Rerank requests require the pipeline to have a tokenizer".into(),
+                        ))
+                        .await
+                        .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                    return;
+                };
+                let text = crate::request::format_rerank_prompt(&query, &document);
+                let prompt = tokenizer
+                    .encode_fast(text.clone(), true)
+                    .map_err(anyhow::Error::msg);
+                (
+                    handle_seq_error!(prompt, request.response)
+                        .get_ids()
+                        .to_vec(),
+                    text,
+                )
+            }
             RequestMessage::CompletionTokens(it)
             | RequestMessage::EmbeddingTokens { prompt: it } => {
                 let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
@@ -423,11 +448,15 @@ impl Engine {
 
         if matches!(
             get_mut_arcmutex!(self.pipeline).category(),
-            ModelCategory::Text | ModelCategory::Multimodal { .. } | ModelCategory::Embedding
+            ModelCategory::Text
+                | ModelCategory::Multimodal { .. }
+                | ModelCategory::Embedding
+                | ModelCategory::Reranker
         ) && prompt_tokens.len() > get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len
         {
             // text/vision => truncate from start
             // embedding => truncate from end
+            // rerank => truncate from start, no generation reserve (the tail is scored)
             let category = get_mut_arcmutex!(self.pipeline).category();
             if !truncate_sequence {
                 request
@@ -464,6 +493,13 @@ impl Engine {
 
                 prompt_tokens = prompt_tokens[slice_start..].to_vec();
                 warn!("Prompt for request {} was {currently_over} tokens over the model maximum length. The first {slice_start} tokens were truncated to make space for generation.", request.id);
+            } else if category == ModelCategory::Reranker {
+                let prompt_len = prompt_tokens.len();
+                let max_len = get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len;
+                let currently_over = prompt_len - max_len;
+
+                prompt_tokens = prompt_tokens[prompt_len - max_len..].to_vec();
+                warn!("Prompt for request {} was {currently_over} tokens over the model maximum length. The first {currently_over} tokens were truncated (rerank scores the final position).", request.id);
             } else {
                 let prompt_len = prompt_tokens.len();
                 let max_len = get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len;

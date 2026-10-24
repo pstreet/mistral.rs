@@ -1720,6 +1720,68 @@ pub struct EmbeddingResponse {
     pub usage: EmbeddingUsage,
 }
 
+/// A rerank document: either a plain string (Jina-style) or an object with a
+/// `text` field (Cohere-style).
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(untagged)]
+pub enum RerankDocument {
+    Text(String),
+    Object { text: String },
+}
+
+impl RerankDocument {
+    pub fn text(&self) -> &str {
+        match self {
+            Self::Text(text) => text,
+            Self::Object { text } => text,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct RerankRequest {
+    /// Model ID; "default" targets the only loaded model.
+    #[schema(example = "default")]
+    #[serde(default = "default_model")]
+    pub model: String,
+    /// The search query to score documents against.
+    pub query: String,
+    /// Documents to score, ordered by input index.
+    pub documents: Vec<RerankDocument>,
+    /// Return only the top N scored documents. `None` returns all.
+    #[schema(example = json!(Option::None::<usize>))]
+    pub top_n: Option<usize>,
+    #[schema(example = json!(Option::None::<String>))]
+    #[serde(rename = "user")]
+    pub _user: Option<String>,
+
+    // mistral.rs additional
+    /// Truncate inputs that exceed the model's context length instead of erroring.
+    #[schema(example = json!(Option::None::<bool>))]
+    #[serde(default)]
+    pub truncate_sequence: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RerankResult {
+    pub index: u32,
+    pub relevance_score: f32,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RerankUsage {
+    pub prompt_tokens: u32,
+    pub total_tokens: u32,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RerankResponse {
+    pub id: String,
+    pub model: String,
+    pub results: Vec<RerankResult>,
+    pub usage: RerankUsage,
+}
+
 /// Image generation request
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ImageGenerationRequest {

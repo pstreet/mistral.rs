@@ -185,11 +185,11 @@ struct EmbeddingGgufContext {
 /// Convert the tokenizer embedded in the GGUF. `tokenizer.ggml.add_eos_token`
 /// mirrors llama.cpp's embedding semantics: the EOS is appended at embed time
 /// (a post-processor here), because last-token pooling reads the EOS position.
-fn convert_embedded_gguf_tokenizer(
-    ctx: &EmbeddingGgufContext,
+pub(crate) fn convert_embedded_gguf_tokenizer(
+    archive: &mistralrs_quant::GgufArchive,
 ) -> Result<crate::gguf::GgufTokenizerConversion> {
-    let conversion = crate::gguf::convert_gguf_metadata_to_hf_tokenizer(ctx.archive.metadata())?;
-    let add_eos = match ctx.archive.metadata_value("tokenizer.ggml.add_eos_token") {
+    let conversion = crate::gguf::convert_gguf_metadata_to_hf_tokenizer(archive.metadata())?;
+    let add_eos = match archive.metadata_value("tokenizer.ggml.add_eos_token") {
         Some(candle_core::quantized::gguf_file::Value::Bool(value)) => *value,
         Some(value) => {
             anyhow::bail!("GGUF `tokenizer.ggml.add_eos_token` must be a bool, got {value:?}")
@@ -294,7 +294,7 @@ impl EmbeddingLoader {
     ) -> Result<Tokenizer> {
         let path = paths.get_tokenizer_filename();
         if path.as_os_str().is_empty() {
-            return Ok(convert_embedded_gguf_tokenizer(ctx)?.tokenizer);
+            return Ok(convert_embedded_gguf_tokenizer(&ctx.archive)?.tokenizer);
         }
         let external = get_tokenizer(path, None).and_then(|tokenizer| {
             crate::gguf::validate_external_gguf_tokenizer(tokenizer, ctx.archive.metadata())
@@ -316,7 +316,7 @@ impl EmbeddingLoader {
                      the tokenizer embedded in the GGUF instead: {error}",
                     path.display()
                 );
-                convert_embedded_gguf_tokenizer(ctx)
+                convert_embedded_gguf_tokenizer(&ctx.archive)
                     .map(|conversion| conversion.tokenizer)
                     .with_context(|| {
                         format!(

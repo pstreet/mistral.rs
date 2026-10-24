@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use candle_core::quantized::gguf_file::Value as GgufValue;
-use mistralrs_quant::{GgufArchive, GgufBindingMap};
+use mistralrs_quant::{GgufArchive, GgufBindingMap, GgufTensorBinding};
 use serde_json::{json, Value as JsonValue};
 
 use super::{
@@ -17,8 +17,100 @@ use std::collections::HashMap;
 const GGUF_POOLING_NONE: u32 = 0;
 const GGUF_POOLING_MEAN: u32 = 1;
 const GGUF_POOLING_LAST: u32 = 3;
+pub(crate) const GGUF_POOLING_RANK: u32 = 4;
 
 const EMBEDDING_GEMMA_ARCHITECTURE: &str = "Gemma3TextModel";
+
+// Native binding for the reranker score head, following the sentence-transformers
+// CrossEncoder `score.weight` convention. The GGUF tensor is llama.cpp's
+// classifier head, extracted from `lm_head` by the official converter.
+pub(crate) const RERANKER_SCORE_HEAD_BINDING: &str = "score.weight";
+const GGUF_RERANKER_HEAD_TENSOR: &str = "cls.output.weight";
+
+/// Label order and yes-position resolved from the GGUF classifier metadata.
+#[derive(Debug)]
+pub(crate) struct RerankHeadSpec {
+    pub labels: Vec<String>,
+    pub yes_idx: usize,
+}
+
+pub(crate) fn rerank_head_spec_from_gguf(archive: &GgufArchive) -> Result<RerankHeadSpec> {
+    let architecture = match archive.metadata_value("general.architecture") {
+        Some(GgufValue::String(value)) => value.as_str(),
+        Some(value) => bail!("GGUF `general.architecture` must be a string, got {value:?}"),
+        None => bail!("GGUF metadata is missing `general.architecture`"),
+    };
+    anyhow::ensure!(
+        architecture.trim().eq_ignore_ascii_case("qwen3"),
+        "GGUF architecture `{architecture}` has no reranker loader. Supported: `qwen3` \
+         (Qwen3-Reranker)"
+    );
+    let head_spec = rerank_head_spec_from_metadata(
+        archive.metadata_value("qwen3.pooling_type"),
+        archive.metadata_value("qwen3.classifier.output_labels"),
+    )?;
+    anyhow::ensure!(
+        archive.tensors().contains_key(GGUF_RERANKER_HEAD_TENSOR),
+        "GGUF is missing the `{GGUF_RERANKER_HEAD_TENSOR}` tensor required for reranker \
+         loading; use an artifact from the official convert_hf_to_gguf.py"
+    );
+    Ok(head_spec)
+}
+
+fn rerank_head_spec_from_metadata(
+    pooling: Option<&GgufValue>,
+    labels: Option<&GgufValue>,
+) -> Result<RerankHeadSpec> {
+    let pooling_key = "qwen3.pooling_type";
+    match pooling {
+        Some(GgufValue::U32(GGUF_POOLING_RANK)) => (),
+        Some(other) => bail!(
+            "GGUF `{pooling_key}` must be {GGUF_POOLING_RANK} (RANK) for reranker loading, got \
+             {other:?}"
+        ),
+        None => bail!(
+            "GGUF is missing `{pooling_key}` = {GGUF_POOLING_RANK} (RANK), so this is not a \
+             reranker checkpoint. Community conversions that drop the RANK metadata and the \
+             `cls.output.weight` head emit garbage scores; use an artifact from the official \
+             convert_hf_to_gguf.py (e.g. ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF)"
+        ),
+    }
+    let labels = match labels {
+        Some(GgufValue::Array(items)) => items
+            .iter()
+            .map(|item| match item {
+                GgufValue::String(value) => Ok(value.as_str().to_string()),
+                other => {
+                    bail!("GGUF `qwen3.classifier.output_labels` entries must be strings, got {other:?}")
+                }
+            })
+            .collect::<Result<Vec<_>>>()?,
+        Some(other) => {
+            bail!("GGUF `qwen3.classifier.output_labels` must be an array of strings, got {other:?}")
+        }
+        None => bail!("GGUF is missing `qwen3.classifier.output_labels` (expected `[\"yes\", \"no\"]`)"),
+    };
+    anyhow::ensure!(
+        labels.len() == 2,
+        "GGUF `qwen3.classifier.output_labels` must have exactly two entries, got {labels:?}"
+    );
+    let yes_idx = labels
+        .iter()
+        .position(|label| label == "yes")
+        .with_context(|| {
+            format!("GGUF `qwen3.classifier.output_labels` {labels:?} has no `yes` label")
+        })?;
+    Ok(RerankHeadSpec { labels, yes_idx })
+}
+
+pub(crate) fn build_reranker_bindings(archive: &GgufArchive) -> Result<GgufBindingMap> {
+    let mut bindings = build_embedding_bindings(archive, EmbeddingLoaderType::Qwen3Embedding)?;
+    bindings.insert(
+        RERANKER_SCORE_HEAD_BINDING,
+        GgufTensorBinding::tensor(GGUF_RERANKER_HEAD_TENSOR),
+    );
+    Ok(bindings)
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PoolingMode {
@@ -200,7 +292,6 @@ mod tests {
     use mistralrs_quant::GgufTensorBinding;
 
     const GGUF_POOLING_CLS: u32 = 2;
-    const GGUF_POOLING_RANK: u32 = 4;
 
     fn qwen3_metadata() -> HashMap<String, GgufValue> {
         HashMap::from([
@@ -398,5 +489,62 @@ mod tests {
             1024
         );
         assert!(config_hidden_size("{}").is_err());
+    }
+
+    fn labels(value: &[&str]) -> GgufValue {
+        GgufValue::Array(
+            value
+                .iter()
+                .map(|label| GgufValue::String(label.to_string()))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn rerank_spec_resolves_yes_index_from_labels() {
+        let spec = rerank_head_spec_from_metadata(
+            Some(&GgufValue::U32(GGUF_POOLING_RANK)),
+            Some(&labels(&["yes", "no"])),
+        )
+        .unwrap();
+        assert_eq!(spec.yes_idx, 0);
+
+        let flipped = rerank_head_spec_from_metadata(
+            Some(&GgufValue::U32(GGUF_POOLING_RANK)),
+            Some(&labels(&["no", "yes"])),
+        )
+        .unwrap();
+        assert_eq!(flipped.yes_idx, 1);
+    }
+
+    #[test]
+    fn rerank_spec_requires_rank_pooling() {
+        assert!(rerank_head_spec_from_metadata(
+            Some(&GgufValue::U32(GGUF_POOLING_MEAN)),
+            Some(&labels(&["yes", "no"]))
+        )
+        .is_err());
+        let missing = rerank_head_spec_from_metadata(None, Some(&labels(&["yes", "no"])))
+            .unwrap_err()
+            .to_string();
+        assert!(missing.contains("RANK"), "{missing}");
+        assert!(missing.contains("garbage scores"), "{missing}");
+    }
+
+    #[test]
+    fn rerank_spec_requires_two_labels_with_yes() {
+        assert!(
+            rerank_head_spec_from_metadata(Some(&GgufValue::U32(GGUF_POOLING_RANK)), None).is_err()
+        );
+        assert!(rerank_head_spec_from_metadata(
+            Some(&GgufValue::U32(GGUF_POOLING_RANK)),
+            Some(&labels(&["yes"]))
+        )
+        .is_err());
+        assert!(rerank_head_spec_from_metadata(
+            Some(&GgufValue::U32(GGUF_POOLING_RANK)),
+            Some(&labels(&["true", "false"]))
+        )
+        .is_err());
     }
 }

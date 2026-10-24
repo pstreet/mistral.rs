@@ -870,6 +870,39 @@ pub enum ModelSelected {
         #[serde(default)]
         hf_cache_path: Option<PathBuf>,
     },
+
+    /// Select a GGUF reranker (cross-encoder) model, without quantization or adapters
+    Reranker {
+        /// Model ID to load from. This may be a HF hub repo or a local path.
+        #[arg(short, long)]
+        model_id: String,
+
+        /// Path to local tokenizer.json file. If this is specified, it is used over any remote file.
+        #[arg(short, long)]
+        #[serde(default)]
+        tokenizer_json: Option<String>,
+
+        /// Model data type. Defaults to `auto`.
+        #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
+        #[serde(default = "default_model_dtype")]
+        dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        #[serde(default)]
+        topology: Option<String>,
+
+        /// GGUF filename(s) within `model_id` to load reranker weights from.
+        /// Semicolon-separated for multiple files.
+        #[arg(long)]
+        #[serde(default)]
+        quantized_filename: Option<String>,
+
+        /// Cache path for Hugging Face models downloaded locally
+        #[arg(long)]
+        #[serde(default)]
+        hf_cache_path: Option<PathBuf>,
+    },
 }
 
 #[cfg(test)]

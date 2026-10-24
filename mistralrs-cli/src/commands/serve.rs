@@ -559,6 +559,46 @@ pub(crate) fn convert_to_model_selected(
                 hf_cache_path: device.hf_cache.clone(),
             })
         }
+
+        ModelType::Reranker {
+            model,
+            format,
+            device,
+            cache: _,
+        } => {
+            validate_mmproj_format(format)?;
+            if format.mmproj.is_some() {
+                anyhow::bail!("Reranker models do not support multimodal projectors");
+            }
+            let quantized_filename = match format.format {
+                None | Some(ModelFormat::Plain) => {
+                    anyhow::bail!("Reranker models require GGUF format (`--quantized-file`/`-f`)")
+                }
+                Some(ModelFormat::Gguf) => Some(
+                    format
+                        .quantized_file
+                        .clone()
+                        .context("GGUF reranker models require `--quantized-file`/`-f`")?,
+                ),
+                Some(ModelFormat::Ggml) => {
+                    anyhow::bail!("Reranker models do not support GGML format")
+                }
+            };
+            Ok(ModelSelected::Reranker {
+                model_id: model.model_id.clone(),
+                tokenizer_json: model
+                    .tokenizer
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
+                dtype: model.dtype,
+                topology: device
+                    .topology
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
+                quantized_filename,
+                hf_cache_path: device.hf_cache.clone(),
+            })
+        }
     }
 }
 
@@ -888,6 +928,7 @@ pub(crate) fn extract_device_settings(
         ModelType::Diffusion { device, .. } => device,
         ModelType::Speech { device, .. } => device,
         ModelType::Embedding { device, .. } => device,
+        ModelType::Reranker { device, .. } => device,
     };
 
     (
@@ -928,7 +969,7 @@ fn extract_quantization(model_type: &ModelType) -> Option<&crate::args::Quantiza
         ModelType::Text { quantization, .. } => Some(quantization),
         ModelType::Multimodal { quantization, .. } => Some(quantization),
         ModelType::Embedding { quantization, .. } => Some(quantization),
-        ModelType::Diffusion { .. } | ModelType::Speech { .. } => None,
+        ModelType::Diffusion { .. } | ModelType::Speech { .. } | ModelType::Reranker { .. } => None,
     }
 }
 
@@ -940,7 +981,7 @@ pub(crate) fn model_quantization_mut(
         ModelType::Text { quantization, .. } => Some(quantization),
         ModelType::Multimodal { quantization, .. } => Some(quantization),
         ModelType::Embedding { quantization, .. } => Some(quantization),
-        ModelType::Diffusion { .. } | ModelType::Speech { .. } => None,
+        ModelType::Diffusion { .. } | ModelType::Speech { .. } | ModelType::Reranker { .. } => None,
     }
 }
 
@@ -949,7 +990,8 @@ fn model_format_mut(model_type: &mut ModelType) -> Option<&mut FormatOptions> {
         ModelType::Auto { format, .. }
         | ModelType::Text { format, .. }
         | ModelType::Multimodal { format, .. }
-        | ModelType::Embedding { format, .. } => Some(format),
+        | ModelType::Embedding { format, .. }
+        | ModelType::Reranker { format, .. } => Some(format),
         ModelType::Diffusion { .. } | ModelType::Speech { .. } => None,
     }
 }
@@ -959,7 +1001,8 @@ fn model_format(model_type: &ModelType) -> Option<&FormatOptions> {
         ModelType::Auto { format, .. }
         | ModelType::Text { format, .. }
         | ModelType::Multimodal { format, .. }
-        | ModelType::Embedding { format, .. } => Some(format),
+        | ModelType::Embedding { format, .. }
+        | ModelType::Reranker { format, .. } => Some(format),
         ModelType::Diffusion { .. } | ModelType::Speech { .. } => None,
     }
 }
@@ -971,7 +1014,8 @@ fn model_dtype(model_type: &ModelType) -> mistralrs_core::ModelDType {
         | ModelType::Multimodal { model, .. }
         | ModelType::Diffusion { model, .. }
         | ModelType::Speech { model, .. }
-        | ModelType::Embedding { model, .. } => model.dtype,
+        | ModelType::Embedding { model, .. }
+        | ModelType::Reranker { model, .. } => model.dtype,
     }
 }
 
@@ -982,7 +1026,8 @@ fn device_options(model_type: &ModelType) -> &DeviceOptions {
         | ModelType::Multimodal { device, .. }
         | ModelType::Diffusion { device, .. }
         | ModelType::Speech { device, .. }
-        | ModelType::Embedding { device, .. } => device,
+        | ModelType::Embedding { device, .. }
+        | ModelType::Reranker { device, .. } => device,
     }
 }
 
@@ -994,6 +1039,7 @@ pub(crate) fn model_id_mut(model_type: &mut ModelType) -> &mut String {
         ModelType::Diffusion { model, .. } => &mut model.model_id,
         ModelType::Speech { model, .. } => &mut model.model_id,
         ModelType::Embedding { model, .. } => &mut model.model_id,
+        ModelType::Reranker { model, .. } => &mut model.model_id,
     }
 }
 
@@ -1005,6 +1051,7 @@ pub(crate) fn model_id_of(model_type: &ModelType) -> &str {
         ModelType::Diffusion { model, .. } => &model.model_id,
         ModelType::Speech { model, .. } => &model.model_id,
         ModelType::Embedding { model, .. } => &model.model_id,
+        ModelType::Reranker { model, .. } => &model.model_id,
     }
 }
 
@@ -1017,7 +1064,8 @@ pub(crate) fn extract_hf_config_settings(
         | ModelType::Multimodal { model, .. }
         | ModelType::Diffusion { model, .. }
         | ModelType::Speech { model, .. }
-        | ModelType::Embedding { model, .. } => model,
+        | ModelType::Embedding { model, .. }
+        | ModelType::Reranker { model, .. } => model,
     };
     (model.max_model_len, model.hf_overrides.clone())
 }

@@ -1,0 +1,100 @@
+---
+title: Use reranker models
+description: Score query-document pairs with cross-encoder rerankers through the Jina/Cohere-compatible /v1/rerank endpoint.
+---
+
+Rerankers are cross-encoders that score how well a document answers a query,
+one (query, document) pair at a time. They re-order first-stage retrieval
+candidates far more accurately than bi-encoder cosine similarity. mistral.rs
+serves rerankers through a Jina/Cohere-compatible `POST /v1/rerank` endpoint,
+so Open WebUI's external reranker engine and other rerank clients point
+straight at the server.
+
+Supported first cut: `Qwen/Qwen3-Reranker-0.6B` GGUF checkpoints (the
+28-layer Qwen3 cross-encoder, 100+ languages, 40k context).
+
+## Loading a GGUF reranker
+
+Reranker checkpoints load through the `kind = "reranker"` entry with a
+`[models.format]` section naming the GGUF file, resolved inside `model_id`
+(a local directory or a Hugging Face repository).
+
+```toml
+command = "serve"
+
+[[models]]
+model_id = "Qwen/Qwen3-Reranker-0.6B"
+kind = "reranker"
+
+[models.format]
+quantized_file = "Qwen3-Reranker-0.6B-Q8_0.gguf"
+```
+
+Or from the CLI:
+
+```bash
+mistralrs serve reranker -m Qwen/Qwen3-Reranker-0.6B -f Qwen3-Reranker-0.6B-Q8_0.gguf
+```
+
+Use an artifact from the official `convert_hf_to_gguf.py` (for example
+`ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF`). The checkpoint must carry the
+`{arch}.pooling_type = RANK` metadata, the `qwen3.classifier.output_labels`
+(`["yes", "no"]`), and the `cls.output.weight` head extracted from `lm_head`;
+community conversions that drop these emit garbage scores, and the loader
+refuses them loudly.
+
+Scoring follows the reference implementation: each (query, document) pair is
+rendered through the rerank template baked into the official GGUF
+(`<Instruct>/<Query>/<Document>` with the default web-search instruct), a
+causal forward pass runs on the pair, and the score is the softmax
+probability of the `yes` label at the final position. Pair requests sent
+together batch into a single forward pass.
+
+Caveats:
+
+- Reranker models load from GGUF only (safetensors CrossEncoder support is not
+  there yet) and do not support ISQ-on-load, UQFF/imatrix flows, tensor
+  parallelism, or topology device mapping. Requantize the GGUF externally if
+  you need a different quantization.
+- `/v1/embeddings` refuses reranker checkpoints, and `/v1/rerank` refuses
+  embedding models: the two lanes only serve their own request type.
+- Small rerankers are quant-sensitive: Q8_0, Q6_K, and Q4_K_M track the F32
+  scores closely, but quality falls off a cliff below Q4_K_M.
+
+## Requesting rerank scores
+
+```bash
+curl http://localhost:1234/v1/rerank \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "query": "What is the capital of France?",
+    "documents": [
+      "Paris is the capital and largest city of France.",
+      "Bananas are rich in potassium.",
+      "Lyon is the third-largest city in France."
+    ],
+    "top_n": 2
+  }'
+```
+
+The response lists `results` sorted by descending relevance, each carrying
+the input `index` and a `relevance_score` in `[0, 1]`:
+
+```json
+{
+  "id": "rerank_9f2c...",
+  "model": "default",
+  "results": [
+    {"index": 0, "relevance_score": 0.9981},
+    {"index": 2, "relevance_score": 0.0042}
+  ],
+  "usage": {"prompt_tokens": 178, "total_tokens": 178}
+}
+```
+
+`documents` accepts plain strings or objects with a `text` field
+(Cohere-style). `top_n` truncates the result list; omit it to score every
+document. Long pairs over the model's context are rejected unless
+`truncate_sequence` is set, in which case the head of the pair prompt is
+dropped so the scoring position survives.

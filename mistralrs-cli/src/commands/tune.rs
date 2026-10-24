@@ -186,9 +186,10 @@ fn validate_adapter_options(model_type: &ModelType) -> Result<()> {
             }
             Ok(())
         }
-        ModelType::Diffusion { .. } | ModelType::Speech { .. } | ModelType::Embedding { .. } => {
-            Ok(())
-        }
+        ModelType::Diffusion { .. }
+        | ModelType::Speech { .. }
+        | ModelType::Embedding { .. }
+        | ModelType::Reranker { .. } => Ok(()),
     }
 }
 
@@ -251,6 +252,7 @@ fn model_kind(model_type: &ModelType) -> &'static str {
         ModelType::Diffusion { .. } => "diffusion",
         ModelType::Speech { .. } => "speech",
         ModelType::Embedding { .. } => "embedding",
+        ModelType::Reranker { .. } => "reranker",
     }
 }
 
@@ -270,7 +272,8 @@ fn model_dtype(model_selected: &ModelSelected) -> Option<&'static str> {
         | ModelSelected::DiffusionPlain { dtype, .. }
         | ModelSelected::Run { dtype, .. }
         | ModelSelected::Speech { dtype, .. }
-        | ModelSelected::Embedding { dtype, .. } => Some(match dtype {
+        | ModelSelected::Embedding { dtype, .. }
+        | ModelSelected::Reranker { dtype, .. } => Some(match dtype {
             ModelDType::Auto => "auto",
             ModelDType::F16 => "f16",
             ModelDType::BF16 => "bf16",

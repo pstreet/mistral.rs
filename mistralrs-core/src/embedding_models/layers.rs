@@ -64,6 +64,26 @@ impl Module for Normalize {
     }
 }
 
+/// Cross-encoder scoring head (Qwen3-Reranker style): last-position hidden
+/// state through the `cls.output.weight` linear, softmax over the two label
+/// logits, output is the probability of the "yes" label as [b, 1].
+#[derive(Debug, Clone)]
+pub struct RerankScoreHead {
+    pub linear: candle_nn::Linear,
+    pub yes_idx: usize,
+}
+
+impl Module for RerankScoreHead {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let (_, seq_len, _) = xs.dims3()?;
+        // Indexing the last position is a strided view; matmul needs it contiguous.
+        let last = xs.i((.., seq_len - 1, ..))?.contiguous()?;
+        let logits = self.linear.forward(&last)?;
+        let probs = candle_nn::ops::softmax(&logits, D::Minus1)?;
+        probs.i((.., self.yes_idx))?.unsqueeze(D::Minus1)
+    }
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub enum DenseActivation {
     #[serde(alias = "torch.nn.modules.linear.Identity")]

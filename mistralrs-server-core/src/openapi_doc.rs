@@ -48,13 +48,14 @@ use crate::{
         OpenAiCodeInterpreterTool, OpenAiCodeInterpreterToolType, OpenAiFunctionToolType,
         OpenAiResponsesFunctionTool, OpenAiShellEnvironment, OpenAiShellSkill, OpenAiShellTool,
         OpenAiShellToolType, OpenAiTool, OpenAiWebSearchTool, OpenAiWebSearchToolType,
-        OpenAiWebSearchUserLocation, ResponseFormat, ResponsesAnnotation, ResponsesChunk,
-        ResponsesContent, ResponsesCreateRequest, ResponsesDelta, ResponsesDeltaContent,
-        ResponsesDeltaOutput, ResponsesError, ResponsesIncompleteDetails,
-        ResponsesInputTokensDetails, ResponsesMessages, ResponsesObject, ResponsesOutput,
-        ResponsesOutputTokensDetails, ResponsesUsage, SpeechGenerationRequest, StopTokens,
-        ToolCall,
+        OpenAiWebSearchUserLocation, RerankDocument, RerankRequest, RerankResponse, RerankResult,
+        RerankUsage, ResponseFormat, ResponsesAnnotation, ResponsesChunk, ResponsesContent,
+        ResponsesCreateRequest, ResponsesDelta, ResponsesDeltaContent, ResponsesDeltaOutput,
+        ResponsesError, ResponsesIncompleteDetails, ResponsesInputTokensDetails, ResponsesMessages,
+        ResponsesObject, ResponsesOutput, ResponsesOutputTokensDetails, ResponsesUsage,
+        SpeechGenerationRequest, StopTokens, ToolCall,
     },
+    rerank::__path_rerank,
     responses::{
         __path_cancel_response, __path_create_response, __path_delete_response, __path_get_response,
     },
@@ -116,7 +117,7 @@ use mistralrs_core::{
 pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
     #[derive(OpenApi)]
     #[openapi(
-        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, re_isq, calibration_start, calibration_status, calibration_apply, image_generation, speech_generation, create_response, get_response, delete_response, cancel_response, upload_skill, list_skills, upload_skill_version, list_skill_versions, load_lora_adapter, unload_lora_adapter, list_lora_adapters, unload_model, reload_model, get_model_status, tune_model, system_info, system_doctor, get_session, put_session, delete_session, list_files, upload_file, get_file, get_file_content, delete_file, list_container_files, get_container_file, get_container_file_content, resolve_agent_approval, metrics),
+        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, rerank, re_isq, calibration_start, calibration_status, calibration_apply, image_generation, speech_generation, create_response, get_response, delete_response, cancel_response, upload_skill, list_skills, upload_skill_version, list_skill_versions, load_lora_adapter, unload_lora_adapter, list_lora_adapters, unload_model, reload_model, get_model_status, tune_model, system_info, system_doctor, get_session, put_session, delete_session, list_files, upload_file, get_file, get_file_content, delete_file, list_container_files, get_container_file, get_container_file_content, resolve_agent_approval, metrics),
         components(schemas(
             ApprovalDecision,
             ApprovalDecisionRequest,
@@ -159,6 +160,11 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             EmbeddingResponse,
             EmbeddingUsage,
             EmbeddingVector,
+            RerankDocument,
+            RerankRequest,
+            RerankResponse,
+            RerankResult,
+            RerankUsage,
             ContainerFileMetadata,
             FileMetadata,
             FileCitation,

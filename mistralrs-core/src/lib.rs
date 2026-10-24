@@ -247,8 +247,9 @@ pub use pipeline::{
     ModelPaths, MultimodalLoader, MultimodalLoaderBuilder, MultimodalLoaderType,
     MultimodalPromptPrefixer, MultimodalSpecificConfig, NormalLoader, NormalLoaderBuilder,
     NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
-    ResolvedLoraAdapter, SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality,
-    TokenSource, UqffWriteConfig, UQFF_MULTI_FILE_DELIMITER,
+    RerankerLoader, RerankerLoaderBuilder, RerankerSpecificConfig, ResolvedLoraAdapter,
+    SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality, TokenSource,
+    UqffWriteConfig, UQFF_MULTI_FILE_DELIMITER,
 };
 pub use request::{
     resolve_reasoning_controls, ApproximateUserLocation, CalibrationAction, CalibrationRequest,

@@ -129,6 +129,7 @@ pub enum ModelKind {
     Diffusion,
     Speech,
     Embedding,
+    Reranker,
 }
 
 /// A model's `device` config accepts both forms: the flat explicit device
@@ -445,6 +446,12 @@ impl ModelEntry {
                 device,
                 cache,
             },
+            ModelKind::Reranker => ModelType::Reranker {
+                model,
+                format: self.format.clone(),
+                device,
+                cache,
+            },
         }
     }
 }
@@ -499,6 +506,31 @@ model_id = "google/gemma-4-E4B-it"
         assert!(matches!(
             cfg.models[0].to_model_type(false),
             ModelType::Multimodal { .. }
+        ));
+    }
+
+    #[test]
+    fn reranker_kind_maps_to_reranker_model_type() {
+        let config: CliConfig = toml::from_str(
+            r#"
+command = "serve"
+
+[[models]]
+kind = "reranker"
+model_id = "Qwen/Qwen3-Reranker-0.6B"
+"#,
+        )
+        .unwrap();
+
+        let cfg = match config {
+            CliConfig::Serve(cfg) => cfg,
+            CliConfig::Run(_) => panic!("expected serve config"),
+        };
+
+        assert!(matches!(cfg.models[0].kind, ModelKind::Reranker));
+        assert!(matches!(
+            cfg.models[0].to_model_type(false),
+            ModelType::Reranker { .. }
         ));
     }
 

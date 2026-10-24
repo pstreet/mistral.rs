@@ -1,5 +1,37 @@
 # COMPLETED: candle + mistral.rs fork work
 
+## Oct 24 (reranker lane: Qwen3-Reranker-0.6B + /v1/rerank endpoint)
+
+- Reranker lane (mistral.rs `~M`): new `kind = "reranker"` mirroring the
+  embedding lane. `ModelSelected::Reranker` (GGUF-only first cut),
+  `RerankerLoader`/`RerankerPipeline` in `mistralrs-core/src/pipeline/reranker.rs`,
+  `RerankScoreHead` in `embedding_models/layers.rs` (last-position hidden
+  state through `cls.output.weight`, softmax over the yes/no logits, returns
+  P(yes) as [b, 1]), `RequestMessage::Rerank { query, document }` with the
+  baked prompt from `request::format_rerank_prompt`, and a Jina/Cohere-
+  compatible `POST /v1/rerank` handler in `mistralrs-server-core/src/rerank.rs`
+  ({model, query, documents, top_n} -> index + relevance_score). `/v1/embeddings`
+  (and chat/completions) refuse reranker checkpoints via the category table.
+- GGUF loader arm in `mistralrs-quant/src/gguf/embedding.rs` reads
+  `{arch}.pooling_type = RANK` + `classifier.output_labels = yes/no` (the
+  arch-prefixed key the spec assumed was unprefixed - caught live) and binds
+  `cls.output.weight` -> `score.weight`.
+- Validation: synthetic GGUF e2e (loads + scores in [0,1]), refusal test,
+  score-head binding test all pass; 4 shapes clean. Probe A/B vs
+  llama-server --reranking on the same ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF
+  artifact: ranking parity 2/2, scores within ~0.002 (mistral.rs
+  0.9922/0.9844/0.0674/0.0293 vs llama.cpp 0.9941/0.9836/0.0698/0.0316).
+  Refusal of /v1/embeddings on a reranker checkpoint verified (400).
+- Two template/metadata gotchas caught live and recorded: (1) the official
+  baked rerank template carries an empty think block
+  (`assistant\n<think>\n\n\n\n</think>\n\n\n`); omitting it scored
+  0.053 instead of 0.994 - fixed and locked by
+  `rerank_prompt_matches_official_gguf_template`. (2) the classifier labels
+  are arch-prefixed (`qwen3.classifier.output_labels`), not bare.
+- GGUF artifact: models/Qwen/Qwen3-Reranker-0.6B/qwen3-reranker-0.6b-q8_0.gguf (610MB).
+- Probe lane ran on :1244 (fast profile); teardown done; card shows only prod.
+
+
 ## Oct 23-24 (3090 throughput lane: expert-split MoE campaign + pooled-event cudarc)
 - Expert-split MoE cold path (mistral.rs): `forward_indexed` direct path in
   `forward_gather` (gate+up fused kernel + down via indexed_gemv, flat form,

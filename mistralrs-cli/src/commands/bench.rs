@@ -122,7 +122,8 @@ fn get_model_id(model_type: &ModelType) -> String {
         | ModelType::Multimodal { model, .. }
         | ModelType::Diffusion { model, .. }
         | ModelType::Speech { model, .. }
-        | ModelType::Embedding { model, .. } => model.model_id.clone(),
+        | ModelType::Embedding { model, .. }
+        | ModelType::Reranker { model, .. } => model.model_id.clone(),
     }
 }
 

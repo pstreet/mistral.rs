@@ -837,6 +837,8 @@ fn model_label_field(route: &str) -> Option<ModelLabelField> {
             | "/v1/messages"
             | "/v1/messages/count_tokens"
             | "/v1/embeddings"
+            | "/v1/rerank"
+            | "/v1/reranking"
             | "/v1/images/generations"
             | "/v1/audio/speech"
     ) {

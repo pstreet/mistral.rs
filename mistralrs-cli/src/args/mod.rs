@@ -434,7 +434,8 @@ fn model_format_mut(model_type: &mut ModelType) -> Option<&mut FormatOptions> {
         ModelType::Auto { format, .. }
         | ModelType::Text { format, .. }
         | ModelType::Multimodal { format, .. }
-        | ModelType::Embedding { format, .. } => Some(format),
+        | ModelType::Embedding { format, .. }
+        | ModelType::Reranker { format, .. } => Some(format),
         ModelType::Diffusion { .. } | ModelType::Speech { .. } => None,
     }
 }
@@ -547,6 +548,21 @@ pub enum ModelType {
 
         #[command(flatten)]
         quantization: QuantizationOptions,
+
+        #[command(flatten)]
+        device: DeviceOptions,
+
+        #[command(flatten)]
+        cache: CacheOptions,
+    },
+
+    /// Reranker (cross-encoder) model, loaded from GGUF
+    Reranker {
+        #[command(flatten)]
+        model: ModelSourceOptions,
+
+        #[command(flatten)]
+        format: FormatOptions,
 
         #[command(flatten)]
         device: DeviceOptions,

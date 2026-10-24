@@ -38,9 +38,10 @@ fn dynamic_adapter_options(
         ModelType::Multimodal { adapter, .. } => {
             Some((adapter.dynamic_lora_enabled(), &adapter.lora))
         }
-        ModelType::Diffusion { .. } | ModelType::Speech { .. } | ModelType::Embedding { .. } => {
-            None
-        }
+        ModelType::Diffusion { .. }
+        | ModelType::Speech { .. }
+        | ModelType::Embedding { .. }
+        | ModelType::Reranker { .. } => None,
     }
 }
 

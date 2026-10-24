@@ -227,11 +227,62 @@ pub enum RequestMessage {
     EmbeddingTokens {
         prompt: Vec<u32>,
     },
+    Rerank {
+        query: String,
+        document: String,
+    },
+}
+
+/// Qwen3-Reranker pair prompt. Byte-identical to the official GGUF artifact's
+/// baked `tokenizer.chat_template.rerank` (ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF):
+/// single newlines between the Instruct/Query/Document fields, an empty think
+/// block, scoring position is the final token after `</think>`.
+pub fn format_rerank_prompt(query: &str, document: &str) -> String {
+    format!(
+        "<|im_start|>system
+Judge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>
+<|im_start|>user
+<Instruct>: Given a web search query, retrieve relevant passages that answer the query
+<Query>: {}
+<Document>: {}<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+",
+        query, document
+    )
 }
 
 fn default_responder<T>() -> Sender<T> {
     let (sender, _) = tokio::sync::mpsc::channel(1);
     sender
+}
+
+#[cfg(test)]
+mod rerank_tests {
+    use super::format_rerank_prompt;
+
+    // Byte-identical to the official ggml-org/Qwen3-Reranker-0.6B GGUF's baked
+    // `tokenizer.chat_template.rerank` after {query}/{document} substitution.
+    #[test]
+    fn rerank_prompt_matches_official_gguf_template() {
+        let rendered = format_rerank_prompt("QUERY", "DOCUMENT");
+        let expected = "<|im_start|>system
+Judge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>
+<|im_start|>user
+<Instruct>: Given a web search query, retrieve relevant passages that answer the query
+<Query>: QUERY
+<Document>: DOCUMENT<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+";
+        assert_eq!(rendered, expected);
+    }
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]

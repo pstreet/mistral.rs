@@ -18,6 +18,7 @@ mod hf_config;
 mod inputs_processor;
 mod isq;
 mod isq_flow;
+mod reranker;
 pub use isq_flow::CalibrationStatus;
 pub(crate) mod llg;
 mod loaders;
@@ -82,6 +83,7 @@ pub use loaders::{
     Qwen3_5TextLoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader,
     VoxtralLoader,
 };
+pub use reranker::{RerankerLoader, RerankerLoaderBuilder, RerankerSpecificConfig};
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_device_layers_for_loader(
     loader: &dyn loaders::DeviceMappedModelLoader,
@@ -1276,6 +1278,7 @@ pub enum SupportedModality {
     Vision,
     Video,
     Embedding,
+    Rerank,
 }
 
 impl Debug for SupportedModality {
@@ -1286,6 +1289,7 @@ impl Debug for SupportedModality {
             Self::Vision => write!(f, "🖼️ Vision"),
             Self::Video => write!(f, "🎬 Video"),
             Self::Embedding => write!(f, "🔢 Embedding"),
+            Self::Rerank => write!(f, "🔎 Rerank"),
         }
     }
 }
@@ -1488,6 +1492,7 @@ pub enum ModelCategory {
     Audio,
     Speech,
     Embedding,
+    Reranker,
 }
 
 impl std::fmt::Debug for ModelCategory {
@@ -1501,6 +1506,7 @@ impl std::fmt::Debug for ModelCategory {
             ModelCategory::Audio => write!(f, "ModelCategory::Audio"),
             ModelCategory::Speech => write!(f, "ModelCategory::Speech"),
             ModelCategory::Embedding => write!(f, "ModelCategory::Embedding"),
+            ModelCategory::Reranker => write!(f, "ModelCategory::Reranker"),
         }
     }
 }
@@ -1514,13 +1520,15 @@ impl PartialEq for ModelCategory {
             (Self::Speech, Self::Speech) => true,
             (Self::Diffusion, Self::Diffusion) => true,
             (Self::Embedding, Self::Embedding) => true,
+            (Self::Reranker, Self::Reranker) => true,
             (
                 Self::Text
                 | Self::Multimodal { .. }
                 | Self::Diffusion
                 | Self::Audio
                 | Self::Speech
-                | Self::Embedding,
+                | Self::Embedding
+                | Self::Reranker,
                 _,
             ) => false,
         }

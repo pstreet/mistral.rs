@@ -107,6 +107,7 @@ fn modality_label(m: &SupportedModality) -> String {
         SupportedModality::Vision => "vision",
         SupportedModality::Video => "video",
         SupportedModality::Embedding => "embedding",
+        SupportedModality::Rerank => "rerank",
     }
     .to_string()
 }
@@ -123,6 +124,7 @@ fn build_model_list(mistralrs: &Arc<MistralRs>) -> IndexMap<String, UiModelInfo>
                     ModelCategory::Audio => "audio",
                     ModelCategory::Embedding => "embedding",
                     ModelCategory::Diffusion => "diffusion",
+                    ModelCategory::Reranker => "reranker",
                 };
                 if matches!(kind, "text" | "multimodal" | "speech") {
                     let cfg = mistralrs.config(Some(&model_id)).ok();

@@ -1077,6 +1077,36 @@
         }
       }
     },
+    "/v1/rerank": {
+      "post": {
+        "tags": [
+          "Mistral.rs"
+        ],
+        "operationId": "rerank",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RerankRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Rerank scores",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RerankResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/responses": {
       "post": {
         "tags": [
@@ -6895,6 +6925,137 @@
           "detailed",
           "auto"
         ]
+      },
+      "RerankDocument": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "required": [
+              "text"
+            ],
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "A rerank document: either a plain string (Jina-style) or an object with a\n`text` field (Cohere-style)."
+      },
+      "RerankRequest": {
+        "type": "object",
+        "required": [
+          "query",
+          "documents"
+        ],
+        "properties": {
+          "documents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RerankDocument"
+            },
+            "description": "Documents to score, ordered by input index."
+          },
+          "model": {
+            "type": "string",
+            "description": "Model ID; \"default\" targets the only loaded model.",
+            "example": "default"
+          },
+          "query": {
+            "type": "string",
+            "description": "The search query to score documents against."
+          },
+          "top_n": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Return only the top N scored documents. `None` returns all.",
+            "example": null,
+            "minimum": 0
+          },
+          "truncate_sequence": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Truncate inputs that exceed the model's context length instead of erroring.",
+            "example": null
+          },
+          "user": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": null
+          }
+        }
+      },
+      "RerankResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "model",
+          "results",
+          "usage"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RerankResult"
+            }
+          },
+          "usage": {
+            "$ref": "#/components/schemas/RerankUsage"
+          }
+        }
+      },
+      "RerankResult": {
+        "type": "object",
+        "required": [
+          "index",
+          "relevance_score"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "relevance_score": {
+            "type": "number",
+            "format": "float"
+          }
+        }
+      },
+      "RerankUsage": {
+        "type": "object",
+        "required": [
+          "prompt_tokens",
+          "total_tokens"
+        ],
+        "properties": {
+          "prompt_tokens": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total_tokens": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
       },
       "ResponseError": {
         "type": "object",
