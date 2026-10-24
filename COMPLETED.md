@@ -29,6 +29,13 @@
   `rerank_prompt_matches_official_gguf_template`. (2) the classifier labels
   are arch-prefixed (`qwen3.classifier.output_labels`), not bare.
 - GGUF artifact: models/Qwen/Qwen3-Reranker-0.6B/qwen3-reranker-0.6b-q8_0.gguf (610MB).
+- Per-category default models: `model="default"` now resolves to a compatible
+  engine per endpoint type (text/chat -> global default, /v1/embeddings ->
+  first embedding model, /v1/rerank -> first reranker), including lazy
+  (unloaded) models via category derived from ModelSelected. Verified on a
+  mixed lazy probe: embeddings default -> 1024-dim embedder, rerank default ->
+  0.9766 score, both auto-reloading. Prod config carries the lazy reranker
+  entry; release binary rebuilt with reranker support; dry-run gate passes.
 - Probe lane ran on :1244 (fast profile); teardown done; card shows only prod.
 
 
