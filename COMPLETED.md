@@ -1,5 +1,48 @@
 # COMPLETED: candle + mistral.rs fork work
 
+## Oct 23-24 (3090 throughput lane: expert-split MoE campaign + pooled-event cudarc)
+- Expert-split MoE cold path (mistral.rs): `forward_indexed` direct path in
+  `forward_gather` (gate+up fused kernel + down via indexed_gemv, flat form,
+  gather_forward wrapper skipped; fallback preserved) - `1299aee82`;
+  no-op `process_routed_stats` calls removed + topk=1 squeeze-vs-sum -
+  `844458b3d`, `486a7b4ad`; hot-cache cold path unified onto forward_indexed
+  (forward_cold_indexed duplicate deleted) - `a9cc884a1`.
+- Hot cache redesign (mistral.rs `fe6ae612c`, `fc1081614`, `3c73d5d12`):
+  router-predicted prefetch admission (empty slots on first selection;
+  use-count-2 gate kept for evictions; duplicate-id double-admit fixed;
+  empty slots preferred over eviction), ONE persistent stacked slot
+  storage per cache with in-place `slice_set` fills (no per-step weight
+  cat, no double VRAM), single folded hot+cold index_add, single state
+  lock window, admission policy moved OFF the serving thread to a
+  dedicated cache worker (deferred per-step ids via channel; cheap
+  to_device routing reads).
+- nsys profiling of the split vs no-cache (reports discarded after
+  extraction, numbers in TODO): root-caused the 68% serving overhead to
+  cudarc's per-op CudaSlice use-tracking (816K event creates/destroys
+  per 30s window = 2 per allocation; 1.4M records; 2.4M stream-waits).
+  Blanket disable_event_tracking REVERTED same day (regressed to ~11
+  tok/s: the event machinery doubles as cudarc's host-read completion
+  sync - load-bearing).
+- Pooled-event cudarc work (candle `487ff1df`, both nvidia+hip forks):
+  same-stream uses skip launch/DevicePtr tracking waits+records (capture
+  keeps byte-identical graph structure; cross-stream + SyncOnDrop
+  host-read sync untouched); per-slice sync events recycle through a
+  context freelist (cap 1024; capture-recorded events never pooled;
+  never-recorded events skip the drop wait). Measured: no-cache lane
+  31.7 -> 32.0-34.5 tok/s (median ~33, +3-5%); hot-cache lane flat ~20.
+  moe 57/0, cuda_graph 31/0 dual; both feature shapes clean.
+- HOT-CACHE VERDICT (recorded in TODO): net-negative on this hardware at
+  every budget (4GB/6GB/8GB-OOM), and the ceiling is structural: the
+  entire CPU-gemm read it could eliminate is ~10ms/step vs the split's
+  ~20ms/step machinery. Even 100% coverage cannot pay; the 3090's 6-8GB
+  slot ceiling cannot reach the 44-expert working set anyway. Stays
+  disabled by default; revisit rule = GPU-side partitioning (~L) AND
+  full coverage (48GB-class card). 3090 lane identity: no-cache ~33
+  tok/s capacity lane.
+- Prod swapped to the pooled-event build Oct 24 00:06 UTC (dry-run gate
+  + idle window verified); hip lane smoke-tested end-to-end via the 4B
+  demand-load (coherent, zero journal errors).
+
 ## Oct 23 (fleet config simplification, /v1/models default entry, fp8 roundtrip fix, housekeeping)
 - Fleet config simplified per model cards + user tuning (mistral.rs a3d7ab3e9):
   hip:0 default device, MoE 35B on cuda:0 with expert offload to CPU, MTP on

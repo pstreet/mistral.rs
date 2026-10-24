@@ -30,6 +30,20 @@ rocm README + cudarc-hip FFI marking + Cargo.toml indentation + dead
 metal todo cleanup (a4651d9e, b6016fbd, d8024a20, a6075cafd). Prod
 swapped to new build + config (Oct 23 05:25 UTC), all commits pushed.
 
+Oct 23-24 session (3090 throughput lane): expert-split cold path
+forward_indexed + no-op removal + stacked in-place hot-cache slot
+storage + router-predicted prefetch admission + policy worker off the
+serving thread; nsys profile of the split vs no-cache root-caused the
+68% serving overhead to cudarc per-op event churn; blanket
+disable_event_tracking tried and REVERTED (host-read sync is
+load-bearing); pooled-event + same-stream elision landed in both cudarc
+forks (candle 487ff1df; no-cache lane 31.7 -> ~33 tok/s); hot-cache
+verdict: net-negative and structurally capped on this hardware (stays
+disabled; revisit = GPU-side partitioning AND 48GB-class coverage).
+Prod swapped to the pooled-event build Oct 24 00:06 UTC, hip lane
+smoke-tested via 4B demand-load. Full evidence chain in the
+expert-split section below and COMPLETED.md.
+
 # ==== OPERATING RULES (2026-10-14, user directive) ====
 # NEVER modify other tools or applications to bypass an issue in this
 # stack. The openwebui webui.db capability patch (builtin_tools=false)
