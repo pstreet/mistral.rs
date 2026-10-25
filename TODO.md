@@ -1883,9 +1883,11 @@ parity queue) now outranks it on impact.
       400 (invalid_request_error/param/code) in <0.1ms. Rankings
       semantically correct, score family matches the probe-lane A/B
       (relevant ~0.99, irrelevant ~0.03). Zero journal errors; main
-      lanes unaffected. Remaining is the user-side openwebui flip
-      (Reranking Engine base URL http://<host>:1235/v1, model name
-      qwen3-reranker-0.6b) - their app settings, not our stack.
+      lanes unaffected. USER-SIDE FLIP DONE 2026-10-25 (user
+      configured the openwebui Reranking Engine slot; connection
+      verified from their side). Lane fully live end to end; first
+      openwebui-originated rerank traffic will appear on the first
+      RAG query against a rerank-enabled collection.
 - [ ] ~L qwen4exp model-arch port: serve Qwen3.8-Flash-Next (opened
       2026-10-22, expanded 2026-10-24). 95 GB GGUF on disk, lazy alias
       `qwen3.8-flash-next` already registered. Loader gate for sharded

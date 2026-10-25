@@ -8,9 +8,10 @@
   Jina-style and Cohere-style document shapes both accepted; top_n
   truncation works; empty-documents returns the structured 400.
   Rankings semantically correct, score family matches the probe-lane
-  A/B. Full record in the TODO reranker entry; remaining flip is the
-  user-side openwebui Reranking Engine setting (base URL
-  http://<host>:1235/v1, model qwen3-reranker-0.6b).
+  A/B. The user flipped the openwebui Reranking Engine slot the same
+  day - the lane is fully live end to end (first openwebui-originated
+  rerank traffic will appear on the first RAG query against a
+  rerank-enabled collection). Full record in the TODO reranker entry.
 - Prod state observed: user rebuilt (build.log 22:38, completed) and
   restarted 22:52 UTC onto the f3b2d3576 tip - the running binary now
   includes the split-GGUF auto-expansion and the inert splitkv
