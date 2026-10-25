@@ -3504,13 +3504,31 @@ mistral.rs hot zones, then merge.
   `mistralrs-quant/src/blockwise_fp8/ops.rs`, `pertensor_fp8/ops.rs`,
   `scalar_fp8/ops.rs`, `mxfp4/ops.rs` (reference `metal_kernels` for MXFP4), reuse
   `candle-kernels` ROCm FP8 primitives, guard `any(cuda, rocm)`.
-- Speculative dflash on ROCm — SKIPPED 2026-09-22. Generic speculative
-  driver/verifier already support ROCm (`any(cuda, rocm)`); only dflash
-  (`mistralrs-core/src/speculative/dflash.rs`, `paged_rows.rs`) is CUDA-gated. Its
-  custom kernels are portable but its attention core is doubly FlashInfer-dependent
-  (FA2 varlen-paged + FlashInfer KV layout) with no ROCm equivalent — 3-6 weeks,
-  high risk. Generic draft-model speculative covers the use case; revisit only with
-  a DFlash draft model in hand.
+- Speculative dflash on ROCm — UPDATED 2026-10-25 after parity audit.
+  Status: NOT on ROCm (hip role) as of today. Reasons + remaining work:
+  (1) Graph capture already works on the hip role (graph_role dual
+      module: Hip/Cuda enum, begin/end capture, launch, mempool, pinned
+      host staging) — this is NOT a blocker.
+  (2) Standard flash attention already works on the hip role via CK
+      (rocm::ck_flash_attn, hdim 128/256, BF16) — NOT a blocker.
+  (3) BLOCKER: dflash's attention core calls
+      mistralrs_flash_attn::flash_attn_varlen_paged_windowed
+      (dflash.rs:3691, paged_attention.rs:1841). That kernel is cutlass-based
+      and cuda-only; mistralrs-flash-attn is #[cfg(feature = "cuda")].
+  (4) CK has a paged+varlen+windowed flash kernel
+      (mha_varlen_fwd.cpp with paged_KV + window_size_left/right), so a
+      perf-parity port is FEASIBLE but requires writing a CK-based
+      paged-windowed-varlen wrapper in C++ (template dispatch over hdim/tile/
+      mask/data type, ~1000 lines, mirroring ck_flash_attn_fwd.cpp) plus FFI
+      + Rust wrapper + gate lifts. Estimated 1-2 focused sessions.
+  (5) Functional-parity alternative (SDPA/CK-standard fallback) is
+      tractable in one session and would make dflash run on hip (slower).
+  Generic speculative driver/verifier already support ROCm
+  (`any(cuda, rocm)`); only dflash (dflash.rs, paged_rows.rs) is
+  CUDA-gated. Custom kernels (dflash_context.cu, dflash_selector.cu,
+  dynamic_conv.cu) are hipcc-portable via the existing compat shim.
+  Revisit trigger: a DFlash draft model in hand, or after the CK
+  paged-windowed kernel lands.
 
 ## Appendix A. Measured baselines (ROCM_PLAN 2026-09-22, keep for context)
 
