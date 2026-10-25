@@ -1896,22 +1896,20 @@ parity queue) now outranks it on impact.
       plain quant with the repo's separate MTP-draft.gguf (~4GB)
       via the existing spec-draft-model machinery; (6) mmproj
       family entry for vision; (7) multi-part split support:
-      RESOLVED 2026-10-25 - the loader ALREADY handles sharded GGUFs
-      end to end. mistral.rs has its own multi-reader Content wrapper
-      (mistralrs-core/src/gguf/content.rs: validates split.count
-      against the reader set - loud error on a partial set - merges
-      metadata, retrieves tensors across shards). Live-proven: a
-      4-shard llama-gguf-split of the 4B Q8_0 (441 tensors) serves
+      RESOLVED 2026-10-25 - the loader ALREADY handled sharded GGUFs
+      end to end (mistral.rs's multi-reader Content wrapper,
+      gguf/content.rs: validates split.count against the reader set,
+      merges metadata, retrieves tensors across shards). Live-proven:
+      a 4-shard llama-gguf-split of the 4B Q8_0 (441 tensors) serves
       CORRECT 1776 through BOTH the CLI serve path and the
-      from-config path with all shards listed `;`-joined in
-      quantized_file. GAP (config-only): serve/from-config do NOT
-      auto-expand a single -00001-of- name into the full set (that
-      expansion exists only in the quant command's gguf_discovery);
-      configs must name every shard. The prod alias named ONLY
-      shard-1 (a guaranteed split-count error once the arch lands) -
-      fixed to the 3-shard ;-joined list, dry-run validated.
-      OPTIONAL port nicety: reuse SPLIT_GGUF_RE + a dir scan to
-      auto-expand single-shard names in the config path.
+      from-config path. AUTO-EXPANSION LANDED same day (user
+      request): naming ANY ONE shard in quantized_file now expands
+      to the full sibling set at get_model_paths time (gguf::
+      parse_split_gguf_shard + paths::expand_split_gguf_names;
+      repo dir scan via list_repo_files, loud error when the
+      sibling set is incomplete, explicit lists dedupe, empty
+      listing falls through to the old explicit behavior). The
+      prod flash-next alias uses the single-shard spelling.
       REFS: llama.cpp #27742 (arch, in
       mainline since 2026-08-27) + #27880 follow-up; #27836 +
       #30592 (MTP self-speculation; ~0.77 draft acceptance on

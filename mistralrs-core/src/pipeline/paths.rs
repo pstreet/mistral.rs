@@ -386,17 +386,31 @@ pub fn get_model_paths(
     match quantized_filename {
         Some(names) => {
             let id = quantized_model_id.unwrap();
+            let qapi = build_api(token_source, true).map_err(candle_core::Error::msg)?;
+            let qapi = qapi.repo(Repo::with_revision(
+                id.to_string(),
+                RepoType::Model,
+                revision.clone(),
+            ));
+            let model_id = Path::new(&id);
+            let names = if names
+                .iter()
+                .any(|name| crate::gguf::parse_split_gguf_shard(name).is_some())
+            {
+                let repo_files: Vec<String> =
+                    api_dir_list!(qapi, model_id, false, &revision).collect::<Vec<_>>();
+                if repo_files.is_empty() {
+                    names.clone()
+                } else {
+                    expand_split_gguf_names(names, &repo_files)?
+                }
+            } else {
+                names.clone()
+            };
             let mut files = Vec::new();
 
             for name in names {
-                let qapi = build_api(token_source, true).map_err(candle_core::Error::msg)?;
-                let qapi = qapi.repo(Repo::with_revision(
-                    id.to_string(),
-                    RepoType::Model,
-                    revision.clone(),
-                ));
-                let model_id = Path::new(&id);
-                files.push(api_get_file!(qapi, name, model_id, &revision));
+                files.push(api_get_file!(qapi, &name, model_id, &revision));
             }
             Ok(files)
         }
@@ -457,6 +471,51 @@ pub fn get_model_paths(
             Ok(filenames)
         }
     }
+}
+
+/// Expands split-shard entries in `names` to every sibling shard present in
+/// `repo_files`. Naming any one `-NNNNN-of-NNNNN` shard pulls in the whole set;
+/// explicitly listed shards dedupe against the expansion, and non-shard names
+/// pass through untouched. Errors loudly when the sibling set is incomplete.
+fn expand_split_gguf_names(names: &[String], repo_files: &[String]) -> Result<Vec<String>> {
+    let mut out: Vec<String> = Vec::with_capacity(names.len());
+    for name in names {
+        if out.iter().any(|expanded| expanded == name) {
+            continue;
+        }
+        let Some((prefix, _, total)) = crate::gguf::parse_split_gguf_shard(name) else {
+            out.push(name.clone());
+            continue;
+        };
+        let mut shards: Vec<(u32, &str)> = repo_files
+            .iter()
+            .filter_map(|file| {
+                let (p, index, t) = crate::gguf::parse_split_gguf_shard(file)?;
+                (p == prefix && t == total).then_some((index, file.as_str()))
+            })
+            .collect();
+        shards.sort_by_key(|(index, _)| *index);
+        let indices: HashSet<u32> = shards.iter().map(|(index, _)| *index).collect();
+        if indices.len() != total as usize || (1..=total).any(|i| !indices.contains(&i)) {
+            let mut found = indices.iter().copied().collect::<Vec<_>>();
+            found.sort_unstable();
+            anyhow::bail!(
+                "Split GGUF `{name}` declares {total} shards, but the model directory \
+                 holds {} matching file(s) (indices {found:?}); expected exactly 1..={total}.",
+                shards.len()
+            );
+        }
+        info!(
+            "Split GGUF `{name}`: using all {total} shard file(s) found by the \
+             `-index-of-total` filename convention"
+        );
+        for (_, shard) in shards {
+            if !out.iter().any(|expanded| expanded == shard) {
+                out.push(shard.to_string());
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn parse_safetensor_index(contents: &str) -> Result<Vec<String>> {
@@ -833,5 +892,133 @@ mod tests {
             assert!(!pickle_match.is_match(id));
         }
         Ok(())
+    }
+
+    fn strs(items: &[&str]) -> Vec<String> {
+        items.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn split_gguf_shard_names_parse() {
+        let (prefix, index, total) = crate::gguf::parse_split_gguf_shard(
+            "Qwen3.8-Flash-Next-Uncensored-IQ4_XS-MTP-00001-of-00003.gguf",
+        )
+        .unwrap();
+        assert_eq!(prefix, "Qwen3.8-Flash-Next-Uncensored-IQ4_XS-MTP");
+        assert_eq!((index, total), (1, 3));
+
+        // A prefix containing `-of-` binds to the last `-of-`.
+        let (prefix, index, total) =
+            crate::gguf::parse_split_gguf_shard("a-of-b-00002-of-00004.gguf").unwrap();
+        assert_eq!(prefix, "a-of-b");
+        assert_eq!((index, total), (2, 4));
+
+        // Unpadded indices are convention-legal too.
+        let (prefix, index, total) =
+            crate::gguf::parse_split_gguf_shard("model-2-of-3.gguf").unwrap();
+        assert_eq!(prefix, "model");
+        assert_eq!((index, total), (2, 3));
+
+        for name in [
+            "model.gguf",
+            "model-00001-of-00003.safetensors",
+            "model-0000a-of-00003.gguf",
+            "model-00001-of-00000.gguf",
+            "-00001-of-00003.gguf",
+            "model--of-3.gguf",
+        ] {
+            assert!(
+                crate::gguf::parse_split_gguf_shard(name).is_none(),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn single_split_shard_expands_to_the_full_set() {
+        let repo = strs(&[
+            "model.gguf",
+            "other-00001-of-00002.gguf",
+            "model-00001-of-00002.gguf",
+            "model-00002-of-00002.gguf",
+        ]);
+        let names = strs(&["model-00001-of-00002.gguf"]);
+        assert_eq!(
+            super::expand_split_gguf_names(&names, &repo).unwrap(),
+            strs(&["model-00001-of-00002.gguf", "model-00002-of-00002.gguf"])
+        );
+    }
+
+    #[test]
+    fn explicit_shard_lists_dedupe_against_expansion() {
+        let repo = strs(&[
+            "model-00001-of-00003.gguf",
+            "model-00002-of-00003.gguf",
+            "model-00003-of-00003.gguf",
+        ]);
+        // Full explicit set, out of order, with a duplicate.
+        let names = strs(&[
+            "model-00003-of-00003.gguf",
+            "model-00001-of-00003.gguf",
+            "model-00001-of-00003.gguf",
+        ]);
+        assert_eq!(
+            super::expand_split_gguf_names(&names, &repo).unwrap(),
+            strs(&[
+                "model-00001-of-00003.gguf",
+                "model-00002-of-00003.gguf",
+                "model-00003-of-00003.gguf",
+            ])
+        );
+        // Partial explicit set expands to the whole set.
+        let names = strs(&["model-00001-of-00003.gguf", "model-00003-of-00003.gguf"]);
+        assert_eq!(
+            super::expand_split_gguf_names(&names, &repo).unwrap(),
+            strs(&[
+                "model-00001-of-00003.gguf",
+                "model-00002-of-00003.gguf",
+                "model-00003-of-00003.gguf",
+            ])
+        );
+    }
+
+    #[test]
+    fn incomplete_shard_set_errors_loudly() {
+        let repo = strs(&["model-00001-of-00003.gguf", "model-00003-of-00003.gguf"]);
+        let names = strs(&["model-00001-of-00003.gguf"]);
+        let err = super::expand_split_gguf_names(&names, &repo).unwrap_err();
+        assert!(err.to_string().contains("declares 3 shards"), "{err}");
+    }
+
+    #[test]
+    fn non_shard_names_pass_through_alongside_expansion() {
+        let repo = strs(&[
+            "plain.gguf",
+            "model-00001-of-00002.gguf",
+            "model-00002-of-00002.gguf",
+        ]);
+        let names = strs(&["plain.gguf", "model-00002-of-00002.gguf"]);
+        assert_eq!(
+            super::expand_split_gguf_names(&names, &repo).unwrap(),
+            strs(&[
+                "plain.gguf",
+                "model-00001-of-00002.gguf",
+                "model-00002-of-00002.gguf",
+            ])
+        );
+    }
+
+    #[test]
+    fn expansion_stays_within_the_named_shards_total() {
+        let repo = strs(&[
+            "model-00001-of-00002.gguf",
+            "model-00002-of-00002.gguf",
+            "model-00001-of-00003.gguf",
+        ]);
+        let names = strs(&["model-00002-of-00002.gguf"]);
+        assert_eq!(
+            super::expand_split_gguf_names(&names, &repo).unwrap(),
+            strs(&["model-00001-of-00002.gguf", "model-00002-of-00002.gguf"])
+        );
     }
 }

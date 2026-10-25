@@ -67,7 +67,8 @@ pub struct FormatOptions {
     #[arg(long, value_enum)]
     pub format: Option<ModelFormat>,
 
-    /// GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple)
+    /// GGUF/GGML filename(s); the suffix selects the format (semicolon-separated
+    /// for multiple). Naming any one shard of a split GGUF expands to all siblings.
     #[arg(short = 'f', long)]
     pub quantized_file: Option<String>,
 

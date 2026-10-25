@@ -49,7 +49,7 @@ repository contains several models rather than variants of one model. Use a supp
 quant name for GGUF. `--quant auto` is for standard model repositories and does not select GGUF
 artifacts. IQ GGUF artifacts are not supported yet; choose a Q/K variant from the repository.
 
-Split GGUF files use semicolon-separated names:
+Split GGUF files can be listed with semicolon-separated names:
 
 ```bash
 mistralrs run -m owner/repo \
@@ -57,6 +57,17 @@ mistralrs run -m owner/repo \
 ```
 
 Local shards supplied without `-m` must all be in the same directory.
+
+Naming any one shard is enough: mistral.rs expands a `-NNNNN-of-NNNNN.gguf`
+name to every sibling shard found beside it, so this loads the same model:
+
+```bash
+mistralrs run -m owner/repo -f model-00001-of-00002.gguf
+```
+
+Explicitly listed shards are still accepted (duplicates collapse), and the
+expansion fails loudly if the directory holds fewer shards than the filename
+declares.
 
 Embedding checkpoints (Qwen3-Embedding, EmbeddingGemma) are the one family served
 through `kind = "embedding"` / the `embedding` subcommand instead of this page's

@@ -1,5 +1,39 @@
 # COMPLETED: candle + mistral.rs fork work
 
+## Oct 25 (hygiene batch: split-GGUF auto-expansion, FFI marking, ledger)
+
+- Sharded-GGUF loader gate PASSED for the qwen4exp port: mistral.rs's
+  multi-reader Content wrapper (gguf/content.rs) already validates
+  split.count, merges metadata, and retrieves tensors across shards;
+  live-proven with a 4-shard llama-gguf-split of the 4B Q8_0 (441
+  tensors) serving CORRECT 1776 through both the CLI and from-config
+  paths. AUTO-EXPANSION LANDED on top (user request): naming any one
+  `-NNNNN-of-NNNNN.gguf` shard now expands to the full sibling set in
+  get_model_paths (gguf::parse_split_gguf_shard + paths::
+  expand_split_gguf_names; repo listing via list_repo_files, loud
+  error when the sibling set is incomplete, explicit lists dedupe,
+  empty listing falls through to the explicit behavior; the
+  split.count check in Content::from_readers stays as backstop).
+  Live-verified: CLI single-name (shard-1) and from-config
+  single-name (MIDDLE shard-00002) both serve 1776 CORRECT; 6 unit
+  tests cover parsing/expansion/dedupe/error/total-isolation.
+  All four shapes check clean; UQFF already had the equivalent
+  (richer: shorthand + report resolution) via expand_uqff_shards -
+  no change needed there. Prod flash-next alias now uses the
+  single-shard spelling; run-gguf.mdx + the -f help updated.
+- Downstream-facing FFI marking completed in cudarc-hip (all five
+  sites; closes the trivial-insurance TODO item).
+- DFlash ROCm status corrected in docs + ledger: dflash is NOT hard
+  gated off hip; attach_dflash + DFlashDraftModel::load run on every
+  build shape and the drafter falls back to the EAGER zero-padded
+  attention arm on the serving GPU (unvalidated live, slow at long
+  contexts). CUDA-only surface = the bounded paged-windowed-varlen
+  flash kernel + drafter graph capture. The CK kernel remains the
+  perf-parity port; functional parity is validation-only.
+- Four stale ledger closures flipped (candle book a4651d9e,
+  Cargo.toml indentation d8024a20, qvm_split_k a6075cafd, FFI
+  b238a1b0).
+
 ## Oct 25 (prod perf pass: 27B quant shootout, 35B MTP depth, 3090 isolation)
 
 - Prod benchmark pass on the new release binary (single-request, 128/256-tok

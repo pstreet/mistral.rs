@@ -32,6 +32,19 @@ use std::str::FromStr;
 
 pub const GGUF_MULTI_FILE_DELIMITER: &str = ";";
 
+/// Parses the llama.cpp split-shard basename convention
+/// `<prefix>-<index>-of-<total>.gguf`, returning `(prefix, index, total)`.
+/// `prefix` may itself contain dashes (and `-of-`); the *last* `-of-` wins.
+pub fn parse_split_gguf_shard(file_name: &str) -> Option<(&str, u32, u32)> {
+    let stem = file_name.strip_suffix(".gguf")?;
+    let of_pos = stem.rfind("-of-")?;
+    let total: u32 = stem[of_pos + 4..].parse().ok()?;
+    let prefix_end = stem[..of_pos].rfind('-')?;
+    let index: u32 = stem[prefix_end + 1..of_pos].parse().ok()?;
+    let prefix = &stem[..prefix_end];
+    (total > 0 && !prefix.is_empty()).then_some((prefix, index, total))
+}
+
 #[derive(Debug, EnumString, Clone, Copy, strum::Display)]
 #[strum(serialize_all = "lowercase")]
 pub enum GGUFArchitecture {
