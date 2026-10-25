@@ -4241,9 +4241,9 @@ impl CustomOp1 for Softcap {
         }
 
         match s1.dtype() {
-            DType::F32 => launch!(f32, role_ffi::softcap_f32),
-            DType::F16 => launch!(half::f16, role_ffi::softcap_f16_to_f32),
-            DType::BF16 => launch!(half::bf16, role_ffi::softcap_bf16_to_f32),
+            DType::F32 => launch!(f32, ffi::softcap_f32),
+            DType::F16 => launch!(half::f16, ffi::softcap_f16_to_f32),
+            DType::BF16 => launch!(half::bf16, ffi::softcap_bf16_to_f32),
             dtype => candle_core::bail!("softcap: unsupported dtype {dtype:?}"),
         }
 
