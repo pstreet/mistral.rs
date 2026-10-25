@@ -3409,10 +3409,17 @@ parity queue) now outranks it on impact.
       and 20 models have `unimplemented!()` in `xlora_forward`.
       Gate the `--xlora` CLI path to the implemented set, or drop the claims.
       Do after upstream merge (touches overlapping model files).
-- [ ] _S mark downstream-facing FFI as such (was §1, one comment) so cleanup does
+- [x] _S mark downstream-facing FFI as such (was §1, one comment) so cleanup does
       not delete it: `cuMemPoolTrimTo`, `cuMemcpy{HtoD,DtoH}Async_v2`, `alloc_pinned`,
       `CudaEvent::elapsed_ms`, `CUDA_ERROR_NOT_SUPPORTED`
       (`cudarc-hip/src/driver/sys.rs:55,260,292,310`). Trivial insurance.
+      CLOSED 2026-10-25: all five sites carry the marker (cudarc-hip b6016fbd
+      marked cuMemPoolTrimTo; the rest - both cuMemcpy*_v2 wrappers +
+      CUDA_ERROR_NOT_SUPPORTED in sys.rs, alloc_pinned +
+      CudaEvent::elapsed_ms in driver/safe/core.rs - marked today).
+      Downstream usage re-verified per symbol: memory_usage.rs matches
+      the variant, graph_role.rs pins via alloc_pinned, gemv/cutile/
+      routed_lora bench via elapsed_ms.
 - [ ] ~M ROCm CI, remaining checklist (was §3, after P0 build-only):
     - [ ] Set up ROCm runner (self-hosted or `rocm/actions` if available)
     - [ ] Add test job running basic inference on ROCm
@@ -3459,10 +3466,11 @@ mistral.rs hot zones, then merge.
 
 ## P3. Polish — low value, do last (small effort unless noted)
 
-- [ ] _S candle book fix (was §1): `candle-book/src/rocm/README.md` is a sketch;
+- [x] _S candle book fix (was §1): `candle-book/src/rocm/README.md` is a sketch;
       cites nonexistent knob `MISTRALRS_ROCM_COMPAT_INCLUDE` (build.rs hardcodes the
       include) and has a mangled sentence at lines 29-32. Fix, or retitle and shrink.
       (Do NOT document the knob until it exists.)
+      CLOSED 2026-10-23 (candle a4651d9e): sentence fixed, knob ref removed.
 - [ ] _S paged-attn proposed micro-opts (was §4), all reverted prototypes — measure
       before committing, none are approved yet:
     - `__ldg()` for KV cache loads: guard with `#if defined(USE_ROCM)` only; do NOT
@@ -3477,10 +3485,12 @@ mistral.rs hot zones, then merge.
 - [ ] _L 14 model files in overlap (was §6, qwen3_next MTP/GDN edits vs upstream tuner
       churn); 8 model files with xlora `unimplemented!()` also in overlap. Handle
       during merge, not before.
-- [ ] _S `qvm_split_k` metal `todo!` inside a `/* */` block (was §7,
+- [x] _S `qvm_split_k` metal `todo!` inside a `/* */` block (was §7,
       `mistralrs-quant/src/metal_kernels/mod.rs:1069`): finish or move to a tracking issue.
-- [ ] _S cosmetic: feature-table indentation in `candle-nn/Cargo.toml`,
+      CLOSED 2026-10-23 (mistral.rs a6075cafd): dead commented-out block removed.
+- [x] _S cosmetic: feature-table indentation in `candle-nn/Cargo.toml`,
       `candle-examples/Cargo.toml`, `candle-transformers/Cargo.toml`. Absolute last.
+      CLOSED 2026-10-23 (candle d8024a20).
 
 ## Deferred. Do not do on RDNA (record, revisit only with CDNA)
 
@@ -3504,8 +3514,16 @@ mistral.rs hot zones, then merge.
   `mistralrs-quant/src/blockwise_fp8/ops.rs`, `pertensor_fp8/ops.rs`,
   `scalar_fp8/ops.rs`, `mxfp4/ops.rs` (reference `metal_kernels` for MXFP4), reuse
   `candle-kernels` ROCm FP8 primitives, guard `any(cuda, rocm)`.
-- Speculative dflash on ROCm — UPDATED 2026-10-25 after parity audit.
-  Status: NOT on ROCm (hip role) as of today. Reasons + remaining work:
+- Speculative dflash on ROCm — UPDATED 2026-10-25 after parity audit;
+  REFINED same day on a code re-read: dflash is NOT hard-gated off the
+  hip role. DFlashDraftModel::load + attach_dflash compile and run on
+  every build shape; enable_windowed_kv returns false on non-solo-cuda,
+  so the drafter falls back to the EAGER zero-padded attention arm of
+  draft_hidden_batch (dflash.rs:3323) ON THE SERVING GPU - functional,
+  but never live-validated on hip and slow at long contexts (pads every
+  draft step to max_ctx). The FAST path (bounded paged-windowed flash +
+  drafter CUDA graphs) is solo-cuda+flash-attn only. Reasons + remaining
+  work:
   (1) Graph capture already works on the hip role (graph_role dual
       module: Hip/Cuda enum, begin/end capture, launch, mempool, pinned
       host staging) — this is NOT a blocker.
@@ -3521,12 +3539,14 @@ mistral.rs hot zones, then merge.
       paged-windowed-varlen wrapper in C++ (template dispatch over hdim/tile/
       mask/data type, ~1000 lines, mirroring ck_flash_attn_fwd.cpp) plus FFI
       + Rust wrapper + gate lifts. Estimated 1-2 focused sessions.
-  (5) Functional-parity alternative (SDPA/CK-standard fallback) is
-      tractable in one session and would make dflash run on hip (slower).
+  (5) The functional fallback ALREADY EXISTS in code (the eager arm
+      above); remaining functional work is only a live hip validation,
+      not new machinery.
   Generic speculative driver/verifier already support ROCm
-  (`any(cuda, rocm)`); only dflash (dflash.rs, paged_rows.rs) is
-  CUDA-gated. Custom kernels (dflash_context.cu, dflash_selector.cu,
-  dynamic_conv.cu) are hipcc-portable via the existing compat shim.
+  (`any(cuda, rocm)`); the cuda-only surface is the dflash fast path
+  (dflash.rs windowed arm, paged_attention.rs:1841). Custom kernels
+  (dflash_context.cu, dflash_selector.cu, dynamic_conv.cu) are
+  hipcc-portable via the existing compat shim.
   Revisit trigger: a DFlash draft model in hand, or after the CK
   paged-windowed kernel lands.
 

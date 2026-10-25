@@ -112,11 +112,14 @@ its CUDA candidate selector is supported, while DFlash 1 and unsupported devices
 drafting. Pass `--mtp-draft-sampling greedy` to force greedy drafting. Passing `probabilistic`
 requires a supported DFlash 2 selector and fails during loading when that path is unavailable.
 
-On ROCm (AMD) builds, DFlash runs on the CPU fallback path: the drafter loads and
-proposes, but the paged-windowed flash attention kernel used by the CUDA fast path
-is not yet available for HIP, so throughput is lower than on NVIDIA. Graph capture,
-standard flash attention (CK), and paged attention itself all work on ROCm; only the
-DFlash-specific paged-windowed-varlen kernel is missing. See the cargo features
+DFlash's drafting fast path is CUDA-only: the bounded paged-windowed flash attention
+kernel and the drafter's CUDA graph capture compile only into solo-NVIDIA builds with
+the `flash-attn` feature. On ROCm (AMD) builds the drafter still loads and drafts
+through an eager, zero-padded attention fallback on the serving GPU (a functional
+path, not yet validated in production serving), so throughput sits well below the
+CUDA path, especially at long contexts. Graph capture, standard flash attention
+(CK), and paged attention itself all work on the hip role; the remaining ROCm parity
+work is a CK-based paged-windowed-varlen flash kernel. See the cargo features
 reference for build shapes.
 
 The maximum automatic draft depth is `min(block_size - 1, 7)`. During serving, mistral.rs may use a
