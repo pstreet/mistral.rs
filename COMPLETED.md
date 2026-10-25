@@ -1,5 +1,23 @@
 # COMPLETED: candle + mistral.rs fork work
 
+## Oct 25 (small items: reranker live-validated on prod)
+
+- Prod /v1/rerank live-tested against :1235 (user's 22:52 restart,
+  build f3b2d3576, md5 c678331e): all green. Lazy demand-load fired
+  on first request, 907ms incl. load / 71ms warm 4-doc rerank;
+  Jina-style and Cohere-style document shapes both accepted; top_n
+  truncation works; empty-documents returns the structured 400.
+  Rankings semantically correct, score family matches the probe-lane
+  A/B. Full record in the TODO reranker entry; remaining flip is the
+  user-side openwebui Reranking Engine setting (base URL
+  http://<host>:1235/v1, model qwen3-reranker-0.6b).
+- Prod state observed: user rebuilt (build.log 22:38, completed) and
+  restarted 22:52 UTC onto the f3b2d3576 tip - the running binary now
+  includes the split-GGUF auto-expansion and the inert splitkv
+  dispatcher. Config unchanged; dry-run gate passed. Stray build.log
+  (xtrace of the successful build) deleted after the md5 was
+  recorded here.
+
 ## Oct 25 (DFlash splitkv kernel: plumbed, then hardware-blocked)
 
 - Second half of the DFlash kernel lane: the full plumbing landed
