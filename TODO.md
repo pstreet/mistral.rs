@@ -3565,12 +3565,43 @@ mistral.rs hot zones, then merge.
       mistralrs_flash_attn::flash_attn_varlen_paged_windowed
       (dflash.rs:3691, paged_attention.rs:1841). That kernel is cutlass-based
       and cuda-only; mistralrs-flash-attn is #[cfg(feature = "cuda")].
-  (4) CK has a paged+varlen+windowed flash kernel
-      (mha_varlen_fwd.cpp with paged_KV + window_size_left/right), so a
-      perf-parity port is FEASIBLE but requires writing a CK-based
-      paged-windowed-varlen wrapper in C++ (template dispatch over hdim/tile/
-      mask/data type, ~1000 lines, mirroring ck_flash_attn_fwd.cpp) plus FFI
-      + Rust wrapper + gate lifts. Estimated 1-2 focused sessions.
+  (4) CK KERNEL INVESTIGATION + TU LANDED 2026-10-25 (same day):
+      API SURVEY of our CK (rocm-install): `fmha_batch_prefill`
+      (the flexible-page paged API) is CDNA-ONLY - its async pipeline
+      hard-wires buffer_load_*_lds (no RDNA instruction) with no
+      Policy::AsyncCopy fallback, and amd_direct_load_global_to_lds
+      is a SILENT NO-OP on non-gfx9 (a batch-prefill TU was written
+      and compiles only on CDNA; removed, not in-tree).
+      `fmha_fwd_splitkv` IS the RDNA path: both splitkv pipelines
+      carry real __gfx11__ sections (PermuteWarpGemmCToA handles the
+      P-tensor warp-gemm handoff on RDNA - the exact mechanism the
+      async pipeline lacks), page size is a RUNTIME arg (the runner's
+      128-divisibility rule is dispatcher-tile conservatism), and
+      pool page 32 == kK1 tile = exactly one tile per page - NO POOL
+      CHANGE NEEDED. LANDED: rocm_ck_flash_attn/
+      fmha_fwd_splitkv_d128_bf16_mask_paged_gfx115.cpp - the gfx1151
+      instantiation of the splitkv main kernel (FmhaFwdSplitKVKernel,
+      BlockFmhaFwdSplitKVPipelineQRKSVS, TileFmhaFwdSplitKVTraits:
+      kIsPagedKV=true, kHasUnevenSplits=true, kStoreLSE=true) PLUS
+      the combine kernel (FmhaFwdSplitKVCombineKernel). COMPILES on
+      gfx1151 (device code verified) and the dual fast build is green
+      with it. Config learnings: WAVE32 forces combine kN1=32 +
+      kLogMaxSplits=4 (the wave64/CDNA defaults fail the combine
+      policy asserts); warp tiles 16x16x16 on both gemms;
+      SimplifiedGenericAttentionMask<true> for runtime masks/windows.
+      REMAINING (~1 focused session): C dispatcher entry
+      (mirror ck_flash_attn_fwd.cpp: extern templates +
+      ck_flash_attn_splitkv_fwd packing fmha_fwd_splitkv_args -
+      seqstart_q/k ptrs, vLLM 2D block table, per-batch seqlen_k,
+      page size, num_splits; o_acc/lse_acc workspaces alloc'd on
+      the Rust side like out/lse today; num_splits heuristic to
+      mirror flash::override_num_splits_if_necessary or simplify),
+      FFI decl + companion wiring (same as ck_flash_attn_fwd), Rust
+      wrapper in rocm/mod.rs (the pool's paged view
+      [pages, 32, heads, hdim] matches the kernel's VLLM-2D layout
+      directly), wiring at dflash.rs:3691 + paged_attention.rs:1841
+      (hip arm), numeric parity test vs eager on hip, and the dflash
+      cfg gate lifts.
   (5) The functional fallback ALREADY EXISTS in code (the eager arm
       above); remaining functional work is only a live hip validation,
       not new machinery.

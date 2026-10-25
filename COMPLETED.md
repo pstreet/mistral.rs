@@ -1,5 +1,26 @@
 # COMPLETED: candle + mistral.rs fork work
 
+## Oct 25 (DFlash ROCm kernel: feasibility proven, splitkv TU landed)
+
+- The CK paged-windowed-varlen kernel lane for DFlash-on-ROCm is GO.
+  Survey of our CK install: `fmha_batch_prefill` (flexible pages) is
+  CDNA-only (async pipeline hard-wires buffer_load_*_lds; the
+  non-gfx9 path of the direct-load builtin is a silent no-op - a
+  batch-prefill TU was written, compiles only on CDNA, removed).
+  `fmha_fwd_splitkv` is the RDNA path: real __gfx11__ sections
+  (PermuteWarpGemmCToA P-tensor handoff), runtime page size (the
+  128-divisibility rule is dispatcher conservatism), and the dflash
+  windowed pool's page 32 == kK1 tile - no pool change needed.
+  LANDED: fmha_fwd_splitkv_d128_bf16_mask_paged_gfx115.cpp (main +
+  combine kernel instantiations, TileFmhaFwdSplitKVTraits with
+  kIsPagedKV/kHasUnevenSplits/kStoreLSE); COMPILES on gfx1151 device
+  code and the dual fast build is green with it. Wave32 forced
+  combine kN1=32/kLogMaxSplits=4 (CDNA defaults fail the policy
+  asserts). Remaining ~1 session: dispatcher entry, FFI, Rust
+  wrapper, dflash wiring, parity test, gate lifts. Also this
+  session: UQFF-vs-GGUF shootout closed (see below) and the earlier
+  split-GGUF auto-expansion + hygiene batch.
+
 ## Oct 25 (UQFF vs GGUF shootout)
 
 - Probe-lane bench (release binary, :1245, 4B Qwen3.5-4B, no MTP,
