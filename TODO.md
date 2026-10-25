@@ -3592,17 +3592,24 @@ mistral.rs hot zones, then merge.
       REMAINING updated after the 2026-10-25 bring-up attempt:
       PLUMBING LANDED (dispatcher ck_flash_attn_splitkv_fwd + hpp ABI,
       FFI decl, rocm::ck_flash_attn_splitkv Rust wrapper with o_acc/
-      lse_acc workspaces + sm-count split heuristic, paged/varlen/
-      windowed parity test) - but the HARDWARE VERDICT IS NEGATIVE:
-      the splitkv MAIN kernel memory-faults on gfx1151 in its BASE
-      group-varlen path. Proven with a standalone harness
-      (LocalAI/scratch/splitkv-debug/, preserved): faults identically
-      with (a) paged AND non-paged kv, (b) no-mask AND masked, (c)
-      splits=1 AND multi-split, (d) full 64-row Q tiles (no Q padding),
-      main-kernel-only (combine skipped). Fault address is small and
-      shifts with the D-pad config (LDS-space signature; the launch
-      requests only 9216B group memory while the K(4KB)+V(8KB) tiles
-      suggest ~12KB+ - smem under-budget suspected, unproven). The
+      lse_acc workspaces + sm-count split heuristic capped by KV
+      chunks (splits beyond the chunk count hand CTAs empty ranges),
+      paged/varlen/windowed parity test) - but the HARDWARE VERDICT
+      IS NEGATIVE: the splitkv MAIN kernel memory-faults on gfx1151
+      in its BASE group-varlen path. Proven with a standalone harness
+      (LocalAI/scratch/splitkv-debug/, preserved; knobs are -D flags:
+      PAGED/HQ/HKV/QLEN/KVLEN/BATCH/WINDOW_L/WINDOW_R/MASK_T): faults
+      identically with (a) paged AND non-paged kv, (b) no-mask AND
+      masked, (c) splits=1 AND multi-split, (d) full 64-row Q tiles
+      (no Q padding), main-kernel-only (combine skipped). RULED OUT
+      along the way: empty-split ranges (KV-chunk cap + 1-split both
+      fault) and seqlen_k_ptr null-reads (the ABI gained a nullable
+      per-batch seqlen_k; populating it changed nothing). The COMBINE
+      kernel is UNTESTED - the main faults first. Fault address is
+      small and shifts with the D-pad config (LDS-space signature;
+      the launch requests only 9216B group memory while the K(4KB)+
+      V(8KB) tiles suggest ~12KB+ - smem under-budget suspected,
+      unproven). The
       NWarpSShuffle splitkv variant does not compile at these tiles
       (MWarp==1 + gfx11 wmma-utility asserts - a separate config hunt).
       AMD ships ZERO gfx115/gfx1151 splitkv instantiations anywhere
