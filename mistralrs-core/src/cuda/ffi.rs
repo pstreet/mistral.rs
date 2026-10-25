@@ -36,6 +36,37 @@ declare_kernel! {
         stream: i64,
     ) -> f32;
 
+    #[cfg(feature = "rocm")]
+    ck_flash_attn_splitkv_fwd(
+        q: *const c_void,
+        k: *const c_void,
+        v: *const c_void,
+        o: *mut c_void,
+        lse: *mut c_void,
+        o_acc: *mut c_void,
+        lse_acc: *mut c_void,
+        cu_seqlens_q: *const i32,
+        cu_seqlens_k: *const i32,
+        seqlen_k: *const i32,
+        block_table: *const i32,
+        block_table_row_stride: i64,
+        num_pages: i32,
+        page_size: i32,
+        num_splits: i32,
+        batch: i32,
+        total_q: i32,
+        max_seqlen_q: i32,
+        max_seqlen_k: i32,
+        nhead_q: i32,
+        nhead_k: i32,
+        hdim: i32,
+        scale_s: f32,
+        window_size_left: i32,
+        window_size_right: i32,
+        mask_type: i32,
+        stream: i64,
+    ) -> f32;
+
     cuda_graph_copy_bytes(
         src: *const c_void,
         dst: *mut c_void,

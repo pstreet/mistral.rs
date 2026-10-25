@@ -3589,19 +3589,34 @@ mistral.rs hot zones, then merge.
       kLogMaxSplits=4 (the wave64/CDNA defaults fail the combine
       policy asserts); warp tiles 16x16x16 on both gemms;
       SimplifiedGenericAttentionMask<true> for runtime masks/windows.
-      REMAINING (~1 focused session): C dispatcher entry
-      (mirror ck_flash_attn_fwd.cpp: extern templates +
-      ck_flash_attn_splitkv_fwd packing fmha_fwd_splitkv_args -
-      seqstart_q/k ptrs, vLLM 2D block table, per-batch seqlen_k,
-      page size, num_splits; o_acc/lse_acc workspaces alloc'd on
-      the Rust side like out/lse today; num_splits heuristic to
-      mirror flash::override_num_splits_if_necessary or simplify),
-      FFI decl + companion wiring (same as ck_flash_attn_fwd), Rust
-      wrapper in rocm/mod.rs (the pool's paged view
-      [pages, 32, heads, hdim] matches the kernel's VLLM-2D layout
-      directly), wiring at dflash.rs:3691 + paged_attention.rs:1841
-      (hip arm), numeric parity test vs eager on hip, and the dflash
-      cfg gate lifts.
+      REMAINING updated after the 2026-10-25 bring-up attempt:
+      PLUMBING LANDED (dispatcher ck_flash_attn_splitkv_fwd + hpp ABI,
+      FFI decl, rocm::ck_flash_attn_splitkv Rust wrapper with o_acc/
+      lse_acc workspaces + sm-count split heuristic, paged/varlen/
+      windowed parity test) - but the HARDWARE VERDICT IS NEGATIVE:
+      the splitkv MAIN kernel memory-faults on gfx1151 in its BASE
+      group-varlen path. Proven with a standalone harness
+      (LocalAI/scratch/splitkv-debug/, preserved): faults identically
+      with (a) paged AND non-paged kv, (b) no-mask AND masked, (c)
+      splits=1 AND multi-split, (d) full 64-row Q tiles (no Q padding),
+      main-kernel-only (combine skipped). Fault address is small and
+      shifts with the D-pad config (LDS-space signature; the launch
+      requests only 9216B group memory while the K(4KB)+V(8KB) tiles
+      suggest ~12KB+ - smem under-budget suspected, unproven). The
+      NWarpSShuffle splitkv variant does not compile at these tiles
+      (MWarp==1 + gfx11 wmma-utility asserts - a separate config hunt).
+      AMD ships ZERO gfx115/gfx1151 splitkv instantiations anywhere
+      (their generate.py emits none) - the family is unvalidated on
+      RDNA, like batch_prefill. The test is #[ignore]d with the
+      verdict; the wrapper carries a do-not-call note; dispatcher/
+      TU/FFI ship inert so a CK fix or working config is a small diff.
+      OPTIONS IF REVISITED: (i) root-cause the smem budget in
+      BlockFmhaPipelineQXKSVSCustomPolicy vs actual LDS use and try a
+      custom Policy, (ii) sshuffle-variant tile hunt, (iii) the third
+      paged API (fmha_fwd_pagedkv), (iv) a newer CK drop. Until one of
+      those pays off, DFlash-on-hip keeps the EAGER fallback
+      (functional; see the status refinement above) and the CK paged
+      kernel lane is PARKED with a precise blocker record.
   (5) The functional fallback ALREADY EXISTS in code (the eager arm
       above); remaining functional work is only a live hip validation,
       not new machinery.

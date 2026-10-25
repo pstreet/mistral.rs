@@ -9,6 +9,8 @@
 #include "ck_tile/ops/fmha_fwd.hpp"
 
 #include <iostream>
+#include <cstdio>
+#include <cstdlib>
 
 #if !defined(__HIP_DEVICE_COMPILE__) || (defined(__gfx115__))
 
@@ -26,8 +28,8 @@ using fmha_shape = ck_tile::TileFmhaShape<fmha_block_tile,
 using fmha_traits = ck_tile::TileFmhaFwdSplitKVTraits<
     true,  // kPadSeqLenQ
     true,  // kPadSeqLenK
-    true,  // kPadHeadDimQ
-    true,  // kPadHeadDimV
+    false, // kPadHeadDimQ (the working gfx1151 batched TUs pad no head dims)
+    false, // kPadHeadDimV
     false, // kHasLogitsSoftCap
     ck_tile::BlockAttentionBiasEnum::NO_BIAS,
     false, // kHasBiasGrad
@@ -94,16 +96,21 @@ using trait = fmha_fwd_splitkv_traits_<
     128, FmhaFwdBf16, true, 64, 64, 32, 128, 32, 128, true,
     ck_tile::BlockFmhaPipelineEnum::QRKSVS, false, fmha_mask,
     ck_tile::BlockAttentionBiasEnum::NO_BIAS, true, false, true, false,
-    true, true, true, true>;
+    true, true, false, false>;
 
 using combine_trait = fmha_fwd_splitkv_combine_traits_<
-    128, FmhaFwdBf16, true, 128, true, false, true, true>;
+    128, FmhaFwdBf16, true, 32, true, false, true, true>;
 
 template<>
 void fmha_fwd_splitkv_oneshot_<trait, ck_tile::gfx115_t>(const ck_tile::stream_config& s, fmha_fwd_splitkv_args a)
 {
     using k_ = fmha_kernel;
     auto [kargs, grids] = fmha_fwd_splitkv_create_kargs_and_grids<k_>(a);
+    if(getenv("SPLITKV_DEBUG"))
+        fprintf(stderr,
+                "[splitkv] grid=(%u,%u,%u) block=(%u,%u,%u) splits=%d\n",
+                grids.x, grids.y, grids.z, k_::BlockSize().x, k_::BlockSize().y, k_::BlockSize().z,
+                int(kargs.num_splits));
     const dim3 blocks                      = k_::BlockSize();
     constexpr ck_tile::index_t kBlockPerCu = k_::kBlockPerCu;
     auto r = ck_tile::launch_kernel(s, ck_tile::make_kernel<kBlockPerCu, ck_tile::gfx115_t>(k_{}, grids, blocks, 0, kargs));

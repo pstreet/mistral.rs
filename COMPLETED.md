@@ -1,5 +1,27 @@
 # COMPLETED: candle + mistral.rs fork work
 
+## Oct 25 (DFlash splitkv kernel: plumbed, then hardware-blocked)
+
+- Second half of the DFlash kernel lane: the full plumbing landed
+  (ck_flash_attn_splitkv_fwd C dispatcher + ABI, kernel_decl FFI
+  entry, rocm::ck_flash_attn_splitkv wrapper with split workspaces
+  and an sm-count split heuristic capped by KV chunks, and a
+  paged/varlen/windowed parity test vs an eager reference). The
+  HARDWARE VERDICT is negative: the CK splitkv main kernel
+  memory-faults on gfx1151 in its base group-varlen path -
+  reproduced via a standalone harness across paged/non-paged,
+  masked/unmasked, 1/multi splits, padded/full Q tiles; fault
+  addresses are LDS-space-like and shift with D-pad configs (smem
+  under-budget suspected: 9216B granted vs ~12KB tile need,
+  unproven). The sshuffle splitkv variant fails its own tile
+  asserts; AMD emits no gfx115 splitkv instantiations at all - the
+  family is unvalidated on RDNA. Shipped state: dispatcher/TU/FFI
+  inert + documented, parity test #[ignore]d, wrapper marked
+  do-not-call, harness + recipe preserved (scratch/splitkv-debug,
+  TODO dflash entry). DFlash-on-hip keeps the eager fallback; the
+  CK paged-kernel lane is parked with a precise blocker record and
+  four reopen options.
+
 ## Oct 25 (DFlash ROCm kernel: feasibility proven, splitkv TU landed)
 
 - The CK paged-windowed-varlen kernel lane for DFlash-on-ROCm is GO.
