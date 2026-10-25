@@ -1,5 +1,44 @@
 # COMPLETED: candle + mistral.rs fork work
 
+## Oct 25 (gemma4 expert split + spin detection + softcap dual fix)
+
+- Gemma 4 26B-A4B is an MoE (A4B), but its expert split was never wired
+  (only qwen3_next consumed the injected `_mistralrs_expert_device` key):
+  config.rs gains the field + expert_split_device() helper; text.rs plumbs
+  expert_device into MoEExpertsConfig via MoEExperts::new_direct (which
+  consumes the varbuilder verbatim, unlike MoEExperts::new which rebinds
+  internally - so the rebind has to happen at the call site), plus the
+  ISQ-combination guard and supports_cuda_decode_graphs gate.
+- Multimodal GGUF loader was dropping expert_device (the text GGUF path
+  already plumbed it): MultimodalLoaderBuilder + MultimodalLoader gained
+  expert_device, load_model_from_path gained the injection (root +
+  text_config for multimodal wrappers) and the DeviceMapSetting::dummy()
+  force on split lanes (so the auto map does not spill layers based on the
+  expert-heavy weight size). loaders/mod.rs inject_expert_device_config_flag
+  now propagates into text_config too.
+- Spin detection in the demand-load fit loop: with no residents on the
+  target device, no reclaim in flight, and flat free memory across retries,
+  the model itself does not fit - bail after 3 unchanged refusals instead
+  of polling the full 5-minute wait budget (was spinning uselessly on
+  gemma-4-26b-cuda). Error message now names the observed free MB and
+  the device.
+- mistralrs-quant: softcap (gemma's logit softcapping) loaded the
+  HIP-compiled kernel on the CUDA role in dual builds ("invalid argument"
+  on the first forward). Mirrored the scalar_fp8 dual-role pattern:
+  utils/ffi_cuda.rs (declare_cuda_role_kernel!) + role_ffi import alias;
+  softcap launches now route through role_ffi.
+- cache_engine: quantized-KV error text corrected to mention ROCm (the
+  gate already supported HIP; only the text was stale); updated the
+  asserting test.
+- Empirical: gemma-4-26b-cuda loads with experts offloaded (7.7GB on
+  card) but serves at ~0.1 tok/s - the CPU expert GEMMs starve the lane,
+  worse than hip. Config lane removed with an explanatory comment; the
+  arch port stays in code (harmless on hip, enables future work).
+- estimate_load_bytes expert-aware gate (committed separately earlier)
+  plus a unit test (minimal GGUF v3 fixture writer + full/dense/expert/
+  unscannable cases).
+- Core suite: 1460/0. 4-shape checks clean.
+
 ## Oct 24 continued (device-keyed FlashInfer + FA3 gate: dual-build capability parity)
 
 - FlashInfer decode on the NVIDIA role in DUAL builds (mistral.rs `~L`,

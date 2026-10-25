@@ -1853,6 +1853,10 @@ parity queue) now outranks it on impact.
       cross-encoder, true classification head, different loader), custom
       instruction field (llama.cpp lacks it too; Qwen eval says +1-5%).
 - [ ] ~L qwen4exp model-arch port: serve Qwen3.8-Flash-Next (opened
+      2026-10-22, expanded 2026-10-24). 95 GB GGUF on disk, lazy alias
+      `qwen3.8-flash-next` already registered. First gate is multi-part
+      sharded GGUF loader support (none of the fleet GGUFs are sharded
+      today); then QSA sparse attention, HyperConnections, PLE.
       2026-10-21, user demand: the orcarouter uncensored GGUF is
       already on disk - 95GB on a 98%-full disk carrying it until
       this lands - and currently unloadable). EVIDENCE: shard-1 GGUF
