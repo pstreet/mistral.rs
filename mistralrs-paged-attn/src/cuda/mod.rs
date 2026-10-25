@@ -47,8 +47,10 @@ pub use fa3_types::{
 };
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 pub use role_dispatch::{
-    copy_blocks_auto, fa3_fp8_decode_auto, fa3_prepare_decode_metadata_auto,
-    fa3_prepare_paged_metadata_auto, flashinfer_decode_auto, gather_kv_cache_auto,
-    gather_kv_cache_flashinfer_auto, paged_attention_auto, reshape_and_cache_auto,
+    concat_and_cache_mla_auto, context_attention_fwd_mla_auto, copy_blocks_auto,
+    fa3_fp8_decode_auto, fa3_prepare_decode_metadata_auto, fa3_prepare_paged_metadata_auto,
+    flash_attn_sinks_auto, flash_attn_sinks_varlen_auto, flashinfer_decode_auto,
+    flashinfer_mla_decode_auto, gather_kv_cache_auto, gather_kv_cache_flashinfer_auto,
+    gather_mla_cache_auto, paged_attention_auto, reshape_and_cache_auto,
     reshape_and_cache_flashinfer_auto, reshape_and_cache_q4_auto, reshape_and_cache_q8_auto,
 };

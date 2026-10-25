@@ -1,5 +1,31 @@
 # COMPLETED: candle + mistral.rs fork work
 
+## Oct 25 (MLA paged + flash_attn_sinks dual-build slice)
+
+- Mirrored the FlashInfer twin pattern for the two remaining hip-only
+  paged-attention slices:
+  - gen_twin.py generated cuda_role twins for mla.rs, flash_attn_sinks.rs,
+    context_attention_mla.rs; hand-fixed the fallout (slice_ptr import,
+    as_cuda_storage import, hip CudaDType -> cuda_backend CudaDType, bare
+    `use crate::cuda::ffi;` in sinks rewritten to ffi_cuda with cuda_
+    prefix).
+  - ffi_cuda.rs gained cuda_ entries for concat_and_cache_mla,
+    flashinfer_mla_decode, gather_mla_cache, flash_attn_sinks (f16/bf16/f32)
+    and varlen (f16/bf16/f32) (c_uint import added).
+  - cuda_role/mod.rs registers the new modules and re-exports.
+  - role_dispatch.rs imports the cuda_role twins and adds *_auto wrappers
+    (concat_and_cache_mla_auto, flashinfer_mla_decode_auto,
+    gather_mla_cache_auto, context_attention_fwd_mla_auto,
+    flash_attn_sinks_auto, flash_attn_sinks_varlen_auto) that route cuda
+    storage to the twin and bail on non-cuda.
+  - cuda/mod.rs exposes the new auto wrappers in dual builds.
+- mistralrs-core lifts `all(feature = "cuda", not(feature = "rocm"), ...)`
+  to `all(feature = "cuda", ...)` in src/mla/* and src/attention/backends/sinks.rs;
+  adds cfg-gated imports aliasing the _auto wrappers in dual builds and
+  rewrites the fully-qualified calls to use them.
+- Tests: paged-attn 27/0 (dual) + 4 (solo) unchanged; core 1567/0 (dual);
+  4-shape checks clean; CLI (cuda,rocm,flash-attn) builds.
+
 ## Oct 25 (gemma4 expert split + spin detection + softcap dual fix)
 
 - Gemma 4 26B-A4B is an MoE (A4B), but its expert split was never wired

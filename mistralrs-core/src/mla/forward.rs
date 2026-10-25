@@ -1,7 +1,7 @@
 //! MLA forward pass functions for decode and cache operations.
 
 #[cfg(any(
-    all(feature = "cuda", not(feature = "rocm"), target_family = "unix"),
+    all(feature = "cuda", target_family = "unix"),
     test
 ))]
 use candle_core::D;
@@ -14,29 +14,38 @@ use crate::{
 
 use super::{MlaKvBProjection, MlaWeights};
 
+#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+use mistralrs_paged_attn::{concat_and_cache_mla, flashinfer_mla_decode, gather_mla_cache};
+#[cfg(all(feature = "cuda", feature = "rocm", target_family = "unix"))]
+use mistralrs_paged_attn::{
+    concat_and_cache_mla_auto as concat_and_cache_mla,
+    flashinfer_mla_decode_auto as flashinfer_mla_decode,
+    gather_mla_cache_auto as gather_mla_cache,
+};
+
 #[cfg(any(
-    all(feature = "cuda", not(feature = "rocm"), target_family = "unix"),
+    all(feature = "cuda", target_family = "unix"),
     test
 ))]
 fn supports_cached_mla_weights(kv_b_proj: &MlaKvBProjection) -> bool {
     !kv_b_proj.is_dynamic_lora_active()
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 use candle_core::DType;
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::layers::Sdpa;
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::ops::SplitOp;
 
 /// Environment variable to disable MLA optimization.
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 const MISTRALRS_NO_MLA: &str = "MISTRALRS_NO_MLA";
 
 #[cfg(any(
-    all(feature = "cuda", not(feature = "rocm"), target_family = "unix"),
+    all(feature = "cuda", target_family = "unix"),
     test
 ))]
 fn pad_mla_value_for_flash(value: &Tensor, target_head_dim: usize) -> Result<(Tensor, usize)> {
@@ -54,7 +63,7 @@ fn pad_mla_value_for_flash(value: &Tensor, target_head_dim: usize) -> Result<(Te
     Ok((value, value_head_dim))
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn mla_direct_attention(
     q: &Tensor,
     k: &Tensor,
@@ -68,7 +77,7 @@ fn mla_direct_attention(
         .narrow(D::Minus1, 0, value_head_dim)
 }
 
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn project_split_mla_value(output: Tensor, kv_b_proj: &MlaKvBProjection) -> Result<Tensor> {
     if kv_b_proj.is_split() {
         kv_b_proj.project_value(&output)
@@ -78,7 +87,7 @@ fn project_split_mla_value(output: Tensor, kv_b_proj: &MlaKvBProjection) -> Resu
 }
 
 /// Check if MLA is disabled via environment variable.
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn is_mla_disabled() -> bool {
     std::env::var(MISTRALRS_NO_MLA).is_ok_and(|x| x == "1")
 }
@@ -93,7 +102,7 @@ fn is_mla_disabled() -> bool {
 /// - Running on CUDA
 /// - Paged KV indptr metadata is available
 /// - The KV projection does not have dynamic LoRA weights active
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub fn should_use_mla_decode(
     attention_mask: &AttentionMask,
     seq_len: usize,
@@ -114,7 +123,7 @@ pub fn should_use_mla_decode(
             .is_some()
 }
 
-#[cfg(not(all(feature = "cuda", not(feature = "rocm"), target_family = "unix")))]
+#[cfg(not(all(feature = "cuda", target_family = "unix")))]
 pub fn should_use_mla_decode(
     _attention_mask: &AttentionMask,
     _seq_len: usize,
@@ -133,7 +142,7 @@ pub fn should_use_mla_decode(
 /// - Paged attention is enabled
 /// - Running on CUDA
 /// - The KV projection has no active dynamic LoRA weights
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub fn should_use_mla_cache(
     paged_attn_enabled: bool,
     device: &Device,
@@ -145,7 +154,7 @@ pub fn should_use_mla_cache(
         && supports_cached_mla_weights(kv_b_proj)
 }
 
-#[cfg(not(all(feature = "cuda", not(feature = "rocm"), target_family = "unix")))]
+#[cfg(not(all(feature = "cuda", target_family = "unix")))]
 pub fn should_use_mla_cache(
     _paged_attn_enabled: bool,
     _device: &Device,
@@ -174,7 +183,7 @@ pub fn should_use_mla_cache(
 /// * `v_head_dim` - Value head dimension
 /// * `bs` - Batch size
 /// * `seq_len` - Sequence length (should be 1)
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 #[allow(clippy::too_many_arguments)]
 pub fn mla_decode_forward(
     q_nope: &Tensor,
@@ -253,7 +262,7 @@ pub fn mla_decode_forward(
         .contiguous()?
         .reshape((bs * seq_len, qk_rope_head_dim))?;
 
-    mistralrs_paged_attn::concat_and_cache_mla(
+    concat_and_cache_mla(
         &ckv_flat,
         &k_pe_flat,
         key_cache,
@@ -289,7 +298,7 @@ pub fn mla_decode_forward(
         ),
     };
 
-    let attn_latent = mistralrs_paged_attn::flashinfer_mla_decode(
+    let attn_latent = flashinfer_mla_decode(
         &ql_nope,
         &q_pe,
         key_cache,
@@ -315,7 +324,7 @@ pub fn mla_decode_forward(
     }
 }
 
-#[cfg(not(all(feature = "cuda", not(feature = "rocm"), target_family = "unix")))]
+#[cfg(not(all(feature = "cuda", target_family = "unix")))]
 #[allow(clippy::too_many_arguments)]
 pub fn mla_decode_forward(
     _q_nope: &Tensor,
@@ -360,7 +369,7 @@ pub fn mla_decode_forward(
 /// * `v_head_dim` - Value head dimension
 /// * `bs` - Batch size
 /// * `seq_len` - Sequence length
-#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 #[allow(clippy::too_many_arguments)]
 pub fn mla_cache_forward(
     q: &Tensor,
@@ -408,7 +417,7 @@ pub fn mla_cache_forward(
             .squeeze(1)?
             .contiguous()?
             .reshape((bs * seq_len, qk_rope_head_dim))?;
-        mistralrs_paged_attn::concat_and_cache_mla(
+        concat_and_cache_mla(
             &ckv_flat,
             &k_pe_flat,
             key_cache_tensor,
@@ -518,7 +527,7 @@ pub fn mla_cache_forward(
                 Tensor::from_vec(token_to_seq, (total_prefix_tokens,), &Device::Cpu)?
                     .to_device(q.device())?;
 
-            let (ckv_prefix, kpe_prefix) = mistralrs_paged_attn::gather_mla_cache(
+            let (ckv_prefix, kpe_prefix) = gather_mla_cache(
                 key_cache,
                 value_cache,
                 &block_tables_seq,
@@ -651,7 +660,7 @@ pub fn mla_cache_forward(
     }
 }
 
-#[cfg(not(all(feature = "cuda", not(feature = "rocm"), target_family = "unix")))]
+#[cfg(not(all(feature = "cuda", target_family = "unix")))]
 #[allow(clippy::too_many_arguments)]
 pub fn mla_cache_forward(
     _q: &Tensor,

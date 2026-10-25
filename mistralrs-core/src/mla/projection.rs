@@ -30,7 +30,7 @@ impl MlaKvBProjection {
         }
     }
 
-    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     pub fn fused_projection(&self) -> Option<&dyn QuantMethod> {
         match self {
             Self::Fused(projection) => Some(projection.as_ref()),
@@ -57,7 +57,7 @@ impl MlaKvBProjection {
     }
 
     #[cfg(any(
-        all(feature = "cuda", not(feature = "rocm"), target_family = "unix"),
+        all(feature = "cuda", target_family = "unix"),
         test
     ))]
     pub fn is_dynamic_lora_active(&self) -> bool {

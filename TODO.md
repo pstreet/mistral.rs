@@ -1631,9 +1631,11 @@ parity queue) now outranks it on impact.
       PROBE (dual fast binary, one 4B per device, auto KV):
       cuda:0 -> "Paged attention backend: FlashInfer", hip:0 ->
       "Standard" in ONE process - the device-key A/B holds.
-      NOT ported (later slices, hip-only until then): MLA paged
-      (mla.rs 897 + context_attention_mla.rs 435) and
-      flash_attn_sinks (385). DFlash/dflash stays not(rocm).
+      Ported this slice: MLA paged (mla.rs 897 + context_attention_mla.rs
+      435) and flash_attn_sinks (385) now twin on the NVIDIA role in
+      dual builds (cuda_role + role_dispatch *_auto + ffi_cuda entries);
+      mistralrs-core lifts the cfg gates and imports the _auto aliases
+      in dual. DFlash/dflash stays not(rocm).
       BENCH context (solo-cuda, 4B): FlashInfer+BF16 KV 117.5
       vs Standard+Q8_0 112.1 = +4.9% decode; KV cost doubles per
       token vs Q8_0. Prod stays Standard by config

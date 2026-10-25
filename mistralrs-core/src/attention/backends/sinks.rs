@@ -6,6 +6,11 @@ use crate::{
     pipeline::text_models_inputs_processor::FlashParams,
 };
 
+#[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+use mistralrs_paged_attn::{flash_attn_sinks, flash_attn_sinks_varlen};
+#[cfg(all(feature = "cuda", feature = "rocm", target_family = "unix"))]
+use mistralrs_paged_attn::{flash_attn_sinks_auto as flash_attn_sinks, flash_attn_sinks_varlen_auto as flash_attn_sinks_varlen};
+
 /// Fused attention with per-head sinks.
 ///
 /// Dispatches to:
@@ -80,7 +85,7 @@ pub(crate) fn sinks_backend_supports(
     }
 
     match location {
-        #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
         DeviceLocation::Cuda { .. } => true,
         #[cfg(feature = "metal")]
         DeviceLocation::Metal { .. } => true,
@@ -112,9 +117,9 @@ fn sinks_attn_regular(
         return sinks_attn_cpu(q, k, v, sinks, mask, sdpa_params);
     }
 
-    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     if q.device().is_cuda() {
-        return mistralrs_paged_attn::flash_attn_sinks(
+        return flash_attn_sinks(
             q,
             k,
             v,
@@ -173,9 +178,9 @@ fn sinks_attn_varlen(
         candle_core::bail!("sinks varlen metadata does not match the query batch");
     }
 
-    #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     if device.is_cuda() {
-        return mistralrs_paged_attn::flash_attn_sinks_varlen(
+        return flash_attn_sinks_varlen(
             q,
             &k_packed,
             &v_packed,
@@ -305,11 +310,7 @@ mod tests {
         assert!(!sinks_backend_supports(DType::F16, DeviceLocation::Cpu, 64));
         assert_eq!(
             sinks_backend_supports(DType::BF16, DeviceLocation::Cuda { gpu_id: 0 }, 128),
-            cfg!(all(
-                feature = "cuda",
-                not(feature = "rocm"),
-                target_family = "unix"
-            ))
+            cfg!(all(feature = "cuda", target_family = "unix"))
         );
         assert_eq!(
             sinks_backend_supports(DType::F32, DeviceLocation::Metal { gpu_id: 0 }, 256),

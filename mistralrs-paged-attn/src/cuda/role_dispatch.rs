@@ -19,15 +19,17 @@ use super::backend::{
     reshape_and_cache_q8 as hip_reshape_and_cache_q8,
 };
 use super::cuda_role::{
+    concat_and_cache_mla as cuda_concat_and_cache_mla, context_attention_fwd_mla as cuda_context_attention_fwd_mla,
     copy_blocks as cuda_copy_blocks, fa3_fp8_decode as cuda_fa3_fp8_decode,
     fa3_prepare_decode_metadata as cuda_fa3_prepare_decode_metadata,
     fa3_prepare_paged_metadata as cuda_fa3_prepare_paged_metadata,
-    flashinfer_decode as cuda_flashinfer_decode, gather_kv_cache as cuda_gather_kv_cache,
-    gather_kv_cache_flashinfer as cuda_gather_kv_cache_flashinfer,
-    paged_attention as cuda_paged_attention, reshape_and_cache as cuda_reshape_and_cache,
-    reshape_and_cache_flashinfer as cuda_reshape_and_cache_flashinfer,
-    reshape_and_cache_q4 as cuda_reshape_and_cache_q4,
-    reshape_and_cache_q8 as cuda_reshape_and_cache_q8, FlashInferDecodeScratch,
+    flash_attn_sinks as cuda_flash_attn_sinks, flash_attn_sinks_varlen as cuda_flash_attn_sinks_varlen,
+    flashinfer_decode as cuda_flashinfer_decode, flashinfer_mla_decode as cuda_flashinfer_mla_decode,
+    gather_kv_cache as cuda_gather_kv_cache, gather_kv_cache_flashinfer as cuda_gather_kv_cache_flashinfer,
+    gather_mla_cache as cuda_gather_mla_cache, paged_attention as cuda_paged_attention,
+    reshape_and_cache as cuda_reshape_and_cache, reshape_and_cache_flashinfer as cuda_reshape_and_cache_flashinfer,
+    reshape_and_cache_q4 as cuda_reshape_and_cache_q4, reshape_and_cache_q8 as cuda_reshape_and_cache_q8,
+    FlashInferDecodeScratch,
 };
 use crate::cuda::fa3_types::{Fa3DecodeMetadata, Fa3DecodeParams, Fa3DecodeSchedule};
 use crate::{BlockQuantKind, KvCacheScales};
@@ -392,5 +394,133 @@ pub fn fa3_fp8_decode_auto(params: Fa3DecodeParams<'_>) -> Result<Tensor> {
         cuda_fa3_fp8_decode(params)
     } else {
         candle_core::bail!("FA3 paged attention requires the NVIDIA role")
+    }
+}
+
+// ---- MLA + sinks (cuda-only; bail on non-cuda role) ----
+
+pub fn concat_and_cache_mla_auto(
+    ckv: &Tensor,
+    k_pe: &Tensor,
+    ckv_cache: &Tensor,
+    kpe_cache: &Tensor,
+    slot_mapping: &Tensor,
+) -> Result<()> {
+    if role_is_cuda(ckv) {
+        cuda_concat_and_cache_mla(ckv, k_pe, ckv_cache, kpe_cache, slot_mapping)
+    } else {
+        candle_core::bail!("MLA paged attention requires the NVIDIA role")
+    }
+}
+
+pub fn flashinfer_mla_decode_auto(
+    q_nope: &Tensor,
+    q_pe: &Tensor,
+    ckv_cache: &Tensor,
+    kpe_cache: &Tensor,
+    paged_kv_indptr: &Tensor,
+    paged_kv_indices: &Tensor,
+    paged_kv_last_page_len: &Tensor,
+    request_indices: &Tensor,
+    kv_tile_indices: &Tensor,
+    o_indptr: &Tensor,
+    kv_chunk_size: &Tensor,
+    sm_scale: f32,
+) -> Result<Tensor> {
+    if role_is_cuda(q_nope) {
+        cuda_flashinfer_mla_decode(
+            q_nope,
+            q_pe,
+            ckv_cache,
+            kpe_cache,
+            paged_kv_indptr,
+            paged_kv_indices,
+            paged_kv_last_page_len,
+            request_indices,
+            kv_tile_indices,
+            o_indptr,
+            kv_chunk_size,
+            sm_scale,
+        )
+    } else {
+        candle_core::bail!("MLA paged attention requires the NVIDIA role")
+    }
+}
+
+pub fn gather_mla_cache_auto(
+    ckv_cache: &Tensor,
+    kpe_cache: &Tensor,
+    block_table: &Tensor,
+    cu_seq_lens: &Tensor,
+    token_to_seq: &Tensor,
+) -> Result<(Tensor, Tensor)> {
+    if role_is_cuda(ckv_cache) {
+        cuda_gather_mla_cache(ckv_cache, kpe_cache, block_table, cu_seq_lens, token_to_seq)
+    } else {
+        candle_core::bail!("MLA paged attention requires the NVIDIA role")
+    }
+}
+
+pub fn context_attention_fwd_mla_auto(
+    q_nope: &Tensor,
+    q_pe: &Tensor,
+    ckv_new: &Tensor,
+    kpe_new: &Tensor,
+    ckv_cache: &Tensor,
+    kpe_cache: &Tensor,
+    block_tables: &Tensor,
+    context_lens: &Tensor,
+    query_lens: &Tensor,
+    w_uk: &Tensor,
+    softmax_scale: f32,
+) -> Result<Tensor> {
+    if role_is_cuda(q_nope) {
+        cuda_context_attention_fwd_mla(
+            q_nope,
+            q_pe,
+            ckv_new,
+            kpe_new,
+            ckv_cache,
+            kpe_cache,
+            block_tables,
+            context_lens,
+            query_lens,
+            w_uk,
+            softmax_scale,
+        )
+    } else {
+        candle_core::bail!("MLA paged attention requires the NVIDIA role")
+    }
+}
+
+pub fn flash_attn_sinks_auto(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    sinks: Option<&Tensor>,
+    softmax_scale: f32,
+    window_size: usize,
+) -> Result<Tensor> {
+    if role_is_cuda(q) {
+        cuda_flash_attn_sinks(q, k, v, sinks, softmax_scale, window_size)
+    } else {
+        candle_core::bail!("flash_attn_sinks requires the NVIDIA role")
+    }
+}
+
+pub fn flash_attn_sinks_varlen_auto(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    sinks: Option<&Tensor>,
+    cu_seqlens_q: &Tensor,
+    cu_seqlens_k: &Tensor,
+    softmax_scale: f32,
+    window_size: usize,
+) -> Result<Tensor> {
+    if role_is_cuda(q) {
+        cuda_flash_attn_sinks_varlen(q, k, v, sinks, cu_seqlens_q, cu_seqlens_k, softmax_scale, window_size)
+    } else {
+        candle_core::bail!("flash_attn_sinks requires the NVIDIA role")
     }
 }

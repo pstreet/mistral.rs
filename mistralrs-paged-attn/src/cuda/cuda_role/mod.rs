@@ -3,9 +3,12 @@
 //! (generated) - same entry shapes, CUDA-role storage and streams.
 
 mod cache;
+mod context_attention_mla;
 mod fa3;
+mod flash_attn_sinks;
 mod flashinfer;
 mod gather_kv;
+mod mla;
 mod paged_attention;
 
 pub use cache::{copy_blocks, swap_blocks};
@@ -14,6 +17,9 @@ pub use flashinfer::{
     flashinfer_decode, gather_kv_cache_flashinfer, is_flashinfer_cache,
     reshape_and_cache_flashinfer, FlashInferDecodeScratch,
 };
+pub use context_attention_mla::context_attention_fwd_mla;
+pub use mla::{concat_and_cache_mla, flashinfer_mla_decode, gather_mla_cache};
+pub use flash_attn_sinks::{flash_attn_sinks, flash_attn_sinks_varlen};
 pub use gather_kv::gather_kv_cache;
 pub use paged_attention::{
     paged_attention, reshape_and_cache, reshape_and_cache_q4, reshape_and_cache_q8,
