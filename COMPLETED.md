@@ -1,5 +1,20 @@
 # COMPLETED: candle + mistral.rs fork work
 
+## Oct 25 (UQFF vs GGUF shootout)
+
+- Probe-lane bench (release binary, :1245, 4B Qwen3.5-4B, no MTP,
+  temp=0, 3 warm runs/lane, port-verified teardowns): container is
+  NEUTRAL at equal quant (q8_0: GGUF 43.6 / UQFF 43.6 decode, 6.0s
+  load both) - native GGUF fleet lanes stay. UQFF WINS the ISQ
+  workflow: pre-baked UQFF q4k loads 6.2s vs 10.0s (no per-load
+  conversion), decodes 56.7 vs 53.8 tok/s (+5.4%), prefills
+  1108 vs 1008 (+10%). Same isq plan both arms; mechanism for the
+  decode delta unproven (layout/packing or kernel-path selection
+  candidates), single boot per lane. Side finding: q4k > q8_0 by
+  ~30% decode on the 4B GDN-hybrid (opposite of 27B dense); any
+  future fast 4B lane should use pre-baked UQFF q4k, not GGUF+ISQ.
+  Artifacts in scratch/uqff-shootout/ (delete freely).
+
 ## Oct 25 (hygiene batch: split-GGUF auto-expansion, FFI marking, ledger)
 
 - Sharded-GGUF loader gate PASSED for the qwen4exp port: mistral.rs's

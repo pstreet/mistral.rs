@@ -1642,9 +1642,28 @@ parity queue) now outranks it on impact.
       ([paged_attn] cache_type = Q8_0 gates it off); flip a cuda
       lane to auto/BF16 KV to activate. Payoff is future 3090
       residents (27B+) and closing the solo-vs-dual gap.
-- [ ] ~S UQFF vs GGUF shootout: same weights through the CLI
+- [x] ~S UQFF vs GGUF shootout: same weights through the CLI
       `quantize`/`uqff` path, bench load + decode on this box.
       Unmeasured; native format may win both.
+      CLOSED 2026-10-25 (probe :1245, release binary, 4B Qwen3.5-4B
+      Q8_0 GGUF source, no MTP, temp=0, 3 warm runs each, single
+      listener verified per lane). VERDICT: container-neutral at
+      equal quant (q8_0 GGUF vs UQFF: decode 43.6 vs 43.6 tok/s,
+      load 6.0s both) - no reason to convert native-GGUF fleet
+      lanes. UQFF WINS THE ISQ WORKFLOW decisively: pre-baked
+      UQFF q4k loads 6.2s vs 10.0s for GGUF + runtime --isq q4k
+      (conversion cost skipped per load; scales up with model
+      size), decodes 56.7 vs 53.8 tok/s (+5.4%) and prefills
+      1108 vs 1008 tok/s (+10%) - same quant plan (isq_flow, q6k
+      sensitive-tensor exceptions in both), 3 tight runs each,
+      mechanism unproven (candidates: serialize round-trip
+      layout/packing, kernel-path selection); honest caveat:
+      single boot per lane. SIDE FINDING: q4k beats q8_0 by ~30%
+      decode on the 4B GDN-hybrid (56.7 vs 43.6) - OPPOSITE of
+      the 27B dense Q4 finding; if a faster 4B lane is ever
+      wanted, pre-baked UQFF q4k is the artifact, not GGUF+ISQ.
+      Artifacts + logs + bench script preserved in scratch/
+      uqff-shootout/ (7GB, delete freely).
 - [x] ~S MTP on the 4B: `Qwen3.5-4B-MTP-GGUF` carries the head but is
       pinned `mtp=false` in prod. Small-model MTP is usually
       high-acceptance; bench before pinning.
