@@ -94,7 +94,7 @@ k_cache_type = "Q8_0"
 v_cache_type = "Q8_0"
 
 [models.format]
-quantized_file = "Qwen3.8-Flash-Next-Uncensored-IQ4_XS-MTP-00001-of-00003.gguf"
+quantized_file = "Qwen3.8-Flash-Next-Uncensored-IQ4_XS-MTP-00001-of-00003.gguf;Qwen3.8-Flash-Next-Uncensored-IQ4_XS-MTP-00002-of-00003.gguf;Qwen3.8-Flash-Next-Uncensored-IQ4_XS-MTP-00003-of-00003.gguf"
 mmproj = "mmproj-Qwen3.8-Flash-Next-Uncensored-F16.gguf"
 
 # ------------------------------------------------------------

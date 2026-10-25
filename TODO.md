@@ -1856,9 +1856,10 @@ parity queue) now outranks it on impact.
       instruction field (llama.cpp lacks it too; Qwen eval says +1-5%).
 - [ ] ~L qwen4exp model-arch port: serve Qwen3.8-Flash-Next (opened
       2026-10-22, expanded 2026-10-24). 95 GB GGUF on disk, lazy alias
-      `qwen3.8-flash-next` already registered. First gate is multi-part
-      sharded GGUF loader support (none of the fleet GGUFs are sharded
-      today); then QSA sparse attention, HyperConnections, PLE.
+      `qwen3.8-flash-next` already registered. Loader gate for sharded
+      GGUFs PASSED 2026-10-25 - multi-part reads already work end to
+      end (see item 7), so the port starts at the arch registry. Then
+      QSA sparse attention, HyperConnections, PLE.
       2026-10-21, user demand: the orcarouter uncensored GGUF is
       already on disk - 95GB on a 98%-full disk carrying it until
       this lands - and currently unloadable). EVIDENCE: shard-1 GGUF
@@ -1894,10 +1895,24 @@ parity queue) now outranks it on impact.
       (5) MTP: self-speculation path for -MTP files, or pair a
       plain quant with the repo's separate MTP-draft.gguf (~4GB)
       via the existing spec-draft-model machinery; (6) mmproj
-      family entry for vision; (7) multi-part split support: none
-      of the fleet GGUFs are sharded - verify our loader handles
-      the llama.cpp -00001-of-000NN convention or add it before
-      anything else matters. REFS: llama.cpp #27742 (arch, in
+      family entry for vision; (7) multi-part split support:
+      RESOLVED 2026-10-25 - the loader ALREADY handles sharded GGUFs
+      end to end. mistral.rs has its own multi-reader Content wrapper
+      (mistralrs-core/src/gguf/content.rs: validates split.count
+      against the reader set - loud error on a partial set - merges
+      metadata, retrieves tensors across shards). Live-proven: a
+      4-shard llama-gguf-split of the 4B Q8_0 (441 tensors) serves
+      CORRECT 1776 through BOTH the CLI serve path and the
+      from-config path with all shards listed `;`-joined in
+      quantized_file. GAP (config-only): serve/from-config do NOT
+      auto-expand a single -00001-of- name into the full set (that
+      expansion exists only in the quant command's gguf_discovery);
+      configs must name every shard. The prod alias named ONLY
+      shard-1 (a guaranteed split-count error once the arch lands) -
+      fixed to the 3-shard ;-joined list, dry-run validated.
+      OPTIONAL port nicety: reuse SPLIT_GGUF_RE + a dir scan to
+      auto-expand single-shard names in the config path.
+      REFS: llama.cpp #27742 (arch, in
       mainline since 2026-08-27) + #27880 follow-up; #27836 +
       #30592 (MTP self-speculation; ~0.77 draft acceptance on
       this IQ4_XS-MTP file per the orcarouter README). SERVING
