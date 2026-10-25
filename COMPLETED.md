@@ -32,8 +32,13 @@
     wrappers; real server PIDs must come from ss/port lookup), SO_REUSEPORT
     let a stale orphaned ISQ instance and the new Q4 instance share :1245
     and silently split benchmark traffic (first Q4 numbers invalid; re-run
-    clean), and from-config ignores a model-level `isq` key (ISQ needs the
-    CLI flag; the dead key was removed from the prod config).
+    clean), and the TOML ISQ key must be NESTED: `[models.quantization]
+    isq = "..."` - a top-level `[[models]] isq = "..."` is an unknown
+    ModelEntry field that serde silently drops. The nested spelling was
+    then verified end-to-end in prod (lazy reload logged "Quantizing
+    model weights to q4k"); CLI `--isq` sets the same field via the
+    builder fallback. Config reverted to Q6_K regardless (Q4 decode
+    slower).
 
 ## Oct 25 (MLA paged + flash_attn_sinks dual-build slice)
 
