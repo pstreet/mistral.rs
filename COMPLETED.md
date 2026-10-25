@@ -1,5 +1,40 @@
 # COMPLETED: candle + mistral.rs fork work
 
+## Oct 25 (prod perf pass: 27B quant shootout, 35B MTP depth, 3090 isolation)
+
+- Prod benchmark pass on the new release binary (single-request, 128/256-tok
+  decode, temp=0): 4B hip 47.5 / cuda 165.2; 16B hip 55.9 / cuda 109.2;
+  35B-A3B hip 58.1 (MTP 78.6% len 2.57); 27B dense Q6_K 17.1 (MTP 61.5%
+  len 2.84); gemma-4-26b 43.8. Competitive vs llama.cpp on Strix Halo
+  except 27B dense (llama.cpp 26.47 on native UD-Q4_K_XL).
+- 3090 35B lane re-measured in isolation (prod restarted first): 41.3
+  tok/s decode / 133.6 prefill, consistent with the 42 from the lane
+  landing. The earlier benchmark OOM was co-residency (hip 35B ~28GB
+  system RAM + cuda 35B load spike in one 122GB box), not a lane defect;
+  the lane's max_seqs=2 + fit_ctx pins already account for it.
+- 35B MTP n=3 A/B (hip): 60.2 vs 58.1 tok/s at n=2 (+3.6%), accept
+  78.6%->68.5% but len 2.57->3.05. Marginal; reverted to n=2. The gap to
+  llama.cpp's 80-with-MTP figure is not depth.
+- 27B dense Q4 shootout (the gap hypothesis was quantization):
+  - ISQ q4k in-memory (sensitive tensors q6k): decode 15.0 tok/s, prefill
+    472 (3x). SLOWER decode than native Q6_K.
+  - Native Q4_K_M GGUF (llama-quantize --allow-requantize
+    --leave-output-tensor from the Q6_K, 16.8GB): decode 14.2 tok/s
+    stable, prefill 468. SLOWER decode than native Q6_K.
+  - Conclusion: on gfx1151 the Q4 dequant/GEMV path costs more than the
+    25% bandwidth saving at 27B-dense scale - matches the TODO appendix
+    finding ("Q4 slower, dequant overhead beats bandwidth savings").
+    Q6_K stays the prod config for the 27B. The remaining gap vs
+    llama.cpp's Q4 figure is a kernel lane (tuned Q4 dequant on RDNA),
+    not a quant choice. Prefill-only workloads would favor Q4 3x, but
+    decode dominates interactive use.
+  - Gotchas recorded: mistralrs `serve` re-forks (recorded nohup PIDs were
+    wrappers; real server PIDs must come from ss/port lookup), SO_REUSEPORT
+    let a stale orphaned ISQ instance and the new Q4 instance share :1245
+    and silently split benchmark traffic (first Q4 numbers invalid; re-run
+    clean), and from-config ignores a model-level `isq` key (ISQ needs the
+    CLI flag; the dead key was removed from the prod config).
+
 ## Oct 25 (MLA paged + flash_attn_sinks dual-build slice)
 
 - Mirrored the FlashInfer twin pattern for the two remaining hip-only
