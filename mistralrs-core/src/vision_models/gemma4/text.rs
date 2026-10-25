@@ -1055,16 +1055,24 @@ impl DecoderLayer {
             let moe_vb = mapper.set_device(layer_idx, vb.pp(moe_prefix), false);
             let moe_cfg = MoEExpertsConfig {
                 num_experts,
-                expert_device: None,
+                expert_device: cfg.expert_split_device()?,
                 expert_hot_slots: None,
                 num_experts_per_tok: top_k,
                 hidden_size: cfg.hidden_size,
                 moe_intermediate_size: expert_inter,
                 expert_proj_names: crate::moe::ExpertProjNames::DEFAULT,
             };
+            // new_direct consumes the caller's varbuilder verbatim, so the
+            // expert split needs the device rebind here (mirrors
+            // MoEExperts::new's internal handling).
+            let expert_device = moe_cfg
+                .expert_device
+                .clone()
+                .unwrap_or_else(|| moe_vb.device().clone());
+            let experts_vb = moe_vb.clone().set_device(expert_device);
             let moe = MoEExperts::new_direct(
                 &moe_cfg,
-                moe_vb.clone(),
+                experts_vb,
                 comm,
                 loading_isq,
                 &cfg.quantization_config,
@@ -1526,6 +1534,7 @@ pub struct TextModel {
     bidirectional_attention: Gemma4BidirectionalAttention,
     cfg: ModelConfigMetadata,
     model_config: Arc<dyn ModelConfigLike + Send + Sync>,
+    expert_device: Option<Device>,
 }
 
 #[derive(Clone)]
@@ -1592,6 +1601,14 @@ impl TextModel {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        if cfg.expert_device.is_some()
+            && (normal_loading_metadata.loading_isq
+                || mistralrs_quant::get_immediate_isq().is_some())
+        {
+            candle_core::bail!(
+                "`expert_device` cannot be combined with in-situ quantization or immediate ISQ"
+            );
+        }
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
                 "Using {} quantization: {}.",
@@ -1896,13 +1913,16 @@ impl TextModel {
             bidirectional_attention: cfg.bidirectional_attention(),
             cfg: cfg_metadata,
             model_config,
+            expert_device: cfg.expert_split_device()?,
             mapper,
         })
     }
 
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     pub fn supports_cuda_decode_graphs(&self) -> bool {
-        true
+        // Expert-split puts a CPU matmul inside every MoE block; capture
+        // cannot span it.
+        self.expert_device.is_none()
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {

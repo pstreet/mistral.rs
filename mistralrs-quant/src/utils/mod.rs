@@ -1,5 +1,7 @@
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 mod ffi;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+mod ffi_cuda;
 pub(crate) mod isq;
 pub mod log;
 mod ops;

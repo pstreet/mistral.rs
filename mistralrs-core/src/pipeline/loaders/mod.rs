@@ -88,6 +88,14 @@ pub(crate) fn inject_expert_device_config_flag(
         EXPERT_DEVICE_CONFIG_KEY.to_string(),
         serde_json::Value::String(device.to_string()),
     );
+    // Multimodal wrappers nest the text model under `text_config`; the
+    // expert split is a text-model concern, so propagate there too.
+    if let Some(serde_json::Value::Object(text_config)) = object.get_mut("text_config") {
+        text_config.insert(
+            EXPERT_DEVICE_CONFIG_KEY.to_string(),
+            serde_json::Value::String(device.to_string()),
+        );
+    }
     Ok(config.to_string())
 }
 
@@ -106,6 +114,13 @@ pub(crate) fn inject_expert_hot_cache_config_flag(
         EXPERT_HOT_CACHE_CONFIG_KEY.to_string(),
         serde_json::Value::from(mb),
     );
+    // Same multimodal-wrapper propagation as the expert split above.
+    if let Some(serde_json::Value::Object(text_config)) = object.get_mut("text_config") {
+        text_config.insert(
+            EXPERT_HOT_CACHE_CONFIG_KEY.to_string(),
+            serde_json::Value::from(mb),
+        );
+    }
     eprintln!(
         "INJECT: inserted key, result contains it: {}",
         config.to_string().contains(EXPERT_HOT_CACHE_CONFIG_KEY)

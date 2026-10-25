@@ -91,6 +91,9 @@ pub struct Gemma4TextConfig {
     pub enable_moe_block: bool,
     pub num_experts: Option<usize>,
     pub top_k_experts: Option<usize>,
+    /// Injected by the loader for expert-split placement (see `EXPERT_DEVICE_CONFIG_KEY`).
+    #[serde(default, rename = "_mistralrs_expert_device")]
+    pub expert_device: Option<String>,
     // Some configs ship both keys; `#[serde(alias)]` would trip duplicate-field detection.
     #[serde(default, rename = "expert_intermediate_size")]
     expert_intermediate_size_field: Option<usize>,
@@ -121,6 +124,17 @@ impl Gemma4TextConfig {
             Some("vision") => Gemma4BidirectionalAttention::Vision,
             Some("all") => Gemma4BidirectionalAttention::All,
             _ => Gemma4BidirectionalAttention::Causal,
+        }
+    }
+
+    /// Expert-split placement device; only `"cpu"` is supported.
+    pub fn expert_split_device(&self) -> candle_core::Result<Option<candle_core::Device>> {
+        match &self.expert_device {
+            None => Ok(None),
+            Some(dev) if dev == "cpu" => Ok(Some(candle_core::Device::Cpu)),
+            Some(dev) => {
+                candle_core::bail!("`expert_device = \"{dev}\"` is not supported; only \"cpu\"")
+            }
         }
     }
 

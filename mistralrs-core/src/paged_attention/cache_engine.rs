@@ -179,7 +179,7 @@ impl PagedCacheType {
                 );
             } else {
                 return Err(format!(
-                    "Quantized KV cache is only supported on CUDA or Metal, got {layer_device:?} for layer {layer_idx}"
+                    "Quantized KV cache is only supported on CUDA, ROCm, or Metal, got {layer_device:?} for layer {layer_idx}"
                 ));
             }
         }
@@ -1012,7 +1012,7 @@ mod tests {
                 &[],
             )
             .unwrap_err();
-        assert!(err.contains("only supported on CUDA or Metal"));
+        assert!(err.contains("only supported on CUDA, ROCm, or Metal"));
     }
 
     #[test]

@@ -164,6 +164,7 @@ pub struct MultimodalLoader {
     loader_type: Option<MultimodalLoaderType>,
     prepared_source: Option<PreparedMultimodalSource>,
     mtp: bool,
+    expert_device: Option<String>,
     encoder_cache_memory_bytes: Option<usize>,
 }
 
@@ -196,6 +197,7 @@ pub struct MultimodalLoaderBuilder {
     lora_adapters: Option<Vec<LoraAdapterSpec>>,
     lora_runtime_config: Option<LoraRuntimeConfig>,
     mtp: bool,
+    expert_device: Option<String>,
     encoder_cache_memory_bytes: Option<usize>,
 }
 
@@ -236,6 +238,7 @@ impl MultimodalLoaderBuilder {
             lora_adapters: None,
             lora_runtime_config: None,
             mtp: false,
+            expert_device: None,
             encoder_cache_memory_bytes: None,
         }
     }
@@ -243,6 +246,13 @@ impl MultimodalLoaderBuilder {
     /// Load the MTP head built into the checkpoint so it can drive speculative decoding.
     pub fn with_mtp(mut self, mtp: bool) -> Self {
         self.mtp = mtp;
+        self
+    }
+
+    /// Set on the model config JSON when MoE experts should be placed on a
+    /// different device.
+    pub fn with_expert_device(mut self, expert_device: Option<String>) -> Self {
+        self.expert_device = expert_device;
         self
     }
 
@@ -321,6 +331,7 @@ impl MultimodalLoaderBuilder {
             loader_type,
             prepared_source,
             mtp: self.mtp,
+            expert_device: self.expert_device,
             encoder_cache_memory_bytes: self.encoder_cache_memory_bytes,
         })
     }
@@ -465,6 +476,10 @@ impl Loader for MultimodalLoader {
             super::loaders::inject_mtp_config_flag(&config)?
         } else {
             config
+        };
+        let config = match &self.expert_device {
+            Some(dev) => super::loaders::inject_expert_device_config_flag(&config, dev)?,
+            None => config,
         };
         super::loaders::validate_lora_qk_rope_layout(&config, self.lora_adapters.is_some())?;
         let modalities = self.inner.modalities(&config)?;
@@ -639,7 +654,12 @@ impl Loader for MultimodalLoader {
 
         // If auto, convert to Map if not using nccl
         let mut max_kv_tokens: Option<usize> = None;
-        if write_uqff {
+        // Expert-split models keep their experts on a separate device (CPU); the auto device
+        // map must not spill layers to that device based on the full (expert-heavy) weight
+        // size, or PagedAttention gets disabled. Force single-device placement.
+        if self.expert_device.is_some() {
+            mapper = DeviceMapSetting::dummy();
+        } else if write_uqff {
             mapper = DeviceMapSetting::dummy();
         } else if use_distributed {
             mapper = DeviceMapSetting::DummyNccl {

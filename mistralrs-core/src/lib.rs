@@ -69,6 +69,11 @@ const EVICT_RECLAIM_GRACE: Duration = Duration::from_secs(10);
 /// Poll cadence when a demand-load hits the loader's own fit check with an
 /// eviction's teardown still in flight.
 const RELOAD_FIT_POLL: Duration = Duration::from_secs(1);
+/// Consecutive fit-check refusals with an unchanged device (no residents,
+/// no reclaim, flat free memory) before the reload loop declares the load
+/// doomed: nothing on the device can change the answer, so polling the full
+/// wait budget would only spin.
+const RELOAD_FIT_DOOMED_RETRIES: u32 = 3;
 /// Default idle time before the TTL task may unload an engine. Reserved for
 /// the idle-eviction pass; no task reads it yet.
 const DEFAULT_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
@@ -3494,6 +3499,8 @@ impl MistralRs {
         let mut evict_tried: HashSet<String> = HashSet::new();
         let mut last_evicted: Option<Instant> = None;
         let mut wait_logged = false;
+        let mut last_free: Option<u64> = None;
+        let mut doomed_refusals: u32 = 0;
         let pipeline = loop {
             match loader.load_model_from_hf(
                 loader_config.hf_revision.clone(),
@@ -3529,10 +3536,51 @@ impl MistralRs {
                             );
                             last_evicted = Some(Instant::now());
                             wait_logged = false;
+                            last_free = None;
+                            doomed_refusals = 0;
                             continue;
                         }
                     }
                     if Instant::now() < fit_deadline {
+                        // Doomed-spin detection: with no residents on the
+                        // target device and no eviction reclaiming, free
+                        // memory cannot change between retries. A repeated
+                        // refusal with flat availability means the model
+                        // itself does not fit; bail instead of polling out
+                        // the whole wait budget. Busy residents keep the
+                        // wait alive (they can idle out and be evicted).
+                        let any_resident = self
+                            .engines
+                            .read()
+                            .map(|engines| {
+                                engines.values().any(|inst| {
+                                    inst.config.device.location()
+                                        == loader_config.device.location()
+                                })
+                            })
+                            .unwrap_or(true);
+                        if !reclaiming && !any_resident {
+                            let free = MemoryUsage
+                                .query(&loader_config.device)
+                                .ok()
+                                .map(|memory| memory.available() as u64);
+                            if free.is_some() && free == last_free {
+                                doomed_refusals += 1;
+                                if doomed_refusals >= RELOAD_FIT_DOOMED_RETRIES {
+                                    return Err(MistralRsError::ReloadFailed(format!(
+                                        "Demand-load of {model_id}: fit check rejected with ~{} MB free, no residents to evict, and no change across retries; the model does not fit on {:?}",
+                                        free.unwrap_or(0) / 1024 / 1024,
+                                        loader_config.device
+                                    )));
+                                }
+                            } else {
+                                doomed_refusals = 0;
+                            }
+                            last_free = free;
+                        } else {
+                            doomed_refusals = 0;
+                            last_free = None;
+                        }
                         if !wait_logged {
                             warn!(
                                 "Demand-load of {model_id}: loader fit check rejected (evicted memory still reclaiming), retrying in {RELOAD_FIT_POLL:?}"

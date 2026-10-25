@@ -10,6 +10,10 @@ use std::{
     ops::{BitAnd, BitOr, BitXor, Not, Shl},
 };
 
+#[cfg(all(feature = "cuda", not(feature = "rocm")))]
+use crate::utils::ffi as role_ffi;
+#[cfg(all(feature = "cuda", feature = "rocm"))]
+use crate::utils::ffi_cuda as role_ffi;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 use crate::utils::slice_ptr;
 #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -4195,9 +4199,9 @@ impl CustomOp1 for Softcap {
         }
 
         match s1.dtype() {
-            DType::F32 => launch!(f32, ffi::softcap_f32),
-            DType::F16 => launch!(half::f16, ffi::softcap_f16_to_f32),
-            DType::BF16 => launch!(half::bf16, ffi::softcap_bf16_to_f32),
+            DType::F32 => launch!(f32, role_ffi::softcap_f32),
+            DType::F16 => launch!(half::f16, role_ffi::softcap_f16_to_f32),
+            DType::BF16 => launch!(half::bf16, role_ffi::softcap_bf16_to_f32),
             dtype => candle_core::bail!("softcap: unsupported dtype {dtype:?}"),
         }
 
@@ -4237,9 +4241,9 @@ impl CustomOp1 for Softcap {
         }
 
         match s1.dtype() {
-            DType::F32 => launch!(f32, ffi::softcap_f32),
-            DType::F16 => launch!(half::f16, ffi::softcap_f16_to_f32),
-            DType::BF16 => launch!(half::bf16, ffi::softcap_bf16_to_f32),
+            DType::F32 => launch!(f32, role_ffi::softcap_f32),
+            DType::F16 => launch!(half::f16, role_ffi::softcap_f16_to_f32),
+            DType::BF16 => launch!(half::bf16, role_ffi::softcap_bf16_to_f32),
             dtype => candle_core::bail!("softcap: unsupported dtype {dtype:?}"),
         }
 

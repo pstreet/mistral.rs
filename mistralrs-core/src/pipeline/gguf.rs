@@ -980,7 +980,8 @@ impl GGUFLoader {
             self.jinja_explicit.clone(),
         )
         .with_encoder_cache_memory_bytes(self.encoder_cache_memory_bytes)
-        .with_mtp(self.config.mtp);
+        .with_mtp(self.config.mtp)
+        .with_expert_device(self.config.expert_device.clone());
         if let Some(dynamic_lora) = self.dynamic_lora.as_ref() {
             loader = loader.with_lora(dynamic_lora.adapters.clone(), dynamic_lora.runtime);
         }
