@@ -1888,6 +1888,17 @@ parity queue) now outranks it on impact.
       verified from their side). Lane fully live end to end; first
       openwebui-originated rerank traffic will appear on the first
       RAG query against a rerank-enabled collection.
+      COMPAT GAP (found 2026-10-26 surveying reranker formats):
+      llama.cpp's /v1/rerank accepts the documents array under TWO
+      keys - `texts` (TEI, Text Embeddings Inference shape, with
+      optional `return_text: true` to echo document text) or
+      `documents` (Jina). Ours accepts `documents` only
+      (RerankRequest, openai.rs). openwebui sends Jina-style so
+      prod is covered; a TEI-shaped client would 422 on the missing
+      `documents` field. Fix if ever needed: one serde addition
+      (accept `texts` as an alias for `documents` + optional
+      `return_text` echo in RerankResult) - minutes, no design
+      change.
 - [ ] ~L qwen4exp model-arch port: serve Qwen3.8-Flash-Next (opened
       2026-10-22, expanded 2026-10-24). 95 GB GGUF on disk, lazy alias
       `qwen3.8-flash-next` already registered. Loader gate for sharded
