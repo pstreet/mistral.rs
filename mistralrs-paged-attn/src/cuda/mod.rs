@@ -24,8 +24,9 @@ pub use backend::{
     USE_FA3_FP8_PAGED,
 };
 pub use backend::{
-    copy_blocks, gather_kv_cache, paged_attention, reshape_and_cache, reshape_and_cache_q4,
-    reshape_and_cache_q8, swap_blocks, PAGED_ATTENTION_V2_PARTITION_SIZE,
+    copy_blocks, gather_kv_cache, lock_paged_attn_v2_workspace, paged_attention, reshape_and_cache,
+    reshape_and_cache_q4, reshape_and_cache_q8, swap_blocks, PagedAttnV2WorkspaceGuard,
+    PAGED_ATTENTION_V2_PARTITION_SIZE,
 };
 
 /// Dual-only NVIDIA-role twins (nvcc companion). Same entry shapes as

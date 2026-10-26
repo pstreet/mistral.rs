@@ -2885,7 +2885,11 @@ impl CudaDecodeGraphState {
                     // multiple hardware queues the copy may not complete
                     // before graph launch, causing the graph to read stale
                     // input_ids and produce NaN logits.
-                    entry.graph.stream().synchronize().map_err(candle_core::Error::wrap)?;
+                    entry
+                        .graph
+                        .stream()
+                        .synchronize()
+                        .map_err(candle_core::Error::wrap)?;
                 }
                 CudaDecodeGraphReplayInput::Resident(_) => {}
             }
@@ -2989,6 +2993,14 @@ impl CudaDecodeGraphState {
                 )));
             }
         }
+        // Hold the paged-attention V2 workspace mutex for the whole replay:
+        // the graph captures the V2 kernel (which uses the shared global
+        // workspace) without capturing this CPU-side lock, so without it
+        // eager forwards race on the same workspace under multi-queue
+        // scheduling. Acquired before the device sync and held until the
+        // post-launch sync completes.
+        let _workspace_guard =
+            mistralrs_paged_attn::lock_paged_attn_v2_workspace(&step.input_ids.device());
         // Device-level synchronize before graph launch to ensure ALL
         // pending operations (input_ids H2D copy, metadata H2D copy,
         // state_indices copy) have completed on ALL streams. On ROCm with
@@ -3001,7 +3013,9 @@ impl CudaDecodeGraphState {
             self.disabled = true;
             self.block_eager_retry();
             self.entries.push(entry);
-            return Err(err.context("CUDA graph replay device synchronization failed before launch"));
+            return Err(
+                err.context("CUDA graph replay device synchronization failed before launch")
+            );
         }
         if let Err(err) = entry.graph.launch().map_err(|err| {
             err.context(format!(
@@ -4524,7 +4538,9 @@ impl CudaGraphHostStaging {
                 // launch can execute concurrently or out of order, causing
                 // the graph to read stale metadata and produce NaN logits.
                 // Synchronize explicitly to close the race.
-                self.graph_stream.synchronize().map_err(candle_core::Error::wrap)?;
+                self.graph_stream
+                    .synchronize()
+                    .map_err(candle_core::Error::wrap)?;
             } else {
                 self.graph_stream.wait_on_event(&completion.event)?;
             }
@@ -4567,7 +4583,9 @@ impl CudaGraphHostStaging {
                 // (GPU_MAX_HW_QUEUES > 1) the HIP stream's FIFO ordering
                 // guarantee breaks. Synchronize to ensure the previous
                 // graph completed before starting new H2D metadata copies.
-                self.graph_stream.synchronize().map_err(candle_core::Error::wrap)?;
+                self.graph_stream
+                    .synchronize()
+                    .map_err(candle_core::Error::wrap)?;
             } else {
                 completion.stream.wait_on_event(&self.graph_complete)?;
             }
@@ -5443,7 +5461,9 @@ mod tests {
         staging.update(|staging| staging.prepare_copy(location, &copy_stream))?;
         assert!(staging.completions[&location].ordered_after_graph);
         staging.order_before_graph()?;
-        graph_stream.synchronize().map_err(candle_core::Error::wrap)?;
+        graph_stream
+            .synchronize()
+            .map_err(candle_core::Error::wrap)?;
         Ok(())
     }
 

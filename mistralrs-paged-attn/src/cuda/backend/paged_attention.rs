@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::ffi::c_int;
 use std::sync::{Mutex, OnceLock};
 
-struct WorkspaceSlot {
+pub struct WorkspaceSlot {
     slice: CudaSlice<u8>,
     cap: usize,
 }
@@ -138,6 +138,61 @@ fn workspace_ensure(
     }
     let ptr = slot.slice.device_ptr(slot.slice.stream()).0;
     Ok((ptr, slot))
+}
+
+/// Guard that holds the per-device paged-attention V2 workspace mutex for its
+/// lifetime. CUDA graphs capture the V2 kernel (which uses the shared global
+/// workspace) without capturing this lock, so replay must take it explicitly to
+/// avoid racing eager forwards on the same workspace.
+pub struct PagedAttnV2WorkspaceGuard {
+    _guard: Option<std::sync::MutexGuard<'static, WorkspaceSlot>>,
+}
+
+/// Acquire the per-device paged-attention V2 workspace mutex. Used by CUDA
+/// graph replay to serialize against eager forwards sharing the global
+/// workspace. Returns `None` for non-GPU devices.
+pub fn lock_paged_attn_v2_workspace(
+    dev: &candle_core::Device,
+) -> Option<PagedAttnV2WorkspaceGuard> {
+    #[cfg(feature = "rocm")]
+    {
+        let dev = dev.as_hip_device().ok()?;
+        lock_paged_attn_v2_workspace_impl(dev)
+    }
+    #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+    {
+        let dev = dev.as_cuda_device().ok()?;
+        lock_paged_attn_v2_workspace_impl(dev)
+    }
+    #[cfg(not(any(feature = "cuda", feature = "rocm")))]
+    {
+        let _ = dev;
+        None
+    }
+}
+
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+fn lock_paged_attn_v2_workspace_impl(
+    dev: &crate::cuda::role_backend::CudaDevice,
+) -> Option<PagedAttnV2WorkspaceGuard> {
+    let map = PAGED_ATTN_V2_WORKSPACE.get_or_init(|| Mutex::new(HashMap::new()));
+    let device_key = dev.id();
+    let device_mtx: &'static Mutex<WorkspaceSlot> = {
+        let mut guard = map.lock().ok()?;
+        match guard.get(&device_key).copied() {
+            Some(mtx) => mtx,
+            None => {
+                let slice = unsafe { dev.alloc::<u8>(1).ok()? };
+                let leaked = Box::leak(Box::new(Mutex::new(WorkspaceSlot { slice, cap: 1 })));
+                guard.insert(device_key, leaked);
+                leaked
+            }
+        }
+    };
+    let slot_guard = device_mtx.lock().ok()?;
+    Some(PagedAttnV2WorkspaceGuard {
+        _guard: Some(slot_guard),
+    })
 }
 
 struct PagedAttention {

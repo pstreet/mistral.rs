@@ -746,6 +746,39 @@ corrected, README reranking mention. Details: COMPLETED.md.
       Graph ptr census (MISTRALRS_GRAPH_PTR_CENSUS=1) is armed in
       prod and may catch moved VAs if re-enabled.
 
+      SINGLE-QUEUE EXPERIMENT (2026-10-26): graphs ON +
+      GPU_MAX_HW_QUEUES=1 (single hardware queue) + all sync fixes +
+      workspace mutex lock during replay. RESULT: 0/10 NaN. Definitive:
+      the NaN is QUEUE-DEPENDENT. Graphs are safe on single-queue
+      scheduling and unsafe on multi-queue scheduling on this ROCm
+      runtime (TheRock). Multi-queue exposes a race that syncs cannot
+      close (likely the runtime distributing one stream's captured
+      graph across multiple hardware queues, or a captured-DAG
+      dependency that only manifests under concurrent queue
+      execution).
+
+      Also shipped: paged-attn V2 workspace mutex is now acquired
+      during graph replay (lock_paged_attn_v2_workspace). This closes
+      the race on the shared global workspace for longer-context
+      requests (V2 path) where the graph captured the V2 kernel
+      without its CPU-side mutex. Harmless on the V1 path (short
+      contexts) and passes 4-shape cargo check.
+
+      CONCLUSION: graphs and multi-queue are mutually exclusive on
+      this runtime. Two viable prod configurations:
+      (A) GPU_MAX_HW_QUEUES=1 + MISTRALRS_CUDA_GRAPHS=1 (graphs on,
+          single-queue power/heat profile), or
+      (B) GPU_MAX_HW_QUEUES unset + MISTRALRS_CUDA_GRAPHS=0 (graphs
+          off, multi-queue power/heat profile).
+      PROD NOW RUNS (A) (user choice 2026-10-26 07:42): wrapper sets
+      GPU_MAX_HW_QUEUES=1 + MISTRALRS_CUDA_GRAPHS=1 on the new binary
+      (sync fixes + V2 workspace replay lock, md5 134443ea). Health
+      OK, 13 models, graphs captured at startup, zero NaN events.
+      One lane hit a capture failure at 07:47 (forward failed, not
+      overflow; graceful eager fallback, no NaN) - watch for recurrence.
+      TheRock 10.2 (user building from source) may fix the runtime
+      side; re-test graphs on multi-queue after it lands.
+
 ## Open: architecture extension
 - [ ] Role-identity Phase 4: Vulkan third shell (untouched; target state is
       one shared backend body with thin role shells - detail: COMPLETED.md).
