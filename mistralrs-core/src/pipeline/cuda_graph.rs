@@ -230,6 +230,11 @@ const DECODE_GRAPH_MIN_ARENA_BYTES: usize = 32 * 1024 * 1024;
 /// overflow; converged roles never notice the extra budget.
 const DECODE_GRAPH_CAPTURE_ATTEMPTS: usize = 6;
 
+/// Runtime lazy-capture failures allowed per key before that shape stays
+/// eager for the process lifetime. Startup (synthetic-data) failures never
+/// count against it; only live-serving capture attempts do.
+const DECODE_GRAPH_RUNTIME_CAPTURE_FAILURE_BUDGET: u32 = 2;
+
 /// Precapture stops taking new buckets once free device memory (as the
 /// device-memory query reports it) falls below this floor. Resident graphs
 /// pin their arenas for the process lifetime, so an unbounded precapture
@@ -355,6 +360,7 @@ pub(crate) enum CudaGraphDispatchReason {
     RuntimeDisabled,
     PaddingUnavailable,
     CachePopulation,
+    CaptureExhausted,
     Fallback,
 }
 
@@ -373,6 +379,7 @@ impl CudaGraphDispatchReason {
             Self::RuntimeDisabled => "runtime_disabled",
             Self::PaddingUnavailable => "padding_unavailable",
             Self::CachePopulation => "cache_population",
+            Self::CaptureExhausted => "capture_exhausted",
             Self::Fallback => "fallback",
         }
     }
@@ -1647,7 +1654,7 @@ pub(crate) struct DecodeArenaBucketKey {
 }
 
 impl CudaDecodeGraphKey {
-    fn arena_bucket(&self) -> DecodeArenaBucketKey {
+    pub(crate) fn arena_bucket(&self) -> DecodeArenaBucketKey {
         DecodeArenaBucketKey {
             batch: self.input_shape.first().copied().unwrap_or(0),
             seq_len: self.input_shape.get(1).copied().unwrap_or(0),
@@ -2722,6 +2729,23 @@ pub(crate) struct CudaDecodeGraphReplay {
     pub(crate) launch: Option<CudaDecodeGraphLaunch>,
 }
 
+pub(crate) struct CudaDecodeGraphCaptureError {
+    pub(crate) err: candle_core::Error,
+    // False means the live recurrent/speculative state could not be restored
+    // after the failure; callers must hard-fail instead of falling back.
+    pub(crate) state_restored: bool,
+}
+
+impl CudaDecodeGraphCaptureError {
+    // For failures before the warmup forward touches live state.
+    pub(crate) fn untouched(err: candle_core::Error) -> Self {
+        Self {
+            err,
+            state_restored: true,
+        }
+    }
+}
+
 pub(crate) struct CudaDecodeGraphState {
     entries: Vec<CudaDecodeGraphEntry>,
     spec_state_budgets: HashMap<DeviceLocation, usize>,
@@ -2731,6 +2755,7 @@ pub(crate) struct CudaDecodeGraphState {
     eager_retry_blocked: bool,
     recurrent_storage_generation: Option<u64>,
     arena_observations: HashMap<DecodeArenaBucketKey, usize>,
+    capture_failures: Vec<(CudaDecodeGraphKey, u32)>,
 }
 
 impl Default for CudaDecodeGraphState {
@@ -2744,6 +2769,7 @@ impl Default for CudaDecodeGraphState {
             eager_retry_blocked: false,
             recurrent_storage_generation: None,
             arena_observations: HashMap::new(),
+            capture_failures: Vec::new(),
         }
     }
 }
@@ -2795,6 +2821,27 @@ impl CudaDecodeGraphState {
 
     pub(crate) fn disabled(&self) -> bool {
         self.disabled || self.suspended
+    }
+
+    pub(crate) fn resident_len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(crate) fn capture_attempts_exhausted(&self, key: &CudaDecodeGraphKey) -> bool {
+        self.capture_failures.iter().any(|(failed, count)| {
+            failed == key && *count >= DECODE_GRAPH_RUNTIME_CAPTURE_FAILURE_BUDGET
+        })
+    }
+
+    pub(crate) fn note_capture_failure(&mut self, key: &CudaDecodeGraphKey) {
+        match self
+            .capture_failures
+            .iter_mut()
+            .find(|(failed, _)| failed == key)
+        {
+            Some((_, count)) => *count += 1,
+            None => self.capture_failures.push((key.clone(), 1)),
+        }
     }
 
     pub(crate) fn disable(&mut self) {

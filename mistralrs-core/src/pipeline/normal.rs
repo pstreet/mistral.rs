@@ -61,10 +61,10 @@ use crate::pipeline::cuda_graph::{
     cuda_graph_startup_capture_allowed, hybrid_graph_slots, install_hybrid_graph_state_indices,
     record_cuda_graph_dispatch, speculative_graph_tensor_metadata,
     target_cuda_graph_cache_capacity, validate_speculative_graph_tensor_metadata,
-    CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey, CudaDecodeGraphLaunch, CudaDecodeGraphReplay,
-    CudaDecodeGraphReplayInput, CudaDecodeGraphState, CudaGraphComponent, CudaGraphDecodeStep,
-    CudaGraphDecodeStepInputs, CudaGraphDispatchMode, CudaGraphDispatchReason, CudaGraphEvent,
-    CudaGraphEventGuard, CudaGraphPrecaptureInputs,
+    CudaDecodeGraphCaptureCtx, CudaDecodeGraphCaptureError, CudaDecodeGraphKey,
+    CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput, CudaDecodeGraphState,
+    CudaGraphComponent, CudaGraphDecodeStep, CudaGraphDecodeStepInputs, CudaGraphDispatchMode,
+    CudaGraphDispatchReason, CudaGraphEvent, CudaGraphEventGuard, CudaGraphPrecaptureInputs,
 };
 #[cfg(all(
     any(feature = "cuda", feature = "rocm"),
@@ -2021,8 +2021,17 @@ impl NormalPipeline {
             return Ok(Some(replay));
         }
 
+        if state.capture_attempts_exhausted(&key) {
+            record_cuda_graph_dispatch(
+                CudaGraphComponent::Target,
+                CudaGraphDispatchMode::Eager,
+                CudaGraphDispatchReason::CaptureExhausted,
+            );
+            return Ok(None);
+        }
+
         let replay_key = key.clone();
-        let _ = self.capture_cuda_decode_graph_step(
+        if let Err(failure) = self.capture_cuda_decode_graph_step(
             &mut state,
             key,
             &step,
@@ -2034,7 +2043,33 @@ impl NormalPipeline {
                 speculative,
             },
             true,
-        )?;
+        ) {
+            // A failed capture launched nothing, so with live state restored it
+            // is safe to keep the resident entries and decode this step
+            // eagerly instead of disabling graphs for the whole lane.
+            if !failure.state_restored {
+                return Err(failure.err);
+            }
+            state.note_capture_failure(&replay_key);
+            let exhausted = state.capture_attempts_exhausted(&replay_key);
+            warn!(
+                "CUDA decode graph capture failed for bucket {:?} ({} resident captures kept, decoding eagerly{}): {}",
+                replay_key.arena_bucket(),
+                state.resident_len(),
+                if exhausted { ", shape retired" } else { "" },
+                failure.err
+            );
+            record_cuda_graph_dispatch(
+                CudaGraphComponent::Target,
+                CudaGraphDispatchMode::Eager,
+                if exhausted {
+                    CudaGraphDispatchReason::CaptureExhausted
+                } else {
+                    CudaGraphDispatchReason::Fallback
+                },
+            );
+            return Ok(None);
+        }
         super::synchronize_cuda_contexts(step.input_ids.device(), self.mapper.as_ref()).map_err(
             |err| {
                 candle_core::Error::msg(format!(
@@ -2207,9 +2242,13 @@ impl NormalPipeline {
                     false,
                 ) {
                     Ok(_) => captured += 1,
-                    Err(err) => {
+                    Err(failure) => {
+                        if !failure.state_restored {
+                            return Err(failure.err);
+                        }
                         warn!(
-                            "CUDA decode graph precapture failed for one bucket (kept earlier captures; lazy fallback for this shape): {err}"
+                            "CUDA decode graph precapture failed for one bucket (kept earlier captures; lazy fallback for this shape): {}",
+                            failure.err
                         );
                         continue;
                     }
@@ -2237,7 +2276,7 @@ impl NormalPipeline {
         step: &CudaGraphDecodeStep,
         inputs: CudaDecodeGraphCaptureInputs<'_>,
         rollback_live_state: bool,
-    ) -> candle_core::Result<Tensor> {
+    ) -> Result<Tensor, CudaDecodeGraphCaptureError> {
         let CudaDecodeGraphCaptureInputs {
             kv_cache,
             flash_meta,
@@ -2252,17 +2291,26 @@ impl NormalPipeline {
             CudaGraphEventGuard::new(CudaGraphComponent::Target, CudaGraphEvent::Capture);
         let graph_device = step.input_ids.device();
         let _htod_cache_guard = crate::pipeline::graph_role::graph_enable_htod_cache(&graph_device)
-            .map_err(|_| candle_core::Error::msg("CUDA graph decode expected CUDA input ids"))?;
+            .map_err(|_| {
+                CudaDecodeGraphCaptureError::untouched(candle_core::Error::msg(
+                    "CUDA graph decode expected CUDA input ids",
+                ))
+            })?;
         // Fork alloc counters live on the hip role's device API; the NVIDIA
         // role captures through driver mempools and needs no arena sizing.
         #[cfg(all(feature = "cuda", feature = "rocm"))]
         let fork_device = step.input_ids.device().as_hip_device().ok();
         #[cfg(not(all(feature = "cuda", feature = "rocm")))]
-        let fork_device = Some(step.input_ids.device().as_role_device()?);
+        let fork_device = Some(
+            step.input_ids
+                .device()
+                .as_role_device()
+                .map_err(CudaDecodeGraphCaptureError::untouched)?,
+        );
         let metadata = step
             .metadata
             .materialize_decode_tensors()
-            .map_err(candle_core::Error::msg)?;
+            .map_err(|err| CudaDecodeGraphCaptureError::untouched(candle_core::Error::msg(err)))?;
 
         let uses_recurrent_transition_log = self.model.cache().is_hybrid()
             && self.model.cache().hybrid().uses_recurrent_transition_log();
@@ -2272,15 +2320,19 @@ impl NormalPipeline {
             && uses_recurrent_transition_log
             && !self
                 .model
-                .apply_recurrent_speculative_transitions_for_current_batch()?
+                .apply_recurrent_speculative_transitions_for_current_batch()
+                .map_err(CudaDecodeGraphCaptureError::untouched)?
         {
-            candle_core::bail!(
-                "CUDA graph capture could not materialize pending recurrent transitions"
-            );
+            return Err(CudaDecodeGraphCaptureError::untouched(
+                candle_core::Error::msg(
+                    "CUDA graph capture could not materialize pending recurrent transitions",
+                ),
+            ));
         }
 
-        let recurrent_snapshots =
-            self.snapshot_hybrid_recurrent_checkpoints(recurrent_batch_kind)?;
+        let recurrent_snapshots = self
+            .snapshot_hybrid_recurrent_checkpoints(recurrent_batch_kind)
+            .map_err(CudaDecodeGraphCaptureError::untouched)?;
         let live_state_indices = self.snapshot_hybrid_state_indices();
         let nonmutating_transition_capture = recurrent_batch_kind
             == RecurrentBatchKind::SpeculativeDecode
@@ -2384,21 +2436,24 @@ impl NormalPipeline {
                 entry.with_spec_state(graph_spec_state.take(), spec_state_usage),
             ))
         })();
-        let capture_attempt = if let Some(warm) = warm_live_spec_state.as_deref() {
-            match self.model.install_speculative_graph_state(warm) {
-                Ok(()) => capture_attempt,
-                Err(install_err) => {
-                    state.block_eager_retry();
-                    match capture_attempt {
-                        Ok(_) => Err(install_err),
-                        Err(capture_err) => Err(candle_core::Error::msg(format!(
-                            "CUDA graph capture failed: {capture_err}; warm speculative state restoration failed: {install_err}"
-                        ))),
-                    }
-                }
+        let warm_restore = warm_live_spec_state
+            .as_deref()
+            .map(|warm| self.model.install_speculative_graph_state(warm));
+        let capture_attempt = match warm_restore {
+            Some(Err(install_err)) => {
+                state.block_eager_retry();
+                let err = match capture_attempt {
+                    Ok(_) => install_err,
+                    Err(capture_err) => candle_core::Error::msg(format!(
+                        "CUDA graph capture failed: {capture_err}; warm speculative state restoration failed: {install_err}"
+                    )),
+                };
+                return Err(CudaDecodeGraphCaptureError {
+                    err,
+                    state_restored: false,
+                });
             }
-        } else {
-            capture_attempt
+            _ => capture_attempt,
         };
         let (logits, entry) = self.finish_cuda_graph_capture_attempt(
             state,
@@ -2438,30 +2493,39 @@ impl NormalPipeline {
         recurrent_snapshots: Option<&[(usize, RecurrentCheckpointStateSnapshot)]>,
         live_state_indices: Option<&HybridStateIndicesSnapshot>,
         rollback_live_state: bool,
-    ) -> candle_core::Result<T> {
+    ) -> Result<T, CudaDecodeGraphCaptureError> {
         self.restore_hybrid_state_indices(live_state_indices);
         match attempt {
             Ok(value) if !rollback_live_state => Ok(value),
-            Ok(value) => {
-                self.restore_hybrid_recurrent_checkpoints(recurrent_snapshots)
-                    .map_err(|restore_err| {
-                        state.block_eager_retry();
-                        candle_core::Error::msg(format!(
-                            "CUDA graph captured, but recurrent checkpoint rollback failed: {restore_err}"
-                        ))
-                    })?;
-                Ok(value)
-            }
-            Err(capture_err) => {
-                if let Err(restore_err) =
-                    self.restore_hybrid_recurrent_checkpoints(recurrent_snapshots)
-                {
+            Ok(value) => match self.restore_hybrid_recurrent_checkpoints(recurrent_snapshots) {
+                Ok(()) => Ok(value),
+                Err(restore_err) => {
                     state.block_eager_retry();
-                    return Err(candle_core::Error::msg(format!(
-                        "CUDA graph capture failed: {capture_err}; recurrent checkpoint rollback failed: {restore_err}"
-                    )));
+                    Err(CudaDecodeGraphCaptureError {
+                            err: candle_core::Error::msg(format!(
+                                "CUDA graph captured, but recurrent checkpoint rollback failed: {restore_err}"
+                            )),
+                            state_restored: false,
+                        })
                 }
-                Err(capture_err)
+            },
+            Err(mut capture_err) => {
+                let state_restored = match self
+                    .restore_hybrid_recurrent_checkpoints(recurrent_snapshots)
+                {
+                    Ok(()) => true,
+                    Err(restore_err) => {
+                        state.block_eager_retry();
+                        capture_err = candle_core::Error::msg(format!(
+                                "CUDA graph capture failed: {capture_err}; recurrent checkpoint rollback failed: {restore_err}"
+                            ));
+                        false
+                    }
+                };
+                Err(CudaDecodeGraphCaptureError {
+                    err: capture_err,
+                    state_restored,
+                })
             }
         }
     }

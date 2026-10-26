@@ -779,6 +779,52 @@ corrected, README reranking mention. Details: COMPLETED.md.
       TheRock 10.2 (user building from source) may fix the runtime
       side; re-test graphs on multi-queue after it lands.
 
+## Closed (2026-10-26): 07:47 capture failure - root cause and fix
+
+      PERF AUDIT (2026-10-26): the 35B lane's wall time is decode-bound.
+      Turn 1 cold prefill 201s of 255s; turns 2-3 replay the prefix
+      (~105K tok/s effective, 2s) and spend 64-139s decoding. Prefix
+      cache works; decode is the only lever, and it ran EAGER all day:
+      the 07:47 capture failure disabled all 30 graphs lane-wide
+      (resident_entries=0, 605 eager dispatches, 1 replay total).
+
+      ROOT CAUSE: lazy capture of a new graph variant mid-serving hit a
+      host->device upload >4KB inside the capture window. candle's H2D
+      content cache caps at CUDA_GRAPH_HTOD_CACHE_MAX_BYTES=4096, and
+      over-cap uploads can NEVER be cached (unbounded content-keyed
+      growth), so the warmup forward cannot pre-populate them; the
+      in-capture forward bails ("cannot upload uncached host data",
+      device.rs). That Err propagated to try_cuda_decode_graph_forward
+      -> disable_cuda_decode_graph -> state.disable()+clear(): ALL
+      resident entries dropped, none re-armed for the process lifetime.
+      The startup precapture path already had per-bucket semantics
+      ("failed for one bucket, kept earlier captures"); the runtime
+      lazy path was the outlier.
+
+      FIX P1a (mistralrs-core): capture failures are now key-scoped.
+      capture_cuda_decode_graph_step returns CudaDecodeGraphCaptureError
+      {err, state_restored}; runtime callers keep resident entries and
+      fall back to eager for the step when state_restored, with a
+      per-key retry budget (2) before the shape retires
+      (dispatch reason capture_exhausted). Unrestorable live state
+      (rollback/restore failures) still hard-fails and replay failures
+      still kill the lane - NaN-safety conservatism is unchanged.
+      Mirrored in normal.rs and multimodal.rs twins.
+
+      FIX P1b (candle): bails now carry byte_len; MRS_TRACE_BIG_HTOD=1
+      eprintlns every over-cap host upload with a backtrace (eager side)
+      and appends backtraces to capture-path bails, so the >4KB
+      uploader can be identified from a probe run. Repro asset:
+      scratch/nan-probe/payload-long.json (~125K tokens, mirrors the
+      prod conversation), launch-probe-htod.sh (prod memory profile:
+      managed weights + mmap + host drop, single-queue, graphs on).
+
+      Expected impact: graphs back on the serving lane = +7-10% decode
+      (A/B 13.89 vs 12.54 tok/s) where decode is 90%+ of wall time.
+      Landing needs a rebuild + idle-window prod swap; verify via
+      /metrics: resident_entries > 0, replay dispatch climbing,
+      zero capture{outcome=failure} growth.
+
 ## Open: architecture extension
 - [ ] Role-identity Phase 4: Vulkan third shell (untouched; target state is
       one shared backend body with thin role shells - detail: COMPLETED.md).
