@@ -1746,11 +1746,17 @@ pub struct RerankRequest {
     pub model: String,
     /// The search query to score documents against.
     pub query: String,
-    /// Documents to score, ordered by input index.
+    /// Documents to score, ordered by input index. Accepts the TEI key
+    /// `texts` as an alias for the same array.
+    #[serde(alias = "texts")]
     pub documents: Vec<RerankDocument>,
     /// Return only the top N scored documents. `None` returns all.
     #[schema(example = json!(Option::None::<usize>))]
     pub top_n: Option<usize>,
+    /// Echo each returned document's text alongside its score (TEI-style).
+    #[schema(example = json!(Option::None::<bool>))]
+    #[serde(default)]
+    pub return_text: Option<bool>,
     #[schema(example = json!(Option::None::<String>))]
     #[serde(rename = "user")]
     pub _user: Option<String>,
@@ -1758,7 +1764,7 @@ pub struct RerankRequest {
     // mistral.rs additional
     /// Truncate inputs that exceed the model's context length instead of erroring.
     #[schema(example = json!(Option::None::<bool>))]
-    #[serde(default)]
+    #[serde(default, alias = "truncate")]
     pub truncate_sequence: Option<bool>,
 }
 
@@ -1766,6 +1772,9 @@ pub struct RerankRequest {
 pub struct RerankResult {
     pub index: u32,
     pub relevance_score: f32,
+    /// Present only when the request set `return_text`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -2731,5 +2740,47 @@ mod tests {
             serde_json::from_value(json!([{ "type": "web_search" }])).unwrap();
 
         assert!(normalize_chat_completion_tools(Some(tools), None).is_err());
+    }
+
+    #[test]
+    fn rerank_request_accepts_tei_texts_key() {
+        let tei: RerankRequest = serde_json::from_value(json!({
+            "model": "m",
+            "query": "q",
+            "texts": ["a", "b"],
+            "return_text": true,
+            "truncate": true
+        }))
+        .unwrap();
+        assert_eq!(tei.documents.len(), 2);
+        assert_eq!(tei.documents[0].text(), "a");
+        assert_eq!(tei.return_text, Some(true));
+        assert_eq!(tei.truncate_sequence, Some(true));
+
+        let jina: RerankRequest = serde_json::from_value(
+            json!({"model": "m", "query": "q", "documents": [{"text": "a"}]}),
+        )
+        .unwrap();
+        assert_eq!(jina.documents.len(), 1);
+        assert_eq!(jina.return_text, None);
+    }
+
+    #[test]
+    fn rerank_result_omits_text_when_none() {
+        let without = serde_json::to_value(RerankResult {
+            index: 0,
+            relevance_score: 0.5,
+            text: None,
+        })
+        .unwrap();
+        assert!(without.get("text").is_none());
+
+        let with = serde_json::to_value(RerankResult {
+            index: 0,
+            relevance_score: 0.5,
+            text: Some("a".to_string()),
+        })
+        .unwrap();
+        assert_eq!(with["text"], "a");
     }
 }

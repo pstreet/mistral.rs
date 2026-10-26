@@ -94,7 +94,10 @@ the input `index` and a `relevance_score` in `[0, 1]`:
 ```
 
 `documents` accepts plain strings or objects with a `text` field
-(Cohere-style). `top_n` truncates the result list; omit it to score every
-document. Long pairs over the model's context are rejected unless
-`truncate_sequence` is set, in which case the head of the pair prompt is
-dropped so the scoring position survives.
+(Cohere-style). TEI-style clients can send the same array under the
+`texts` key and set `return_text: true` to echo each returned
+document's text alongside its score; `truncate` is accepted as an
+alias for `truncate_sequence`. `top_n` truncates the result list;
+omit it to score every document. Long pairs over the model's context
+are rejected unless `truncate_sequence` is set, in which case the
+head of the pair prompt is dropped so the scoring position survives.

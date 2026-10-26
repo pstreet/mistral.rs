@@ -1888,17 +1888,22 @@ parity queue) now outranks it on impact.
       verified from their side). Lane fully live end to end; first
       openwebui-originated rerank traffic will appear on the first
       RAG query against a rerank-enabled collection.
-      COMPAT GAP (found 2026-10-26 surveying reranker formats):
+      TEI-SHAPE COMPAT (found 2026-10-26, FIXED same day):
       llama.cpp's /v1/rerank accepts the documents array under TWO
-      keys - `texts` (TEI, Text Embeddings Inference shape, with
-      optional `return_text: true` to echo document text) or
-      `documents` (Jina). Ours accepts `documents` only
-      (RerankRequest, openai.rs). openwebui sends Jina-style so
-      prod is covered; a TEI-shaped client would 422 on the missing
-      `documents` field. Fix if ever needed: one serde addition
-      (accept `texts` as an alias for `documents` + optional
-      `return_text` echo in RerankResult) - minutes, no design
-      change.
+      keys - `texts` (TEI, Text Embeddings Inference shape) or
+      `documents` (Jina); ours took `documents` only. FIXED:
+      RerankRequest now takes `texts` as a serde alias for
+      `documents` (plus `truncate` as an alias for
+      truncate_sequence), gained a `return_text` flag, and
+      RerankResult carries an optional `text` echo
+      (skip_serializing_if None - byte-identical responses for
+      existing clients). Two serde unit tests lock the shapes;
+      docs/openapi.json regenerated (staleness gate green);
+      use-rerankers.mdx documents the aliases; crate fmt clean
+      (incl. a leftover import wrap from the rerank lane commit
+      itself). openwebui unaffected (Jina sender). Prod serves
+      the change after the next binary swap - the running
+      f3b2d3576 binary predates it; no config change needed.
 - [ ] ~L qwen4exp model-arch port: serve Qwen3.8-Flash-Next (opened
       2026-10-22, expanded 2026-10-24). 95 GB GGUF on disk, lazy alias
       `qwen3.8-flash-next` already registered. Loader gate for sharded

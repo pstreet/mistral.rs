@@ -6957,7 +6957,7 @@
             "items": {
               "$ref": "#/components/schemas/RerankDocument"
             },
-            "description": "Documents to score, ordered by input index."
+            "description": "Documents to score, ordered by input index. Accepts the TEI key\n`texts` as an alias for the same array."
           },
           "model": {
             "type": "string",
@@ -6967,6 +6967,14 @@
           "query": {
             "type": "string",
             "description": "The search query to score documents against."
+          },
+          "return_text": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Echo each returned document's text alongside its score (TEI-style).",
+            "example": null
           },
           "top_n": {
             "type": [
@@ -7035,6 +7043,13 @@
           "relevance_score": {
             "type": "number",
             "format": "float"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present only when the request set `return_text`."
           }
         }
       },

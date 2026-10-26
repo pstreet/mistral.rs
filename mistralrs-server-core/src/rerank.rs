@@ -121,11 +121,13 @@ pub async fn rerank(
 
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
+    let return_text = oairequest.return_text.unwrap_or(false);
     let mut results: Vec<RerankResult> = scored
         .into_iter()
         .map(|(index, relevance_score)| RerankResult {
             index: index as u32,
             relevance_score,
+            text: return_text.then(|| oairequest.documents[index].text().to_string()),
         })
         .collect();
     if let Some(top_n) = oairequest.top_n {

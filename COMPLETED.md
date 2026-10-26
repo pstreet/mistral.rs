@@ -1,5 +1,18 @@
 # COMPLETED: candle + mistral.rs fork work
 
+## Oct 26 (TEI-shape compat for /v1/rerank)
+
+- /v1/rerank now accepts the TEI wire shape alongside Jina/Cohere:
+  `texts` as a serde alias for `documents`, `truncate` as an alias
+  for `truncate_sequence`, a `return_text` flag, and an optional
+  `text` echo on RerankResult (omitted unless requested, so
+  existing client responses are byte-identical). Two serde unit
+  tests; docs/openapi.json regenerated through the staleness-gated
+  workflow; use-rerankers.mdx updated; a leftover import-wrap fmt
+  drift from the rerank lane commit fixed. Server-core crate: 155
+  tests green, fmt + clippy clean. Live on prod after the next
+  binary swap (no config change).
+
 ## Oct 25 (small items: reranker live-validated on prod)
 
 - Prod /v1/rerank live-tested against :1235 (user's 22:52 restart,
