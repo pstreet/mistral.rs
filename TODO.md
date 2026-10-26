@@ -730,13 +730,21 @@ corrected, README reranking mention. Details: COMPLETED.md.
       (a) explicit event dependencies for every buffer in the graph,
       (b) capture-time stream serialization, or (c) accepting that
       graphs only work with GPU_MAX_HW_QUEUES=1.
+      FINAL TEST (2026-10-26, graphs ON + all 5 sync fixes): ~10%
+      NaN rate (2/20) down from 40% (6/15) without syncs. Partial
+      improvement but not elimination. Remaining NaNs likely from
+      graph capture's unrecorded stream dependencies or shared buffer
+      races that syncs cannot close.
+
       Graphs remain DISABLED in prod (MISTRALRS_CUDA_GRAPHS=0).
       Sync fixes committed as partial improvement (no harm, reduces
-      NaN rate). Graphs stay off until a deeper fix lands.
+      NaN rate, passes 4-shape cargo check). Graphs stay off until
+      a deeper fix (explicit event deps or capture-time serialization)
+      lands. B3 (MTP cross-check) not run - graphs are the confirmed
+      mechanism; MTP is not implicated.
 
       Graph ptr census (MISTRALRS_GRAPH_PTR_CENSUS=1) is armed in
-      prod and may catch moved VAs if re-enabled. B3 (MTP cross-check)
-      deferred - B2 A/B is strong enough (0/12 vs 6/15).
+      prod and may catch moved VAs if re-enabled.
 
 ## Open: architecture extension
 - [ ] Role-identity Phase 4: Vulkan third shell (untouched; target state is
