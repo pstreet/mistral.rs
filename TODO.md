@@ -664,6 +664,60 @@ corrected, README reranking mention. Details: COMPLETED.md.
       mid-build), cleared Ubuntu `debian/canonical-*.pem` cert
       paths from .config (SecureBoot off, inert), kept MODULE_SIG
 
+      PHASE B0 (2026-10-26, var-off + de-risked load, 27B Q6_K):
+      de-risk = NO_MMAP + no-managed (removes userptr + managed
+      migration churn = the crash class). GPU_MAX_HW_QUEUES unset.
+      RESULT: NaN REPRODUCES (all-NaN logits at sampling:
+      "invalid CUDA top-1 output: max_logit=NaN argmax=NaN"),
+      6/15 = 40% rate (lottery-like, matches hunt). ZERO CRASHES
+      across all 15 requests. CONCLUSION: NaN mechanism is in the
+      COMPUTE path, not the load path. De-risk disarmed crashes but
+      not NaNs -> crash-free NaN lab now available. Discriminator
+      cells B1-B4 (trim race, graphs, MTP, per-layer probes) can run
+      safely. Note: trial runner's NaN detection only checks the
+      HTTP response body; the actual NaN errors surface in the
+      server log as "invalid CUDA top-1 output: max_logit=NaN".
+      Probe tooling: scratch/nan-probe/ (payload, toml, launch
+      scripts, trial runner). Probe-nan branch holds the cherry-pick
+      attempt (aborted; diff at /tmp/opencode/nan-probe-commit.patch).
+      ROCm 10.2.0 (user building from source) = parallel reopen
+      condition (a) test; slots in as a comparison trial when ready.
+      B1 (trim-race discriminator, 2026-10-26): var-off +
+      de-risked + MISTRALRS_NO_POOL_TRIM=1. RESULT: NaN STILL
+      REPRODUCES (3/12 = 25% vs 6/15 = 40% with trims on).
+      Trims are NOT the sole mechanism (NaN persists with trims
+      off). Rate reduction may be real (trims amplify) or noise
+      (small samples). Trims EXCLUDED as root cause per the
+      discriminator's own criterion (NaN != clean).
+
+      B2 (graph discriminator, 2026-10-26): var-off + de-risked +
+      MISTRALRS_CUDA_GRAPHS=0 (trims ON, same as B0). RESULT: ZERO
+      NaNs in 12/12 requests (0% vs 40% with graphs on). Clean
+      A/B on graphs with trims held constant. GRAPHS ARE THE
+      MECHANISM (or the gate through which the NaN manifests).
+      CUDA graph replay is the prime suspect. This explains:
+      - var-gating: graph replay interacts with queue scheduling
+      - lottery: captured-state sensitivity to ASLR
+      - HIP_LAUNCH_BLOCKING no help: graph replay is independent
+        of launch serialization
+      - per-layer probes: garbage in g's buffer during replay
+
+      DEPLOYED 2026-10-26: MISTRALRS_CUDA_GRAPHS=0 in prod wrapper
+      (~/.config/mistralrs-server-wrapper.sh). GPU_MAX_HW_QUEUES
+      removed from all launch scripts (user accepts power/heat on
+      APU). Prod restarted in idle window (0 requests in 10 min),
+      dry-run gate passed, 13 models registered, health OK. Env
+      verified in process (MISTRALRS_CUDA_GRAPHS=0 present,
+      GPU_MAX_HW_QUEUES absent).
+
+      NEXT: investigate the graph capture/replay path in
+      cuda_graph.rs for a proper fix (re-enable graphs without NaN).
+      Prime suspects: host_staging.order_before_graph() metadata
+      ordering, stale captured pointers during replay, or state_indices
+      corruption. Graph ptr census (MISTRALRS_GRAPH_PTR_CENSUS=1)
+      is armed in prod and may catch moved VAs. B3 (MTP cross-check)
+      deferred - B2 A/B is strong enough (0/12 vs 6/15).
+
 ## Open: architecture extension
 - [ ] Role-identity Phase 4: Vulkan third shell (untouched; target state is
       one shared backend body with thin role shells - detail: COMPLETED.md).
