@@ -2880,7 +2880,12 @@ impl CudaDecodeGraphState {
                             "CUDA graph input update failed for generation {}, replay epoch {}, {} live rows, key {:?}",
                             entry.generation, entry.replay_epoch, step.real_batch, entry.key
                         ))
-                    })?
+                    })?;
+                    // Synchronize after input_ids H2D copy: on ROCm with
+                    // multiple hardware queues the copy may not complete
+                    // before graph launch, causing the graph to read stale
+                    // input_ids and produce NaN logits.
+                    entry.graph.stream().synchronize().map_err(candle_core::Error::wrap)?;
                 }
                 CudaDecodeGraphReplayInput::Resident(_) => {}
             }
@@ -2984,6 +2989,20 @@ impl CudaDecodeGraphState {
                 )));
             }
         }
+        // Device-level synchronize before graph launch to ensure ALL
+        // pending operations (input_ids H2D copy, metadata H2D copy,
+        // state_indices copy) have completed on ALL streams. On ROCm with
+        // multiple hardware queues (GPU_MAX_HW_QUEUES > 1) a single HIP
+        // stream's operations can be dispatched to different hardware queues,
+        // breaking FIFO ordering. A stream-level sync only waits for that
+        // stream; a device-level sync waits for everything. This closes the
+        // race that caused the graph to read stale data and produce NaN logits.
+        if let Err(err) = step.input_ids.device().synchronize() {
+            self.disabled = true;
+            self.block_eager_retry();
+            self.entries.push(entry);
+            return Err(err.context("CUDA graph replay device synchronization failed before launch"));
+        }
         if let Err(err) = entry.graph.launch().map_err(|err| {
             err.context(format!(
                 "CUDA graph replay launch failed for generation {}, replay epoch {}, {} live rows, key {:?}",
@@ -2994,6 +3013,17 @@ impl CudaDecodeGraphState {
             self.block_eager_retry();
             self.entries.push(entry);
             return Err(err);
+        }
+        // Device-level synchronize after graph launch: ensure the graph has
+        // completed writing logits before returning them to the caller. On
+        // ROCm with multiple hardware queues the graph launch (enqueued on
+        // the graph stream) may not have completed when the caller reads the
+        // logits tensor, producing NaN or stale values.
+        if let Err(err) = step.input_ids.device().synchronize() {
+            self.disabled = true;
+            self.block_eager_retry();
+            self.entries.push(entry);
+            return Err(err.context("CUDA graph replay device synchronization failed after launch"));
         }
         if let Some(timer) = phase_timer {
             timer.finish("target_graph", step.real_batch, timing_rows)?;
@@ -4484,7 +4514,18 @@ impl CudaGraphHostStaging {
 
     pub(crate) fn order_before_graph(&self) -> candle_core::Result<()> {
         for completion in self.completions.values() {
-            if completion.pending && !same_cuda_stream(&completion.stream, &self.graph_stream) {
+            if !completion.pending {
+                continue;
+            }
+            if same_cuda_stream(&completion.stream, &self.graph_stream) {
+                // Same stream: on ROCm with multiple hardware queues
+                // (GPU_MAX_HW_QUEUES > 1) the HIP stream's FIFO ordering
+                // guarantee breaks — H2D metadata copies and the graph
+                // launch can execute concurrently or out of order, causing
+                // the graph to read stale metadata and produce NaN logits.
+                // Synchronize explicitly to close the race.
+                self.graph_stream.synchronize()?;
+            } else {
                 self.graph_stream.wait_on_event(&completion.event)?;
             }
         }
@@ -4521,7 +4562,13 @@ impl CudaGraphHostStaging {
             candle_core::bail!("CUDA graph metadata stream changed during replay");
         }
         if self.graph_pending && !completion.ordered_after_graph {
-            if !same_cuda_stream(&completion.stream, &self.graph_stream) {
+            if same_cuda_stream(&completion.stream, &self.graph_stream) {
+                // Same stream: on ROCm with multiple hardware queues
+                // (GPU_MAX_HW_QUEUES > 1) the HIP stream's FIFO ordering
+                // guarantee breaks. Synchronize to ensure the previous
+                // graph completed before starting new H2D metadata copies.
+                self.graph_stream.synchronize()?;
+            } else {
                 completion.stream.wait_on_event(&self.graph_complete)?;
             }
             completion.ordered_after_graph = true;

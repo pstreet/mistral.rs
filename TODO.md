@@ -710,12 +710,32 @@ corrected, README reranking mention. Details: COMPLETED.md.
       verified in process (MISTRALRS_CUDA_GRAPHS=0 present,
       GPU_MAX_HW_QUEUES absent).
 
-      NEXT: investigate the graph capture/replay path in
-      cuda_graph.rs for a proper fix (re-enable graphs without NaN).
-      Prime suspects: host_staging.order_before_graph() metadata
-      ordering, stale captured pointers during replay, or state_indices
-      corruption. Graph ptr census (MISTRALRS_GRAPH_PTR_CENSUS=1)
-      is armed in prod and may catch moved VAs. B3 (MTP cross-check)
+      FIX ATTEMPT (2026-10-26): Added synchronization in cuda_graph.rs
+      replay path to close the multi-queue race:
+      1. After input_ids.set() - stream sync (H2D copy of input_ids)
+      2. prepare_copy() - device-level sync before H2D metadata copy
+         (was: skip sync for same-stream)
+      3. order_before_graph() - stream sync for same-stream completions
+         (was: skip sync for same-stream)
+      4. Before graph.launch() - device-level sync (all streams)
+      5. After graph.launch() - device-level sync (ensure graph complete)
+      RESULT: NaN reduced from 40% to ~25% but NOT eliminated
+      (4/16 NaN across multiple test runs). Syncs address the
+      H2D->graph-launch race but NaNs persist, suggesting the race is
+      deeper - possibly in graph capture's stream dependencies or in
+      operations that reference shared buffers during replay.
+
+      CONCLUSION: Graphs cannot be safely re-enabled on multi-queue
+      systems with simple sync fixes. The proper fix requires either:
+      (a) explicit event dependencies for every buffer in the graph,
+      (b) capture-time stream serialization, or (c) accepting that
+      graphs only work with GPU_MAX_HW_QUEUES=1.
+      Graphs remain DISABLED in prod (MISTRALRS_CUDA_GRAPHS=0).
+      Sync fixes committed as partial improvement (no harm, reduces
+      NaN rate). Graphs stay off until a deeper fix lands.
+
+      Graph ptr census (MISTRALRS_GRAPH_PTR_CENSUS=1) is armed in
+      prod and may catch moved VAs if re-enabled. B3 (MTP cross-check)
       deferred - B2 A/B is strong enough (0/12 vs 6/15).
 
 ## Open: architecture extension
