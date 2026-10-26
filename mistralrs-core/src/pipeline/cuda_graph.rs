@@ -4524,7 +4524,7 @@ impl CudaGraphHostStaging {
                 // launch can execute concurrently or out of order, causing
                 // the graph to read stale metadata and produce NaN logits.
                 // Synchronize explicitly to close the race.
-                self.graph_stream.synchronize()?;
+                self.graph_stream.synchronize().map_err(candle_core::Error::wrap)?;
             } else {
                 self.graph_stream.wait_on_event(&completion.event)?;
             }
@@ -4567,7 +4567,7 @@ impl CudaGraphHostStaging {
                 // (GPU_MAX_HW_QUEUES > 1) the HIP stream's FIFO ordering
                 // guarantee breaks. Synchronize to ensure the previous
                 // graph completed before starting new H2D metadata copies.
-                self.graph_stream.synchronize()?;
+                self.graph_stream.synchronize().map_err(candle_core::Error::wrap)?;
             } else {
                 completion.stream.wait_on_event(&self.graph_complete)?;
             }
@@ -5443,7 +5443,7 @@ mod tests {
         staging.update(|staging| staging.prepare_copy(location, &copy_stream))?;
         assert!(staging.completions[&location].ordered_after_graph);
         staging.order_before_graph()?;
-        graph_stream.synchronize()?;
+        graph_stream.synchronize().map_err(candle_core::Error::wrap)?;
         Ok(())
     }
 
