@@ -19,17 +19,21 @@ use super::backend::{
     reshape_and_cache_q8 as hip_reshape_and_cache_q8,
 };
 use super::cuda_role::{
-    concat_and_cache_mla as cuda_concat_and_cache_mla, context_attention_fwd_mla as cuda_context_attention_fwd_mla,
-    copy_blocks as cuda_copy_blocks, fa3_fp8_decode as cuda_fa3_fp8_decode,
+    concat_and_cache_mla as cuda_concat_and_cache_mla,
+    context_attention_fwd_mla as cuda_context_attention_fwd_mla, copy_blocks as cuda_copy_blocks,
+    fa3_fp8_decode as cuda_fa3_fp8_decode,
     fa3_prepare_decode_metadata as cuda_fa3_prepare_decode_metadata,
     fa3_prepare_paged_metadata as cuda_fa3_prepare_paged_metadata,
-    flash_attn_sinks as cuda_flash_attn_sinks, flash_attn_sinks_varlen as cuda_flash_attn_sinks_varlen,
-    flashinfer_decode as cuda_flashinfer_decode, flashinfer_mla_decode as cuda_flashinfer_mla_decode,
-    gather_kv_cache as cuda_gather_kv_cache, gather_kv_cache_flashinfer as cuda_gather_kv_cache_flashinfer,
+    flash_attn_sinks as cuda_flash_attn_sinks,
+    flash_attn_sinks_varlen as cuda_flash_attn_sinks_varlen,
+    flashinfer_decode as cuda_flashinfer_decode,
+    flashinfer_mla_decode as cuda_flashinfer_mla_decode, gather_kv_cache as cuda_gather_kv_cache,
+    gather_kv_cache_flashinfer as cuda_gather_kv_cache_flashinfer,
     gather_mla_cache as cuda_gather_mla_cache, paged_attention as cuda_paged_attention,
-    reshape_and_cache as cuda_reshape_and_cache, reshape_and_cache_flashinfer as cuda_reshape_and_cache_flashinfer,
-    reshape_and_cache_q4 as cuda_reshape_and_cache_q4, reshape_and_cache_q8 as cuda_reshape_and_cache_q8,
-    FlashInferDecodeScratch,
+    reshape_and_cache as cuda_reshape_and_cache,
+    reshape_and_cache_flashinfer as cuda_reshape_and_cache_flashinfer,
+    reshape_and_cache_q4 as cuda_reshape_and_cache_q4,
+    reshape_and_cache_q8 as cuda_reshape_and_cache_q8, FlashInferDecodeScratch,
 };
 use crate::cuda::fa3_types::{Fa3DecodeMetadata, Fa3DecodeParams, Fa3DecodeSchedule};
 use crate::{BlockQuantKind, KvCacheScales};
@@ -519,7 +523,16 @@ pub fn flash_attn_sinks_varlen_auto(
     window_size: usize,
 ) -> Result<Tensor> {
     if role_is_cuda(q) {
-        cuda_flash_attn_sinks_varlen(q, k, v, sinks, cu_seqlens_q, cu_seqlens_k, softmax_scale, window_size)
+        cuda_flash_attn_sinks_varlen(
+            q,
+            k,
+            v,
+            sinks,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            softmax_scale,
+            window_size,
+        )
     } else {
         candle_core::bail!("flash_attn_sinks requires the NVIDIA role")
     }

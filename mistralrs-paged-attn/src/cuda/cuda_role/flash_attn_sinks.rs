@@ -5,10 +5,10 @@
 
 use super::slice_ptr;
 use crate::cuda::ffi_cuda;
-use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DeviceSlice};
 use candle::backend::BackendStorage;
 use candle::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Tensor};
 use candle_core as candle;
+use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DeviceSlice};
 use half::{bf16, f16};
 use std::ffi::{c_int, c_uint};
 

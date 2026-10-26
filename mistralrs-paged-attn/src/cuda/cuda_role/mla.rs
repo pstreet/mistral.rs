@@ -4,10 +4,14 @@
 //! there, then hand-fix the fallout. Dual builds only.
 
 use super::{as_cuda_storage, slice_ptr};
-use crate::cuda::ffi_cuda::{cuda_concat_and_cache_mla as ffi_concat_and_cache_mla, cuda_flashinfer_mla_decode as ffi_flashinfer_mla_decode, cuda_gather_mla_cache as ffi_gather_mla_cache};
+use crate::cuda::ffi_cuda::{
+    cuda_concat_and_cache_mla as ffi_concat_and_cache_mla,
+    cuda_flashinfer_mla_decode as ffi_flashinfer_mla_decode,
+    cuda_gather_mla_cache as ffi_gather_mla_cache,
+};
 
-use candle_core::cuda_backend::CudaStorageSlice;
 use candle_core::backend::BackendStorage;
+use candle_core::cuda_backend::CudaStorageSlice;
 use candle_core::{DType, Result, Tensor};
 
 pub fn concat_and_cache_mla(
