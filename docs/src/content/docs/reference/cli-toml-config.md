@@ -28,7 +28,7 @@ quant = "4"
 | Field | Type | Applies to | Purpose |
 |---|---|---|---|
 | `command` | string | both | `"serve"` or `"run"`. |
-| `default_model_id` | string | serve | Model id (or alias) treated as the default. When omitted, the first configured model is the default. Must match one of the `[[models]]` entries when set. |
+| `default_model_id` | string | serve | Model id (or alias) treated as the default. When omitted, `model = "default"` (or an omitted model) resolves per request category: the first configured model of that category, so chat, embedding, and reranker requests each land on their own lane; a scan of loaded, then unloaded, engines is the final fallback. Must match one of the `[[models]]` entries when set. |
 | `thinking` | bool | run | Legacy thinking toggle (alias: `enable_thinking`). If both reasoning controls are omitted, thinking defaults on. Maps to `--thinking` on `mistralrs run`. |
 | `reasoning_effort` | string | run | `off`, `low`, `medium`, `high`, or `xhigh`; `none` aliases `off`. Omit to leave effort unspecified. Maps to `--reasoning-effort`. |
 
@@ -152,7 +152,9 @@ Each entry defines one loaded model.
 | `matformer_slice_name` | string | no | MatFormer slice to load. |
 | `alias` | string | no | API-visible name for this model (like llama.cpp `--alias`). Defaults to `model_id`. |
 | `device` | string | no | Flat backend selection for this model (`"cpu"`, `"cuda"` / `"cuda:<N>"`, `"hip"` / `"hip:<N>"`); overrides `[global] device`. Equivalent to the `device` key of the `[models.device]` sub-table. |
-| `lazy` | boolean | no | Register without loading weights (`serve` with 2+ models only; the first model must stay eager). Lazy models load on first request or explicit `/v1/models/reload`. |
+| `expert_device` | string | no | MoE expert-split placement: `"cpu"` keeps attention, router, and shared experts on the layer device while the full expert set streams from system RAM (llama.cpp `--cpu-moe` style). Only `"cpu"` is supported; other values fail at load. Honored by qwen3-next-class (Qwen3.6-35B) and Gemma-4 MoE GGUF models; other architectures ignore it. A capacity lane for models larger than VRAM: expert reads cross the bus every step, so decode is substantially slower than device-resident experts, and MTP heads split too. |
+| `expert_hot_cache_mb` | integer | no | VRAM budget (MB) for the per-layer hot-expert cache of an expert-split lane; unset (default) disables it. Experimental: on measured hardware the cache nets slower than the plain split, so leave unset unless re-benchmarking. |
+| `lazy` | boolean | no | Register without loading weights. Lazy models load on first request or explicit `/v1/models/reload`. An all-lazy `serve` config boots headless with no seed engine and demand-loads the first requested model. |
 | `mtp` | boolean | no | MTP speculative decoding for this model. Defaults to the global `[runtime] mtp` flag. Honored for the first model and lazy entries only; a headless model fails at load (at first request when lazy). |
 | `cache_type` | enum | no | Per-model KV cache type (same values as `[paged_attn] cache_type`). Unset inherits the global base. Setting it also resets inherited global `k_cache_type`/`v_cache_type` overrides for this model. |
 | `k_cache_type` | enum | no | Per-model K cache type. Unset inherits the global `[paged_attn] k_cache_type` override, else the effective base. |

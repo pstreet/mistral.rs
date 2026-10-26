@@ -93,7 +93,7 @@ Mean tokens per second across prompt lengths and decode depths from 128 to 16384
 ## Why mistral.rs?
 
 - **Automatic model loading**: Architecture, weight format, and chat template are detected for supported Hugging Face models and GGUF files, with flags available for explicit selection.
-- **True multimodality**: Text, vision, video, and audio, speech generation, image generation, and embeddings in one engine.
+- **True multimodality**: Text, vision, video, and audio, speech generation, image generation, embeddings, and reranking in one engine.
 - **Quantization selection**: `--quant` selects a matching artifact from GGUF repositories. For other Hugging Face repositories, it uses a prebuilt UQFF when available and otherwise applies ISQ. [Docs](https://docs.mistralrs.dev/guides/quantization/quantize-a-model/)
 - **OpenAI + Anthropic compatible serving**: The same `mistralrs serve` process exposes OpenAI-compatible `/v1` endpoints and Anthropic-compatible Messages endpoints.
 - **Prometheus metrics**: `mistralrs serve` exposes a `/metrics` endpoint in Prometheus format, recording per-request counts and latency labeled by method, route, and status. [Docs](https://docs.mistralrs.dev/reference/http-api/)

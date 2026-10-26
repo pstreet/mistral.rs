@@ -1,5 +1,23 @@
 # COMPLETED: candle + mistral.rs fork work
 
+## Oct 26 (docs audit: config reference + ledger + README)
+
+- Full docs surface audit against the Oct 24-26 work. Gaps closed:
+  `expert_device` / `expert_hot_cache_mb` now documented in the
+  `[[models]]` table of cli-toml-config.md (cpu-only expert split,
+  qwen3-next + gemma4 consumers, hot cache experimental and
+  net-negative on measured hardware); the `lazy` row's stale "first
+  model must stay eager" rule corrected (all-lazy configs boot
+  headless - prod runs one); the `default_model_id` row now states
+  per-category resolution (verified against
+  resolve_alias_or_default); README's feature list mentions
+  reranking. TODO status header refreshed to 2026-10-26 (13 all-lazy
+  lanes, prod on the f3b2d3576 tip) and the recently-closed section
+  gained the Oct 24-26 arc. Verified accurate, no change needed:
+  run-gguf split-shard expansion, the DFlash ROCm note,
+  paged-attention per-device dual-build text, rerankers + embeddings
+  guides, openapi.json (staleness-gated), AGENTS.md.
+
 ## Oct 26 (TEI-shape compat for /v1/rerank)
 
 - /v1/rerank now accepts the TEI wire shape alongside Jina/Cohere:

@@ -7,10 +7,14 @@ candle 56 ahead / 26 behind huggingface/candle:main, mistral.rs 111 ahead /
 Legend: [ ] open, [x] done. P0 = do first, P1 = do next, P2 = merge prep,
 P3 = polish, Deferred = do not do on RDNA.
 
-## Current status (2026-10-15, prod build 12, dual cuda,rocm)
-35B (iGPU) + 4B (3090) serving; 27B demand-loads clean. GPU_MAX_HW_QUEUES=1
-on all three ROCm tenants until the NaN fix lands. Branch synced to
-origin/pstreet-rocm.
+## Current status (2026-10-26, prod on the f3b2d3576 tip, dual cuda,rocm,flash-attn)
+13 lanes configured, ALL lazy (headless boot, demand-load, per-category
+defaults: chat -> qwen3.6-35b-a3b): 35B A3B hip + cuda twins, 27B Q6_K
++ MTP n=2, 16B, 4B, gemma-4-26b, Llama-3.2-30b, Muse-30b, flash-next
+alias (inert until qwen4exp lands), embedding GGUF Q8_0, reranker GGUF
+Q8_0 (openwebui flipped; TEI-shape compat rides the next binary swap).
+GPU_MAX_HW_QUEUES=1 stays on all three ROCm tenants until the NaN bug
+closes. Branch synced to origin/pstreet-rocm.
 
 ## Recently closed (detail: COMPLETED.md)
 Sizing saga (ISQ estimator, fit-ctx everywhere, runtime reserve, mapping
@@ -43,6 +47,21 @@ disabled; revisit = GPU-side partitioning AND 48GB-class coverage).
 Prod swapped to the pooled-event build Oct 24 00:06 UTC, hip lane
 smoke-tested via 4B demand-load. Full evidence chain in the
 expert-split section below and COMPLETED.md.
+
+Oct 24-26 sessions: device-keyed FlashInfer gate + FA3/MLA/sinks
+twins on the NVIDIA role in dual builds (build-shape gates retired,
+paged-attention docs now state per-device fast-path selection); UQFF
+vs GGUF shootout closed (container-neutral at equal quant; UQFF wins
+the ISQ workflow; q4k > q8_0 ~30% decode on the 4B GDN hybrid);
+split-GGUF auto-expansion landed (name any one -NNNNN-of-NNNNN.gguf
+shard; loader gate for qwen4exp PASSED); DFlash splitkv kernel lane:
+plumbing shipped inert, kernel hardware-blocked on gfx1151 (precise
+record + 4 reopen options in the dflash entry); reranker lane
+live-validated on prod and flipped in openwebui; TEI-shape compat for
+/v1/rerank landed (texts alias + return_text echo; prod picks it up
+at the next binary swap); docs audit closed: expert_device/
+expert_hot_cache_mb documented, stale lazy + default_model_id rows
+corrected, README reranking mention. Details: COMPLETED.md.
 
 # ==== OPERATING RULES (2026-10-14, user directive) ====
 # NEVER modify other tools or applications to bypass an issue in this
