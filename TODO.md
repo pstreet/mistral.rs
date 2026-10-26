@@ -819,6 +819,40 @@ corrected, README reranking mention. Details: COMPLETED.md.
       prod conversation), launch-probe-htod.sh (prod memory profile:
       managed weights + mmap + host drop, single-queue, graphs on).
 
+      PROBE RESULTS (2026-10-26 23:27, 27B at 12K tokens, new binary
+      md5 9dd116343): 31 captures (29 startup + 2 lazy MTP decode
+      variants), 0 failures, 24 graph replays, resident_entries=4
+      (rest evicted by spec-state budget, 27 evictions - expected).
+      Lazy captures at 12K are CLEAN; decode runs on graphs. The only
+      over-cap H2D traffic is the hybrid checkpoint RESTORE path
+      (HybridCache::restore_recurrent_checkpoint_state ->
+      Tensor::to_device: 3MB f32 + 80KB bf16 x ~3 slots per capture
+      step, 96 events of each size in one trial). These are legal
+      post-capture uploads (outside the capture window) - not the
+      07:47 culprit, but they churn the pool on every capture step.
+
+      The 07:47 in-window >4KB uploader did NOT reproduce at 12K on
+      the 27B. Full 125K probe repro is infeasible on this box: the
+      padded 32-slot capture buckets x full-KV V2 gathers explode
+      (kernel OOM killed the probe at 44GB unit peak, 2026-10-26
+      23:17 - probe with oom_score_adj=100 was the preferred victim).
+      Working hypothesis for the 35B at 133K: managed-weights pool
+      trim during lazy-capture arena prep evicts weight pages; the
+      in-capture forward faults them back in-window (>4KB page
+      upload -> bail). Fits the 36864B-consumed early death and the
+      35B lane's big KV-driven trim pressure.
+
+      CLOSURE PATH: prod now runs the new binary (user deployed
+      22:25, idle window, Option A env preserved) and the wrapper
+      arms MRS_TRACE_BIG_HTOD=1 (TEMP, remove once named). The next
+      natural occurrence of the failure class on the user's real
+      133K workload will: (a) stay key-scoped (lane keeps its
+      graphs, warn names the bucket + byte_len + backtrace),
+      (b) name the exact uploader in the journal. Probe lesson:
+      run probe lanes as systemd user units (mistralrs-htod-probe);
+      harness restarts kill nohup'd AND setsid'd children
+      (cgroup cleanup), only systemd units survive.
+
       Expected impact: graphs back on the serving lane = +7-10% decode
       (A/B 13.89 vs 12.54 tok/s) where decode is 90%+ of wall time.
       Landing needs a rebuild + idle-window prod swap; verify via
