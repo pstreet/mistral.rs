@@ -63,6 +63,24 @@ at the next binary swap); docs audit closed: expert_device/
 expert_hot_cache_mb documented, stale lazy + default_model_id rows
 corrected, README reranking mention. Details: COMPLETED.md.
 
+Oct 27 session: 27B perf re-baseline + 27B-specific MTP n re-sweep on
+prod (release, Q6_K hip, K=Q8_0/V=Q4_0, graphs+single-queue). Re-baseline:
+prefill 396 (1K tok) / 648 (2.7K) / 441 (15.5K) T/s; arithmetic decode
+19.4-20.5 T/s (vs 14.1-14.3 Sep 30, +40%); essay 600tok 12.6-13.0 T/s
+(13.89 Sep 24 A/B best was an n=2 arm; heat-sag noted); N=2/N=4 aggregate
+14.4/31.2 T/s; bandwidth math ~134GB/s effective on the arithmetic arm =
+~80% of realistic APU peak, hip lane is bandwidth-bound with no broken
+gates. MTP n sweep (essay x3, same methodology, restart per arm, n=3
+reproduced 12.88/12.62 after restore): n=3 avg 12.79 vs n=2 avg 13.08
+(+2.3% essay) but arithmetic 19.95 vs 18.22 (-8.7% at n=2, len caps 3.0);
+per-pos accept 76/52/35% explains it - the third draft pays only at high
+acceptance (structured/codey content), costs on prose. VERDICT: keep n=3
+(model card); 27B re-sweep closed, no further MTP-pin churn expected.
+dev-tools/decode_bench.py added (recreates the lost /tmp/opencode/
+mtp_bench.py for decode A/Bs: TTFT/ITL/server-tok, essay|arithmetic
+prompts). No cuda-27B twin: user directive, ISQ-Q4K 3090 lane stays
+unpursued (27.7 T/s historical, ~4K ctx ceiling, displaces the 35B lane).
+
 # ==== OPERATING RULES (2026-10-14, user directive) ====
 # NEVER modify other tools or applications to bypass an issue in this
 # stack. The openwebui webui.db capability patch (builtin_tools=false)

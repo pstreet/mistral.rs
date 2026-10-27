@@ -65,7 +65,9 @@ quantized_file = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
 # ============================================================
 # Qwen3.8 27B dense (lazy, demand-loaded)
 # ============================================================
-# Dense 27B. Context: 262K. MTP n=3 (model card recommendation).
+# Dense 27B. Context: 262K. MTP n=3 (model card recommendation; re-swept
+# 2026-10-27: n=2 is +2.3% prose decode but -8.7% on high-acceptance
+# content, so n=3 stays).
 # KV: K=Q8_0 V=Q4_0 (user intent; model card recommends Q4_0/Q4_0).
 
 [[models]]
