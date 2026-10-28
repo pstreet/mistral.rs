@@ -473,7 +473,12 @@ fn normalize_topk(topk_ids: &Tensor) -> Result<Option<Tensor>> {
     } else {
         topk_ids.to_dtype(DType::U32)?
     };
-    Ok(Some(topk_ids.contiguous()?))
+    let topk_ids = if topk_ids.is_contiguous() {
+        topk_ids
+    } else {
+        topk_ids.contiguous()?
+    };
+    Ok(Some(topk_ids))
 }
 
 fn persistent_direct_resource(

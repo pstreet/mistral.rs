@@ -202,7 +202,7 @@ pub fn requantize_tracked(
     let guard = crate::QuantizeOntoGuard::new();
     let mut receivers = Vec::with_capacity(modules.len());
     for module in modules {
-        let layer = module.ct.resolve()?;
+        let layer = module.ct.resolve()?.clone();
         let ty = ty_for(module);
         let imatrix = if ty.supports_imatrix() {
             imatrix_for(&module.key)

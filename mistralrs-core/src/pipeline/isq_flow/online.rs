@@ -166,7 +166,7 @@ fn requantize_from_weight_source(
 
     let guard = mistralrs_quant::QuantizeOntoGuard::new();
     for module in from_source {
-        let resident = module.ct.resolve()?;
+        let resident = module.ct.resolve()?.clone();
         let (_, device) = resident.dtype_and_device();
         let Some(source_layer) = source.load_linear(
             &module.key,
@@ -315,7 +315,7 @@ pub(crate) fn requantize_from_source(
             .expect("dense source probe requires a weight")
             .clone();
         let source_has_bias = source.shapes.contains_key(&format!("{}.bias", module.key));
-        let resident = module.ct.resolve()?;
+        let resident = module.ct.resolve()?.clone();
         let (_, device) = resident.dtype_and_device();
         let resident_has_bias = resident.has_bias();
         let request = mistralrs_quant::IsqRequest {
@@ -382,7 +382,7 @@ pub(crate) fn requantize_from_source(
             let projection =
                 crate::moe::rebuild_expert_projection(&source.mmap, &source.shapes, &module.key)?
                     .context("Expert stack probe succeeded but rebuild failed.")?;
-            let resident = module.ct.resolve()?;
+            let resident = module.ct.resolve()?.clone();
             let (_, device) = resident.dtype_and_device();
             let (ty, imatrix) = module_imatrix(module, pool_ty, imatrix_map);
             let shard = module.shard.expect("expert source reload requires a shard");

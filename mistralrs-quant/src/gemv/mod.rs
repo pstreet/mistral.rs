@@ -55,7 +55,7 @@ use half::{bf16, f16};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
 #[cfg(feature = "cuda")]
-use std::{collections::HashMap, sync::Mutex};
+use std::{collections::HashMap, sync::RwLock};
 
 /// Maximum batch size supported by the GEMV kernel
 pub const MAX_GEMV_BATCH_SIZE: usize = 8;
@@ -99,8 +99,8 @@ fn should_use_gemv_shape(
 }
 
 #[cfg(feature = "cuda")]
-static GEMV_DEVICE_INFO: LazyLock<Mutex<HashMap<GemvDeviceId, GemvDeviceInfo>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static GEMV_DEVICE_INFO: LazyLock<RwLock<HashMap<GemvDeviceId, GemvDeviceInfo>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
 #[cfg(feature = "cuda")]
 fn gemv_device_info(device: &CudaDevice) -> Option<GemvDeviceInfo> {
@@ -109,7 +109,7 @@ fn gemv_device_info(device: &CudaDevice) -> Option<GemvDeviceInfo> {
     #[cfg(not(all(feature = "cuda", feature = "rocm")))]
     use candle_core::role::backend::cudarc::driver::sys::CUdevice_attribute;
 
-    if let Some(info) = GEMV_DEVICE_INFO.lock().unwrap().get(&device.id()).copied() {
+    if let Some(info) = GEMV_DEVICE_INFO.read().unwrap().get(&device.id()).copied() {
         return Some(info);
     }
     let stream = device.cuda_stream();
@@ -126,7 +126,7 @@ fn gemv_device_info(device: &CudaDevice) -> Option<GemvDeviceInfo> {
         compute_major,
         multiprocessor_count,
     };
-    GEMV_DEVICE_INFO.lock().unwrap().insert(device.id(), info);
+    GEMV_DEVICE_INFO.write().unwrap().insert(device.id(), info);
     Some(info)
 }
 

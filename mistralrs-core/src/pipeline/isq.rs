@@ -982,7 +982,7 @@ fn write_uqff_type(ctx: UqffTypeWriteContext<'_>) -> Result<mistralrs_quant::Uqf
                 .map_err(|e| anyhow::anyhow!("Requantize channel error: {e}"))??
                 .value
         } else {
-            module.ct.resolve()?
+            module.ct.resolve()?.clone()
         };
         let serialize_ty = resolved_ty.or_else(|| layer.uqff_type()).unwrap_or(ty);
         let serialized_tensors = layer.serialize_uqff(&module.key, serialize_ty)?;

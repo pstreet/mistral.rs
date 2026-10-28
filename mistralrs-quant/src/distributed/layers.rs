@@ -981,8 +981,10 @@ impl QuantMethod for RowParallelLayer {
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
         let mut xs = self.weight.forward_raw(a)?;
         if !self.all_reduce.is_noop() {
-            let xs_contiguous = xs.contiguous()?;
-            xs = self.all_reduce.sum_all_reduce(&xs_contiguous)?;
+            if !xs.is_contiguous() {
+                xs = xs.contiguous()?;
+            }
+            xs = self.all_reduce.sum_all_reduce(&xs)?;
         }
         if let Some(bias) = &self.bias {
             xs = xs.broadcast_add(bias)?;
@@ -1049,8 +1051,10 @@ impl QuantMethod for RowParallelLayer {
     fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
         let mut xs = self.weight.forward_quantized(a)?;
         if !self.all_reduce.is_noop() {
-            let xs_contiguous = xs.contiguous()?;
-            xs = self.all_reduce.sum_all_reduce(&xs_contiguous)?;
+            if !xs.is_contiguous() {
+                xs = xs.contiguous()?;
+            }
+            xs = self.all_reduce.sum_all_reduce(&xs)?;
         }
         if let Some(bias) = &self.bias {
             xs = xs.broadcast_add(bias)?;
@@ -1072,7 +1076,10 @@ impl QuantMethod for RowParallelLayer {
             return Ok(None);
         };
         if !self.all_reduce.is_noop() {
-            output = self.all_reduce.sum_all_reduce(&output.contiguous()?)?;
+            if !output.is_contiguous() {
+                output = output.contiguous()?;
+            }
+            output = self.all_reduce.sum_all_reduce(&output)?;
         }
         if let Some(bias) = &self.bias {
             output = output.broadcast_add(bias)?;

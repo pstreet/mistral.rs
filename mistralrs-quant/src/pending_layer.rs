@@ -1,9 +1,10 @@
 use std::{
     fmt::Debug,
+    ops::Deref,
     sync::{
         atomic::AtomicUsize,
         mpsc::{self, Receiver},
-        Arc, Mutex,
+        Arc, Mutex, RwLock, RwLockReadGuard,
     },
 };
 
@@ -15,7 +16,7 @@ use crate::{
 };
 
 enum PendingState {
-    Pending(Receiver<Result<IsqJobOutput<Arc<dyn QuantMethod>>>>),
+    Pending(Mutex<Receiver<Result<IsqJobOutput<Arc<dyn QuantMethod>>>>>),
     Ready(Arc<dyn QuantMethod>),
     /// Transitional state used during resolve to avoid holding both the old
     /// receiver and the new layer simultaneously.
@@ -26,60 +27,86 @@ enum PendingState {
 /// quantization task. Created by `apply_immediate_isq` when a thread pool is
 /// available for parallel immediate ISQ.
 pub struct PendingIsqLayer {
-    inner: Mutex<PendingState>,
+    inner: RwLock<PendingState>,
+}
+
+/// A borrowed reference to a resolved [`PendingIsqLayer`]'s inner layer.
+pub struct PendingIsqLayerRef<'a> {
+    guard: RwLockReadGuard<'a, PendingState>,
+}
+
+impl Deref for PendingIsqLayerRef<'_> {
+    type Target = Arc<dyn QuantMethod>;
+    fn deref(&self) -> &Self::Target {
+        match &*self.guard {
+            PendingState::Ready(layer) => layer,
+            _ => panic!("PendingIsqLayer is not resolved"),
+        }
+    }
 }
 
 impl PendingIsqLayer {
     pub fn new(rx: Receiver<Result<IsqJobOutput<Arc<dyn QuantMethod>>>>) -> Self {
         Self {
-            inner: Mutex::new(PendingState::Pending(rx)),
+            inner: RwLock::new(PendingState::Pending(Mutex::new(rx))),
         }
     }
 
     /// Replace the inner layer; propagates to every holder, including the live model.
     pub fn replace(&self, layer: Arc<dyn QuantMethod>) {
-        *self.inner.lock().expect("PendingIsqLayer lock poisoned") = PendingState::Ready(layer);
+        *self.inner.write().expect("PendingIsqLayer lock poisoned") = PendingState::Ready(layer);
     }
 
     /// Block until the background quantization task completes and return the
     /// resolved layer. Subsequent calls return the cached result immediately.
-    pub fn resolve(&self) -> Result<Arc<dyn QuantMethod>> {
-        let mut state = self.inner.lock().expect("PendingIsqLayer lock poisoned");
-        match &*state {
-            PendingState::Ready(layer) => Ok(layer.clone()),
-            PendingState::Taken => {
-                candle_core::bail!("PendingIsqLayer is in an invalid transitional state")
-            }
-            PendingState::Pending(_) => {
-                // Take the receiver out so we can receive without holding the
-                // lock on the enum variant (swap to Taken first).
-                let old = std::mem::replace(&mut *state, PendingState::Taken);
-                if let PendingState::Pending(rx) = old {
-                    let result = rx
-                        .recv()
-                        .map_err(|e| candle_core::Error::Msg(format!("ISQ channel error: {e}")))?;
-                    match result {
-                        Ok(output) => {
-                            let layer = output.value;
-                            *state = PendingState::Ready(layer.clone());
-                            Ok(layer)
-                        }
-                        Err(e) => {
-                            // Leave in Taken state; the error is propagated.
-                            Err(e)
-                        }
+    pub fn resolve(&self) -> Result<PendingIsqLayerRef<'_>> {
+        loop {
+            {
+                let state = self.inner.read().expect("PendingIsqLayer lock poisoned");
+                match &*state {
+                    PendingState::Ready(_) => break,
+                    PendingState::Taken => {
+                        candle_core::bail!("PendingIsqLayer is in an invalid transitional state")
                     }
-                } else {
-                    unreachable!()
+                    PendingState::Pending(_) => {}
                 }
             }
+            let mut state = self.inner.write().expect("PendingIsqLayer lock poisoned");
+            match &*state {
+                PendingState::Ready(_) => continue,
+                PendingState::Taken => {
+                    candle_core::bail!("PendingIsqLayer is in an invalid transitional state")
+                }
+                PendingState::Pending(_) => {}
+            }
+            let old = std::mem::replace(&mut *state, PendingState::Taken);
+            if let PendingState::Pending(rx) = old {
+                let rx = rx
+                    .into_inner()
+                    .expect("PendingIsqLayer receiver lock poisoned");
+                let result = rx
+                    .recv()
+                    .map_err(|e| candle_core::Error::Msg(format!("ISQ channel error: {e}")))?;
+                match result {
+                    Ok(output) => {
+                        *state = PendingState::Ready(output.value);
+                    }
+                    Err(e) => {
+                        return Err(e);
+                    }
+                }
+            } else {
+                unreachable!()
+            }
         }
+        let guard = self.inner.read().expect("PendingIsqLayer lock poisoned");
+        Ok(PendingIsqLayerRef { guard })
     }
 }
 
 impl Debug for PendingIsqLayer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state_str = match &*self.inner.lock().unwrap() {
+        let state_str = match &*self.inner.read().unwrap() {
             PendingState::Pending(_) => "Pending",
             PendingState::Ready(_) => "Ready",
             PendingState::Taken => "Taken",
