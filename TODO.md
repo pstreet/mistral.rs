@@ -105,13 +105,13 @@ so candle CUDA fixes apply to the HIP role automatically.
       Per-device workspace cache.
 - [ ] [H] k_quants.rs:2606-2639 - matmul_f16 fully serial, per-row Vec<f32> alloc.
       Parallelize cols, vec_dot_4 tails, reuse scratch.
-- [ ] [H] gemv/mod.rs:102-131 - GEMV_DEVICE_INFO Mutex locked on every should_use_gemv.
+- [x] [H] gemv/mod.rs:102-131 - GEMV_DEVICE_INFO Mutex -> RwLock (read hot path).
       RwLock/read-cache or cache on device handle.
 
 ### candle-core: CPU / quantized backend
 - [ ] [H] k_quants.rs:2606-2639 - matmul_f16 serial; per-row Vec<f32> alloc; no vec_dot_4.
 - [ ] [H] cpu_backend/mod.rs:3050-3068 - BF16 matmul widens both operands via collect + narrows serially.
-- [ ] [H] cpu_backend/mod.rs:1050-1052,1280-1282,1354-1358 - k_cont Vec alloc inside parallel loops per output channel.
+- [x] [H] cpu_backend/mod.rs:1050-1052,1280-1282,1354-1358 - k_cont hoisted out of parallel region (all 3 conv sites).
 - [ ] [H] neon.rs (11 sites: 538,686,859,1135,1818,1882,2603,2667,2908,2971,3113) - thread_local RefCell<Vec<u64>> scratch borrow_mut + lookup per matmul.
 - [ ] [H] k_quants.rs:2423-2436 - LHS_SCRATCH same thread_local pattern.
 - [ ] [H] neon.rs:516-522,1797,2581,2887 - features::get().i8mm checked inside hot vec_dot dispatch.
@@ -150,19 +150,19 @@ so candle CUDA fixes apply to the HIP role automatically.
 - [ ] [H] gguf/cpu.rs:61 - host ids conversion on every indexed MoE call; skip if already U32/contiguous.
 - [ ] [H] gguf/cuda.rs:958-970 (+cuda_hip) - fresh CudaSlice Q8_1 buffer per quantize.
 - [ ] [H] gguf/cuda.rs:309-333 - alloc_zeros full output each fused call.
-- [ ] [H] lora/dynamic/expert_cuda.rs:471-476, expert.rs:779-782 - normalize_topk clones even if U32, always contiguous().
+- [x] [H] lora/dynamic/expert_cuda.rs:471-476 - normalize_topk avoids contiguous() when already contiguous.
 - [ ] [H] gemv/mod.rs:102-131 - GEMV_DEVICE_INFO Mutex locked on every should_use_gemv.
-- [ ] [M] distributed/layers.rs:981-986,1050-1058 - unconditional contiguous() before all-reduce.
+- [x] [M] distributed/layers.rs:981-986,1050-1058,~1075 - contiguous() only when !is_contiguous().
 - [ ] [M] afq/ops.rs:430-452 - metal afq_mm clones lhs/rhs indices even if U32; broadcasts into new tensors.
 - [ ] [M] f8q8/mod.rs:298-320 - per-row Rust loop with narrow+force_contiguous.
 - [ ] [M] fp8/mod.rs:102-120 - per-row dequant temporaries on metal.
 - [ ] [M] gguf/mod.rs:590-607 - bias gather not fused; index_select+reshape+broadcast.
 - [ ] [M] gguf/weight_source.rs:613 - copies full tensor bytes to_vec during load.
 - [ ] [M] gguf/archive.rs:649 - per-tensor shard storage lock on load path.
-- [ ] [L] utils/ops.rs:66-70 - leftshift allocates new Vec every call.
-- [ ] [L] pending_layer.rs:46-76 - clones Arc<dyn QuantMethod> on every resolve.
+- [x] [L] utils/ops.rs:66-70 - leftshift reuses preallocated buffer.
+- [x] [L] pending_layer.rs:46-76 - RwLock + borrowed resolve (no per-call Arc clone).
 - [ ] [L] isq_executor.rs:206-246 - separate workers/state locks in submit path.
-- [ ] [L] gguf/cpu.rs:178-190 - reshape alloc when input already 3D.
+- [x] [L] gguf/cpu.rs:178-190 - reshape skipped when input already 3D.
 - [ ] [L] utils/ops.rs:3702-3819 - fused_glu allocates output+scales each call.
 - [ ] [L] rotary/mod.rs:1893-1894 - host copies in rotary per call.
 - [ ] [L] gguf/cpu.rs:196 - dequantizes all experts every fallback call.
