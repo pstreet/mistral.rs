@@ -997,11 +997,18 @@ impl WindowedKvPool {
                 rows.len()
             );
         }
-        let pad_row = rows[0].clone();
+        let pad_query_len = rows[0].query_len;
+        let pad_block_table = &rows[0].block_table;
         while rows.len() < batch_bucket {
             rows.push(WindowedKvBatchRow {
-                slot_mapping: vec![super::_PAD_SLOT_ID; pad_row.query_len],
-                ..pad_row.clone()
+                seq_id: 0,
+                pool_slot: 0,
+                origin_pos: 0,
+                next_committed_pos: 0,
+                query_len: pad_query_len,
+                kv_len: 0,
+                block_table: pad_block_table.clone(),
+                slot_mapping: vec![super::_PAD_SLOT_ID; pad_query_len],
             });
         }
         Self::batch_from_rows(

@@ -38,9 +38,6 @@ max_prefill_chunk_tokens = 2048
 model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
 alias = "qwen3.6-35b-a3b"
 lazy = true
-fit_ctx = true
-k_cache_type = "Q8_0"
-v_cache_type = "Q8_0"
 
 [models.format]
 quantized_file = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
@@ -54,10 +51,6 @@ alias = "qwen3.6-35b-a3b-cuda"
 lazy = true
 device = "cuda:0"
 expert_device = "cpu"
-fit_ctx = true
-max_seqs = 2
-k_cache_type = "Q8_0"
-v_cache_type = "Q8_0"
 
 [models.format]
 quantized_file = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
@@ -74,8 +67,6 @@ quantized_file = "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
 model_id = "models/orcarouter/Qwen3.8-27B-Uncensored-GGUF"
 alias = "qwen3.8-27b"
 lazy = true
-k_cache_type = "Q8_0"
-v_cache_type = "Q4_0"
 mtp_n_predict = 3
 
 [models.format]
@@ -92,8 +83,6 @@ mmproj = "mmproj-Qwen3.8-27B-Uncensored-f16.gguf"
 model_id = "models/orcarouter/Qwen3.8-Flash-Next-Uncensored-GGUF"
 alias = "qwen3.8-flash-next"
 lazy = true
-k_cache_type = "Q8_0"
-v_cache_type = "Q8_0"
 
 [models.format]
 quantized_file = "Qwen3.8-Flash-Next-Uncensored-IQ4_XS-MTP-00001-of-00003.gguf"
