@@ -81,6 +81,122 @@ mtp_bench.py for decode A/Bs: TTFT/ITL/server-tok, essay|arithmetic
 prompts). No cuda-27B twin: user directive, ISQ-Q4K 3090 lane stays
 unpursued (27.7 T/s historical, ~4K ctx ceiling, displaces the 35B lane).
 
+## Perf review backlog (opened 2026-10-28, candle + mistral.rs code review)
+
+Scope: four hot-path scans (candle CPU/quantized, candle CUDA/HIP, mistral.rs quant,
+mistral.rs core). ~84 candidates. Items are ideas, none started. Priority tags:
+[H] high expected impact, [M] medium, [L] low. Validate against the NaN-rate
+harness before weakening any sync. HIP reuses candle's shared body via include,
+so candle CUDA fixes apply to the HIP role automatically.
+
+### Start here (first wave)
+- [ ] [H] cuda_graph.rs:3050-3083 - paged-attn V2 workspace mutex held across whole
+      graph replay + device sync before/after launch. Narrow lock; use stream/event
+      sync where ordering allows. Validate NaN rate.
+- [ ] [H] normal.rs:2738 - clones whole Vec<KVCache> per forward step. Pass borrowed
+      slice/Arc instead.
+- [ ] [H] qwen3_next.rs:2114 (also 2832,2932) - gdn_replay_stash Mutex per layer/token.
+      Thread-localize or move behind non-locking context.
+- [ ] [H] candle device.rs:587-631 - kernel function handles not cached (only modules);
+      load_function + RwLock per op. Cache CudaFunction by (module,name).
+- [ ] [H] candle mod.rs:448-499 - graph H2D cache hit does full D2D try_clone() copy.
+      Share refcounted non-owning handle.
+- [ ] [H] gguf/cuda.rs:958-970 (+cuda_hip) - fresh CudaSlice Q8_1 buffer per quantize.
+      Per-device workspace cache.
+- [ ] [H] k_quants.rs:2606-2639 - matmul_f16 fully serial, per-row Vec<f32> alloc.
+      Parallelize cols, vec_dot_4 tails, reuse scratch.
+- [ ] [H] gemv/mod.rs:102-131 - GEMV_DEVICE_INFO Mutex locked on every should_use_gemv.
+      RwLock/read-cache or cache on device handle.
+
+### candle-core: CPU / quantized backend
+- [ ] [H] k_quants.rs:2606-2639 - matmul_f16 serial; per-row Vec<f32> alloc; no vec_dot_4.
+- [ ] [H] cpu_backend/mod.rs:3050-3068 - BF16 matmul widens both operands via collect + narrows serially.
+- [ ] [H] cpu_backend/mod.rs:1050-1052,1280-1282,1354-1358 - k_cont Vec alloc inside parallel loops per output channel.
+- [ ] [H] neon.rs (11 sites: 538,686,859,1135,1818,1882,2603,2667,2908,2971,3113) - thread_local RefCell<Vec<u64>> scratch borrow_mut + lookup per matmul.
+- [ ] [H] k_quants.rs:2423-2436 - LHS_SCRATCH same thread_local pattern.
+- [ ] [H] neon.rs:516-522,1797,2581,2887 - features::get().i8mm checked inside hot vec_dot dispatch.
+- [ ] [M] cpu_backend/mod.rs:1037,1265,1334 - conv inp_cont alloc + triple-nested copy; no contiguous fast path.
+- [ ] [M] cpu_backend/mod.rs:137 - pred.iter().zip(...).map(...).collect() without capacity.
+- [ ] [M] k_quants.rs:2462-2488 - outer row loop with per-row execute_chunked over quads; barrier overhead for small n.
+- [ ] [M] k_quants.rs:217-227,391-402,494-508 - per-block f16->f32 scalar dequant; no SIMD.
+- [ ] [M] cpu_backend/mod.rs:726-769 - index-select per-id slice copy in nested loops; not parallelized.
+- [ ] [M] k_quants.rs:1460-1474 - Q4K vec_dot_4 only NEON; x86/avx + simd128 fall back to two vec_dot_2.
+- [ ] [L] k_quants.rs:630-646,800-816 - Q8_0/Q8_1 to_float scalar loops.
+- [ ] [L] neon.rs:1806-1860 - gemv pool.execute_chunked with small n_groups; tune serial threshold.
+- [ ] [L] cpu_backend/mod.rs:558 - upsample identity returns src.to_vec() instead of borrow.
+
+### candle-core: CUDA / HIP backend (hip reuses shared body via include)
+- [ ] [H] device.rs:587-631 - kernel function handles not cached (only modules); load_function + RwLock per op.
+- [ ] [H] mod.rs:83-134 - CUDA_PARAM_CACHE only consulted under graph capture; normal path re-uploads params + settle sync.
+- [ ] [H] mod.rs:101,116,129 - params.clone() keys + global Mutex<HashMap> per unique layout.
+- [ ] [H] mod.rs:484-488 - slice_ptr calls device_ptr twice per input.
+- [ ] [H] mod.rs:448-499 + cudarc core.rs:1415-1417 - graph H2D cache hit does full D2D try_clone() copy.
+- [ ] [H] device.rs:593-622,150-152 - function/module lock contention; replace with per-module OnceLock.
+- [ ] [M] mod.rs:1710-1727 - DType re-matched (15-arm) in hot transfer paths.
+- [ ] [M] mod.rs:176-179,1808 - format! kernel names per call in to_dtype.
+- [ ] [M] mod.rs:1773-1912 - duplicated alloc+launch per dtype in to_dtype.
+- [ ] [M] mod.rs:123,131 - params_from_vec unconditional sync on miss/untracked.
+- [ ] [M] mod.rs:28-30,102-103 - global Mutex for param cache; shard by device.
+- [ ] [M] device.rs:691-693,766,816 - curand mutex + seed RwLock per rand call.
+- [ ] [M] cudarc core.rs:1805-1836 - record-on-drop records per device_ptr even same stream.
+- [ ] [L] mod.rs:2634-2818 + device.rs:918-1093 - duplicated dtype branches in copy_strided/conversions.
+- [ ] [L] mod.rs:1404-1436 - env-gated debug D2H; ensure fast path.
+- [ ] [L] device.rs:448-499 - graph H2D cache RefCell borrow churn.
+- [ ] [L] cudarc core.rs:933-936,1017-1020 - alloc_bytes atomic fetch_add; use Relaxed.
+
+### mistral.rs: mistralrs-quant
+- [ ] [H] gguf/cpu.rs:144-191 - qtensor_indexed_moe_forward always clones x/ids on shape normalize; try_grouped_gather_mm clones x again.
+- [ ] [H] gguf/cpu.rs:61-88 - grouped_gather_mm copies every expert id list + per-expert index_add alloc.
+- [ ] [H] gguf/cpu.rs:61 - host ids conversion on every indexed MoE call; skip if already U32/contiguous.
+- [ ] [H] gguf/cuda.rs:958-970 (+cuda_hip) - fresh CudaSlice Q8_1 buffer per quantize.
+- [ ] [H] gguf/cuda.rs:309-333 - alloc_zeros full output each fused call.
+- [ ] [H] lora/dynamic/expert_cuda.rs:471-476, expert.rs:779-782 - normalize_topk clones even if U32, always contiguous().
+- [ ] [H] gemv/mod.rs:102-131 - GEMV_DEVICE_INFO Mutex locked on every should_use_gemv.
+- [ ] [M] distributed/layers.rs:981-986,1050-1058 - unconditional contiguous() before all-reduce.
+- [ ] [M] afq/ops.rs:430-452 - metal afq_mm clones lhs/rhs indices even if U32; broadcasts into new tensors.
+- [ ] [M] f8q8/mod.rs:298-320 - per-row Rust loop with narrow+force_contiguous.
+- [ ] [M] fp8/mod.rs:102-120 - per-row dequant temporaries on metal.
+- [ ] [M] gguf/mod.rs:590-607 - bias gather not fused; index_select+reshape+broadcast.
+- [ ] [M] gguf/weight_source.rs:613 - copies full tensor bytes to_vec during load.
+- [ ] [M] gguf/archive.rs:649 - per-tensor shard storage lock on load path.
+- [ ] [L] utils/ops.rs:66-70 - leftshift allocates new Vec every call.
+- [ ] [L] pending_layer.rs:46-76 - clones Arc<dyn QuantMethod> on every resolve.
+- [ ] [L] isq_executor.rs:206-246 - separate workers/state locks in submit path.
+- [ ] [L] gguf/cpu.rs:178-190 - reshape alloc when input already 3D.
+- [ ] [L] utils/ops.rs:3702-3819 - fused_glu allocates output+scales each call.
+- [ ] [L] rotary/mod.rs:1893-1894 - host copies in rotary per call.
+- [ ] [L] gguf/cpu.rs:196 - dequantizes all experts every fallback call.
+
+### mistral.rs: mistralrs-core
+- [ ] [H] pipeline/cuda_graph.rs:3050 - paged-attn V2 workspace mutex across whole replay.
+- [ ] [H] pipeline/cuda_graph.rs:3059,3083 - device sync before/after graph launch.
+- [ ] [H] pipeline/normal.rs:2738 - clones whole Vec<KVCache> per forward step.
+- [ ] [H] models/qwen3_next.rs:2114 (also 2832,2932) - gdn_replay_stash Mutex per layer/token.
+- [ ] [H] paged_attention/block_pool.rs:912 - prefix block retention mutex per allocation.
+- [ ] [M] kv_cache/hybrid_cache.rs:2244-2245 - set_state_indices host Vec + slot remap per batch.
+- [ ] [M] gdn/cache.rs:93-94 - checkout clones conv/recurrent state per GDN layer.
+- [ ] [M] mla/forward.rs:459,476 - slot/block tables moved to CPU + to_vec2 per decode.
+- [ ] [M] paged_attention/scheduler.rs:876 - per-sequence Arc<Mutex<Sequence>> lock churn.
+- [ ] [M] kv_cache/hybrid_cache.rs:1414 - logical_slots.to_vec() per batch mapping.
+- [ ] [M] kv_cache/hybrid_cache.rs:2437,2493 - host_indices cloned into new Tensor per install.
+- [ ] [M] cuda/speculative_rejection.rs:3006 - host staging clones Vecs + rebuilds Tensors per case.
+- [ ] [M] sampler.rs:1143,1171,1187 - sampler top1/topk cache Mutex per token.
+- [ ] [M] paged_attention/cache_engine.rs:328 - blocking MutexGuard over whole KV cache vector.
+- [ ] [M] prefix_cacher.rs:388,401 - cache insertion clones full KV cache + tokens.
+- [ ] [L] paged_attention/windowed_pool.rs:1000-1008 - pad_row clone per added row.
+- [ ] [L] speculative/dflash.rs:642-649 - repeated reshape/contiguous + codebook contiguous.
+- [ ] [L] sequence.rs:1063-1088 - RwLock read per state query in hot loops.
+- [ ] [L] paged_attention/scheduler.rs:337 - candidates.clone() VecDeque of Arcs.
+- [ ] [L] models/qwen3_next.rs:3063,3407,3409 - draft_lm_head Mutex in speculative paths.
+- [ ] [L] kv_cache/hybrid_cache.rs:1026-1040 - RecurrentStatePool full clone.
+- [ ] [L] pipeline/cuda_graph.rs:281 - sync in capture/timing path.
+
+### Notes
+- Several [H] items are perf-correctness coupled (graph replay sync, paged-attn workspace lock).
+  Validate against the NaN-rate harness before weakening syncs.
+- Keep changes small and measurable; profile with dev-tools/decode_bench.py and
+  prefill_bench.py/conc_bench.py before/after.
+
 # ==== OPERATING RULES (2026-10-14, user directive) ====
 # NEVER modify other tools or applications to bypass an issue in this
 # stack. The openwebui webui.db capability patch (builtin_tools=false)
