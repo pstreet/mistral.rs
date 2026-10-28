@@ -180,7 +180,7 @@ pub fn qtensor_indexed_moe_forward(
         };
         if let Some(shape) = out_shape.filter(|_| x3.rank() == 3 && ids2.rank() == 2) {
             if let Some(out) = qtensor.indexed_gemv(&x3, &ids2)? {
-                return if shape.is_empty() {
+                return if x.rank() == 3 {
                     Ok(out)
                 } else {
                     let n_out = out.dim(2)?;

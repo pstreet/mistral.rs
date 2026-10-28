@@ -2,7 +2,9 @@ use candle_core::{
     backend::BackendStorage, shape::Dim, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout,
     Result, Shape, Tensor, WithDType,
 };
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
 use rayon::slice::ParallelSliceMut;
 
 use std::{
@@ -65,7 +67,14 @@ struct Leftshift(usize);
 impl Leftshift {
     fn leftshift<T: WithDType + Shl<Output = T>>(&self, vs: &[T]) -> Vec<T> {
         let offset = T::from_f64(self.0 as f64);
-        vs.into_par_iter().map(|v| *v << offset).collect()
+        let mut result = Vec::with_capacity(vs.len());
+        // SAFETY: every element is overwritten below before the vec is returned.
+        unsafe { result.set_len(vs.len()) };
+        result
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(i, r)| *r = vs[i] << offset);
+        result
     }
 }
 

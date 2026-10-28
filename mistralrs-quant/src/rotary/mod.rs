@@ -1890,10 +1890,34 @@ mod tensor_rope_tests {
         let (q_cpu, k_cpu) = cpu_apply_rotary_qk(&q, &k, &cos, &sin, positions.as_ref(), is_neox)?;
         let (q_t, k_t) = tensor_apply_rotary_qk(&q, &k, &cos, &sin, positions.as_ref(), is_neox)?;
         for (label, host, tensor) in [("q", &q_cpu, &q_t), ("k", &k_cpu, &k_t)] {
-            let host = host.flatten_all()?.to_vec1::<f32>()?;
-            let tensor = tensor.flatten_all()?.to_vec1::<f32>()?;
-            assert_eq!(host.len(), tensor.len(), "{label} length");
-            for (i, (a, bb)) in host.iter().zip(tensor.iter()).enumerate() {
+            // Avoid a host copy when the result is already F32 + contiguous:
+            // borrow the underlying storage slice instead of flatten/to_vec1.
+            let host_flat = host.flatten_all()?;
+            let tensor_flat = tensor.flatten_all()?;
+            let (host_storage, host_layout) = host_flat.storage_and_layout();
+            let host_vals: std::borrow::Cow<'_, [f32]> = match &*host_storage {
+                Storage::Cpu(CpuStorage::F32(s)) => {
+                    if let Some((o1, o2)) = host_layout.contiguous_offsets() {
+                        std::borrow::Cow::Borrowed(&s[o1..o2])
+                    } else {
+                        std::borrow::Cow::Owned(host_flat.to_vec1::<f32>()?)
+                    }
+                }
+                _ => std::borrow::Cow::Owned(host_flat.to_vec1::<f32>()?),
+            };
+            let (tensor_storage, tensor_layout) = tensor_flat.storage_and_layout();
+            let tensor_vals: std::borrow::Cow<'_, [f32]> = match &*tensor_storage {
+                Storage::Cpu(CpuStorage::F32(s)) => {
+                    if let Some((o1, o2)) = tensor_layout.contiguous_offsets() {
+                        std::borrow::Cow::Borrowed(&s[o1..o2])
+                    } else {
+                        std::borrow::Cow::Owned(tensor_flat.to_vec1::<f32>()?)
+                    }
+                }
+                _ => std::borrow::Cow::Owned(tensor_flat.to_vec1::<f32>()?),
+            };
+            assert_eq!(host_vals.len(), tensor_vals.len(), "{label} length");
+            for (i, (a, bb)) in host_vals.iter().zip(tensor_vals.iter()).enumerate() {
                 let diff = (a - bb).abs();
                 assert!(diff < 1e-4, "{label}[{i}]: host {a} vs tensor {bb}");
             }
