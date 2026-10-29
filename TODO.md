@@ -90,11 +90,14 @@ harness before weakening any sync. HIP reuses candle's shared body via include,
 so candle CUDA fixes apply to the HIP role automatically.
 
 ### Start here (first wave)
-- [ ] [H] cuda_graph.rs:3050-3083 - paged-attn V2 workspace mutex held across whole
+- [x] [H] cuda_graph.rs:3050-3083 - paged-attn V2 workspace mutex held across whole
       graph replay + device sync before/after launch. Narrow lock; use stream/event
       sync where ordering allows. Validate NaN rate.
-- [ ] [H] normal.rs:2738 - clones whole Vec<KVCache> per forward step. Pass borrowed
+      (8309fb55f: moved device sync outside mutex, replaced device sync with stream sync)
+- [x] [H] normal.rs:2738 - clones whole Vec<KVCache> per forward step. Pass borrowed
       slice/Arc instead.
+      (5479aefe7: changed CudaDecodeGraphForwardInput to &[(Tensor, Tensor)]
+      eliminating redundant clone; both normal.rs and multimodal.rs)
 - [ ] [H] qwen3_next.rs:2114 (also 2832,2932) - gdn_replay_stash Mutex per layer/token.
       Thread-localize or move behind non-locking context.
 - [ ] [H] candle device.rs:587-631 - kernel function handles not cached (only modules);
