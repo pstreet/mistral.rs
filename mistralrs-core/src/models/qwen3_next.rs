@@ -9,6 +9,7 @@ use mistralrs_quant::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::UnsafeCell,
     collections::{BTreeMap, HashMap},
     ops::Range,
     sync::{
@@ -1550,12 +1551,19 @@ pub struct Model {
     store_spec_hidden: AtomicBool,
     last_spec_capture: Mutex<Option<SpecCapture>>,
     last_full_capture: Mutex<Option<SpecCapture>>,
-    gdn_replay_stash: Mutex<Option<GdnReplayStash>>,
+    /// GDN replay stash - accessed only from inference thread (single-threaded).
+    /// Replaces Mutex for zero-overhead access; caller must not access from other threads.
+    gdn_replay_stash: UnsafeCell<Option<GdnReplayStash>>,
     pending_prompt_tails: Mutex<HashMap<usize, PendingPromptTail>>,
     draft_lm_head: Mutex<Option<Arc<dyn QuantMethod>>>,
     /// Tracks MTP acceptance rate for automatic fallback at long context.
     mtp_acceptance: Mutex<crate::speculative::MtpAcceptanceTracker>,
 }
+
+// SAFETY: gdn_replay_stash is only accessed from the inference thread
+// via forward() and snapshot_spec_graph_state(). All other threads
+// never touch it. The inference thread is single-threaded per model.
+unsafe impl Sync for Model {}
 
 impl Model {
     pub fn new(
@@ -1828,7 +1836,7 @@ impl Model {
             store_spec_hidden: AtomicBool::new(false),
             last_spec_capture: Mutex::new(None),
             last_full_capture: Mutex::new(None),
-            gdn_replay_stash: Mutex::new(None),
+            gdn_replay_stash: UnsafeCell::new(None),
             pending_prompt_tails: Mutex::new(HashMap::new()),
             draft_lm_head: Mutex::new(None),
             mtp_acceptance: Mutex::new(MtpAcceptanceTracker::new(0.25, 5)),
@@ -2114,7 +2122,7 @@ impl Model {
         }
 
         if self.store_spec_hidden.load(Ordering::Relaxed) {
-            *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = gdn_stash;
+            unsafe { *self.gdn_replay_stash.get() = gdn_stash };
         }
         let x = x.to_device(&self.device)?;
         let x = self.norm.forward(&x)?;
@@ -2181,7 +2189,7 @@ impl Model {
                 .last_full_capture
                 .lock()
                 .expect("spec capture poisoned") = None;
-            *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = None;
+            unsafe { *self.gdn_replay_stash.get() = None };
         }
     }
 
@@ -2481,12 +2489,7 @@ impl Model {
         if rows.is_empty() {
             return Ok(true);
         }
-        let Some(stash) = self
-            .gdn_replay_stash
-            .lock()
-            .expect("gdn stash poisoned")
-            .clone()
-        else {
+        let Some(stash) = (unsafe { (*self.gdn_replay_stash.get()).clone() }) else {
             candle_core::bail!("no GDN transition stash for speculative commit");
         };
         if stash.layers.is_empty()
@@ -2614,12 +2617,7 @@ impl Model {
         if rows.is_empty() {
             return Ok(());
         }
-        let Some(stash) = self
-            .gdn_replay_stash
-            .lock()
-            .expect("gdn stash poisoned")
-            .clone()
-        else {
+        let Some(stash) = (unsafe { (*self.gdn_replay_stash.get()).clone() }) else {
             candle_core::bail!("no GDN replay stash for speculative rollback");
         };
         let transition_layers = stash
@@ -2832,7 +2830,7 @@ impl Model {
     }
 
     fn clear_gdn_replay_stash(&self) {
-        *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = None;
+        unsafe { *self.gdn_replay_stash.get() = None };
     }
 
     fn supports_recurrent_speculative_checkpoints(&self) -> bool {
@@ -2904,11 +2902,7 @@ impl Model {
                 .lock()
                 .expect("spec capture poisoned")
                 .take(),
-            gdn_stash: self
-                .gdn_replay_stash
-                .lock()
-                .expect("gdn stash poisoned")
-                .take(),
+            gdn_stash: unsafe { (*self.gdn_replay_stash.get()).take() },
         })
     }
 
@@ -2932,7 +2926,7 @@ impl Model {
             .last_full_capture
             .lock()
             .expect("spec capture poisoned") = full_capture;
-        *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = gdn_stash;
+        unsafe { *self.gdn_replay_stash.get() = gdn_stash };
         Ok(())
     }
 
