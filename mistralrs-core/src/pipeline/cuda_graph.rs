@@ -3040,22 +3040,10 @@ impl CudaDecodeGraphState {
                 )));
             }
         }
-        // Hold the paged-attention V2 workspace mutex for the whole replay:
-        // the graph captures the V2 kernel (which uses the shared global
-        // workspace) without capturing this CPU-side lock, so without it
-        // eager forwards race on the same workspace under multi-queue
-        // scheduling. Acquired before the device sync and held until the
-        // post-launch sync completes.
-        let _workspace_guard =
-            mistralrs_paged_attn::lock_paged_attn_v2_workspace(&step.input_ids.device());
-        // Device-level synchronize before graph launch to ensure ALL
-        // pending operations (input_ids H2D copy, metadata H2D copy,
-        // state_indices copy) have completed on ALL streams. On ROCm with
-        // multiple hardware queues (GPU_MAX_HW_QUEUES > 1) a single HIP
-        // stream's operations can be dispatched to different hardware queues,
-        // breaking FIFO ordering. A stream-level sync only waits for that
-        // stream; a device-level sync waits for everything. This closes the
-        // race that caused the graph to read stale data and produce NaN logits.
+        // Device-level synchronize before graph launch to ensure ALL pending
+        // operations (input_ids H2D copy, metadata H2D copy, state_indices
+        // copy) have completed. Do this before acquiring the workspace mutex
+        // so the sync doesn't hold the mutex idle.
         if let Err(err) = step.input_ids.device().synchronize() {
             self.disabled = true;
             self.block_eager_retry();
@@ -3064,6 +3052,13 @@ impl CudaDecodeGraphState {
                 err.context("CUDA graph replay device synchronization failed before launch")
             );
         }
+        // Hold the paged-attention V2 workspace mutex while the graph runs:
+        // the graph captures the V2 kernel (which uses the shared global
+        // workspace) without capturing this CPU-side lock, so without it
+        // eager forwards race on the same workspace under multi-queue
+        // scheduling. Narrowed to just the graph execution window.
+        let _workspace_guard =
+            mistralrs_paged_attn::lock_paged_attn_v2_workspace(&step.input_ids.device());
         if let Err(err) = entry.graph.launch().map_err(|err| {
             err.context(format!(
                 "CUDA graph replay launch failed for generation {}, replay epoch {}, {} live rows, key {:?}",
@@ -3075,16 +3070,19 @@ impl CudaDecodeGraphState {
             self.entries.push(entry);
             return Err(err);
         }
-        // Device-level synchronize after graph launch: ensure the graph has
-        // completed writing logits before returning them to the caller. On
-        // ROCm with multiple hardware queues the graph launch (enqueued on
-        // the graph stream) may not have completed when the caller reads the
-        // logits tensor, producing NaN or stale values.
-        if let Err(err) = step.input_ids.device().synchronize() {
+        // Stream-level synchronize after graph launch: ensure the graph has
+        // completed writing logits before returning to the caller. Stream sync
+        // is sufficient (and faster than device sync) because the workspace
+        // mutex prevents any eager forward from using the workspace until this
+        // sync completes, and the stream sync guarantees the graph has flushed
+        // all writes to the logits tensor.
+        if let Err(err) = entry.graph.stream().synchronize() {
             self.disabled = true;
             self.block_eager_retry();
             self.entries.push(entry);
-            return Err(err.context("CUDA graph replay device synchronization failed after launch"));
+            return Err(candle_core::Error::msg(format!(
+                "CUDA graph replay stream synchronization failed after launch: {err}"
+            )));
         }
         if let Some(timer) = phase_timer {
             timer.finish("target_graph", step.real_batch, timing_rows)?;
