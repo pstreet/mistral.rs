@@ -1557,7 +1557,8 @@ mod tests {
         );
         assert_eq!(batch.max_kv_len(), pool.config().graph_max_kv_len());
         assert_eq!(batch.cumulative_query_lens(), &[0, 3, 6, 9, 12]);
-        assert_eq!(batch.cumulative_kv_lens(), &[0, 14, 28, 42, 56]);
+        // Padded rows have kv_len=0 (inert), only the real row contributes.
+        assert_eq!(batch.cumulative_kv_lens(), &[0, 14, 14, 14, 14]);
         assert_eq!(batch.slot_mapping()[..3], [11, 12, 13]);
         assert!(batch.slot_mapping()[3..]
             .iter()
