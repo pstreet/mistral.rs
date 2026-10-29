@@ -148,7 +148,11 @@ so candle CUDA fixes apply to the HIP role automatically.
       (cc158813: same commit — move params as key, RwLock replaces Mutex)
 - [x] [H] mod.rs:484-488 - slice_ptr calls device_ptr twice per input.
       (cc158813: single device_ptr + arithmetic offset, same sync semantics)
-- [ ] [H] device.rs:587-631 - kernel function handles not cached (only modules); load_function + RwLock per op.
+- [x] [H] device.rs:587-631 - kernel function handles not cached (only modules);
+      load_function + RwLock per op.
+      (849c51ef: global RwLock<ModuleStore> replaced with
+      HashMap<idx, OnceLock<ModuleCache>> — cache hits lock-free,
+      eliminates module store contention on every kernel launch)
 - [ ] [H] device.rs:593-622,150-152 - function/module lock contention; replace with per-module OnceLock.
 - [ ] [M] mod.rs:1710-1727 - DType re-matched (15-arm) in hot transfer paths.
 - [ ] [M] mod.rs:176-179,1808 - format! kernel names per call in to_dtype.
