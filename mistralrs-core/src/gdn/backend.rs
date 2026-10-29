@@ -17,6 +17,43 @@ const RECURRENCE_CHUNK_THRESHOLD: usize = 64;
 // kernel instead of the prefill path: same recurrence, no prepare permutes.
 #[cfg(any(feature = "cuda", feature = "rocm"))]
 const RECURRENCE_STEP_THRESHOLD: usize = 8;
+#[cfg(any(feature = "cuda", feature = "rocm"))]
+fn try_cuda_recurrence_from_convolved(
+    mixed_qkv: &Tensor,
+    b: &Tensor,
+    a: &Tensor,
+    a_log: &Tensor,
+    dt_bias: &Tensor,
+    dims: &GdnDims,
+    batch_size: usize,
+    seq_len: usize,
+    cache: &mut GdnLayerCache,
+    dtype: DType,
+) -> Option<Result<Tensor>> {
+    if !crate::cuda::gdn::gdn_device_supported(mixed_qkv.device()) {
+        return None;
+    }
+    Some(recurrence_cuda_from_convolved(
+        mixed_qkv, b, a, a_log, dt_bias, dims, batch_size, seq_len, cache, dtype,
+    ))
+}
+
+#[cfg(not(any(feature = "cuda", feature = "rocm")))]
+fn try_cuda_recurrence_from_convolved(
+    _mixed_qkv: &Tensor,
+    _b: &Tensor,
+    _a: &Tensor,
+    _a_log: &Tensor,
+    _dt_bias: &Tensor,
+    _dims: &GdnDims,
+    _batch_size: usize,
+    _seq_len: usize,
+    _cache: &mut GdnLayerCache,
+    _dtype: DType,
+) -> Option<Result<Tensor>> {
+    None
+}
+
 const QK_NORM_EPS: f64 = 1e-6;
 const QK_NORM_EPS_F32: f32 = 1e-6;
 const SOFTPLUS_LINEAR_THRESHOLD: f32 = 20.0;
@@ -270,17 +307,23 @@ pub fn apply_recurrence_from_convolved(
     cache: &mut GdnLayerCache,
     dtype: DType,
 ) -> Result<Tensor> {
+    // Try CUDA path first; return None to fall through to CPU paths.
     #[cfg(any(feature = "cuda", feature = "rocm"))]
-    if crate::cuda::gdn::gdn_device_supported(mixed_qkv.device()) {
-        return recurrence_cuda_from_convolved(
-            mixed_qkv, b, a, a_log, dt_bias, dims, batch_size, seq_len, cache, dtype,
-        );
+    if let Some(res) = try_cuda_recurrence_from_convolved(
+        mixed_qkv, b, a, a_log, dt_bias, dims, batch_size, seq_len, cache, dtype,
+    ) {
+        let result = res?;
+        // Clamp recurrent output to prevent numerical drift over very long contexts.
+        const GDN_CLAMP: f32 = 100.0;
+        return result.clamp(-GDN_CLAMP, GDN_CLAMP);
     }
 
     if seq_len == 1 && mixed_qkv.device().is_cpu() {
-        return decode_recurrence_cpu_from_convolved(
+        let result = decode_recurrence_cpu_from_convolved(
             mixed_qkv, b, a, a_log, dt_bias, dims, batch_size, cache, dtype,
-        );
+        )?;
+        const GDN_CLAMP: f32 = 100.0;
+        return result.clamp(-GDN_CLAMP, GDN_CLAMP);
     }
 
     let q = mixed_qkv.narrow(D::Minus1, 0, dims.key_dim)?;
@@ -294,6 +337,7 @@ pub fn apply_recurrence_from_convolved(
     let (beta, g) = compute_beta_g(b, a, a_log, dt_bias, dtype)?;
     let q = l2_norm(&q, QK_NORM_EPS)?;
     let k = l2_norm(&k, QK_NORM_EPS)?;
+    // Clamping is already handled inside apply_recurrence
     apply_recurrence(
         &q, &k, &v, &g, &beta, dims, batch_size, seq_len, cache, dtype,
     )
@@ -644,7 +688,10 @@ pub fn apply_recurrence(
             cache.state_layout
         );
     }
-    gated_delta_rule_recurrence(q, k, v, g, beta, &mut cache.recurrent_state)
+    let output = gated_delta_rule_recurrence(q, k, v, g, beta, &mut cache.recurrent_state)?;
+    // Clamp recurrent output to prevent numerical drift over very long contexts.
+    const GDN_CLAMP: f32 = 100.0;
+    output.clamp(-GDN_CLAMP, GDN_CLAMP)
 }
 
 #[cfg(any(feature = "cuda", feature = "rocm"))]
@@ -868,18 +915,24 @@ fn finish_recurrence(
             .to_dtype(cache.recurrent_state.dtype())?;
     }
 
-    match output {
+    let output = match output {
         RecurrenceOutput::BatchHeadMajor(output) => output
             .reshape((batch_size, dims.num_v_heads, seq_len, dims.head_v_dim))?
             .transpose(1, 2)?
-            .to_dtype(dtype),
+            .to_dtype(dtype)?,
         RecurrenceOutput::TokenMajor(output) => {
             if output.dims4()? != (batch_size, seq_len, dims.num_v_heads, dims.head_v_dim) {
                 candle_core::bail!("GDN token-major output has an incompatible shape")
             }
-            output.to_dtype(dtype)
+            output.to_dtype(dtype)?
         }
-    }
+    };
+    // Clamp recurrent output to prevent numerical drift over very long
+    // contexts (60K+ tokens).  The SSM recurrence compounds tiny errors;
+    // values outside [-100, 100] are almost certainly drift rather than
+    // valid signal for this model family.
+    const GDN_CLAMP: f32 = 100.0;
+    output.clamp(-GDN_CLAMP, GDN_CLAMP)
 }
 
 pub fn causal_conv1d(

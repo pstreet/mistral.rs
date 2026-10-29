@@ -8,6 +8,7 @@ runner = Runner(
         model_id=MODEL_ID,
         arch=MultimodalArchitecture.Qwen3_5,
     ),
+    mtp=True,
 )
 
 # For MoE variant, use:

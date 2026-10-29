@@ -19,7 +19,9 @@ pub use config::{
 };
 pub use dflash::DFlashDraftModel;
 pub use logging::{SpeculativeAttachInfo, SpeculativeAttachKind};
-pub use policy::{SpeculativeBatchObservation, SpeculativeBatchPlan, SpeculativeGraphPlan};
+pub use policy::{
+    MtpAcceptanceTracker, SpeculativeBatchObservation, SpeculativeBatchPlan, SpeculativeGraphPlan,
+};
 pub(crate) use proposer::SpeculativeTapRouting;
 pub use proposer::{
     SparseSpeculativeProbs, SpeculativeCommitRow, SpeculativeKvCache, SpeculativePrefillCtx,

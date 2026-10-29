@@ -45,11 +45,11 @@ use crate::{
     },
     serde_default_fn,
     speculative::{
-        paged_rows::make_paged_rows_metadata, proposer::sample_draft_rows, MtpRuntimeConfig,
-        SpeculativeAttachInfo, SpeculativeBatchPlan, SpeculativeCommitRow, SpeculativeConfig,
-        SpeculativeGraphPlan, SpeculativeGraphState, SpeculativeKvCache, SpeculativePrefillCtx,
-        SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
-        SpeculativeTargetMixin, TargetAttentionInputs,
+        paged_rows::make_paged_rows_metadata, proposer::sample_draft_rows, MtpAcceptanceTracker,
+        MtpRuntimeConfig, SpeculativeAttachInfo, SpeculativeBatchObservation, SpeculativeBatchPlan,
+        SpeculativeCommitRow, SpeculativeConfig, SpeculativeGraphPlan, SpeculativeGraphState,
+        SpeculativeKvCache, SpeculativePrefillCtx, SpeculativeProposal, SpeculativeProposalBatch,
+        SpeculativeProposeBatchCtx, SpeculativeTargetMixin, TargetAttentionInputs,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -1553,6 +1553,8 @@ pub struct Model {
     gdn_replay_stash: Mutex<Option<GdnReplayStash>>,
     pending_prompt_tails: Mutex<HashMap<usize, PendingPromptTail>>,
     draft_lm_head: Mutex<Option<Arc<dyn QuantMethod>>>,
+    /// Tracks MTP acceptance rate for automatic fallback at long context.
+    mtp_acceptance: Mutex<crate::speculative::MtpAcceptanceTracker>,
 }
 
 impl Model {
@@ -1829,6 +1831,7 @@ impl Model {
             gdn_replay_stash: Mutex::new(None),
             pending_prompt_tails: Mutex::new(HashMap::new()),
             draft_lm_head: Mutex::new(None),
+            mtp_acceptance: Mutex::new(MtpAcceptanceTracker::new(0.25, 5)),
         })
     }
 
@@ -3468,6 +3471,43 @@ impl SpeculativeTargetMixin for Model {
             return Vec::new();
         }
         vec![SpeculativeGraphPlan::new(n, None)]
+    }
+
+    fn speculative_observe(&self, observation: SpeculativeBatchObservation) {
+        let proposed = observation.proposed_drafts;
+        let accepted = observation.accepted_drafts;
+        // Only track non-trivial batches (at least one proposed draft)
+        if proposed == 0 {
+            return;
+        }
+        let mut tracker = self.mtp_acceptance.lock().expect("mtp acceptance poisoned");
+        if tracker.record(proposed, accepted).is_some() {
+            // Acceptance rate dropped below threshold — trigger bypass.
+            // This prevents the MTP amplification loop where wrong drafts
+            // drive wrong samples which drive worse drafts.
+            eprintln!(
+                "[mtp-fallback] acceptance rate dropped below threshold ({} / {} = {:.1}%), \
+                 disabling speculation",
+                accepted,
+                proposed,
+                (accepted as f64 / proposed as f64) * 100.0
+            );
+            tracker.reset();
+            // Flush recurrent transitions and disable MTP by setting n=0.
+            // The pipeline will call speculative_bypass next, which triggers
+            // the transition flush; setting n=0 prevents new speculative batches.
+            self.mtp_n_predict.store(0, Ordering::Relaxed);
+        }
+    }
+
+    fn speculative_bypass(&mut self, seq_ids: &[usize]) -> Result<()> {
+        // Reset the acceptance tracker on bypass so the next session
+        // starts fresh.
+        self.mtp_acceptance
+            .lock()
+            .expect("mtp acceptance poisoned")
+            .reset();
+        self.flush_recurrent_speculative_transitions(seq_ids)
     }
 
     fn speculative_propose(

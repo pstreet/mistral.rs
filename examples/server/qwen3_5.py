@@ -1,7 +1,7 @@
 """
 Start the server:
-    Dense:  mistralrs serve multimodal -p 1234 -m Qwen/Qwen3.5-27B
-    MoE:    mistralrs serve multimodal -p 1234 -m Qwen/Qwen3.5-35B-A3B
+    Dense:  mistralrs serve multimodal -p 1234 -m Qwen/Qwen3.5-27B --mtp
+    MoE:    mistralrs serve multimodal -p 1234 -m Qwen/Qwen3.5-35B-A3B --mtp
 """
 
 from openai import OpenAI

@@ -1,6 +1,6 @@
 """
 Start the server:
-    mistralrs serve --quant 4 -p 1234 -m Qwen/Qwen3-Coder-Next
+    mistralrs serve --quant 4 -p 1234 -m Qwen/Qwen3-Coder-Next --mtp
 """
 
 from openai import OpenAI

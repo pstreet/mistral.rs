@@ -6,6 +6,7 @@ runner = Runner(
         arch=Architecture.Qwen3Next,
     ),
     in_situ_quant="Q4K",
+    mtp=True,
 )
 
 res = runner.send_chat_completion_request(

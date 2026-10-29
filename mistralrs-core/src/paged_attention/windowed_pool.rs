@@ -998,7 +998,7 @@ impl WindowedKvPool {
             );
         }
         let pad_query_len = rows[0].query_len;
-        let pad_block_table = &rows[0].block_table;
+        let pad_block_table = rows[0].block_table.clone();
         while rows.len() < batch_bucket {
             rows.push(WindowedKvBatchRow {
                 seq_id: 0,
