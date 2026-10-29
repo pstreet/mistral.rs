@@ -1,5 +1,28 @@
 # COMPLETED: candle + mistral.rs fork work
 
+## Oct 29 (long-context stability: GDN clamping, MTP acceptance tracker, borrow fix, prefill chunk tuning)
+
+- GDN clamping (mistralrs-core/src/gdn/backend.rs): clamp recurrent output to [-100, 100] in all code paths
+  (CUDA, Metal, CPU) to prevent numerical drift over long contexts. Add try_cuda_recurrence_from_convolved
+  helper for conditional compilation. Commit: efa2c895d.
+- MTP acceptance tracker (mistralrs-core/src/speculative/policy.rs + qwen3_next.rs): MtpAcceptanceTracker
+  struct with sliding window tracking, configurable min_acceptance (0.25) and min_batches (5). Auto-triggers
+  bypass when acceptance rate drops below threshold. speculative_observe tracks acceptance, speculative_bypass
+  resets tracker. Commit: efa2c895d.
+- Paged attention borrow fix (mistralrs-core/src/paged_attention/windowed_pool.rs): fix E0502 where
+  pad_block_table reference into rows was live across rows.push(). Clone eagerly before the loop.
+  Commit: efa2c895d.
+- Prefill chunk size tuning: default reduced from 4096 to 2048 (mistralrs-core/src/scheduler/mod.rs,
+  docs, prod config). 4096 caused slow decode with long contexts (12 tok/s vs 24 tok/s). 2048 is a
+  better balance between prefill throughput and decode latency. Commits: f3a0f43ac, 5e8c13761.
+- 200K token prefill test: with chunk size 2048, 200K context (~53K prompt tokens) prefills at 1055 tok/s
+  (50.6s), decodes at 12.4 tok/s (71.6s for 889 tokens). Slow decode is due to attention over 53K KV
+  tokens + lots of reasoning tokens (3941 chars), not prefill chunk size.
+- 65K/90K/200K long-context tests: all passed with correct answers, no garbage output, no early truncation.
+  GDN clamping holding up at all tested lengths. Commit: efa2c895d.
+- MTP examples updated: added --mtp / mtp=True to Qwen3-Next and Qwen3.5 examples (server + Python).
+  Commits: efa2c895d (examples in the same commit).
+
 ## Oct 26 (docs audit: config reference + ledger + README)
 
 - Full docs surface audit against the Oct 24-26 work. Gaps closed:

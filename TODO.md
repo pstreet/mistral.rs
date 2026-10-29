@@ -164,7 +164,7 @@ so candle CUDA fixes apply to the HIP role automatically.
 - [ ] [L] isq_executor.rs:206-246 - separate workers/state locks in submit path.
 - [x] [L] gguf/cpu.rs:178-190 - reshape skipped when input already 3D.
 - [ ] [L] utils/ops.rs:3702-3819 - fused_glu allocates output+scales each call.
-- [ ] [L] rotary/mod.rs:1893-1894 - host copies in rotary per call.
+- [x] [L] rotary/mod.rs:1893-1894 - host copies in rotary per call.
 - [ ] [L] gguf/cpu.rs:196 - dequantizes all experts every fallback call.
 
 ### mistral.rs: mistralrs-core
