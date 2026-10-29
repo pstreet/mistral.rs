@@ -98,8 +98,10 @@ so candle CUDA fixes apply to the HIP role automatically.
       slice/Arc instead.
       (5479aefe7: changed CudaDecodeGraphForwardInput to &[(Tensor, Tensor)]
       eliminating redundant clone; both normal.rs and multimodal.rs)
-- [ ] [H] qwen3_next.rs:2114 (also 2832,2932) - gdn_replay_stash Mutex per layer/token.
+- [x] [H] qwen3_next.rs:2114 (also 2832,2932) - gdn_replay_stash Mutex per layer/token.
       Thread-localize or move behind non-locking context.
+      (1a2e1bd81: replaced Mutex<Option<GdnReplayStash>> with
+      UnsafeCell + unsafe impl Sync; all 7 access sites converted)
 - [ ] [H] candle device.rs:587-631 - kernel function handles not cached (only modules);
       load_function + RwLock per op. Cache CudaFunction by (module,name).
 - [ ] [H] candle mod.rs:448-499 - graph H2D cache hit does full D2D try_clone() copy.
