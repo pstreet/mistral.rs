@@ -42,7 +42,7 @@ struct CudaDecodeGraphForwardInput<'a> {
     seqlen_offsets: &'a [usize],
     context_lens: &'a [(usize, usize)],
     position_ids: &'a [usize],
-    paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &'a PagedAttentionInputMetadata)>,
+    paged_attn_meta: Option<(&'a [(Tensor, Tensor)], &'a PagedAttentionInputMetadata)>,
     flash_meta: &'a FlashParams,
     recurrent_batch_kind: RecurrentBatchKind,
 }
@@ -2036,7 +2036,7 @@ impl NormalPipeline {
             key,
             &step,
             CudaDecodeGraphCaptureInputs {
-                kv_cache: kv_cache.as_slice(),
+                kv_cache,
                 flash_meta,
                 block_size: cache_config.block_size,
                 recurrent_batch_kind,
@@ -2744,7 +2744,7 @@ impl Pipeline for NormalPipeline {
                         seqlen_offsets: &seqlen_offsets,
                         context_lens: &context_lens,
                         position_ids: &position_ids,
-                        paged_attn_meta: paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
+                        paged_attn_meta: paged_attn_meta.as_ref().map(|(a, b)| (a.as_slice(), b)),
                         flash_meta: &flash_meta,
                         recurrent_batch_kind,
                     }) {
