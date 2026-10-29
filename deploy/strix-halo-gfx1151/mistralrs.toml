@@ -32,7 +32,7 @@ idle_ttl_secs = 1800
 mtp = true
 mtp_n_predict = 2
 mtp_draft_sampling = "auto"
-max_prefill_chunk_tokens = 2048
+max_prefill_chunk_tokens = 4096
 
 [[models]]
 model_id = "models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF"

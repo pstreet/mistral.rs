@@ -11,7 +11,7 @@ A handful of flags control how many requests run at once and how much repeated w
 mistralrs serve -m Qwen/Qwen3-4B \
   --max-seqs 64 \
   --max-num-batched-tokens 4096 \
-  --max-prefill-chunk-tokens 512 \
+  --max-prefill-chunk-tokens 4096 \
   --pa-memory-fraction 0.9
 ```
 
@@ -70,7 +70,7 @@ Three limits control how new prompts share the GPU with active decodes:
 
 - `--max-num-batched-tokens` bounds the total token work in a scheduler batch (default 4096).
 - `--max-prefill-chunk-tokens` bounds each chunkable CUDA text-prompt scheduling quantum (default
-  512). The budget is divided across admitted prompt sequences, limiting how long active decodes
+  4096). The budget is divided across admitted prompt sequences, limiting how long active decodes
   wait behind one non-preemptible prefill step. Raw-logit, adapter, and multimodal prompt paths that
   cannot be split remain atomic; the limit does not change CPU or Metal scheduling.
 - `--max-decode-steps-before-prefill` bounds how long a waiting prompt can be deferred while a

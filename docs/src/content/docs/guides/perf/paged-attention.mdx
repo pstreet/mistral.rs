@@ -86,7 +86,7 @@ In multi-model TOML configs, each `[[models]]` entry can also set `cache_type`, 
 Scheduler memory and latency are controlled independently:
 
 - `--max-num-batched-tokens <n>`: total scheduler-step token budget (default 4096).
-- `--max-prefill-chunk-tokens <n>`: batch-wide chunkable CUDA text-prompt quantum (default 512).
+- `--max-prefill-chunk-tokens <n>`: batch-wide chunkable CUDA text-prompt quantum (default 4096).
 - `--max-decode-steps-before-prefill <n>`: maximum decode turns before a waiting prompt receives service (default 8).
 
 See the [serve flag reference](/reference/cli/serve/) for all `--pa-*` flags.
