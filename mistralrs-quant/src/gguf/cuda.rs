@@ -325,7 +325,7 @@ fn indexed_moe_forward_fused_q8_1_input(
 
     let total_rows = batch * input_dim1;
     let input = input.reshape((total_rows, k))?;
-    let (input_quant, quant_k, k_padded) = quantize_input_q8_1(&input, dev)?;
+    let (inputs_ptr, _input_quant_guard, quant_k, k_padded) = quantize_input_q8_1(&input, dev)?;
     assert!(quant_k == k, "K mismatch");
 
     // Output buffer - zero-initialize to prevent NaN from uninitialized memory
@@ -342,18 +342,18 @@ fn indexed_moe_forward_fused_q8_1_input(
     let k_padded_i32 = k_padded as i32;
     let input_dim1_i32 = input_dim1 as i32;
 
-    let (inputs_ptr, _inputs_guard) = slice_ptr(&input_quant, 0);
-    let (indices_ptr, _indices_guard) = slice_ptr(ids, 0);
-    let (outputs_ptr, _outputs_guard) = slice_ptr(&out, 0);
+    let indices_ptr = slice_ptr(ids, 0).0;
+    let outputs_ptr = slice_ptr(&out, 0).0;
 
     unsafe {
         let weights_ptr = weight_ptr as *const std::ffi::c_void;
+        let inputs_ptr = inputs_ptr as *const std::ffi::c_void;
 
         match w_dtype {
             GgmlDType::Q4_0 => {
                 ffi::launch_indexed_moe_forward_q4_0_q8_1(
                     weights_ptr,
-                    inputs_ptr as *const std::ffi::c_void,
+                    inputs_ptr,
                     indices_ptr as *const u32,
                     outputs_ptr as *mut f32,
                     n_i32,
@@ -520,9 +520,7 @@ fn indexed_moe_forward_fused_q8_1_input(
     }
 
     // Drop guards before moving out
-    drop(_inputs_guard);
-    drop(_indices_guard);
-    drop(_outputs_guard);
+    drop(_input_quant_guard);
 
     let mut out_shape = in_shape.dims().to_vec();
     out_shape.pop();
@@ -952,21 +950,41 @@ pub fn moe_weighted_reduce_flat_same_dtype(
     }
 }
 
-/// Quantize input to Q8_1 format, returning the quantized buffer.
+/// Quantize input to Q8_1 format, returning a raw pointer to the quantized buffer.
 ///
 /// Supports F32, BF16, and F16 inputs directly without dtype conversion.
-pub fn quantize_input_q8_1(xs: &Tensor, dev: &CudaDevice) -> Result<(CudaSlice<u8>, usize, usize)> {
+///
+/// Returns the quantized pointer, a guard keeping the workspace alive, and k/k_padded.
+pub fn quantize_input_q8_1(
+    xs: &Tensor,
+    dev: &CudaDevice,
+) -> Result<(
+    u64,
+    std::sync::MutexGuard<'static, U8WorkspaceSlot>,
+    usize,
+    usize,
+)> {
     let xs_contig = xs.contiguous()?;
     let num_rows = xs_contig.dim(0)?;
     let k = xs_contig.dim(1)?;
     let k_padded = pad(k, MATRIX_ROW_PADDING);
     let y_size_in_bytes = q8_1_bytes(num_rows, k_padded);
 
-    // SAFETY: quantize kernel writes all elements up to k_padded per row
-    let mut input_quant = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
-    quantize_input_q8_1_into(&xs_contig, &mut input_quant, dev)?;
+    let mut slot = u8_workspace_ensure(&MOE_DECODE_Q8_WORKSPACE, dev, y_size_in_bytes)?;
+    quantize_input_q8_1_into(&xs_contig, &mut slot.slice, dev)?;
 
-    Ok((input_quant, k, k_padded))
+    let stream = slot.slice.stream().clone();
+    // Extract the raw pointer, then drop the sync guard to end the borrow
+    // so we can move `slot` out. The guard's sync would fire on drop but
+    // the slice's memory is leaked (per-device slot), so the sync is
+    // unnecessary: the pointer is only used for a kernel launch on the
+    // same stream (already sequenced).
+    let ptr = {
+        let (ptr, guard) = slot.slice.device_ptr(&*stream);
+        drop(guard);
+        ptr
+    };
+    Ok((ptr, slot, k, k_padded))
 }
 
 fn quantize_input_q8_1_into(
