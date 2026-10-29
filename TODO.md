@@ -107,8 +107,11 @@ so candle CUDA fixes apply to the HIP role automatically.
       (candle 5c50f222: added ModuleCache per module with
       RwLock<HashMap<String, CudaFunction>>; double-checked locking
       for lazy population; load_function now only called on first use)
-- [ ] [H] candle mod.rs:448-499 - graph H2D cache hit does full D2D try_clone() copy.
+- [x] [H] candle mod.rs:448-499 - graph H2D cache hit does full D2D try_clone() copy.
       Share refcounted non-owning handle.
+      (candle 57dd6934: store Arc<CudaSlice<T>> in cache, added share() to
+      cudarc-hip and cudarc-nvidia; on hit constructs non-owning CudaSlice
+      sharing the same allocation, graph_owned=true; eliminates D2D copy)
 - [ ] [H] gguf/cuda.rs:958-970 (+cuda_hip) - fresh CudaSlice Q8_1 buffer per quantize.
       Per-device workspace cache.
 - [ ] [H] k_quants.rs:2606-2639 - matmul_f16 fully serial, per-row Vec<f32> alloc.
