@@ -142,6 +142,12 @@ so candle CUDA fixes apply to the HIP role automatically.
 - [ ] [L] cpu_backend/mod.rs:558 - upsample identity returns src.to_vec() instead of borrow.
 
 ### candle-core: CUDA / HIP backend (hip reuses shared body via include)
+- [x] [H] mod.rs:83-134 - CUDA_PARAM_CACHE only consulted under graph capture;
+      normal path re-uploads params + settle sync.
+      (cc158813: cache now always consulted, params moved as key, RwLock
+      replaces Mutex, eliminates redundant H2D upload on every call)
+- [x] [H] mod.rs:484-488 - slice_ptr calls device_ptr twice per input.
+      (cc158813: single device_ptr + arithmetic offset, same sync semantics)
 - [ ] [H] device.rs:587-631 - kernel function handles not cached (only modules); load_function + RwLock per op.
 - [ ] [H] mod.rs:83-134 - CUDA_PARAM_CACHE only consulted under graph capture; normal path re-uploads params + settle sync.
 - [ ] [H] mod.rs:101,116,129 - params.clone() keys + global Mutex<HashMap> per unique layout.
