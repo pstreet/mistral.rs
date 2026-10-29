@@ -102,8 +102,11 @@ so candle CUDA fixes apply to the HIP role automatically.
       Thread-localize or move behind non-locking context.
       (1a2e1bd81: replaced Mutex<Option<GdnReplayStash>> with
       UnsafeCell + unsafe impl Sync; all 7 access sites converted)
-- [ ] [H] candle device.rs:587-631 - kernel function handles not cached (only modules);
+- [x] [H] candle device.rs:587-631 - kernel function handles not cached (only modules);
       load_function + RwLock per op. Cache CudaFunction by (module,name).
+      (candle 5c50f222: added ModuleCache per module with
+      RwLock<HashMap<String, CudaFunction>>; double-checked locking
+      for lazy population; load_function now only called on first use)
 - [ ] [H] candle mod.rs:448-499 - graph H2D cache hit does full D2D try_clone() copy.
       Share refcounted non-owning handle.
 - [ ] [H] gguf/cuda.rs:958-970 (+cuda_hip) - fresh CudaSlice Q8_1 buffer per quantize.
