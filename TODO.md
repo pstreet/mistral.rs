@@ -124,13 +124,11 @@ so candle CUDA fixes apply to the HIP role automatically.
       RwLock/read-cache or cache on device handle.
 
 ### candle-core: CPU / quantized backend
-- [x] [H] k_quants.rs:2606-2639 - matmul_f16 serial; per-row Vec<f32> alloc;
-      no vec_dot_4. Parallelized over rows with rayon.
-- [ ] [H] cpu_backend/mod.rs:3050-3068 - BF16 matmul widens both operands via collect + narrows serially.
-- [x] [H] cpu_backend/mod.rs:1050-1052,1280-1282,1354-1358 - k_cont hoisted out of parallel region (all 3 conv sites).
-- [ ] [H] neon.rs (11 sites: 538,686,859,1135,1818,1882,2603,2667,2908,2971,3113) - thread_local RefCell<Vec<u64>> scratch borrow_mut + lookup per matmul.
+- [x] [H] cpu_backend/mod.rs:3050-3068 - BF16 matmul widens both operands via collect + narrows serially.
+      (2d3924c0: use in-place convert_to/from_f32_slice; avoids iterator overhead)
+- [ ] [H] neon.rs (11 sites: 538,686,859,1135,1818,1882,2603,2667,2908,2971,3113) - thread_local RefCell<Vec<u64>> scratch borrow_mut + lookup per matmul. (ARM-only)
 - [ ] [H] k_quants.rs:2423-2436 - LHS_SCRATCH same thread_local pattern.
-- [ ] [H] neon.rs:516-522,1797,2581,2887 - features::get().i8mm checked inside hot vec_dot dispatch.
+- [ ] [H] neon.rs:516-522,1797,2581,2887 - features::get().i8mm checked inside hot vec_dot dispatch. (ARM-only)
 - [ ] [M] cpu_backend/mod.rs:1037,1265,1334 - conv inp_cont alloc + triple-nested copy; no contiguous fast path.
 - [ ] [M] cpu_backend/mod.rs:137 - pred.iter().zip(...).map(...).collect() without capacity.
 - [ ] [M] k_quants.rs:2462-2488 - outer row loop with per-row execute_chunked over quads; barrier overhead for small n.
@@ -146,13 +144,11 @@ so candle CUDA fixes apply to the HIP role automatically.
       normal path re-uploads params + settle sync.
       (cc158813: cache now always consulted, params moved as key, RwLock
       replaces Mutex, eliminates redundant H2D upload on every call)
+- [x] [H] mod.rs:101,116,129 - params.clone() keys + global Mutex<HashMap> per unique layout.
+      (cc158813: same commit — move params as key, RwLock replaces Mutex)
 - [x] [H] mod.rs:484-488 - slice_ptr calls device_ptr twice per input.
       (cc158813: single device_ptr + arithmetic offset, same sync semantics)
 - [ ] [H] device.rs:587-631 - kernel function handles not cached (only modules); load_function + RwLock per op.
-- [ ] [H] mod.rs:83-134 - CUDA_PARAM_CACHE only consulted under graph capture; normal path re-uploads params + settle sync.
-- [ ] [H] mod.rs:101,116,129 - params.clone() keys + global Mutex<HashMap> per unique layout.
-- [ ] [H] mod.rs:484-488 - slice_ptr calls device_ptr twice per input.
-- [ ] [H] mod.rs:448-499 + cudarc core.rs:1415-1417 - graph H2D cache hit does full D2D try_clone() copy.
 - [ ] [H] device.rs:593-622,150-152 - function/module lock contention; replace with per-module OnceLock.
 - [ ] [M] mod.rs:1710-1727 - DType re-matched (15-arm) in hot transfer paths.
 - [ ] [M] mod.rs:176-179,1808 - format! kernel names per call in to_dtype.
