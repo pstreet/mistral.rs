@@ -20,7 +20,7 @@ pub(crate) const IMAGE_MODALITY: u8 = 1 << 0;
 pub(crate) const AUDIO_MODALITY: u8 = 1 << 1;
 pub(crate) const VIDEO_MODALITY: u8 = 1 << 2;
 pub const DEFAULT_MAX_NUM_BATCHED_TOKENS: usize = 4096;
-pub const DEFAULT_MAX_PREFILL_CHUNK_TOKENS: usize = 4096;
+pub const DEFAULT_MAX_PREFILL_CHUNK_TOKENS: usize = 2048;
 pub const DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL: usize = 8;
 
 pub(crate) fn modality_signature(sequence: &Sequence) -> u8 {
