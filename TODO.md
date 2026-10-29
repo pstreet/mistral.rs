@@ -112,8 +112,11 @@ so candle CUDA fixes apply to the HIP role automatically.
       (candle 57dd6934: store Arc<CudaSlice<T>> in cache, added share() to
       cudarc-hip and cudarc-nvidia; on hit constructs non-owning CudaSlice
       sharing the same allocation, graph_owned=true; eliminates D2D copy)
-- [ ] [H] gguf/cuda.rs:958-970 (+cuda_hip) - fresh CudaSlice Q8_1 buffer per quantize.
+- [x] [H] gguf/cuda.rs:958-970 (+cuda_hip) - fresh CudaSlice Q8_1 buffer per quantize.
       Per-device workspace cache.
+      (620b91154: quantize_input_q8_1 now uses MOE_DECODE_Q8_WORKSPACE
+      cache instead of fresh alloc; returns raw ptr + guard; eliminates
+      thousands of GPU allocations per forward for large models)
 - [ ] [H] k_quants.rs:2606-2639 - matmul_f16 fully serial, per-row Vec<f32> alloc.
       Parallelize cols, vec_dot_4 tails, reuse scratch.
 - [x] [H] gemv/mod.rs:102-131 - GEMV_DEVICE_INFO Mutex -> RwLock (read hot path).
