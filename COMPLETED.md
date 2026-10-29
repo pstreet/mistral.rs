@@ -1,6 +1,29 @@
 # COMPLETED: candle + mistral.rs fork work
 
-## Oct 29 (long-context stability: GDN clamping, MTP acceptance tracker, borrow fix, prefill chunk tuning)
+## Oct 29 (perf review first-wave: mutex narrowing, clone elimination, cache, parallelism)
+
+- cuda_graph.rs workspace mutex narrowed (mistral.rs 8309fb55f): pre-launch device
+  sync moved outside the mutex; post-launch replaced with stream-level sync,
+  reducing mutex hold to the kernel launch window only.
+- CUDA graph forward input clone eliminated (mistral.rs 5479aefe7; candle 5c50f222):
+  CudaDecodeGraphForwardInput now takes &[(Tensor, Tensor)] instead of Vec,
+  removing redundant per-step Vec clone; candle ModuleCache added for function
+  handle cache to support the reference-based API.
+- gdn_replay_stash Mutex -> UnsafeCell (mistralrs-core 1a2e1bd81): single-threaded
+  access model no longer needs a Mutex; replaced with UnsafeCell<Option<GdnReplayStash>>
+  + unsafe impl Sync for Model.
+- Candle CUDA kernel function handles cached (candle 5c50f222): ModuleCache with
+  RwLock<HashMap<String, CudaFunction>> per module; double-checked locking on
+  first access; subsequent calls hit the cache.
+- Graph H2D cache shares slices (candle 57dd6934): store Arc<CudaSlice<T>> in cache
+  instead of D2D try_clone() copy; CudaSlice::share() added to cudarc-hip and
+  cudarc-nvidia forks for non-owning slice sharing.
+- Q8_1 quantize workspace cache (mistralrs-quant 620b91154): quantize_input_q8_1
+  now uses MOE_DECODE_Q8_WORKSPACE per-device cache instead of fresh dev.alloc()
+  on every call; eliminates thousands of GPU allocations per forward for large models.
+- matmul_f16 parallelized over rows (candle e9326fc3): rayon par_chunks_mut parallelizes
+  the matmul over independent output rows; lhs conversion remains serial (generic type
+  param prevents thread_local).
 
 - GDN clamping (mistralrs-core/src/gdn/backend.rs): clamp recurrent output to [-100, 100] in all code paths
   (CUDA, Metal, CPU) to prevent numerical drift over long contexts. Add try_cuda_recurrence_from_convolved

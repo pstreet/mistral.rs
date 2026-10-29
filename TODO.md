@@ -117,13 +117,15 @@ so candle CUDA fixes apply to the HIP role automatically.
       (620b91154: quantize_input_q8_1 now uses MOE_DECODE_Q8_WORKSPACE
       cache instead of fresh alloc; returns raw ptr + guard; eliminates
       thousands of GPU allocations per forward for large models)
-- [ ] [H] k_quants.rs:2606-2639 - matmul_f16 fully serial, per-row Vec<f32> alloc.
+- [x] [H] k_quants.rs:2606-2639 - matmul_f16 fully serial, per-row Vec<f32> alloc.
+      Parallelize over output rows with rayon par_chunks_mut.
       Parallelize cols, vec_dot_4 tails, reuse scratch.
 - [x] [H] gemv/mod.rs:102-131 - GEMV_DEVICE_INFO Mutex -> RwLock (read hot path).
       RwLock/read-cache or cache on device handle.
 
 ### candle-core: CPU / quantized backend
-- [ ] [H] k_quants.rs:2606-2639 - matmul_f16 serial; per-row Vec<f32> alloc; no vec_dot_4.
+- [x] [H] k_quants.rs:2606-2639 - matmul_f16 serial; per-row Vec<f32> alloc;
+      no vec_dot_4. Parallelized over rows with rayon.
 - [ ] [H] cpu_backend/mod.rs:3050-3068 - BF16 matmul widens both operands via collect + narrows serially.
 - [x] [H] cpu_backend/mod.rs:1050-1052,1280-1282,1354-1358 - k_cont hoisted out of parallel region (all 3 conv sites).
 - [ ] [H] neon.rs (11 sites: 538,686,859,1135,1818,1882,2603,2667,2908,2971,3113) - thread_local RefCell<Vec<u64>> scratch borrow_mut + lookup per matmul.
