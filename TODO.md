@@ -16,6 +16,40 @@ Q8_0 (openwebui flipped; TEI-shape compat rides the next binary swap).
 GPU_MAX_HW_QUEUES=1 stays on all three ROCm tenants until the NaN bug
 closes. Branch synced to origin/pstreet-rocm.
 
+## Roofline profiling (2026-10-30, gfx1151, Qwen3.6-35B-A3B, Q8_0 KV)
+
+All major kernels are **memory-bound**, not compute-bound. Arithmetic
+intensity (FLOPs/byte) is 0.12-0.50 vs roofline transition at ~6.4 F/B.
+GPU compute units are idle waiting for data.
+
+### GPU peak (measured with rocprof-compute --roof-only)
+| Metric | Value |
+|--------|-------|
+| FP32 VALU | 17.6 TFLOPS |
+| BF16 VALU | 112.7 TFLOPS |
+| MALL BW | 1221 GB/s |
+| L2 BW | 2540 GB/s |
+
+### Kernel breakdown (300-token decode, graphs ON, 45.2 tok/s)
+| Kernel | GFLOP/s | % FP32 peak | GB/s | Regime |
+|--------|---------|-------------|------|--------|
+| mmvq_q8_0_plain (17.4k calls) | 60.6 | 0.3% | 242 | mem-bound |
+| moe_gemv_gate_up (5.2k) | 124.5 | 0.7% | 125 | mem-bound |
+| moe_gemv_down_aggr (4.9k) | 91.5 | 0.5% | 183 | mem-bound |
+| attention_paged (1.5k) | 168.6 | 1.0% | 337 | mem-bound |
+| gdn_recurrence (12.9k) | 13.3 | 0.08% | 13 | mem-bound |
+
+### Implications
+- 39% graph speedup (32.6 → 45.2 tok/s) came from eliminating host
+  overhead, not from better compute utilization. GPU was already
+  memory-bound; graphs just removed the non-GPU bottleneck.
+- Remaining TODO items (mutex narrowing, clone elimination, etc.)
+  will not move the needle on memory-bound workloads.
+- Next-highest-ROI targets: fused Q8_0 dequant+matmul kernels, MoE
+  expert packing, KV cache layout optimization.
+- Low-impact items below are deprioritized until memory-bound work
+  is addressed.
+
 ## Recently closed (detail: COMPLETED.md)
 Sizing saga (ISQ estimator, fit-ctx everywhere, runtime reserve, mapping
 clamp + exact pricing, attach reservation, floors + physical fallback, zero
@@ -229,6 +263,10 @@ so candle CUDA fixes apply to the HIP role automatically.
   Validate against the NaN-rate harness before weakening syncs.
 - Keep changes small and measurable; profile with dev-tools/decode_bench.py and
   prefill_bench.py/conc_bench.py before/after.
+- Roofline analysis (2026-10-30): all major kernels are memory-bound (AI 0.12-0.50 F/B vs
+  roofline transition ~6.4). GPU compute utilization is <1%. Remaining TODO items targeting
+  host-side latency (mutexes, clones) will not improve decode throughput; focus shifts to
+  kernel fusion, MoE expert packing, and KV cache layout.
 
 # ==== OPERATING RULES (2026-10-14, user directive) ====
 # NEVER modify other tools or applications to bypass an issue in this
