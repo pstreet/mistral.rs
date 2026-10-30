@@ -1,3 +1,25 @@
+## Oct 30 (perf review tier 1: param cache, BF16 matmul, module store onceLock, MLA CPU tensors)
+
+- Param cache always consulted (candle cc158813): CUDA_PARAM_CACHE now checked in normal
+  path (not just graph capture); params moved as HashMap key (no clone), global Mutex
+  replaced with RwLock; eliminates redundant H2D upload on every param lookup.
+- BF16 matmul in-place conversion (candle 2d3924c0): use convert_to_f32_slice /
+  convert_from_f32_slice instead of per-element collect; avoids iterator overhead
+  and extra allocations.
+- Module store OnceLock (candle 849c51ef): global RwLock<ModuleStore> replaced with
+  HashMap<idx, OnceLock<ModuleCache>>; cache hits are lock-free (OnceLock::get has
+  no lock), eliminates module store contention on every kernel launch.
+- MLA slot/block table CPU tensors (mistralrs-core 3817f9c5b): added slot_mappings_cpu
+  and block_tables_cpu fields to PagedAttentionInputMetadata; populated in all construction
+  paths (prefill, decode, graph staged, reduced prefill, speculative).
+- MLA forward uses CPU tensors directly (mistralrs-core 06abd8e1f): reads slot_mappings_cpu
+  and block_tables_cpu instead of doing H2D copy via to_device(&Device::Cpu); eliminates
+  2 H2D copies per decode step.
+- MLA tensor clone fix (mistralrs-core f72ce469a): slot_mapping_cpu now cloned in the
+  non-reshape branch of the reshape-if-needed pattern to fix type mismatch (&Tensor vs Tensor).
+- Paged attention test fix (mistralrs 68df14d2b): corrected cumulative_kv_lens expectation
+  in graph_batch_has_fixed_tables_and_inert_pad_rows (padded rows kv_len=0).
+
 # COMPLETED: candle + mistral.rs fork work
 
 ## Oct 29 (perf review first-wave: mutex narrowing, clone elimination, cache, parallelism)

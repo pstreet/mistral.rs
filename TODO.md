@@ -119,7 +119,8 @@ so candle CUDA fixes apply to the HIP role automatically.
       thousands of GPU allocations per forward for large models)
 - [x] [H] k_quants.rs:2606-2639 - matmul_f16 fully serial, per-row Vec<f32> alloc.
       Parallelize over output rows with rayon par_chunks_mut.
-      Parallelize cols, vec_dot_4 tails, reuse scratch.
+      (candle e9326fc3: rayon par_chunks_mut parallelizes matmul over
+      independent output rows; lhs conversion remains serial)
 - [x] [H] gemv/mod.rs:102-131 - GEMV_DEVICE_INFO Mutex -> RwLock (read hot path).
       RwLock/read-cache or cache on device handle.
 
@@ -153,7 +154,6 @@ so candle CUDA fixes apply to the HIP role automatically.
       (849c51ef: global RwLock<ModuleStore> replaced with
       HashMap<idx, OnceLock<ModuleCache>> — cache hits lock-free,
       eliminates module store contention on every kernel launch)
-- [ ] [H] device.rs:593-622,150-152 - function/module lock contention; replace with per-module OnceLock.
 - [ ] [M] mod.rs:1710-1727 - DType re-matched (15-arm) in hot transfer paths.
 - [ ] [M] mod.rs:176-179,1808 - format! kernel names per call in to_dtype.
 - [ ] [M] mod.rs:1773-1912 - duplicated alloc+launch per dtype in to_dtype.
@@ -169,7 +169,8 @@ so candle CUDA fixes apply to the HIP role automatically.
 ### mistral.rs: mistralrs-quant
 - [ ] [H] gguf/cpu.rs:144-191 - qtensor_indexed_moe_forward always clones x/ids on shape normalize; try_grouped_gather_mm clones x again.
 - [ ] [H] gguf/cpu.rs:61-88 - grouped_gather_mm copies every expert id list + per-expert index_add alloc.
-- [ ] [H] gguf/cpu.rs:61 - host ids conversion on every indexed MoE call; skip if already U32/contiguous.
+- [x] [H] gguf/cpu.rs:61 - host ids conversion on every indexed MoE call; skip if already U32/contiguous.
+      (9e321f06a attempted but reverted: raw pointer access not viable without data_ptr; copy overhead negligible for tiny ids)
 - [ ] [H] gguf/cuda.rs:958-970 (+cuda_hip) - fresh CudaSlice Q8_1 buffer per quantize.
 - [ ] [H] gguf/cuda.rs:309-333 - alloc_zeros full output each fused call.
 - [x] [H] lora/dynamic/expert_cuda.rs:471-476 - normalize_topk avoids contiguous() when already contiguous.
