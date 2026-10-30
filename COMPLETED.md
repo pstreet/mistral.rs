@@ -1,3 +1,29 @@
+## Oct 30 (fix: revert OnceLock module store — caused model load hangs)
+
+- OnceLock module store reverted (candle 138018f2): the Oct 29 change (849c51ef)
+  that replaced RwLock<ModuleStore> with HashMap<idx, OnceLock<ModuleCache>> caused
+  22GB Qwen3.6-35B-A3B model weight loading to hang indefinitely on ROCm/gfx1151.
+  Bisect confirmed: b5e28c9b (Oct 28) works (44 tok/s), 849c51ef hangs.
+  Root cause: nested OnceLock inside RwLock-write section creates deadlock where
+  load_module() blocks during weight loading. Restored original RwLock<ModuleStore>.
+  Fixed build: 46.67 tok/s (slightly faster than b5e28c9b's 44.12).
+
+## Oct 30 (HotExpertCache ROCm enablement + roofline analysis)
+
+- HotExpertCache ROCm gates removed (mistralrs-core hot_cache.rs, mod.rs): changed
+  `!device.is_cuda()` to `!device.is_cuda() && !device.is_hip()` in two places:
+  the constructor bail condition (line 160) and the build_hot_cache guard (line 428).
+  BF16 tensor ops (zeros, matmul, slice_set, dequantize_expert_rows) are already
+  supported on ROCm via the shared CUDA body. Cache is NOT enabled by default in
+  prod (expert_hot_cache_mb: None); enabling requires config change. Previous
+  session (Oct 23-24) found hot-cache net-negative on this hardware; revisit only
+  after other memory-bound work is addressed.
+- Roofline profiling (rocprof-compute --roof-only, gfx1151, Q8_0 KV, 300-token decode):
+  all kernels memory-bound (AI 0.12-0.50 F/B vs roofline ~6.4). Peak: FP32 17.6 TFLOPS,
+  BF16 112.7 TFLOPS, MALL BW 1221 GB/s. Q8_0 plain matmul dominates at 592s (60.6 GFLOP/s,
+  0.3% peak). MoE gate_up 642s (124.5 GFLOP/s), down_aggregate 449s (91.5 GFLOP/s).
+  39% graph speedup (32.6→45.2 tok/s) from host overhead elimination, not compute.
+
 ## Oct 30 (perf review tier 1: param cache, BF16 matmul, module store onceLock, MLA CPU tensors)
 
 - Param cache always consulted (candle cc158813): CUDA_PARAM_CACHE now checked in normal
@@ -6,9 +32,12 @@
 - BF16 matmul in-place conversion (candle 2d3924c0): use convert_to_f32_slice /
   convert_from_f32_slice instead of per-element collect; avoids iterator overhead
   and extra allocations.
-- Module store OnceLock (candle 849c51ef): global RwLock<ModuleStore> replaced with
-  HashMap<idx, OnceLock<ModuleCache>>; cache hits are lock-free (OnceLock::get has
-  no lock), eliminates module store contention on every kernel launch.
+- Module store OnceLock (candle 849c51ef, **reverted** 138018f2): global RwLock<ModuleStore>
+  replaced with HashMap<idx, OnceLock<ModuleCache>>, but this caused model weight loading
+  to hang on ROCm (gfx1151). Bisected: b5e28c9b (Oct 28) works, 849c51ef hangs.
+  Root cause: nested OnceLock inside RwLock-write section creates deadlock path where
+  load_module() blocks indefinitely during weight loading. Reverted to original
+  RwLock<ModuleStore> with array-based module cache.
 - MLA slot/block table CPU tensors (mistralrs-core 3817f9c5b): added slot_mappings_cpu
   and block_tables_cpu fields to PagedAttentionInputMetadata; populated in all construction
   paths (prefill, decode, graph staged, reduced prefill, speculative).
