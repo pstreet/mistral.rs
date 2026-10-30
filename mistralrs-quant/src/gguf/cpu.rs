@@ -58,7 +58,17 @@ fn grouped_gather_mm(w: &Tensor, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
     };
 
     // Host-side routing: ids is tiny (tokens * t u32).
-    let ids_host: Vec<u32> = ids.flatten_all()?.to_vec1::<u32>()?;
+    // Fast path: if ids is already contiguous U32, read directly.
+    let ids_host: Vec<u32> =
+        if ids.dtype() == DType::U32 && ids.is_contiguous() && ids.dims() == &[ids.elem_count()] {
+            unsafe {
+                let ptr = ids.data_ptr() as *const u32;
+                let len = ids.elem_count();
+                std::slice::from_raw_parts(ptr, len).to_vec()
+            }
+        } else {
+            ids.flatten_all()?.to_vec1::<u32>()?
+        };
     let mut positions: Vec<Vec<u32>> = vec![Vec::new(); n_experts];
     for (slot, e) in ids_host.iter().enumerate() {
         let e = *e as usize;
