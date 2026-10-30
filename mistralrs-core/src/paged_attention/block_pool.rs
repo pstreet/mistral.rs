@@ -906,6 +906,9 @@ impl BlockPool {
             return Some(self.allocate_free_blocks(num_blocks));
         }
 
+        // Always sync when retention is enabled: sync_retention_locked is a
+        // no-op when applied == retention.revision, but it must be called to
+        // keep applied up to date after free_blocks/cache_full_blocks sync.
         let retention_handle = Arc::clone(&self.prefix_block_retention.inner);
         let published_revision = Arc::clone(&self.prefix_block_retention.published_revision);
         let mut retention = retention_handle
@@ -930,6 +933,7 @@ impl BlockPool {
             )
             .increment(pressure_evictions);
         }
+
         if num_blocks > self.free_queue.num_free_blocks {
             return None;
         }

@@ -436,7 +436,7 @@ pub fn mla_cache_forward(
             .get(&device_location)
             .ok_or_else(|| candle_core::Error::msg("slot mapping missing"))?;
         let slot_mapping_cpu = if slot_mapping_cpu.dims().len() == 2 {
-            slot_mapping_cpu
+            slot_mapping_cpu.clone()
         } else {
             slot_mapping_cpu.reshape((bs, seq_len))?
         };
