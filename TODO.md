@@ -200,6 +200,8 @@ so candle CUDA fixes apply to the HIP role automatically.
       (1a2e1bd81: first-wave done)
 - [ ] [H] paged_attention/block_pool.rs:912 - prefix block retention mutex per allocation.
 - [ ] [M] kv_cache/hybrid_cache.rs:2244-2245 - set_state_indices host Vec + slot remap per batch.
+      (production path uses set_state_indices_with_host with pre-provided host indices;
+      the D2H fallback via to_vec1 is per-batch, not per-token, so low impact)
 - [ ] [M] gdn/cache.rs:93-94 - checkout clones conv/recurrent state per GDN layer.
 - [x] [M] mla/forward.rs:459,476 - slot/block tables moved to CPU + to_vec2 per decode
       (3817f9c5b+06abd8e1f: slot_mappings_cpu/block_tables_cpu fields added;
