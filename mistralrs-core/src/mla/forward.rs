@@ -1,9 +1,6 @@
 //! MLA forward pass functions for decode and cache operations.
 
-#[cfg(any(
-    all(feature = "cuda", target_family = "unix"),
-    test
-))]
+#[cfg(any(all(feature = "cuda", target_family = "unix"), test))]
 use candle_core::D;
 use candle_core::{Device, Result, Tensor};
 
@@ -19,14 +16,10 @@ use mistralrs_paged_attn::{concat_and_cache_mla, flashinfer_mla_decode, gather_m
 #[cfg(all(feature = "cuda", feature = "rocm", target_family = "unix"))]
 use mistralrs_paged_attn::{
     concat_and_cache_mla_auto as concat_and_cache_mla,
-    flashinfer_mla_decode_auto as flashinfer_mla_decode,
-    gather_mla_cache_auto as gather_mla_cache,
+    flashinfer_mla_decode_auto as flashinfer_mla_decode, gather_mla_cache_auto as gather_mla_cache,
 };
 
-#[cfg(any(
-    all(feature = "cuda", target_family = "unix"),
-    test
-))]
+#[cfg(any(all(feature = "cuda", target_family = "unix"), test))]
 fn supports_cached_mla_weights(kv_b_proj: &MlaKvBProjection) -> bool {
     !kv_b_proj.is_dynamic_lora_active()
 }
@@ -44,10 +37,7 @@ use crate::ops::SplitOp;
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 const MISTRALRS_NO_MLA: &str = "MISTRALRS_NO_MLA";
 
-#[cfg(any(
-    all(feature = "cuda", target_family = "unix"),
-    test
-))]
+#[cfg(any(all(feature = "cuda", target_family = "unix"), test))]
 fn pad_mla_value_for_flash(value: &Tensor, target_head_dim: usize) -> Result<(Tensor, usize)> {
     let value_head_dim = value.dim(D::Minus1)?;
     if value_head_dim > target_head_dim {
@@ -262,13 +252,7 @@ pub fn mla_decode_forward(
         .contiguous()?
         .reshape((bs * seq_len, qk_rope_head_dim))?;
 
-    concat_and_cache_mla(
-        &ckv_flat,
-        &k_pe_flat,
-        key_cache,
-        value_cache,
-        &slot_mapping,
-    )?;
+    concat_and_cache_mla(&ckv_flat, &k_pe_flat, key_cache, value_cache, &slot_mapping)?;
 
     let q_nope = q_nope.squeeze(2)?.contiguous()?;
     let q_pe = q_pe.squeeze(2)?.contiguous()?;
@@ -446,11 +430,11 @@ pub fn mla_cache_forward(
             };
 
         let device_location = q.device().location();
-        let slot_mapping = input_metadata
-            .slot_mappings
+        // Use pre-stored CPU tensors to avoid per-step H2D copy.
+        let slot_mapping_cpu = input_metadata
+            .slot_mappings_cpu
             .get(&device_location)
             .ok_or_else(|| candle_core::Error::msg("slot mapping missing"))?;
-        let slot_mapping_cpu = slot_mapping.to_device(&Device::Cpu)?;
         let slot_mapping_cpu = if slot_mapping_cpu.dims().len() == 2 {
             slot_mapping_cpu
         } else {
@@ -467,13 +451,12 @@ pub fn mla_cache_forward(
             .collect();
 
         let block_tables = input_metadata
-            .block_tables
+            .block_tables_cpu
             .as_ref()
             .and_then(|m| m.get(&device_location))
             .ok_or_else(|| candle_core::Error::msg("block tables missing"))?;
-        let block_tables_cpu = block_tables.to_device(&Device::Cpu)?;
-        let (block_rows, block_stride) = block_tables_cpu.dims2()?;
-        let block_tables_vec = block_tables_cpu.to_vec2::<u32>()?;
+        let (block_rows, block_stride) = block_tables.dims2()?;
+        let block_tables_vec = block_tables.to_vec2::<u32>()?;
         let expected_rows: usize = cur_lens.iter().sum();
         let mut block_tables_seq: Vec<i32> = Vec::with_capacity(bs * block_stride);
         if block_rows == bs {
