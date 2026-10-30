@@ -155,7 +155,9 @@ so candle CUDA fixes apply to the HIP role automatically.
       HashMap<idx, OnceLock<ModuleCache>> — cache hits lock-free,
       eliminates module store contention on every kernel launch)
 - [ ] [M] mod.rs:1710-1727 - DType re-matched (15-arm) in hot transfer paths.
-- [ ] [M] mod.rs:176-179,1808 - format! kernel names per call in to_dtype.
+- [x] [M] mod.rs:176-179,1808 - format! kernel names per call in to_dtype.
+      (9643f9f7: cast_kernel_name() pre-computed lookup replaces format!,
+      eliminates per-call string allocations)
 - [ ] [M] mod.rs:1773-1912 - duplicated alloc+launch per dtype in to_dtype.
 - [ ] [M] mod.rs:123,131 - params_from_vec unconditional sync on miss/untracked.
 - [ ] [M] mod.rs:28-30,102-103 - global Mutex for param cache; shard by device.
