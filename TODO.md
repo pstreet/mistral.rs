@@ -201,7 +201,9 @@ so candle CUDA fixes apply to the HIP role automatically.
 - [ ] [H] paged_attention/block_pool.rs:912 - prefix block retention mutex per allocation.
 - [ ] [M] kv_cache/hybrid_cache.rs:2244-2245 - set_state_indices host Vec + slot remap per batch.
 - [ ] [M] gdn/cache.rs:93-94 - checkout clones conv/recurrent state per GDN layer.
-- [ ] [M] mla/forward.rs:459,476 - slot/block tables moved to CPU + to_vec2 per decode.
+- [x] [M] mla/forward.rs:459,476 - slot/block tables moved to CPU + to_vec2 per decode
+      (3817f9c5b+06abd8e1f: slot_mappings_cpu/block_tables_cpu fields added;
+      MLA forward reads CPU tensors directly, eliminating H2D copies)
 - [ ] [M] paged_attention/scheduler.rs:876 - per-sequence Arc<Mutex<Sequence>> lock churn.
 - [ ] [M] kv_cache/hybrid_cache.rs:1414 - logical_slots.to_vec() per batch mapping.
 - [ ] [M] kv_cache/hybrid_cache.rs:2437,2493 - host_indices cloned into new Tensor per install.
