@@ -190,10 +190,14 @@ so candle CUDA fixes apply to the HIP role automatically.
 - [ ] [L] gguf/cpu.rs:196 - dequantizes all experts every fallback call.
 
 ### mistral.rs: mistralrs-core
-- [ ] [H] pipeline/cuda_graph.rs:3050 - paged-attn V2 workspace mutex across whole replay.
-- [ ] [H] pipeline/cuda_graph.rs:3059,3083 - device sync before/after graph launch.
-- [ ] [H] pipeline/normal.rs:2738 - clones whole Vec<KVCache> per forward step.
-- [ ] [H] models/qwen3_next.rs:2114 (also 2832,2932) - gdn_replay_stash Mutex per layer/token.
+- [x] [H] pipeline/cuda_graph.rs:3050 - paged-attn V2 workspace mutex across whole replay.
+      (8309fb55f: first-wave done)
+- [x] [H] pipeline/cuda_graph.rs:3059,3083 - device sync before/after graph launch.
+      (8309fb55f: first-wave done)
+- [x] [H] pipeline/normal.rs:2738 - clones whole Vec<KVCache> per forward step.
+      (5479aefe7: first-wave done)
+- [x] [H] models/qwen3_next.rs:2114 (also 2832,2932) - gdn_replay_stash Mutex per layer/token.
+      (1a2e1bd81: first-wave done)
 - [ ] [H] paged_attention/block_pool.rs:912 - prefix block retention mutex per allocation.
 - [ ] [M] kv_cache/hybrid_cache.rs:2244-2245 - set_state_indices host Vec + slot remap per batch.
 - [ ] [M] gdn/cache.rs:93-94 - checkout clones conv/recurrent state per GDN layer.

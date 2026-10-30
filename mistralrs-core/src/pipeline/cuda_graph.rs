@@ -2230,6 +2230,8 @@ impl CudaDecodeGraphMetadataBuffers {
             paged_context_lens_cpu: metadata.paged_context_lens_cpu.clone(),
             full_paged_context_lens_cpu: metadata.full_paged_context_lens_cpu.clone(),
             slot_mappings: tensor_map_from_var_map(&self.slot_mappings),
+            slot_mappings_cpu: metadata.slot_mappings_cpu.clone(),
+            block_tables_cpu: metadata.block_tables_cpu.clone(),
             max_context_len: graph_context_len(
                 metadata.max_context_len,
                 bucket_context_len_from_vars(&self.block_tables, block_size),

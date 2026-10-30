@@ -85,8 +85,10 @@ pub(crate) fn make_paged_rows_metadata(
 
     let batch = seq_ids.len();
     let slot_mappings = Tensor::from_vec(slot_mappings, (batch,), device)?;
+    let slot_mappings_cpu = slot_mappings.to_device(&Device::Cpu)?;
 
     let block_tables = table_tensor(&windowed_block_tables, device)?;
+    let block_tables_cpu = block_tables.to_device(&Device::Cpu)?;
     let full_block_tables = if paged_meta.sliding_window.is_some() {
         table_tensor(&full_tables, device)?
     } else {
@@ -200,6 +202,8 @@ pub(crate) fn make_paged_rows_metadata(
         paged_context_lens_cpu: Some(context_lens_windowed.to_vec()),
         full_paged_context_lens_cpu: Some(context_lens.to_vec()),
         slot_mappings: HashMap::from([(location, slot_mappings)]),
+        slot_mappings_cpu: HashMap::from([(location, slot_mappings_cpu)]),
+        block_tables_cpu: Some(HashMap::from([(location, block_tables_cpu)])),
         max_context_len: Some(context_lens_windowed.iter().copied().max().unwrap_or(0)),
         full_block_tables: Some(full_block_tables_map),
         full_context_lens: Some(full_context_lens_map),

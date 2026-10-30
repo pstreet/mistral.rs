@@ -261,6 +261,8 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
                 paged_context_lens_cpu: None,
                 full_paged_context_lens_cpu: None,
                 slot_mappings: map_to_devices(&slot_mappings, device, mapper)?,
+                slot_mappings_cpu: map_to_devices(&slot_mappings, device, mapper)?,
+                block_tables_cpu: Some(map_to_devices(&block_tables, device, mapper)?),
                 max_context_len: Some(
                     context_lens
                         .to_vec1::<u32>()?

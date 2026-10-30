@@ -280,6 +280,10 @@ pub mod text_models_inputs_processor {
         pub paged_context_lens_cpu: Option<Vec<usize>>,
         pub full_paged_context_lens_cpu: Option<Vec<usize>>,
         pub slot_mappings: HashMap<DeviceLocation, Tensor>,
+        /// CPU copies of slot_mappings and block_tables for MLA/decoder
+        /// code that reads them on the host — avoids per-step H2D copy.
+        pub slot_mappings_cpu: HashMap<DeviceLocation, Tensor>,
+        pub block_tables_cpu: Option<HashMap<DeviceLocation, Tensor>>,
         pub max_context_len: Option<usize>,
         /// Full (unwindowed) block tables, always covering the entire context.
         /// For models with per-layer sliding windows (GPT-OSS, Gemma2), layers
@@ -354,6 +358,8 @@ pub mod text_models_inputs_processor {
                 full_context_lens: None,
                 full_max_context_len: None,
                 slot_mappings: HashMap::from([(dev.location(), Tensor::new(&[0f32], dev)?)]),
+                slot_mappings_cpu: HashMap::new(),
+                block_tables_cpu: None,
                 is_first_prompt_chunk: true,
                 is_final_prompt_chunk: true,
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
@@ -545,6 +551,24 @@ pub mod text_models_inputs_processor {
                     full_decode_block_valid_mask_cpu.to_device(device)?,
                 );
             }
+            // Build CPU copies of slot_mappings and block_tables for MLA/decoder code.
+            let device_locations: Vec<_> = devices.iter().map(|d| d.location()).collect();
+            let mut slot_mappings_cpu_map = HashMap::new();
+            let block_tables_cpu_map = if let Some(ref block_tables) = self.block_tables {
+                let mut cpu_map = HashMap::new();
+                for loc in &device_locations {
+                    slot_mappings_cpu_map.insert(*loc, slot_mappings_cpu.clone());
+                    if let Some(bt) = block_tables.get(loc) {
+                        cpu_map.insert(*loc, bt.to_device(&Device::Cpu)?);
+                    }
+                }
+                Some(cpu_map)
+            } else {
+                for loc in &device_locations {
+                    slot_mappings_cpu_map.insert(*loc, slot_mappings_cpu.clone());
+                }
+                None
+            };
             let full_context_lens = self
                 .full_block_tables
                 .as_ref()
@@ -601,6 +625,8 @@ pub mod text_models_inputs_processor {
                 paged_context_lens_cpu: Some(paged_decode_context_lens.to_vec()),
                 full_paged_context_lens_cpu: Some(full_decode_context_lens.to_vec()),
                 slot_mappings,
+                slot_mappings_cpu: slot_mappings_cpu_map,
+                block_tables_cpu: block_tables_cpu_map,
                 max_context_len: context_lens.iter().copied().max(),
                 full_block_tables: self.full_block_tables.clone(),
                 full_context_lens,
@@ -1261,6 +1287,7 @@ pub mod text_models_inputs_processor {
                 None
             };
 
+            let device_locations: Vec<_> = devices.iter().map(|d| d.location()).collect();
             for device in devices {
                 slot_mappings_map
                     .insert(device.location(), slot_mappings.clone().to_device(&device)?);
@@ -1408,9 +1435,34 @@ pub mod text_models_inputs_processor {
                 sliding_flashinfer_view,
             ));
 
+            // Build CPU copies of slot_mappings and block_tables for MLA/decoder
+            // code that reads them on the host — avoids per-step H2D copy.
+            let mut slot_mappings_cpu = HashMap::new();
+            let mut block_tables_cpu_map = HashMap::new();
+            for loc in &device_locations {
+                slot_mappings_cpu.insert(*loc, slot_mappings.clone());
+                block_tables_cpu_map.insert(*loc, block_tables.clone());
+            }
+            let full_block_tables_cpu = if sliding_window.is_some() {
+                let mut cpu_map = HashMap::new();
+                for loc in &device_locations {
+                    cpu_map.insert(
+                        device.location(),
+                        full_block_tables_tensor
+                            .clone()
+                            .expect("full block tables present"),
+                    );
+                }
+                Some(cpu_map)
+            } else {
+                None
+            };
+
             Some(PagedAttentionInputMetadata {
                 slot_mappings: slot_mappings_map,
-                block_tables: Some(block_tables_map),
+                slot_mappings_cpu,
+                block_tables: Some(block_tables_map.clone()),
+                block_tables_cpu: Some(block_tables_cpu_map),
                 context_lens: Some(context_lens_map),
                 block_size: Some(block_size),
                 paged_context_lens_cpu: Some(paged_context_lens_for_fi.clone()),
@@ -2055,7 +2107,7 @@ pub mod text_models_inputs_processor {
 
         pub(crate) fn build_graph_staged(self: &Arc<Self>) -> Result<PagedAttentionInputMetadata> {
             let max_slot_mapping_len = self.slot_mappings.iter().map(Vec::len).max().unwrap_or(1);
-            let slot_mappings = _make_tensor_with_pad(
+            let slot_mappings_tensor = _make_tensor_with_pad(
                 self.slot_mappings.clone(),
                 max_slot_mapping_len,
                 _PAD_SLOT_ID,
@@ -2064,7 +2116,7 @@ pub mod text_models_inputs_processor {
             let slot_mappings = self
                 .devices
                 .iter()
-                .map(|device| (device.location(), slot_mappings.clone()))
+                .map(|device| (device.location(), slot_mappings_tensor.clone()))
                 .collect();
             let max_context_len = self.context_lens.iter().copied().max().unwrap_or(0);
             let full_max_context_len = self.full_context_lens.iter().copied().max().unwrap_or(0);
@@ -2075,8 +2127,10 @@ pub mod text_models_inputs_processor {
                 paged_context_lens_cpu: Some(self.context_lens.clone()),
                 full_paged_context_lens_cpu: Some(self.full_context_lens.clone()),
                 slot_mappings,
+                slot_mappings_cpu: HashMap::from([(Device::Cpu.location(), slot_mappings_tensor)]),
                 max_context_len: self.use_standard_metadata.then_some(max_context_len),
                 full_block_tables: None,
+                block_tables_cpu: None,
                 full_context_lens: None,
                 full_max_context_len: self.use_standard_metadata.then_some(full_max_context_len),
                 is_first_prompt_chunk: false,
@@ -2359,9 +2413,70 @@ pub mod text_models_inputs_processor {
                 flashinfer_metadata(logical, sliding)
             });
 
+            // Build CPU copies of slot_mappings and block_tables for MLA code.
+            let mut slot_mappings_cpu = HashMap::new();
+            let block_tables_cpu_map = {
+                let max_len = (0..block_tables.len())
+                    .map(|r| block_tables.row(r).len())
+                    .max()
+                    .unwrap_or(1);
+                let bt_tensor = _make_tensor_with_pad(
+                    (0..block_tables.len())
+                        .map(|r| {
+                            block_tables
+                                .row(r)
+                                .iter()
+                                .map(|x| *x as u32)
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>(),
+                    max_len,
+                    0,
+                    &Device::Cpu,
+                )?
+                .reshape(((), max_len))?;
+                let mut cpu_map = HashMap::new();
+                for device in &self.devices {
+                    slot_mappings_cpu.insert(device.location(), slot_mappings.clone());
+                    cpu_map.insert(device.location(), bt_tensor.clone());
+                }
+                Some(cpu_map)
+            };
+            let full_block_tables_cpu = if !full_matches_paged {
+                let max_len = (0..full_block_tables.len())
+                    .map(|r| full_block_tables.row(r).len())
+                    .max()
+                    .unwrap_or(0)
+                    .max(1);
+                let fb_tensor = _make_tensor_with_pad(
+                    (0..full_block_tables.len())
+                        .map(|r| {
+                            full_block_tables
+                                .row(r)
+                                .iter()
+                                .map(|x| *x as u32)
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>(),
+                    max_len,
+                    0,
+                    &Device::Cpu,
+                )?
+                .reshape(((), max_len))?;
+                let mut cpu_map = HashMap::new();
+                for device in &self.devices {
+                    cpu_map.insert(device.location(), fb_tensor.clone());
+                }
+                Some(cpu_map)
+            } else {
+                None
+            };
+
             Ok(PagedAttentionInputMetadata {
                 slot_mappings: slot_mappings_map,
+                slot_mappings_cpu,
                 block_tables: requirements.block_tables.then_some(paged_maps.block_tables),
+                block_tables_cpu: block_tables_cpu_map,
                 context_lens: requirements.context_lens.then_some(paged_maps.context_lens),
                 block_size: Some(block_size),
                 paged_context_lens_cpu: Some(paged_attn_context_lens.clone()),
