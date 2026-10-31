@@ -1326,3 +1326,31 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   a short-lived process.
 - **Reverted all changes:** ROCP_TOOL_ATTACH removed from wrapper script. Server
   restored to normal operation. No code changes from this session.
+
+## Oct 31 (bench profiling via rocprof-compute launch mode: WORKS)
+
+- **Unlock:** profile `mistralrs bench` (short-lived process) under
+  `rocprof-compute profile ... -- <cmd>` instead of attaching to the
+  long-running server. Attach mode remains broken (no rocp-bg-attach
+  thread), but launch mode now works end to end: counter passes, peak
+  calibration, roofline.csv. Analyze mode needs missing Python deps
+  (dash/pandas pinned in rocm-install/libexec/rocprofiler-compute/requirements.txt);
+  raw results_pmc_perf_*.csv.gz are parseable directly with stdlib csv.
+- **Bench CLI gotchas:** `--mtp`, `--prompt-len/--depth/--gen-len/
+  --iterations/--warmup` are `bench`-level args (before the model-type
+  subcommand); `--pa-cache-type` is lowercase (`q8_0`).
+- **GTT roofline measured** (4GiB stream hipcc microbench, gfx1151):
+  read 241.3, write 218.3, copy r+w 208.6 GB/s. This, not MALL/L2, is
+  the ceiling for weight streaming. 94% of LPDDR5X-8000 theoretical.
+- **Per-kernel results** (MTP n=2, d854): mmvq Q8_0 plain 195-212 GB/s
+  (81-88% of roofline, 45% of kernel time), MoE gate_up q4k 191 (79%),
+  MoE down q5k 163 (68%), paged_attention_v2 273 (>roofline, KV cache
+  hot in L2/MALL), gdn 229 (95%). Total headroom if all kernels hit
+  the GTT roofline: ~14% of captured kernel time.
+- **Revised optimization outlook:** kernels are far closer to the real
+  memory roofline than the earlier MALL-based analysis suggested.
+  MoE down aggregate (68%) and the dominant mmvq plain path (81%) are
+  the two largest remaining targets; paged attention already exceeds
+  GTT via cache residency at d854.
+- Artifacts: workloads/bench_roc (first pass, partial -k), bench_roc2
+  (full), /tmp/opencode/bw_test.hip, /tmp/opencode/analyze_pmc.py.

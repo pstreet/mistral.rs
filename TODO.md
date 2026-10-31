@@ -42,15 +42,63 @@ GPU compute units are idle waiting for data.
 | BF16 VALU | 112.7 TFLOPS |
 | MALL BW | 1221 GB/s |
 | L2 BW | 2540 GB/s |
+| GTT read (measured, 4GiB stream, 2026-10-31) | 241.3 GB/s |
+| GTT write (measured) | 218.3 GB/s |
+| GTT copy r+w (measured) | 208.6 GB/s |
+
+### Correct roofline comparator (2026-10-31)
+MALL (1210 GB/s) and L2 (2540 GB/s) are NOT the right ceilings for the
+decode kernels: 22GB of weights live in GTT and never fit the on-package
+cache, so streaming weight reads are DDR5-bound. The binding decode roofline
+is **GTT read: 241 GB/s** (94% of the 256 GB/s LPDDR5X theoretical). Kernel
+GB/s figures below must be judged against 241 GB/s, not MALL/L2.
 
 ### Kernel breakdown (300-token decode, graphs ON, 45.2 tok/s)
-| Kernel | GFLOP/s | % FP32 peak | GB/s | Regime |
-|--------|---------|-------------|------|--------|
-| mmvq_q8_0_plain (17.4k calls) | 60.6 | 0.3% | 242 | mem-bound |
-| moe_gemv_gate_up (5.2k) | 124.5 | 0.7% | 125 | mem-bound |
-| moe_gemv_down_aggr (4.9k) | 91.5 | 0.5% | 183 | mem-bound |
-| attention_paged (1.5k) | 168.6 | 1.0% | 337 | mem-bound |
-| gdn_recurrence (12.9k) | 13.3 | 0.08% | 13 | mem-bound |
+| Kernel | GFLOP/s | % FP32 peak | GB/s | % GTT roofline | Regime |
+|--------|---------|-------------|------|----------------|--------|
+| mmvq_q8_0_plain (17.4k calls) | 60.6 | 0.3% | 242 | 100% | at GTT roofline |
+| moe_gemv_gate_up (5.2k) | 124.5 | 0.7% | 125 | 52% | mem-bound |
+| moe_gemv_down_aggr (4.9k) | 91.5 | 0.5% | 183 | 76% | mem-bound |
+| attention_paged (1.5k) | 168.6 | 1.0% | 337 | >100% (L2/MALL hits) | KV-cache-resident |
+| gdn_recurrence (12.9k) | 13.3 | 0.08% | 13 | 5% | launch/latency-bound |
+
+### Full bench profile (2026-10-31, rocprof-compute launch mode, MTP n=2,
+### prompt 1024 / depth 854 / gen 64, workloads/bench_roc2)
+| Kernel (real name) | calls | tot ms | share | GB/s | % of 241 GTT read |
+|--------|------|--------|-------|------|-------------------|
+| mmvq_gguf_q8_0_bf16_plain_cuda3 (MTP verify, 3 tok) | 15681 | 963 | 28.1% | 195 | 81% |
+| mmvq_gguf_q8_0_bf16_plain_cuda1 (batch 1) | 1619 | 589 | 17.2% | 212 | 88% |
+| moe_gemv_fused_gate_up_q4k_q8_1 | 4779 | 583 | 17.0% | 191 | 79% |
+| moe_gemv_down_aggregate_q5k_q8_1 | 4545 | 409 | 11.9% | 163 | 68% |
+| vllm::paged_attention_v2_kernel (bf16) | 1356 | 359 | 10.5% | 273 | >100% (KV in L2/MALL) |
+| gdn_decode_recurrence_kernel (bf16) | 12299 | 176 | 5.1% | 229 | 95% |
+| mmvq_gguf_q8_0_bf16_fused_qkv_cuda3 | 1157 | 131 | 3.8% | 166 | 69% |
+| mmvq_gguf_q8_0_bf16_fused_glu_cuda3 | 4457 | 88 | 2.6% | 175 | 73% |
+| mmvq_gguf_quantize_q8_1_bf16 (act quant) | 23651 | 39 | 1.1% | 21 | n/a |
+| other (18 more variants incl. qkv/glu cuda1-2, v1/reduce attn) | ~1100 | 97 | 2.8% | | |
+
+Total captured kernel time 3434 ms / 72125 dispatches. Kernel names in the
+older table above were shorthand; the real symbol names are these.
+
+### Corrected implications (2026-10-31)
+- Decode kernels already run at 68-95% of the GTT read roofline. The
+  earlier "10-15% of peak" reading compared against MALL (1210 GB/s),
+  which weights never touch. True remaining headroom if every kernel hit
+  241 GB/s: ~14% of captured kernel time.
+- Biggest single-kernel gaps: moe_gemv_down_aggregate_q5k (163 GB/s, 68%)
+  and mmvq_gguf_q8_0_bf16_plain_cuda3 (195 GB/s, 81%, but 28% of all time
+  so ~5% wall savings if fixed).
+- paged_attention_v2 sustains 273 GB/s at d854 because the KV blocks are
+  L2/MALL-resident; the large-context decode drop (54->29 tok/s) is
+  consistent with KV blocks spilling out of cache as context grows. A
+  depth-sweep profile (d854 vs d3094) would confirm; not yet run.
+- gdn kernels are tiny (14.3 us avg, 12.3k launches): amortized inside
+  graphs, but any future per-step host work compounds there.
+- The 14% ceiling assumes DDR5-bound reads stay DDR5-bound. Kernels that
+  can exploit L2/MALL residency (paged attention proves it is possible)
+  can exceed the GTT roofline; that is the only path to >241 GB/s for
+  weight streaming, and active-expert sets (~1.7 GB/token) are far too
+  big for the on-package cache.
 
 ### Implications
 - 39% graph speedup (32.6 → 45.2 tok/s) came from eliminating host
