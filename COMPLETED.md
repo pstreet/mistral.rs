@@ -1,3 +1,41 @@
+## Oct 31 (perf: wide4 q5_K MoE down-aggregate kernel, 1.3x, swap pending)
+
+- Winner `g2l8-wide4` (commit 2f9e320d0): 8 lanes/row (lane = superblock,
+  scale pair), 4 rows in flight, ROWS_GROUPS=2, NWARPS=4, NWARPS sweep 2/8
+  noisy, RG 3/4 worse, hoisted reduce hurt, LCS staging net loss
+  1.16-1.25x < 1.246x, atomics exonerated (again) - sweep flattened.
+  qh-indexing int4 bug found+fixed (ints 0..7 of B->qh with >>2P shift,
+  not +16p); tail is uniform clamp-row (per-segment divergence cost ~6%
+  of kernel perf). Only Q5_K down dispatches to it (ffi.rs declare_kernel,
+  cuda_hip.rs + cuda.rs Q5K arms); 10 other quants keep the generic
+  kernel, q6_K down (3/41 layers) untouched. Repo launchers keep the
+  per-unit vec_dot_q5_K_q8_1_impl_vmmq call (twin test exonerated the
+  indirection idea).
+- Validated at model level on exact repo source (REPO-w4 harness variant,
+  gates pass; vs-ref FAIL norms 292-1964 are benign cancellation-row
+  bias, gate is vs-repo norm < 1.0 + NaN gates). Profile bench_w4d854 vs
+  bench_roc2: q5k down per-call 89.6 -> 69.1 us (1.296x), 313 -> 228
+  ms/pass; q6k/gate_up/mmvq/att/gdn unchanged. Plain decode (deterministic,
+  +/-0.0 sigma): d854 46.0 -> 46.7 t/s (+1.5%), d3208 42.9 -> 43.6 (+1.6%).
+- With-MTP bench decode is acceptance-text-drift noise, NOT a kernel
+  metric: masked-argmax re-rolls flip draft acceptance per depth (d3208:
+  old 0/2 fallback->plain 43.0 stable, new kept MTP-on 69.2% -> 47.4;
+  d854: new accept 77.8-78.6% vs old 66.7% but tok/s 53.7 vs 55.7).
+  Hist 54.6/43.0 baselines also contaminated by the 27G llama server RAM
+  state; fresh paired runs used.
+- Watchdog found (user-level units, missed by earlier system-scope check):
+  mistralrs-server-healthcheck.timer linked+enabled but NOT scheduled
+  (stopped); wedged/failed/absent prod auto-restarts with mail+ntfy
+  alerts; intentional stops must use mistralrs-server-stop.sh (marker
+  file) so the watchdog stays quiet. llamacpp-healthcheck timer runs every
+  minute. Port 1236 preset manager (PID 75517, 91 MB) still up: silently
+  respawns a llama-server if 1236 is used - kill pending user decision.
+- Prod swap PENDING approval: new binary in place (symbol verified, d854
+  clean), rollback mistralrs.pre-20261031-premoew4 (sha cd28add5...),
+  unit inactive, port 1235 free, healthcheck timer quiet.
+- rasdaemon/memtester/memtest86+ installed but not run (machine-stability
+  item stays open, separate session).
+
 ## Oct 30 (fix: revert OnceLock module store — caused model load hangs)
 
 - OnceLock module store reverted (candle 138018f2): the Oct 29 change (849c51ef)

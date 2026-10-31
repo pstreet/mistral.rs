@@ -21,8 +21,10 @@ Earlier today (pre-fix): 854 54.4 vs ~50 / 1814 32.1 vs 49.9 / 3094 29.4
 vs 48.1. Other standing findings unchanged: MTP n=3 worse than n=2,
 Q4_0 KV slower than Q8_0 on ROCm, block size 64 infeasible (dispatcher
 8/16/32), contiguous KV rejected, fused Q8_0 dequant already in MMVQ.
-Remaining kernel-side headroom: MoE down-aggregate at 68% of the 241 GB/s
-GTT roofline (~2% end-to-end if fixed); everything else at 81-100%+.
+Remaining kernel-side headroom: MoE down-aggregate WIDE4 kernel built,
+validated at model level (1.296x per-call, plain decode +1.5-1.6% wall,
+commit 2f9e320d0), prod swap pending approval; mmvq_q8_0_plain_cuda3
+(81% roofline) is the next biggest kernel gap.
 
 ## Current status (2026-10-26, prod on the f3b2d3576 tip, dual cuda,rocm,flash-attn)
 13 lanes configured, ALL lazy (headless boot, demand-load, per-category
@@ -103,6 +105,8 @@ older table above were shorthand; the real symbol names are these.
 - Biggest single-kernel gaps: moe_gemv_down_aggregate_q5k (163 GB/s, 68%)
   and mmvq_gguf_q8_0_bf16_plain_cuda3 (195 GB/s, 81%, but 28% of all time
   so ~5% wall savings if fixed).
+- 2026-10-31: down_aggregate fixed wide4 below; mmvq plain cuda3 is now
+  the biggest gap (195-212 GB/s).
 - paged_attention_v2 sustains 273 GB/s at d854 (KV blocks L2/MALL-resident).
   The large-context decode drop is NOT kernel-side: see depth sweep below.- gdn kernels are tiny (14.3 us avg, 12.3k launches): amortized inside
   graphs, but any future per-step host work compounds there.
@@ -111,6 +115,29 @@ older table above were shorthand; the real symbol names are these.
   can exceed the GTT roofline; that is the only path to >241 GB/s for
   weight streaming, and active-expert sets (~1.7 GB/token) are far too
   big for the on-package cache.
+
+### w4 q5_K down-aggregate kernel (2026-10-31, commit 2f9e320d0)
+
+Wide4 mapping: 8 lanes/row (lane = superblock, scale pair), 4 rows in
+flight x 2 row groups, NWARPS=4; int4 weight loads with per-(lane,sb)
+scale decode hoisted; uniform clamp-row tail; q5_K only (10 other quants
+keep the generic kernel; q6_K down untouched, 3 of 41 layers).
+- Microbench: b1 169-171 GB/s (1.23-1.25x repo), b3 215-217 (1.28-1.29x)
+  ~96% of roofline net of launch floor. Rejected: NWARPS 2/8 (noise),
+  RG 3/4, hoisted reduce, LDS staging, per-segment tail divergence
+  (~6% kernel perf), atomic contention (exonerated).
+- Model-level (bench_w4d854 profile vs bench_roc2): 89.6 -> 69.1 us/call
+  = 1.296x, tot 313 -> 228 ms/pass (~211 GB/s est). Old kernel gone,
+  q6k 100.5 us and gate_up/mmvq unchanged. Elementwise bmax/bmin/is_u32
+  ops are mask-fix ops, in both binaries, not introduced here; atomicAdd
+  aggregation discipline unchanged (no new nondeterminism class).
+- Plain decode (no MTP, +/-0.0 sigma, deterministic): d854 46.0 -> 46.7
+  t/s (+1.5%), d3208 42.9 -> 43.6 (+1.6%).
+- With-MTP tok/s is NOT a kernel metric: tiny rounding re-rolls flip
+  draft acceptances per depth (new d3208 kept 69% accept vs old
+  fallback-to-plain 0/2, one +10% spot; d854 spot -3% despite higher
+  accept 78% vs 67). Kernel + plain-decode evidence is the swap basis.
+- Prod swap pending user approval; rollback mistralrs.pre-20261031-premoew4.
 
 ## Depth sweep: d854 vs d3094 (2026-10-31, same bench, MTP n=2)
 
