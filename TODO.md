@@ -23,8 +23,9 @@ Q4_0 KV slower than Q8_0 on ROCm, block size 64 infeasible (dispatcher
 8/16/32), contiguous KV rejected, fused Q8_0 dequant already in MMVQ.
 Remaining kernel-side headroom: MoE down-aggregate WIDE4 kernel built,
 validated at model level (1.296x per-call, plain decode +1.5-1.6% wall,
-commit 2f9e320d0), prod swap pending approval; mmvq_q8_0_plain_cuda3
-(81% roofline) is the next biggest kernel gap.
+commit 2f9e320d0), deployed to prod 14:53 (build-mistral.rs.sh, sha
+5e832ad1...); mmvq_q8_0_plain_cuda3 (81% roofline) is the next biggest
+kernel gap.
 
 ## Current status (2026-10-26, prod on the f3b2d3576 tip, dual cuda,rocm,flash-attn)
 13 lanes configured, ALL lazy (headless boot, demand-load, per-category

@@ -30,9 +30,21 @@
   file) so the watchdog stays quiet. llamacpp-healthcheck timer runs every
   minute. Port 1236 preset manager (PID 75517, 91 MB) still up: silently
   respawns a llama-server if 1236 is used - kill pending user decision.
-- Prod swap PENDING approval: new binary in place (symbol verified, d854
-  clean), rollback mistralrs.pre-20261031-premoew4 (sha cd28add5...),
-  unit inactive, port 1235 free, healthcheck timer quiet.
+- Prod swap done 14:53 via build-mistral.rs.sh (canonical cuda,rocm,
+  flash-attn release; sha 5e832ad1..., quant crate incremental from the
+  13:45 compile, w4 launcher verified in hip + cuda companion objects).
+  Service active, port 1235, /health OK, 1-token + 32-token + 96-token
+  probes generate cleanly; MTP accept 75.0% (len 2.50) / 63.1% on prod -
+  speculation healthy in the known band. Journal: no hip-700 / NaN /
+  wedge / panic since restart. Rollback mistralrs.pre-20261031-premoew4
+  kept alongside. Healthcheck watchdog re-enabled (user asked): first two
+  runs 14:59/15:00 clean. Found probe-alias drift (script default
+  qwen3.6-35b-q5 vs toml alias qwen3.6-35b-a3b since the Oct 26 refresh):
+  fixed with reversible drop-in
+  ~/.config/systemd/user/mistralrs-server-healthcheck.service.d/override.conf
+  (MISTRALRS_PROBE_MODEL env, no script edit) so watchdog signal-4
+  (1-token real generation) actually fires. 1236 preset manager left
+  running per user (llama-server still used at times).
 - rasdaemon/memtester/memtest86+ installed but not run (machine-stability
   item stays open, separate session).
 
