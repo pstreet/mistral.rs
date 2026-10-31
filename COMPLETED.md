@@ -47,6 +47,14 @@
   running per user (llama-server still used at times).
 - rasdaemon/memtester/memtest86+ installed but not run (machine-stability
   item stays open, separate session).
+- Housekeeping: removed the three Oct 22 rollback binaries and ~32 GB of
+  stale scratch build trees (Oct 22 prod-rel-build, Oct 24 check-{rocm,
+  cuda,dual}, Oct 26 shape-{none,rocm,cuda,dual}, Oct 31 check-moe-w4 -
+  all rebuildable via ccache); 33 GB total freed (960G avail). UQFF
+  shootout results archived to scratch/uqff-shootout-results (report,
+  bench.py, configs) before deleting the 6.6 GB tree. Kept: current
+  binary + mistralrs.pre-20261031-premoew4 rollback, moe-down-bench
+  sweep harness, nan-probe, logs.
 
 ## Oct 30 (fix: revert OnceLock module store — caused model load hangs)
 
