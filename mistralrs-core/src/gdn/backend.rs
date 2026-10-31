@@ -312,10 +312,7 @@ pub fn apply_recurrence_from_convolved(
     if let Some(res) = try_cuda_recurrence_from_convolved(
         mixed_qkv, b, a, a_log, dt_bias, dims, batch_size, seq_len, cache, dtype,
     ) {
-        let result = res?;
-        // Clamp recurrent output to prevent numerical drift over very long contexts.
-        const GDN_CLAMP: f32 = 100.0;
-        return result.clamp(-GDN_CLAMP, GDN_CLAMP);
+        return res;
     }
 
     if seq_len == 1 && mixed_qkv.device().is_cpu() {
@@ -927,11 +924,15 @@ fn finish_recurrence(
             output.to_dtype(dtype)?
         }
     };
-    // Clamp recurrent output to prevent numerical drift over very long
-    // contexts (60K+ tokens).  The SSM recurrence compounds tiny errors;
-    // values outside [-100, 100] are almost certainly drift rather than
-    // valid signal for this model family.
+    // CUDA/HIP GDN kernels clamp on store; metal still needs the explicit clamp.
     const GDN_CLAMP: f32 = 100.0;
+    if output.device().is_cuda() {
+        return Ok(output);
+    }
+    #[cfg(feature = "rocm")]
+    if output.device().is_hip() {
+        return Ok(output);
+    }
     output.clamp(-GDN_CLAMP, GDN_CLAMP)
 }
 

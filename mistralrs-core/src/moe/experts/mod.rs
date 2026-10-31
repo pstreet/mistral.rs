@@ -425,10 +425,17 @@ impl MoEExperts {
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     fn build_hot_cache(&self, xs: &Tensor) -> Option<Arc<hot_cache::HotExpertCache>> {
         let slots = self.expert_hot_slots?;
-        if self.world_size > 1
-            || self.lora_site.is_some()
-            || (!xs.device().is_cuda() && !xs.device().is_hip())
-        {
+        let gpu_role = {
+            #[cfg(feature = "rocm")]
+            {
+                xs.device().is_cuda() || xs.device().is_hip()
+            }
+            #[cfg(not(feature = "rocm"))]
+            {
+                xs.device().is_cuda()
+            }
+        };
+        if self.world_size > 1 || self.lora_site.is_some() || !gpu_role {
             return None;
         }
         let MoEExpertsBackendImpl::Fast(fast) = &self.backend else {

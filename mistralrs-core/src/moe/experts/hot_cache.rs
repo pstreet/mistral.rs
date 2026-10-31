@@ -157,7 +157,17 @@ impl HotExpertCache {
         device: &Device,
         sources: HotSources,
     ) -> Result<Self> {
-        if slots == 0 || !device.is_cuda() && !device.is_hip() {
+        let gpu_role = {
+            #[cfg(feature = "rocm")]
+            {
+                device.is_cuda() || device.is_hip()
+            }
+            #[cfg(not(feature = "rocm"))]
+            {
+                device.is_cuda()
+            }
+        };
+        if slots == 0 || !gpu_role {
             candle_core::bail!("expert hot cache requires cuda and at least one slot");
         }
         let stacked_gate_up = Tensor::zeros((slots, 2 * inter, hidden), DType::BF16, device)?;

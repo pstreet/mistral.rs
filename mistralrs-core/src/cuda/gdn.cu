@@ -17,6 +17,12 @@ struct alignas(1) gdn_fp8_e4m3 {
 #endif
 
 constexpr int GDN_CHANNEL_BLOCK_SIZE = 256;
+// Recurrent output clamp; matches the Rust-side GDN_CLAMP=100 that used to
+// run as a separate bmaximum+bminimum kernel pair per layer per step.
+constexpr float GDN_OUTPUT_CLAMP = 100.0f;
+__device__ __forceinline__ float gdn_clamp_out(float v) {
+  return fminf(fmaxf(v, -GDN_OUTPUT_CLAMP), GDN_OUTPUT_CLAMP);
+}
 constexpr int GDN_DECODE_VALUE_TILE = 64;
 constexpr int GDN_DECODE_STATE_LOAD_UNROLL = 128;
 constexpr int GDN_DECODE_STATE_UPDATE_TILE_ROWS = 32;
@@ -381,7 +387,7 @@ __global__ void gated_delta_rule_recurrence_kernel_tiled(
       y_t = __fmaf_rn(s[j], q_buf[j], y_t);
     }
 
-    out_bh[t * v_dim + v_idx] = y_t;
+    out_bh[t * v_dim + v_idx] = gdn_clamp_out(y_t);
 
     __syncthreads();
   }
@@ -464,7 +470,7 @@ __global__ void gated_delta_rule_recurrence_kernel_fallback(
       y_t = __fmaf_rn(s[j], q_buf[j], y_t);
     }
 
-    out_bh[t * v_dim + v_idx] = y_t;
+    out_bh[t * v_dim + v_idx] = gdn_clamp_out(y_t);
 
     __syncthreads();
   }
@@ -640,7 +646,7 @@ __global__ __launch_bounds__(
 
     const float y_col = gdn_warp_sum<WARP_SIZE>(y_partial);
     if (lane == 0) {
-      out_bh[t * v_dim + v_idx] = y_col;
+      out_bh[t * v_dim + v_idx] = gdn_clamp_out(y_col);
     }
 
 #pragma unroll
@@ -838,7 +844,7 @@ gated_delta_rule_recurrence_kernel_vmajor_grouped(
       }
       const float y_col = gdn_warp_sum<WARP_SIZE>(y_partial);
       if (lane == 0) {
-        out_bh[t * V_DIM + value_idx] = y_col;
+        out_bh[t * V_DIM + value_idx] = gdn_clamp_out(y_col);
       }
     }
   }
@@ -1100,7 +1106,7 @@ chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
         o_val += qk_dot * delta[j] * expf(gcum[i] - gcum[j]);
       }
 
-      out_bh[(chunk_start + i) * v_dim + v_idx] = o_val;
+      out_bh[(chunk_start + i) * v_dim + v_idx] = gdn_clamp_out(o_val);
       __syncthreads();
     }
 
@@ -1874,7 +1880,7 @@ __global__ __launch_bounds__(32) void gdn_decode_recurrence_kernel_value_major(
         h[vi]);
   }
   if (lane < BV) {
-    out_bh[v_base + lane] = (T)out_owned;
+    out_bh[v_base + lane] = (T)gdn_clamp_out(out_owned);
   }
 }
 
@@ -2066,7 +2072,7 @@ __global__ void gdn_decode_recurrence_kernel_cooperative(
   state_dot_q =
       gdn_grouped_k_sum<GDN_DECODE_COOPERATIVE_VALUES_PER_WARP>(state_dot_q);
   if (k_lane == 0) {
-    out_bh[v_idx] = (T)state_dot_q;
+    out_bh[v_idx] = (T)gdn_clamp_out(state_dot_q);
   }
   __syncthreads();
 
@@ -2283,7 +2289,7 @@ __global__ void gdn_decode_recurrence_kernel_pipelined(
     state_dot_q =
         gdn_grouped_k_sum<GDN_DECODE_PIPELINED_VALUES_PER_WARP>(state_dot_q);
     if (k_lane == 0) {
-      out_bh[v_idx] = (T)state_dot_q;
+      out_bh[v_idx] = (T)gdn_clamp_out(state_dot_q);
     }
     __syncthreads();
 
@@ -2418,7 +2424,7 @@ __global__ void gdn_decode_recurrence_kernel(
       y_t = __fmaf_rn(s, q_buf[j], y_t);
     }
   }
-  out_bh[v_idx] = (T)y_t;
+  out_bh[v_idx] = (T)gdn_clamp_out(y_t);
 }
 
 template <typename T, typename StateT, int BV, int MAX_K>
@@ -2536,7 +2542,7 @@ __global__ void gdn_decode_recurrence_kernel_fallback(
   for (int j = 0; j < head_k_dim; j++) {
     state_bh[j * head_v_dim + v_idx] = s[j];
   }
-  out_bh[v_idx] = (T)y_t;
+  out_bh[v_idx] = (T)gdn_clamp_out(y_t);
 }
 
 template <typename T, typename StateT>
