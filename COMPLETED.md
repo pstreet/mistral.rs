@@ -1219,3 +1219,110 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
       sweep - not directly comparable).
 
 ---
+
+## Oct 31 (MTP n-size investigation + mistralrs vs llama.cpp benchmark)
+
+- **MTP n=3 tested and found WORSE than n=2** on all context sizes (n=3: 34.5/29.8/26.1 tok/s
+  vs n=2: 53.5/33.1/29.4 tok/s). Low draft acceptance rate at n=3 adds overhead without
+  benefit. Reverted to n=2.
+- **MTP n=2 confirmed optimal** (per Qwen3.6 model card: vLLM recommends num_speculative_tokens=2,
+  SGLang recommends 3 steps with 4 draft tokens, community reports 1.2-1.5x speedup at draft 3
+  on Apple M1 Max). n=2 gives best balance of acceptance rate vs overhead on Strix Halo.
+- **Q4_0 KV cache tested** (mistralrs 42.8/40.2/39.5 tok/s vs Q8_0's 44.7/41.3/40.7 tok/s).
+  Q4_0 is actually SLOWER on this hardware despite halving memory traffic — likely due to
+  dequantization overhead on the ROCm path. Reverted to Q8_0 to match llama.cpp.
+- **Clean comparison (Q8_0 KV, MTP OFF for both):**
+  | Size | mistralrs | llama.cpp | Gap |
+  |------|-----------|-----------|-----|
+  | 854  | 44.7 tok/s | 49.9 tok/s | 11% |
+  | 1814 | 41.4 tok/s | 49.9 tok/s | 17% |
+  | 3094 | 40.9 tok/s | 48.1 tok/s | 15% |
+- **With MTP n=2 (production config):**
+  | Size | mistralrs | llama.cpp | Verdict |
+  |------|-----------|-----------|---------|
+  | 854  | 54.4 tok/s | ~50 tok/s | mistralrs wins (+9%) |
+  | 1814 | 32.1 tok/s | 49.9 tok/s | llama.cpp wins (-36%) |
+  | 3094 | 29.4 tok/s | 48.1 tok/s | llama.cpp wins (-39%) |
+- **Prefill comparison (cold):**
+  | Size | mistralrs | llama.cpp | Winner |
+  |------|-----------|-----------|--------|
+  | 854  | 1099 tok/s (0.90s) | 77 tok/s* (0.05s) | llama.cpp (cached) |
+  | 1814 | 1261 tok/s (1.83s) | 1408 tok/s (1.64s) | llama.cpp |
+  | 3094 | 1437 tok/s (2.83s) | 1439 tok/s (2.83s) | tie |
+- **Root cause of gap:** paged attention's scattered block access pattern causes more L2 cache
+  misses vs llama.cpp's contiguous KV cache. llama.cpp decode stays flat (49.9→48.1 tok/s
+  across 3x context) while mistralrs drops (54.4→29.4 tok/s). This is memory-bandwidth-bound.
+- **Conclusion:** MTP n=2 makes mistralrs faster at small contexts. For large contexts (>2k),
+  llama.cpp's contiguous KV cache wins. Paged attention is the right choice for multi-user
+  workloads (batching + prefix caching), accepting the single-user performance cost.
+
+## Oct 31 (block size 64 investigation)
+
+- **block_size=64 tested:** Adding 64 to SUPPORTED_BLOCK_SIZE passed Rust validation but
+  HIP kernels crashed (hip error 905: dependency created on uncaptured work in another stream;
+  hip error 1: invalid argument). Root cause: the CUDA/HIP kernel dispatcher
+  (CALL_V1_LAUNCHER_BLOCK_SIZE / CALL_V2_LAUNCHER_BLOCK_SIZE in pagedattention.cuh)
+  only has cases for 8, 16, 32. The comment explicitly states 64, 128, 256 were omitted
+  to reduce compilation time. Adding 64 requires modifying the kernel macros and rebuilding
+  the companion .so library.
+- **Reverted to block_size=32.** The kernel change is moderate effort but the expected
+  gain is small (1-3%) since block table lookups are <0.001% of total memory traffic.
+
+## Oct 31 (KV cache layout + fused dequant+matmul investigation)
+
+- **Contiguous KV cache for single-sequence decode:** Evaluated and rejected as overkill.
+  Pros: better memory locality, no block table lookups, matches llama.cpp approach.
+  Cons: loss of prefix caching, loss of memory efficiency, two code paths, no batching,
+  complexity. Paged attention is the right architecture for multi-user workloads.
+- **Fused Q8_0 dequant+matmul:** Already implemented in the MMVQ kernel (mmvq_gguf.cu)
+  which dequantizes Q8_0 weights on-the-fly during matmul. The remaining optimization
+  would be kernel-level memory access tuning (vectorized loads, shared memory tiling,
+  warp-level reduction) requiring rocprof-compute profiling. Roofline shows mmvq_q8_0_plain
+  at 242 GB/s vs 1221 GB/s peak — significant headroom but requires low-level kernel work.
+- **Priority ranking for future work:**
+  1. Fused Q8_0 dequant+matmul kernel optimization (10-30% gain, kernel-level)
+  2. MoE expert packing (10-20% gain, refactor)
+  3. Q4_0 KV cache (10-15% gain, accuracy trade-off, but slower on ROCm)
+  4. Block size 64 (1-3% gain, kernel changes needed)
+  5. Contiguous KV cache (15-25% gain, architectural change)
+  6. Host-side clone/mutex cleanup (low impact on memory-bound workloads)
+
+## Oct 31 (build script + environment)
+
+- Build script (build-mistral.rs.sh) already sources .rocm-env.sh (line 13) and adds
+  /usr/local/cuda/bin to PATH (lines 26-32). No changes needed.
+- MTP n=2 confirmed as production config (re-enabled after testing n=3 and n=0).
+
+## Oct 31 (VDR_Q8_0_Q8_1_MMVQ experiment + Gemini paged attention suggestions)
+
+- **VDR_Q8_0_Q8_1_MMVQ change attempted** (2→4): Modified mmvq_gguf.cu to process 4 int32
+  values per iteration instead of 2. Build was cancelled before completion. Reverted to 2.
+  The change is low-risk but requires a full rebuild (7+ min) and NaN validation on both
+  CUDA and ROCm.
+- **Gemini paged attention suggestions documented:**
+  1. Coalesced memory access in cache lookup: reorder memory access so threads in same
+     warp/wavefront read contiguous elements of K/V vectors. Real issue — vLLM's kernel
+     uses specially designed memory layout for this.
+  2. Dual-backend layout: NVIDIA warps are 32 threads, AMD wavefronts are 64. Current
+     kernel hardcodes WARP_SIZE=32 and NUM_THREADS=128 (2 wavefronts on AMD). Tile sizes
+     and block dimensions should be parameterized by backend.
+  3. Shared memory tiling: prefetch block table mappings into shared memory (LDS on ROCm)
+     while processing current block. Moderate complexity kernel change.
+- All three suggestions are valid but require kernel-level changes to pagedattention.cuh,
+  companion .so rebuild, and testing on both CUDA and ROCm. Priority remains after the
+  higher-ROI items (fused dequant+matmul memory access tuning, MoE expert packing).
+
+## Oct 31 (rocprof-compute profiling attempt)
+
+- **Profiling attempted** with rocprof-compute --roof-only on the mistralrs server.
+  - ROCP_TOOL_ATTACH=1 added to wrapper script to enable attach support.
+  - rocprofv3 attach failed: "rocp-bg-attach thread not found" despite ROCP_TOOL_ATTACH=1.
+  - rocprof-compute profile (launch mode) was killed by SIGTERM (timeout).
+  - GPU entered a bad state after profiling attempts (memory access fault).
+  - Server recovered after restart.
+- **Profiling conclusion:** rocprof-compute attach mode doesn't work with this ROCm
+  build (missing rocp-bg-attach thread). Launch-mode profiling times out because
+  the server is long-running. Alternative: use rocprofv3 in daemon mode or profile
+  a short-lived process.
+- **Reverted all changes:** ROCP_TOOL_ATTACH removed from wrapper script. Server
+  restored to normal operation. No code changes from this session.

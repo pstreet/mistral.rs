@@ -7,6 +7,19 @@ candle 56 ahead / 26 behind huggingface/candle:main, mistral.rs 111 ahead /
 Legend: [ ] open, [x] done. P0 = do first, P1 = do next, P2 = merge prep,
 P3 = polish, Deferred = do not do on RDNA.
 
+## Current status (2026-10-31, prod on Strix Halo gfx1151, dual cuda,rocm,flash-attn)
+
+Benchmark (Oct 31): mistralrs (MTP n=2, Q8_0 KV, CUDA graphs) vs llama.cpp (Q8_0 KV, no MTP):
+- 854 tokens: mistralrs 54.4 tok/s vs llama.cpp ~50 tok/s (mistralrs wins, +9%)
+- 1814 tokens: mistralrs 32.1 tok/s vs llama.cpp 49.9 tok/s (llama.cpp wins, -36%)
+- 3094 tokens: mistralrs 29.4 tok/s vs llama.cpp 48.1 tok/s (llama.cpp wins, -39%)
+- MTP n=3 tested and found WORSE than n=2 (low draft acceptance rate)
+- Q4_0 KV cache tested and found SLOWER than Q8_0 on ROCm (dequant overhead)
+- Block size 64: not feasible without kernel changes (dispatcher only supports 8/16/32)
+- Contiguous KV cache: rejected as overkill for multi-user workloads
+- Fused Q8_0 dequant+matmul: already implemented in MMVQ kernel
+- Remaining gap is memory-bandwidth-bound kernel optimization (not config-tunable)
+
 ## Current status (2026-10-26, prod on the f3b2d3576 tip, dual cuda,rocm,flash-attn)
 13 lanes configured, ALL lazy (headless boot, demand-load, per-category
 defaults: chat -> qwen3.6-35b-a3b): 35B A3B hip + cuda twins, 27B Q6_K
@@ -4159,3 +4172,52 @@ Re-verify after the merge in section P2.
   done, CI open — P0/P1).
 - References: FlashInfer ROCm, AMD Composable Kernel, candle-kernels ROCm,
   hipBLASLt docs, `mistralrs-paged-attn/build.rs:250-352`, `src/rocm_ck_flash_attn/`.
+
+## Kernel-level paged attention optimizations (from Gemini analysis, Oct 31)
+
+### [H] Coalesced memory access in paged attention cache lookup
+- **File:** mistralrs-paged-attn/src/cuda/pagedattention.cuh
+- **Issue:** Threads in same warp read from different physical blocks at
+  BLOCK_SIZE*x stride (non-coalesced). For Q8_0 KV (x=16, block_size=32),
+  consecutive threads access memory 512 bytes apart.
+- **Fix:** Reorder memory access so threads in same warp read contiguous
+  elements of K/V vectors. Requires changing cache layout from
+  [num_blocks, num_kv_heads, (head_dim/x), block_size, x] to
+  [num_blocks, num_kv_heads, block_size, (head_dim/x), x] or similar.
+- **Impact:** Better L2 cache utilization, 10-20% decode improvement.
+- **Effort:** High (cache engine + kernel + block table changes)
+- **Status:** Not started. Needs profiling with rocprof-compute first.
+
+### [M] Dual-backend thread layout (32 vs 64 threads)
+- **File:** mistralrs-paged-attn/src/cuda/pagedattention.cuh
+- **Issue:** WARP_SIZE hardcoded to 32. AMD wavefronts are 64 threads.
+  NUM_THREADS=128 gives 2 wavefronts on AMD (fine) but tiling assumes
+  32-thread warps. Thread group size MAX(WARP_SIZE/BLOCK_SIZE, 1) may
+  not be optimal for 64-thread wavefronts.
+- **Fix:** Parameterize WARP_SIZE and thread block dimensions by backend
+  (32 for CUDA, 64 for ROCm). Adjust tiling accordingly.
+- **Impact:** Better CU utilization on AMD, 5-10% improvement.
+- **Effort:** Medium (template parameterization)
+- **Status:** Not started.
+
+### [M] Shared memory tiling for attention scores
+- **File:** mistralrs-paged-attn/src/cuda/pagedattention.cuh
+- **Issue:** Block table lookups and KV cache reads go directly to global
+  memory. No prefetching of next block's metadata.
+- **Fix:** Prefetch block table entries and KV scale data into shared
+  memory (LDS on ROCm) while processing current block. Overlap
+  computation with memory fetch.
+- **Impact:** Reduced global memory latency, 5-15% improvement.
+- **Effort:** Medium (shared memory staging)
+- **Status:** Not started.
+
+### [H] Kernel memory access tuning (mmvq_q8_0_plain)
+- **File:** candle-kernels/src/mmvq_gguf.cu
+- **Issue:** mmvq_q8_0_plain at 242 GB/s vs 1221 GB/s peak (20% utilization).
+  Uses 16-bit loads (get_int_from_int8) instead of 32/128-bit.
+  Q8_0 block layout (34 bytes) is not 16-byte aligned.
+- **Fix:** Vectorized loads where alignment allows, shared memory tiling,
+  warp-level reduction optimization, occupancy tuning.
+- **Impact:** 10-30% decode improvement (dominant kernel).
+- **Effort:** Very high (profiling + iterative tuning)
+- **Status:** Not started. Needs rocprof-compute profiling first.
