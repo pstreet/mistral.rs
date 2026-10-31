@@ -144,6 +144,62 @@ The 54->29 tok/s drop with depth is NOT memory-access degradation:
 3. Profile the server decode loop host time at depth (LAYER_PROFILE env
    seen in prod logs, or perf) to find the 8.5 ms/token vs bench.
 
+## Root cause closed (2026-10-31): one bug, three symptoms
+
+All three items above resolved as a SINGLE defect, fixed in eb025a60a.
+
+### The bug
+qwen3_next::forward built a (q_len, ctx+q_len) u8 causal mask on host
+EVERY step and discarded it for all decode/verify steps. The upload
+grows ~3 B/token; past ctx ~1361 it exceeds candle's 4KB H2D capture
+cache cap, the SpeculativeDecode verify graph capture bails, the shape
+retires, and speculative decode runs eager. In the eager path after a
+failed capture, draft acceptance collapses to 0% -> mtp-fallback
+disables speculation -> decode runs batch-1. Fix: build the mask only
+when is_first_prompt_chunk() consumes it.
+
+### Evidence chain
+- Capture bail named the uploader (MRS_TRACE_BIG_HTOD=1 backtrace):
+  CausalMasker::make_mask <- qwen3_next::forward; 9294B = 3x3095+12,
+  +3B per step as context grew.
+- Acceptance sweep (MISTRALRS_MTP_ACCEPT_LOG=1, greedy drafts, fixed
+  binary): bench acceptance 65-78% at d854-d1814, EXACT 0% at d2400+
+  (5 obs then fallback). Looked like a depth cliff.
+- Disproved as depth: probe server (fast binary) with REAL text -
+  d2307: accept ~90%; d3208: 81.8% (46.2 tok/s); d4067: 65.5-86.4%
+  (41.9 tok/s); zero fallbacks. Real-text acceptance is healthy at all
+  depths; target output coherent at d2307 (43.7 tok/s, no MTP).
+- The bench 0% at d2400+ is a BENCH ARTIFACT: bench prompts are
+  1000+(start+i)%2048 token cycles (BENCH_TOKEN_SPAN=2048, greedy
+  target). The 3047->1000 wrap lands at prompt idx ~1917 for these
+  runs - inside d2400/d3094/d3208 prompts, outside d854-d1814. The
+  DFlash draft cannot model the wrap; real text has no wrap.
+- Old-binary prod numbers (30.2 @ d4067, 31.5 @ d3208) reproduced the
+  fallbacks (2 in prod-stderr.log); fixed binary at the same depths:
+  41.9 and 46.2 tok/s (+39-47%) with MTP active.
+
+### Impact
+- One-line-class fix restores MTP + graphs at ALL depths: deep-context
+  decode 30 -> 42-46 tok/s on the probe binary (real text).
+- The "server 8.5 ms/token overhead vs bench" never existed as host
+  overhead: it was MTP disabled by the fallback. With the fix the
+  server (46.2 @ d3208) now BEATS the bench (43.0 @ d3208, where MTP
+  is off due to the synthetic-cycle artifact).
+- Bench limitation documented: synthetic-cycle prompts cannot measure
+  MTP acceptance at prompt lengths crossing the wrap index; depth
+  sweeps of acceptance need real text or a non-cyclic token pattern.
+
+### Follow-ups
+1. Deploy: release build with eb025a60a + prod swap (30 -> 42-46 tok/s
+   at deep context).
+2. Optionally: bench token pattern could avoid the wrap (real text or
+   aperiodic tokens) so bench MTP numbers are meaningful at depth.
+3. The eager-speculative path's 0% acceptance after a failed capture is
+   still unexplained in detail (state restore bug?) - the mask fix
+   avoids triggering it, but the eager fallback path deserves a look
+   since it converts any future capture failure into an acceptance
+   collapse.
+
 ### Implications
 - 39% graph speedup (32.6 → 45.2 tok/s) came from eliminating host
   overhead, not from better compute utilization. GPU was already

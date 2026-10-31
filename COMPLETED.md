@@ -1373,3 +1373,24 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   of per-step overhead on the server path. Biggest open lever at depth.
 - Clean-run artifact: /tmp/opencode/bench_d3094_clean.log;
   workload: workloads/bench_roc_d3094.
+
+## Oct 31 (MTP acceptance investigation: one bug, three symptoms, all closed)
+
+- Added MISTRALRS_MTP_ACCEPT_LOG=1 env-gated per-verify-batch logging to
+  qwen3_next speculative_observe (kept; same pattern as LAYER_PROFILE).
+- Acceptance sweep (bench, greedy drafts): healthy 65-78% at d854-d1814,
+  exact 0% at d2400+. Looked like a depth cliff; it is not.
+- Probe server (fast binary, port 1244, real text) disproved depth:
+  100%/86%/65% acceptance at d2307/d3208/d4067, zero fallbacks, zero
+  capture failures. Engine logger already reports "MTP accept %" in its
+  periodic throughput lines (stdout, not stderr).
+- Bench 0% at depth is a synthetic-data artifact: bench tokens cycle
+  mod 2048 and the wrap inside deep prompts breaks DFlash drafting.
+- Prod's acceptance collapse (old release binary) was the mask bug's
+  second-order effect: verify capture fails at ctx>~1361 -> eager
+  speculative -> acceptance 0% -> mtp-fallback disables MTP.
+- Fixed-binary results at matched depths (real text): d3208 46.2 tok/s
+  (prod: 31.5), d4067 41.9 tok/s (prod: 30.2). Server now beats bench
+  at depth because MTP works on real text.
+- Full chain in TODO.md "Root cause closed (2026-10-31)". Deploy step
+  pending: release build + prod swap.

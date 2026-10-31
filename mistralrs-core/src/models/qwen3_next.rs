@@ -3476,6 +3476,16 @@ impl SpeculativeTargetMixin for Model {
         if proposed == 0 {
             return;
         }
+        static ACCEPT_LOG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *ACCEPT_LOG.get_or_init(|| std::env::var("MISTRALRS_MTP_ACCEPT_LOG").is_ok()) {
+            static STEP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            eprintln!(
+                "[mtp-accept] step={} proposed={} accepted={}",
+                STEP.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                proposed,
+                accepted
+            );
+        }
         let mut tracker = self.mtp_acceptance.lock().expect("mtp acceptance poisoned");
         if tracker.record(proposed, accepted).is_some() {
             // Acceptance rate dropped below threshold — trigger bypass.
