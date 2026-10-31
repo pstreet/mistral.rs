@@ -88,17 +88,61 @@ older table above were shorthand; the real symbol names are these.
 - Biggest single-kernel gaps: moe_gemv_down_aggregate_q5k (163 GB/s, 68%)
   and mmvq_gguf_q8_0_bf16_plain_cuda3 (195 GB/s, 81%, but 28% of all time
   so ~5% wall savings if fixed).
-- paged_attention_v2 sustains 273 GB/s at d854 because the KV blocks are
-  L2/MALL-resident; the large-context decode drop (54->29 tok/s) is
-  consistent with KV blocks spilling out of cache as context grows. A
-  depth-sweep profile (d854 vs d3094) would confirm; not yet run.
-- gdn kernels are tiny (14.3 us avg, 12.3k launches): amortized inside
+- paged_attention_v2 sustains 273 GB/s at d854 (KV blocks L2/MALL-resident).
+  The large-context decode drop is NOT kernel-side: see depth sweep below.- gdn kernels are tiny (14.3 us avg, 12.3k launches): amortized inside
   graphs, but any future per-step host work compounds there.
 - The 14% ceiling assumes DDR5-bound reads stay DDR5-bound. Kernels that
   can exploit L2/MALL residency (paged attention proves it is possible)
   can exceed the GTT roofline; that is the only path to >241 GB/s for
   weight streaming, and active-expert sets (~1.7 GB/token) are far too
   big for the on-package cache.
+
+## Depth sweep: d854 vs d3094 (2026-10-31, same bench, MTP n=2)
+
+### Kernel GB/s by depth
+| Kernel | d854 | d3094 | verdict |
+|--------|------|-------|---------|
+| paged_attention_v2 | 273 | 442 | FASTER at depth (refutes cache-spill) |
+| mmvq_q8_0 plain (dominant batch) | 195 | 243-248 | at/above GTT roofline at depth |
+| moe_gemv_fused_gate_up_q4k | 191 | 182 | flat |
+| moe_gemv_down_aggregate_q5k | 163 | 172 | flat |
+| gdn_decode_recurrence | 229 | 210 | flat |
+
+### Wall clock and runtime behavior
+- bench d3094 (clean, no profiler): **43.1 tok/s / 23.2 ms TPOT**
+- server d3208 (prod binary, same env): **31.5 tok/s / 31.7 ms TPOT**
+- server d4067: 30.2 tok/s; earlier server d3094: 29.4-29.8 -> server path
+  is ~8.5 ms/token (37%) slower than bench path at matched depth.
+- Profiled d3094 decode kernel structure: batch-1 dominant (26.4k
+  mmvq_plain_cuda1 vs 1.1k cuda3 calls) = one full forward per token,
+  MTP verify NOT batching. At d854 the structure is batch-3 dominant
+  (15.7k cuda3) = MTP active.
+- `CUDA decode graph capture failed ... kind: SpeculativeDecode
+  (batch 1, seq_len 3)` occurs at d3094 in bench (2x clean, 4x profiled),
+  shape then retires and the speculative path runs EAGER. Zero
+  occurrences at d854. Prod showed 0 failures at d4067 but still decodes
+  at the batch-1-equivalent rate, so MTP is not paying at depth either way.
+
+### Revised large-context diagnosis
+The 54->29 tok/s drop with depth is NOT memory-access degradation:
+1. Kernels are at/above the GTT roofline at depth; attention is faster
+   per byte at d3094 than d854 (longer dispatches hide latency better).
+2. MTP stops contributing at depth: draft acceptance collapse and/or
+   SpeculativeDecode graph capture failure (bench) -> pure batch-1 decode
+   at ~23 ms/forward.
+3. The server adds ~8.5 ms/token over the bench at matched depth:
+   per-step scheduler/host overhead or a slower captured-graph path.
+   This is the single biggest open lever at deep context.
+4. llama.cpp flat 48-50 tok/s at these depths beats both paths; closing
+   items 2+3 is the route there, not kernel tuning.
+
+### Next actions (priority order)
+1. Instrument MTP acceptance rate vs depth (log accept length per step).
+2. Root-cause SpeculativeDecode graph capture failure at depth: capture
+   workspace sizing vs KV-pool memory pressure (90% VRAM), graph pool
+   cap ("3 resident captures kept").
+3. Profile the server decode loop host time at depth (LAYER_PROFILE env
+   seen in prod logs, or perf) to find the 8.5 ms/token vs bench.
 
 ### Implications
 - 39% graph speedup (32.6 → 45.2 tok/s) came from eliminating host

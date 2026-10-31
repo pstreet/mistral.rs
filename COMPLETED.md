@@ -1354,3 +1354,22 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   GTT via cache residency at d854.
 - Artifacts: workloads/bench_roc (first pass, partial -k), bench_roc2
   (full), /tmp/opencode/bw_test.hip, /tmp/opencode/analyze_pmc.py.
+
+## Oct 31 (depth sweep d854 vs d3094: cache-spill refuted, server-vs-bench gap found)
+
+- Depth sweep run under the same bench+profiler setup. Results in TODO.md
+  "Depth sweep" section. Headlines:
+- **Cache-spill hypothesis refuted:** paged_attention_v2 sustains 442 GB/s
+  at d3094 vs 273 at d854; mmvq plain hits 243-248 GB/s (100%+ of the
+  241.3 GB/s GTT read roofline). Kernel memory access does not degrade
+  with depth.
+- **MTP goes inert at depth:** d854 decode is batch-3 dominant (verify
+  batches of 3); d3094 is batch-1 dominant (26.4k vs 1.1k dispatches) =
+  one full forward per token. SpeculativeDecode graph capture fails at
+  d3094 in the bench (with AND without profiler attached), shape retires,
+  path runs eager. No failures at d854.
+- **Server vs bench gap:** server 31.5 tok/s at d3208 vs bench 43.1 tok/s
+  at d3094 (same binary, same env, matched depth): ~8.5 ms/token (37%)
+  of per-step overhead on the server path. Biggest open lever at depth.
+- Clean-run artifact: /tmp/opencode/bench_d3094_clean.log;
+  workload: workloads/bench_roc_d3094.
