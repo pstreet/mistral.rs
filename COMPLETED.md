@@ -1402,3 +1402,14 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   d3208: 44.0 tok/s (was 31.5, +40%); d4067: 43.9 tok/s (was 30.2, +45%);
   zero capture failures, zero mtp-fallbacks. Short-prompt smoke unchanged
   (86.2 tok/s). Deep-context decode now within ~10% of llama.cpp (48.1).
+
+## Oct 31 (post-swap head-to-head vs llama.cpp, warm, real text, 64 tok greedy)
+
+| depth | mistralrs | llama.cpp | delta |
+|-------|-----------|-----------|-------|
+| d3208 | 48.5-48.6 tok/s | 49.1 | -1% (tie) |
+| d4067 | 51.4 tok/s | 48.2 | +6.6% |
+
+Deep context flipped from -37% (pre-fix) to parity/+7%: MTP now works at
+depth (65-86% acceptance on real text) while llama.cpp stays flat at ~48-49.
+Shallow-context lead (54.6 vs ~50 at d854) unchanged.
