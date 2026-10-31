@@ -7,18 +7,22 @@ candle 56 ahead / 26 behind huggingface/candle:main, mistral.rs 111 ahead /
 Legend: [ ] open, [x] done. P0 = do first, P1 = do next, P2 = merge prep,
 P3 = polish, Deferred = do not do on RDNA.
 
-## Current status (2026-10-31, prod on Strix Halo gfx1151, dual cuda,rocm,flash-attn)
+## Current status (2026-10-31, post mask-fix deploy, prod on Strix Halo gfx1151, dual cuda,rocm,flash-attn)
 
-Benchmark (Oct 31): mistralrs (MTP n=2, Q8_0 KV, CUDA graphs) vs llama.cpp (Q8_0 KV, no MTP):
-- 854 tokens: mistralrs 54.4 tok/s vs llama.cpp ~50 tok/s (mistralrs wins, +9%)
-- 1814 tokens: mistralrs 32.1 tok/s vs llama.cpp 49.9 tok/s (llama.cpp wins, -36%)
-- 3094 tokens: mistralrs 29.4 tok/s vs llama.cpp 48.1 tok/s (llama.cpp wins, -39%)
-- MTP n=3 tested and found WORSE than n=2 (low draft acceptance rate)
-- Q4_0 KV cache tested and found SLOWER than Q8_0 on ROCm (dequant overhead)
-- Block size 64: not feasible without kernel changes (dispatcher only supports 8/16/32)
-- Contiguous KV cache: rejected as overkill for multi-user workloads
-- Fused Q8_0 dequant+matmul: already implemented in MMVQ kernel
-- Remaining gap is memory-bandwidth-bound kernel optimization (not config-tunable)
+The SpeculativeDecode capture failure root-caused and fixed (eb025a60a,
+deployed to prod + validated 99165ac08). Head-to-head vs llama.cpp (warm,
+real text, 64 tok greedy, same prompts both servers):
+- d3208: mistralrs 48.5-48.6 tok/s vs llama.cpp 49.1 (tie)
+- d4067: mistralrs 51.4 tok/s vs llama.cpp 48.2 (mistralrs wins, +6.6%)
+- d854: mistralrs 54.6 tok/s vs llama.cpp ~50 (mistralrs wins, +9%, unchanged)
+Deep context flipped from -37% to parity/+: MTP stays active at depth
+(65-86% acceptance on real text) while llama.cpp decodes flat at ~48-49.
+Earlier today (pre-fix): 854 54.4 vs ~50 / 1814 32.1 vs 49.9 / 3094 29.4
+vs 48.1. Other standing findings unchanged: MTP n=3 worse than n=2,
+Q4_0 KV slower than Q8_0 on ROCm, block size 64 infeasible (dispatcher
+8/16/32), contiguous KV rejected, fused Q8_0 dequant already in MMVQ.
+Remaining kernel-side headroom: MoE down-aggregate at 68% of the 241 GB/s
+GTT roofline (~2% end-to-end if fixed); everything else at 81-100%+.
 
 ## Current status (2026-10-26, prod on the f3b2d3576 tip, dual cuda,rocm,flash-attn)
 13 lanes configured, ALL lazy (headless boot, demand-load, per-category
@@ -80,6 +84,17 @@ GB/s figures below must be judged against 241 GB/s, not MALL/L2.
 Total captured kernel time 3434 ms / 72125 dispatches. Kernel names in the
 older table above were shorthand; the real symbol names are these.
 
+### Implications (roofline, 2026-10-30)
+- 39% graph speedup (32.6 → 45.2 tok/s) came from eliminating host
+  overhead, not from better compute utilization. GPU was already
+  memory-bound; graphs just removed the non-GPU bottleneck.
+- Remaining TODO items (mutex narrowing, clone elimination, etc.)
+  will not move the needle on memory-bound workloads.
+- Next-highest-ROI targets: fused Q8_0 dequant+matmul kernels, MoE
+  expert packing, KV cache layout optimization.
+- Low-impact items below are deprioritized until memory-bound work
+  is addressed.
+
 ### Corrected implications (2026-10-31)
 - Decode kernels already run at 68-95% of the GTT read roofline. The
   earlier "10-15% of peak" reading compared against MALL (1210 GB/s),
@@ -136,13 +151,13 @@ The 54->29 tok/s drop with depth is NOT memory-access degradation:
 4. llama.cpp flat 48-50 tok/s at these depths beats both paths; closing
    items 2+3 is the route there, not kernel tuning.
 
-### Next actions (priority order)
-1. Instrument MTP acceptance rate vs depth (log accept length per step).
-2. Root-cause SpeculativeDecode graph capture failure at depth: capture
-   workspace sizing vs KV-pool memory pressure (90% VRAM), graph pool
-   cap ("3 resident captures kept").
-3. Profile the server decode loop host time at depth (LAYER_PROFILE env
-   seen in prod logs, or perf) to find the 8.5 ms/token vs bench.
+### Next actions (priority order) - ALL RESOLVED 2026-10-31, see "Root cause closed" below
+1. [x] Instrument MTP acceptance rate vs depth (MISTRALRS_MTP_ACCEPT_LOG=1,
+       51d83d966; engine logger already reports "MTP accept %" server-side).
+2. [x] Root-cause SpeculativeDecode graph capture failure at depth: unused
+       causal mask upload vs candle's 4KB H2D capture cache cap (eb025a60a).
+3. [x] The "8.5 ms/token server vs bench" gap: not host overhead - it was
+       MTP disabled by the fallback. Closed by the same fix.
 
 ## Root cause closed (2026-10-31): one bug, three symptoms
 
@@ -190,26 +205,18 @@ when is_first_prompt_chunk() consumes it.
   sweeps of acceptance need real text or a non-cyclic token pattern.
 
 ### Follow-ups
-1. Deploy: release build with eb025a60a + prod swap (30 -> 42-46 tok/s
-   at deep context).
-2. Optionally: bench token pattern could avoid the wrap (real text or
-   aperiodic tokens) so bench MTP numbers are meaningful at depth.
-3. The eager-speculative path's 0% acceptance after a failed capture is
-   still unexplained in detail (state restore bug?) - the mask fix
-   avoids triggering it, but the eager fallback path deserves a look
-   since it converts any future capture failure into an acceptance
-   collapse.
-
-### Implications
-- 39% graph speedup (32.6 → 45.2 tok/s) came from eliminating host
-  overhead, not from better compute utilization. GPU was already
-  memory-bound; graphs just removed the non-GPU bottleneck.
-- Remaining TODO items (mutex narrowing, clone elimination, etc.)
-  will not move the needle on memory-bound workloads.
-- Next-highest-ROI targets: fused Q8_0 dequant+matmul kernels, MoE
-  expert packing, KV cache layout optimization.
-- Low-impact items below are deprioritized until memory-bound work
-  is addressed.
+1. [x] Deployed: release build with eb025a60a + prod swap; validated
+   d3208 44.0->48.5 tok/s, d4067 43.9->51.4 tok/s (99165ac08, a80179b61).
+2. [x] Bench token pattern avoids the wrap: span scales with prompt
+   length (9fbdada2d); d2400 acceptance 0%->65.6%, d3208 0%->56.8%.
+3. [x] Eager-speculative 0%-acceptance path: bounded, not fully
+   explained. Exhaustive matrix on pre-fix code (fast profile) never
+   reproduces the collapse (66-76% acceptance in every combination:
+   depths, TOMLs, graphs on/off, same-process depth changes); old prod
+   release collapsed with zero capture-failure warnings logged. Old
+   binary overwritten without a rollback copy - exact reproduction
+   would need a pre-fix release rebuild. Fix deployed sidesteps the
+   whole path. LESSON: keep mistralrs.pre-* rollback copies on swaps.
 
 ## Recently closed (detail: COMPLETED.md)
 Sizing saga (ISQ estimator, fit-ctx everywhere, runtime reserve, mapping
@@ -275,6 +282,24 @@ dev-tools/decode_bench.py added (recreates the lost /tmp/opencode/
 mtp_bench.py for decode A/Bs: TTFT/ITL/server-tok, essay|arithmetic
 prompts). No cuda-27B twin: user directive, ISQ-Q4K 3090 lane stays
 unpursued (27.7 T/s historical, ~4K ctx ceiling, displaces the 35B lane).
+
+Oct 31 session (mask fix + profiling unlock): rocprof-compute launch
+mode now works on short-lived processes (mistralrs bench) - attach mode
+still broken; GTT roofline measured 241.3/218.3/208.6 GB/s read/write/
+copy (bw_test.hip), correcting the roofline comparator (MALL/L2 were
+the wrong ceilings for weight streaming). Kernel GB/s re-judged: mmvq
+Q8_0 81-100% of roofline, MoE down 68%, paged attn >100% (KV cache-hot).
+Depth sweep refuted cache-spill. One bug, three symptoms, all closed:
+unused decode-step causal mask upload busted verify-graph capture past
+ctx ~1361 -> eager speculative -> 0% acceptance -> mtp-fallback. Fixed
+(eb025a60a), deployed to prod, validated (d3208 31.5->48.5, d4067
+30.2->51.4 tok/s; ties/beats llama.cpp at depth). Bench token pattern
+fixed (9fbdada2d: span scales with prompt; synthetic mod-2048 wrap was
+faking acceptance cliffs). MISTRALRS_MTP_ACCEPT_LOG=1 acceptance logging
+added (51d83d966). Eager-speculative 0% collapse bounded but not fully
+explained (never reproduces on fast profile; see Root cause closed).
+Open kernel-side lever: MoE down-aggregate at 68% of roofline (~2%
+end-to-end). Details: COMPLETED.md.
 
 ## Perf review backlog (opened 2026-10-28, candle + mistral.rs code review)
 
