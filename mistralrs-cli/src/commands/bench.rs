@@ -493,8 +493,12 @@ async fn run_single_bench(
 }
 
 fn bench_tokens(prompt_tokens: usize, token_start: u32) -> Vec<u32> {
+    // Span must cover token_start + prompt so the +1 token progression never
+    // wraps mid-prompt: a wrap breaks DFlash drafting and fakes an acceptance
+    // cliff in depth sweeps.
+    let span = (BENCH_TOKEN_SPAN as usize).max(token_start as usize + prompt_tokens) as u32;
     (0..prompt_tokens)
-        .map(|idx| BENCH_TOKEN_BASE + (token_start + idx as u32) % BENCH_TOKEN_SPAN)
+        .map(|idx| BENCH_TOKEN_BASE + (token_start + idx as u32) % span)
         .collect()
 }
 
