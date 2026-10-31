@@ -1485,6 +1485,112 @@ __device__ void moe_gemv_down_aggregate_impl(
   }
 }
 
+// Down+aggregate wide4 (q5_K): 8 lanes per row, 4 rows in flight, 2 row
+// groups; lane covers (super-block, scale pair) with the 4 sub-call slots
+// unrolled as int4 weight loads.
+#define DOWN_W4_LANES_PER_ROW 8
+#define DOWN_W4_ROWS_IN_FLIGHT (WARP_SIZE / DOWN_W4_LANES_PER_ROW)
+#define DOWN_W4_ROWS_GROUPS 2
+#define DOWN_W4_NWARPS 4
+#define DOWN_W4_ROWS_PER_WARP (DOWN_W4_ROWS_GROUPS * DOWN_W4_ROWS_IN_FLIGHT)
+#define DOWN_W4_ROWS_PER_BLOCK (DOWN_W4_NWARPS * DOWN_W4_ROWS_PER_WARP)
+
+template <int qk_val>
+__device__ void moe_gemv_down_aggregate_w4_q5k_impl(
+    const void *__restrict__ all_weights, const void *__restrict__ all_inputs,
+    const unsigned int *__restrict__ indices,
+    const float *__restrict__ topk_weights_ptr, float *__restrict__ all_outputs,
+    const int n, const int k, const int batch, const int topk,
+    const int k_padded) {
+
+  const int grp = threadIdx.x / DOWN_W4_LANES_PER_ROW;
+  const int lin = threadIdx.x % DOWN_W4_LANES_PER_ROW;
+  const int row_base =
+      DOWN_W4_ROWS_PER_BLOCK * blockIdx.x + threadIdx.y * DOWN_W4_ROWS_PER_WARP;
+  if (row_base >= n)
+    return;
+
+  const int task_id = blockIdx.z * topk + blockIdx.y;
+  const unsigned int expert_id = indices[task_id];
+  const float tw = topk_weights_ptr[task_id];
+
+  const size_t blocks_per_row = ((size_t)k + qk_val - 1) / qk_val;
+  const size_t expert_stride_bytes =
+      (size_t)n * blocks_per_row * sizeof(block_q5_K);
+  const size_t input_stride_bytes =
+      (size_t)k_padded / QK8_1 * sizeof(block_q8_1);
+
+  const block_q5_K *w =
+      (const block_q5_K *)((const char *)all_weights +
+                           (size_t)expert_id * expert_stride_bytes);
+  const block_q8_1 *x =
+      (const block_q8_1 *)((const char *)all_inputs +
+                           (size_t)task_id * input_stride_bytes);
+  float *out = all_outputs + (size_t)blockIdx.z * n;
+
+  const int p = lin & 3;
+  const int shift = 2 * p;
+
+  for (int g = 0; g < DOWN_W4_ROWS_GROUPS; ++g) {
+    const int rowg = row_base + g * DOWN_W4_ROWS_IN_FLIGHT;
+    if (rowg >= n)
+      break;
+    // compute travels the uniform path; tail rows process a harmless
+    // duplicate row and only the atomics are gated
+    const bool live = rowg + grp < n;
+    const int row = live ? rowg + grp : n - 1;
+    const block_q5_K *wr = w + (size_t)row * blocks_per_row;
+    // even/odd super-blocks split across lane halves; p indexes scale
+    // pairs within a block, the 4 unrolled slots cover the sub-calls
+    float acc = 0.0f;
+    for (int sb = lin >> 2; sb < (int)blocks_per_row; sb += 2) {
+      const block_q5_K *B = wr + sb;
+      const int4 qlA = *(const int4 *)(B->qs + 32 * p);
+      const int4 qlB = *(const int4 *)(B->qs + 32 * p + 16);
+      // qh ints 0..7 serve every unit; only the >>2*pair shift differs
+      const int4 qhA = *(const int4 *)(B->qh);
+      const int4 qhB = *(const int4 *)(B->qh + 16);
+
+      const uint16_t *scales = (const uint16_t *)B->scales;
+      uint16_t aux[2];
+      if (p < 2) {
+        aux[0] = scales[p + 0] & 0x3f3f;
+        aux[1] = scales[p + 2] & 0x3f3f;
+      } else {
+        aux[0] =
+            ((scales[p + 2] >> 0) & 0x0f0f) | ((scales[p - 2] & 0xc0c0) >> 2);
+        aux[1] =
+            ((scales[p + 2] >> 4) & 0x0f0f) | ((scales[p - 0] & 0xc0c0) >> 2);
+      }
+      const block_q8_1 *b0 = &x[sb * (qk_val / QK8_1) + 2 * p];
+      const float d8[2] = {__low2float(b0->ds), __low2float((b0 + 1)->ds)};
+
+      float sumf = 0.0f;
+#pragma unroll
+      for (int t = 0; t < 4; ++t) {
+        const int u[4] = {((const int *)b0->qs)[t],
+                          ((const int *)b0->qs)[t + 4],
+                          ((const int *)(b0 + 1)->qs)[t],
+                          ((const int *)(b0 + 1)->qs)[t + 4]};
+        const int vl[2] = {(&qlA.x)[t], (&qlB.x)[t]};
+        const int vh[2] = {(&qhA.x)[t] >> shift, (&qhB.x)[t] >> shift};
+        sumf += vec_dot_q5_K_q8_1_impl_vmmq(vl, vh, u, (const uint8_t *)aux,
+                                           (const uint8_t *)aux + 2, B->dm, d8);
+      }
+      acc += sumf;
+    }
+
+    float v = acc;
+#pragma unroll
+    for (int mask = DOWN_W4_LANES_PER_ROW / 2; mask > 0; mask >>= 1) {
+      v += __shfl_xor_sync(0xffffffff, v, mask, DOWN_W4_LANES_PER_ROW);
+    }
+    if (lin == 0 && live) {
+      atomicAdd(&out[row], v * tw);
+    }
+  }
+}
+
 // ============== Fused gate+up kernel instantiations ==============
 
 #define FUSED_GATE_UP_KERNEL(suffix, qk_val, qi_val, block_type, vdr_val,      \
@@ -1613,6 +1719,21 @@ DOWN_AGGREGATE_KERNEL(q5k_q8_1, QK_K, QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ,
 DOWN_AGGREGATE_KERNEL(q6k_q8_1, QK_K, QI6_K, block_q6_K, VDR_Q6_K_Q8_1_MMVQ,
                       vec_dot_q6_K_q8_1)
 
+#define DOWN_AGGREGATE_KERNEL_W4_Q5K(suffix)                                   \
+  extern "C" __global__ void moe_gemv_down_aggregate_##suffix(                 \
+      const void *__restrict__ all_weights,                                    \
+      const void *__restrict__ all_inputs,                                     \
+      const unsigned int *__restrict__ indices,                                \
+      const float *__restrict__ topk_weights_ptr,                              \
+      float *__restrict__ all_outputs, const int n, const int k,               \
+      const int batch, const int topk, const int k_padded) {                   \
+    moe_gemv_down_aggregate_w4_q5k_impl<QK_K>(                                 \
+        all_weights, all_inputs, indices, topk_weights_ptr, all_outputs, n, k, \
+        batch, topk, k_padded);                                                \
+  }
+
+DOWN_AGGREGATE_KERNEL_W4_Q5K(w4_q5k_q8_1)
+
 // ============== Fused gate+up launcher functions ==============
 
 #define LAUNCH_FUSED_GATE_UP(suffix)                                           \
@@ -1724,3 +1845,20 @@ LAUNCH_DOWN_AGGREGATE(q3k_q8_1)
 LAUNCH_DOWN_AGGREGATE(q4k_q8_1)
 LAUNCH_DOWN_AGGREGATE(q5k_q8_1)
 LAUNCH_DOWN_AGGREGATE(q6k_q8_1)
+
+#define LAUNCH_DOWN_AGGREGATE_W4_Q5K(suffix)                                   \
+  extern "C" void launch_moe_gemv_down_aggregate_##suffix(                     \
+      const void *all_weights, const void *all_inputs,                         \
+      const unsigned int *indices, const float *topk_weights_ptr,              \
+      float *all_outputs, int n, int k, int batch, int topk, int k_padded,     \
+      void *stream) {                                                          \
+    dim3 grid((n + DOWN_W4_ROWS_PER_BLOCK - 1) / DOWN_W4_ROWS_PER_BLOCK,        \
+              topk, batch);                                                    \
+    dim3 block(WARP_SIZE, DOWN_W4_NWARPS, 1);                                  \
+    cudaStream_t s = static_cast<cudaStream_t>(stream);                        \
+    moe_gemv_down_aggregate_##suffix<<<grid, block, 0, s>>>(                   \
+        all_weights, all_inputs, indices, topk_weights_ptr, all_outputs, n, k, \
+        batch, topk, k_padded);                                                \
+  }
+
+LAUNCH_DOWN_AGGREGATE_W4_Q5K(w4_q5k_q8_1)

@@ -872,6 +872,19 @@ declare_kernel! {
         k_padded: i32,
         stream: *mut c_void,
     );
+    launch_moe_gemv_down_aggregate_w4_q5k_q8_1(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        indices: *const u32,
+        topk_weights: *const f32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        batch: i32,
+        topk: i32,
+        k_padded: i32,
+        stream: *mut c_void,
+    );
     launch_moe_gemv_down_aggregate_q6k_q8_1(
         all_weights: *const c_void,
         all_inputs: *const c_void,

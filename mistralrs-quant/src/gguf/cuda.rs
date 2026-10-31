@@ -1640,7 +1640,7 @@ pub unsafe fn indexed_moe_fused_decode(
             GgmlDType::Q2K => ffi::launch_moe_gemv_down_aggregate_q2k_q8_1,
             GgmlDType::Q3K => ffi::launch_moe_gemv_down_aggregate_q3k_q8_1,
             GgmlDType::Q4K => ffi::launch_moe_gemv_down_aggregate_q4k_q8_1,
-            GgmlDType::Q5K => ffi::launch_moe_gemv_down_aggregate_q5k_q8_1,
+            GgmlDType::Q5K => ffi::launch_moe_gemv_down_aggregate_w4_q5k_q8_1,
             GgmlDType::Q6K => ffi::launch_moe_gemv_down_aggregate_q6k_q8_1,
             _ => candle_core::bail!("unsupported dtype for fused MoE decode: {down_dtype:?}"),
         };
