@@ -1413,3 +1413,38 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
 Deep context flipped from -37% (pre-fix) to parity/+7%: MTP now works at
 depth (65-86% acceptance on real text) while llama.cpp stays flat at ~48-49.
 Shallow-context lead (54.6 vs ~50 at d854) unchanged.
+
+## Oct 31 (open items: bench fix shipped; eager-speculative archaeology bounded)
+
+1. BENCH TOKEN PATTERN - FIXED (9fbdada2d). Span now scales with prompt
+   length; validated: d854 unchanged (54.6), d2400 acceptance 0%->65.6%
+   (45.9 tok/s), d3208 0%->56.8%. Depth sweeps of MTP acceptance are
+   now meaningful.
+
+2. EAGER-SPECULATIVE ACCEPTANCE - bounded, not fully explained.
+   Exhaustive matrix on the pre-fix code (worktree at 22f74ea97, code
+   identical to old prod), fast profile, real text: acceptance stays
+   66-76% in EVERY combination - probe TOML d2307/d3208/d4067, prod
+   TOML d4067, d854-then-d4067 same-process, graphs ON (capture
+   failing) and OFF. Pure eager is healthy (73.8%).
+   The old prod RELEASE binary collapsed to 0% + fallback at d4067/
+   d3208 with ZERO capture-failure warnings logged. Its eager rate
+   (30.2 tok/s @ d4067) matches the pre-fix fast eager rate (28.5-29.4),
+   suggesting prod-old also fell back to eager but hit a 0% acceptance
+   window the fast profile never reproduces. Remaining variables:
+   release vs fast codegen, or the old binary's exact vintage. Not
+   reproducible on the fast profile; the deployed fix sidesteps the
+   entire path (no mask upload -> captures succeed -> graphs + MTP
+   stay active -> the fallback never triggers). Old binary was
+   overwritten without a rollback copy, so exact reproduction would
+   need a pre-fix release rebuild (~35 min, uncertain payoff).
+   LESSON: keep a mistralrs.pre-* rollback copy on prod swaps.
+
+3. MOE DOWN-AGGREGATE KERNEL (68% of GTT roofline) - scoped, not
+   attempted. Kernel: indexed_moe.cu moe_gemv_down_aggregate_impl
+   (ROWS_PER_WARP=4, NWARPS=4, warp sharded over K blocks, atomicAdd
+   aggregation). Candidates: larger per-warp row count / ILP, x-input
+   register caching, L2 policy hints. Expected ceiling if brought to
+   ~85% of roofline: ~2% wall clock. Highest remaining kernel-side
+   lever but small end-to-end payoff; needs a dedicated session with
+   correctness harness (NaN gate) and per-config benchmarking.
