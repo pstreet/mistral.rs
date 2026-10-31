@@ -4376,6 +4376,18 @@ Re-verify after the merge in section P2.
 
 ## Kernel-level paged attention optimizations (from Gemini analysis, Oct 31)
 
+### [M] Mask-op elementwise chain scales with context (2026-10-31 profile)
+- **What:** bmaximum_bf16/bminimum_bf16 masked-argmax chain (mask fix
+  eb025a60a) per-call time doubles with context: 9.4 us/call at d854 ->
+  19.7 at d3094 (472 ms at d3094 = 14% of captured kernel time; ~24k
+  calls/pass). Tensors touched are per-step but context-proportional.
+- **Fix:** fuse the max/min chain (or batch it into one kernel); highest
+  value for long-context decode where it compounds.
+- **Status:** Not started. Follow-up from the prefill-at-long-context
+  check. Related open question: gate_up per-call +6.7% at depth in the
+  new-binary profile (possible L2 interference from interleaved mask ops;
+  small, unconfirmed).
+
 ### [H] Coalesced memory access in paged attention cache lookup
 - **File:** mistralrs-paged-attn/src/cuda/pagedattention.cuh
 - **Issue:** Threads in same warp read from different physical blocks at
