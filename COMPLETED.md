@@ -47,6 +47,25 @@
   running per user (llama-server still used at times).
 - rasdaemon/memtester/memtest86+ installed but not run (machine-stability
   item stays open, separate session).
+- Prefill-at-long-context check (2026-10-31, post w4 deploy): prod server,
+  fresh natural-text prompts, disjoint slices - prefill t/s FLAT 1382 /
+  1402 / 1436 / 1295 / 1341 at 3.3k / 6.6k / 9.9k / 19.7k / 23.7k tokens
+  (TTFT ~0.74s per 1k tokens, linear, no cliff through 24k). Fully cached
+  3.3k prompt served in 84ms (prefix cache ~50x). Bench-mode TTFT numbers
+  (1330-1345 t/s) are NOT comparable to server fresh prefill: synthetic
+  bench prompts route to fewer MoE experts (concentrated routing -> fewer
+  weight bytes). Bench KV pool caps at 4064 tokens (d6144+ benches fail;
+  --max-seq-len does not lift it) - the server is the long-context
+  instrument. Corrected d3094 profile (bench_w4d3094b): w4 down 68.02
+  us/call vs generic 89.58 = 1.317x at matched depth; q6k/mmvq unchanged;
+  0 graph-capture failures; MTP accept 62.5-96.9% at depth. NOTE: an
+  earlier "prefill GEMM flat vs context" reading was an artifact of
+  profiling d854 mislabeled as d3094 (env var not passed through rocprof);
+  real GEMM captured time 86.4 -> 118.1 ms (d854 -> d3094), sublinear.
+  Follow-up candidates surfaced: bmax/bmin mask-op chain scales with
+  context (9.4 -> 19.7 us/call d854 -> d3094, 472 ms at d3094 = 14% of
+  captured kernel time -> fusion candidate); gate_up per-call +6.7% at
+  depth in new profile (possible mask-op L2 interference, open, small).
 - Housekeeping: removed the three Oct 22 rollback binaries and ~32 GB of
   stale scratch build trees (Oct 22 prod-rel-build, Oct 24 check-{rocm,
   cuda,dual}, Oct 26 shape-{none,rocm,cuda,dual}, Oct 31 check-moe-w4 -
