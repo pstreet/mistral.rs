@@ -2053,7 +2053,7 @@ impl NormalPipeline {
             state.note_capture_failure(&replay_key);
             let exhausted = state.capture_attempts_exhausted(&replay_key);
             warn!(
-                "CUDA decode graph capture failed for bucket {:?} ({} resident captures kept, decoding eagerly{}): {}",
+                "CUDA decode graph capture failed for bucket {:?} ({} resident captures kept, decoding eagerly{}): {:#}",
                 replay_key.arena_bucket(),
                 state.resident_len(),
                 if exhausted { ", shape retired" } else { "" },

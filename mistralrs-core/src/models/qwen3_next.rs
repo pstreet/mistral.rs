@@ -1955,28 +1955,30 @@ impl Model {
             layers: Vec::new(),
         });
 
-        let mask = if ctx.is_paged() {
-            let cache = ForwardMaskCache::Paged(ctx.seqlen_offsets());
-            CausalMasker.make_causal_mask(
-                input_ids,
-                &cache,
-                x.dtype(),
-                &CausalMaskConfig::default(),
-            )?
-        } else {
-            CausalMasker.make_causal_mask(
-                input_ids,
-                &*hybrid_cache as &dyn PastKvLenCache,
-                x.dtype(),
-                &CausalMaskConfig::default(),
-            )?
-        };
+        // Decode/verify steps replace the mask with AttentionMask::None below,
+        // but building it uploads a (q_len, ctx) host tensor that breaks graph
+        // capture once 3B/token pushes it past candle's 4KB H2D cache cap.
         let mask = if ctx.is_first_prompt_chunk() {
-            mask
+            let mask = if ctx.is_paged() {
+                let cache = ForwardMaskCache::Paged(ctx.seqlen_offsets());
+                CausalMasker.make_causal_mask(
+                    input_ids,
+                    &cache,
+                    x.dtype(),
+                    &CausalMaskConfig::default(),
+                )?
+            } else {
+                CausalMasker.make_causal_mask(
+                    input_ids,
+                    &*hybrid_cache as &dyn PastKvLenCache,
+                    x.dtype(),
+                    &CausalMaskConfig::default(),
+                )?
+            };
+            DeviceMappedMask::new(mask, &*self.mapper)?
         } else {
-            AttentionMask::None
+            DeviceMappedMask::new(AttentionMask::None, &*self.mapper)?
         };
-        let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
 
         {
             use std::sync::Once;
