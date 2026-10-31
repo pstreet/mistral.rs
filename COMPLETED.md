@@ -1394,3 +1394,11 @@ Condensed record. Full evidence lives in git history (`git log -p TODO.md`).
   at depth because MTP works on real text.
 - Full chain in TODO.md "Root cause closed (2026-10-31)". Deploy step
   pending: release build + prod swap.
+
+## Oct 31 (prod swap: fix deployed, deep-context +40-45%)
+
+- Release rebuild (build-mistral.rs.sh, 380MB) with eb025a60a + 51d83d966;
+  prod swapped via systemctl restart. Post-swap validation on prod:
+  d3208: 44.0 tok/s (was 31.5, +40%); d4067: 43.9 tok/s (was 30.2, +45%);
+  zero capture failures, zero mtp-fallbacks. Short-prompt smoke unchanged
+  (86.2 tok/s). Deep-context decode now within ~10% of llama.cpp (48.1).
