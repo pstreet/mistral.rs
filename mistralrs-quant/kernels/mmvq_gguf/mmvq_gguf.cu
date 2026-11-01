@@ -722,13 +722,14 @@ static constexpr __device__ int mmvq_rows_per_cuda_block_fused_qkv_for(int ncols
 }
 
 template <typename dst_t, int qk, int qi, typename block_q_t, int vdr,
-          vec_dot_q_cuda_t vec_dot_q_cuda, int ncols_dst>
+          vec_dot_q_cuda_t vec_dot_q_cuda, int ncols_dst, int force_nw = 0>
 static __device__ void
 mmvq_core_impl(const void *__restrict__ vx, const block_q8_1 *__restrict__ y,
                dst_t *__restrict__ dst, const int ncols_x, const int nrows_x,
                const int stride_col_y, const int stride_col_dst) {
 
-  constexpr int nwarps = mmvq_nwarps_plain_for(ncols_dst);
+  constexpr int nwarps =
+      force_nw ? force_nw : mmvq_nwarps_plain_for(ncols_dst);
   constexpr int rows_per_cuda_block = mmvq_rows_per_cuda_block_plain_for(ncols_dst);
 
   const int tid = WARP_SIZE * threadIdx.y + threadIdx.x;
@@ -1144,6 +1145,33 @@ MMVQ_PLAIN_BATCH_SET(q5_1, block_q5_1, QK5_1, QI5_1, VDR_Q5_1_Q8_1_MMVQ,
                      vec_dot_q5_1_q8_1)
 MMVQ_PLAIN_BATCH_SET(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
                      vec_dot_q8_0_q8_1)
+
+// Small-projection geometry for q8_0 bf16: when nb = ncols_x/QK8_0 <= 16 the
+// default plain path leaves half of the block's lanes without weight work
+// (qi/vdr = 4 lanes per block, 16 blocks = 64 lanes; the 4-warp path has 128
+// lanes, the 1-col path 256). The 2-warp entries are an exact fit
+// (gfx1151 sweep: down_shexp 2048x512 +51% GB/s, all other shapes neutral).
+#define MMVQ_PLAIN_ENTRY_SM(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, \
+                            dst_tag, dst_c_type, ncols)                       \
+  extern "C" __global__ void __launch_bounds__(2 * WARP_SIZE, 1)              \
+      mmvq_gguf_##tag##_##dst_tag##_plain_sm_cuda##ncols(                     \
+          const void *__restrict__ vx, const void *__restrict__ vy,           \
+          dst_c_type *__restrict__ dst, const int ncols_x,                    \
+          const int nrows_x, const int stride_col_y,                          \
+          const int stride_col_dst) {                                         \
+    mmvq_core_impl<dst_c_type, qk_val, qi_val, block_q_t, vdr_val, vec_dot,    \
+                   ncols, 2>(vx, (const block_q8_1 *)vy, dst, ncols_x,         \
+                             nrows_x, stride_col_y, stride_col_dst);          \
+  }
+
+MMVQ_PLAIN_ENTRY_SM(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                    vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 1)
+MMVQ_PLAIN_ENTRY_SM(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                    vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 2)
+MMVQ_PLAIN_ENTRY_SM(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                    vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 3)
+MMVQ_PLAIN_ENTRY_SM(q8_0, block_q8_0, QK8_0, QI8_0, VDR_Q8_0_Q8_1_MMVQ,
+                    vec_dot_q8_0_q8_1, bf16, __nv_bfloat16, 4)
 MMVQ_PLAIN_BATCH_SET(q2_k, block_q2_K, QK_K, QI2_K, VDR_Q2_K_Q8_1_MMVQ,
                      vec_dot_q2_K_q8_1)
 MMVQ_PLAIN_BATCH_SET(q3_k, block_q3_K, QK_K, QI3_K, VDR_Q3_K_Q8_1_MMVQ,
@@ -1317,8 +1345,8 @@ mmvq_gguf_quantize_q8_1_f32(const float *__restrict__ x, void *__restrict__ vy,
   reinterpret_cast<half &>(y[ib].ds.y) = (half)sum;
 }
 
-// Host-side launchers used by `mistralrs-quant/src/gguf/ffi.rs`.
-
+// -- plain entries for all 10 supported quant types, batch sizes 1..8, bf16 +
+// f16 + f32 --
 #define MMVQ_LAUNCHER_PLAIN(tag, dst_tag, dst_c_type)                          \
   extern "C" void launch_mmvq_gguf_##tag##_##dst_tag##_plain(                  \
       const void *vx, const void *vy, void *dst, int ncols_x, int nrows_x,     \
@@ -1540,7 +1568,105 @@ MMVQ_LAUNCHER_PLAIN(q4_0, bf16, __nv_bfloat16)
 MMVQ_LAUNCHER_PLAIN(q4_1, bf16, __nv_bfloat16)
 MMVQ_LAUNCHER_PLAIN(q5_0, bf16, __nv_bfloat16)
 MMVQ_LAUNCHER_PLAIN(q5_1, bf16, __nv_bfloat16)
-MMVQ_LAUNCHER_PLAIN(q8_0, bf16, __nv_bfloat16)
+// q8_0 bf16 plain launcher: hand-written to add the small-projection dispatch.
+// When nb = ncols_x / QK8_0 <= 16 and b_size <= 4, the default plain path
+// leaves most of the block's lanes without weight work (qi/vdr = 4 lanes per
+// block, so a 16-block row needs only 64 lanes; the 4-warp path has 128 lanes
+// and the 1-col path 256). The 2-warp entries are an exact fit
+// (gfx1151 sweep: down_shexp 2048x512 b3 +51% / b1 -2.1us, all other shapes
+// neutral at the DRAM ceiling). Standard geometry otherwise, unchanged.
+extern "C" void launch_mmvq_gguf_q8_0_bf16_plain(
+    const void *vx, const void *vy, void *dst, int ncols_x, int nrows_x,
+    int stride_col_y, int stride_col_dst, int b_size, void *stream) {
+  const unsigned int rows_per_block =
+      (b_size <= 1) ? MMVQ_ROWS_PER_BLOCK_SINGLE_COL_PLAIN : 2;
+  const unsigned int nblocks =
+      (unsigned int)((nrows_x + rows_per_block - 1) / rows_per_block);
+  cudaStream_t s = static_cast<cudaStream_t>(stream);
+  if (b_size >= 1 && b_size <= 4 && ncols_x / QK8_0 <= 16) {
+    dim3 grid(nblocks, 1, 1);
+    dim3 block(WARP_SIZE, 2, 1);
+    switch (b_size) {
+    case 1:
+      mmvq_gguf_q8_0_bf16_plain_sm_cuda1<<<grid, block, 0, s>>>(
+          vx, vy, (__nv_bfloat16 *)dst, ncols_x, nrows_x, stride_col_y,
+          stride_col_dst);
+      break;
+    case 2:
+      mmvq_gguf_q8_0_bf16_plain_sm_cuda2<<<grid, block, 0, s>>>(
+          vx, vy, (__nv_bfloat16 *)dst, ncols_x, nrows_x, stride_col_y,
+          stride_col_dst);
+      break;
+    case 3:
+      mmvq_gguf_q8_0_bf16_plain_sm_cuda3<<<grid, block, 0, s>>>(
+          vx, vy, (__nv_bfloat16 *)dst, ncols_x, nrows_x, stride_col_y,
+          stride_col_dst);
+      break;
+    case 4:
+      mmvq_gguf_q8_0_bf16_plain_sm_cuda4<<<grid, block, 0, s>>>(
+          vx, vy, (__nv_bfloat16 *)dst, ncols_x, nrows_x, stride_col_y,
+          stride_col_dst);
+      break;
+    default:
+      break;
+    }
+    return;
+  }
+  unsigned int nwarps;
+  if (b_size == 1) {
+    nwarps = MMVQ_NWARPS_SINGLE_COL_PLAIN;
+  } else if (b_size <= 4) {
+    nwarps = 4;
+  } else {
+    nwarps = 2;
+  }
+  dim3 grid(nblocks, 1, 1);
+  dim3 block(WARP_SIZE, nwarps, 1);
+  switch (b_size) {
+  case 1:
+    mmvq_gguf_q8_0_bf16_plain_cuda1<<<grid, block, 0, s>>>(
+        vx, vy, (__nv_bfloat16 *)dst, ncols_x, nrows_x, stride_col_y,
+        stride_col_dst);
+    break;
+  case 2:
+    mmvq_gguf_q8_0_bf16_plain_cuda2<<<grid, block, 0, s>>>(
+        vx, vy, (__nv_bfloat16 *)dst, ncols_x, nrows_x, stride_col_y,
+        stride_col_dst);
+    break;
+  case 3:
+    mmvq_gguf_q8_0_bf16_plain_cuda3<<<grid, block, 0, s>>>(
+        vx, vy, (__nv_bfloat16 *)dst, ncols_x, nrows_x, stride_col_y,
+        stride_col_dst);
+    break;
+  case 4:
+    mmvq_gguf_q8_0_bf16_plain_cuda4<<<grid, block, 0, s>>>(
+        vx, vy, (__nv_bfloat16 *)dst, ncols_x, nrows_x, stride_col_y,
+        stride_col_dst);
+    break;
+  case 5:
+    mmvq_gguf_q8_0_bf16_plain_cuda5<<<grid, block, 0, s>>>(
+        vx, vy, (__nv_bfloat16 *)dst, ncols_x, nrows_x, stride_col_y,
+        stride_col_dst);
+    break;
+  case 6:
+    mmvq_gguf_q8_0_bf16_plain_cuda6<<<grid, block, 0, s>>>(
+        vx, vy, (__nv_bfloat16 *)dst, ncols_x, nrows_x, stride_col_y,
+        stride_col_dst);
+    break;
+  case 7:
+    mmvq_gguf_q8_0_bf16_plain_cuda7<<<grid, block, 0, s>>>(
+        vx, vy, (__nv_bfloat16 *)dst, ncols_x, nrows_x, stride_col_y,
+        stride_col_dst);
+    break;
+  case 8:
+    mmvq_gguf_q8_0_bf16_plain_cuda8<<<grid, block, 0, s>>>(
+        vx, vy, (__nv_bfloat16 *)dst, ncols_x, nrows_x, stride_col_y,
+        stride_col_dst);
+    break;
+  default:
+    break;
+  }
+}
 MMVQ_LAUNCHER_PLAIN(q2_k, bf16, __nv_bfloat16)
 MMVQ_LAUNCHER_PLAIN(q3_k, bf16, __nv_bfloat16)
 MMVQ_LAUNCHER_PLAIN(q4_k, bf16, __nv_bfloat16)

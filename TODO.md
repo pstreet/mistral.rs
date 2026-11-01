@@ -23,8 +23,8 @@ Q4_0 KV slower than Q8_0 on ROCm, block size 64 infeasible (dispatcher
 8/16/32), contiguous KV rejected, fused Q8_0 dequant already in MMVQ.
 Remaining kernel-side headroom: MoE down-aggregate WIDE4 kernel deployed
 (1.296x per-call); GDN clamp-in-kernel deployed (+11% with-MTP decode at
-d854); mmvq_q8_0_plain_cuda3 (81% roofline) is the next biggest
-kernel gap.
+d854); mmvq q8_0 closed (Nov 1: small-projection 2-warp dispatch
+deployed; all other q8_0 shapes measured at the DRAM roofline).
 
 ## Current status (2026-10-26, prod on the f3b2d3576 tip, dual cuda,rocm,flash-attn)
 13 lanes configured, ALL lazy (headless boot, demand-load, per-category
@@ -107,6 +107,22 @@ older table above were shorthand; the real symbol names are these.
   so ~5% wall savings if fixed).
 - 2026-10-31: down_aggregate fixed wide4 below; mmvq plain cuda3 is now
   the biggest gap (195-212 GB/s).
+- 2026-11-01 (mmvq q8_0 sweep closed): cold-cycle microbench (weights
+  rotated across 8 copies so every launch streams from DRAM, matching
+  the prod profile regime) shows the repo kernel ALREADY at the 226
+  GB/s measured DRAM roofline on every q8_0 shape (attn_q 221,
+  attn_gate 213, ssm_out 209, kv 237, lm_head 234-239 GB/s); the
+  weight-repack hypothesis (34->36B stride for aligned loads) is
+  EXONERATED: neutral-to-worse on every shape. The only real gap was
+  lane-idling on narrow projections (in_dim 512 -> nb=16 blocks x 4
+  lanes = 64 lanes vs 128/256 in the block): fixed by a 2-warp
+  small-projection dispatch (plain_sm_cuda1..4, nb<=16 && b<=4)
+  deployed Nov 1 - down_shexp b3 8.6->6.0 us bench, b1 6.3->4.2; prod
+  profile buckets now call it at 10.2/8.8 us (all other buckets
+  byte-identical). Wall impact ~0.2-0.4% (microbench-predicted; plain
+  flat, MTP +2.1% same-session with acceptance 2.4pp lower = not
+  acceptance luck). mmvq q8_0 is now fully closed: nothing left
+  kernel-side for this dtype on this model.
 - paged_attention_v2 sustains 273 GB/s at d854 (KV blocks L2/MALL-resident).
   The large-context decode drop is NOT kernel-side: see depth sweep below.- gdn kernels are tiny (14.3 us avg, 12.3k launches): amortized inside
   graphs, but any future per-step host work compounds there.

@@ -1,3 +1,52 @@
+## Nov 1 (perf: mmvq q8_0 small-projection 2-warp dispatch; sweep closed the dtype)
+
+- Follow-up to the Oct 31/Nov 1 mmvq_q8_0_plain_cuda3 "81% roofline"
+  gap: cold-cycle microbench (bench2.cu harness - kernel file included
+  verbatim, weights rotated across 8 copies so every launch streams
+  from DRAM, matching the prod profile regime; repo lm_head 2311us =
+  prod 2302us validates the method) measured every prod q8_0 shape:
+  attn_q 221 / attn_gate 213 / ssm_out 209 / kv 237 / lm_head 234-239
+  GB/s vs 226 GB/s pure-read roofline. The repo u16-split loads are
+  already at the ceiling - the repack hypothesis (34->36B stride for
+  aligned weight loads) and RPB=1 / NW=8 / vdr=1 variants are all
+  neutral-to-worse; ar1d1 etc. exonerated. Earlier "600+ GB/s" microbench
+  readings were a harness bug (v1 vec dots missed the kbx block offset,
+  read 36 bytes).
+- The only real inefficiency: narrow projections. in_dim 512 -> nb=16
+  blocks x 4 lanes/block = 64 fittings lanes inside a 128-lane (b2-4)
+  or 256-lane (b1) block: half or more lanes idle end-to-end, and with
+  only 2 rows per block the wave parallelism is halved too. Fix: 2-warp
+  entries `plain_sm_cuda1..4` (q8_0+bf16; `__launch_bounds__(64,1)`,
+  core template gains force_nw) dispatched from a hand-written
+  `launch_mmvq_gguf_q8_0_bf16_plain` when b_size<=4 && ncols_x/QK8_0
+  <= 16; all other shapes take the unchanged standard switch.
+- Microbench (cold-cycle): down_shexp 2048x512 b3 8.59 -> 5.97us
+  (+51% GB/s), b1 6.26 -> 4.14us; every other shape unchanged within
+  noise; CPU-reference + cross-variant correctness gates pass. Compile
+  checks: cargo check -p mistralrs-quant --features rocm AND --features
+  cuda clean.
+- Release A/B (paired same-session 2x iterations, marker-stop bench
+  runs): d854 MTP 57.8 -> 59.0 (+2.1% with MTP accept 71.4 -> 69.0%,
+  i.e. gain is kernel-side not acceptance), d854 plain 47.2 -> 47.2
+  (flat), TTFT 730.5 -> 728.2 ms. Cross-session baselines (59.8/47.8/
+  57.8 from the gdnclamp deploy at ~00:10) differ by ambient state -
+  same-session controls supersede them; nothing regressed.
+- rocprof (w2sm854 vs bench_w4d854): down_shexp now separated from its
+  old mixture bucket - sm_b3 3165 calls @ 10.21us, sm_b1 330 @ 8.77us
+  (pre: c.12/9.7 us residuals in the 29.81/30.70 mixtures); attn_q
+  84.12 vs 84.40, ssm-class 43.94-48.59 vs 44.41-48.68, lm_head 2299/
+  2325 vs 2303/2330 - all other buckets unchanged.
+- Deployed 02:35 via build-mistral.rs.sh (sha d688e637): service
+  active, health OK, 96-token generate clean (1.4s, coherent), MTP
+  accept ~64% (len 2.29-2.43 window), journal clean. Rollback
+  mistralrs.pre-20261102-prew2 (the gdnclamp binary); superseded
+  pre-20261031-gdnclamp (w4-only) removed per keep-no-old-builds.
+- Verdict: mmvq q8_0 closed - wall impact ~0.2-0.4% (corrected
+  post-mixture estimate; the original 0.4-0.6% leaned on an attribution
+  error in the b1 bucket). Remaining decode-critical-path kernels are
+  all at the DRAM roofline; only structural (fewer launches/cycle)
+  work remains kernel-side.
+
 ## Nov 1 (perf: GDN output clamp folded into kernel stores, +11% MTP decode, deployed)
 
 - Mask-chain follow-up from the Oct 31 prefill check: the -100/100
