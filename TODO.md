@@ -1313,6 +1313,37 @@ so candle CUDA fixes apply to the HIP role automatically.
 ## Open: architecture extension
 - [ ] Role-identity Phase 4: Vulkan third shell (untouched; target state is
       one shared backend body with thin role shells - detail: COMPLETED.md).
+- [ ] NPU backend survey (2026-11-01, user: "look at building an NPU
+      backend for Strix Halo"). BOX STATE: fully provisioned already -
+      amdxdna loaded + /dev/accel/accel0, XRT 2.23.0 (2026-03-02) +
+      xrt_plugin-amdxdna 2.23 + libxrt-npu2 (pyxrt importable at
+      /opt/xilinx/xrt/python), NPU "Strix Halo AIE2P topology 6x8"
+      (48 AIE-ML tiles, 50-TOPS class) fw 255.0.11.71, xrt-smi examine
+      clean (user-level needs ulimit -l unlimited: 8KB default shell
+      memlock; service units already LimitMEMLOCK=infinity).
+      ECOSYSTEM (2026 web audit): the working Linux LLM path is
+      FastFlowLM (fastflowlm.com, closed runtime; AMD's own docs name
+      it the NPU runtime) optionally fronted by AMD's Lemonade server
+      (OpenAI-compatible, wraps FLM on Linux/Strix Halo). AMD's
+      VitisAI/ONNX-Runtime-EP path on Linux is structurally blocked
+      (voe wheel not shipped for Linux, source build broken on GCC
+      13/14). Deep-native path = mlir-aie-targeted xclbins
+      (research-grade). Slated as probe: FLM/Lemonade as an external
+      consolidated lane (llamacpp-on-1236 pattern) - Phase 0 first:
+      no mistral.rs code, decision gate after benchmarks.
+      MACHINE MATH (expectations from our prod profiles): decode is
+      DRAM-bound at 226-241 GB/s GTT roof and NPU shares the SAME
+      DDR5 bus - NPU decode of 19GB weights cannot beat iGPU
+      throughput; the value axes are power/efficiency, a second
+      serving lane (smaller models on NPU while 35B serves on iGPU;
+      third-party NPU+GPU concurrent testing showed only +15-19%
+      TTFT contention), and TTFT on small models (8B NPU TTFT 2.2s
+      vs GPU 5.1s in lemonade-community testing). Prefill is
+      compute-bound: NPU INT8 GEMM could add prefill throughput but
+      needs the compile pipeline (doesn't exist for GGUF q8_0/q4_K).
+      Honest verdict mirrored above: GGUF formats + xclbin pipeline
+      = the blocker for a native mistral.rs NPU backend; FLM-LANE
+      first is both cheap and informative.
 
 ## P1. Do next — high impact, slightly more work (week)
 
