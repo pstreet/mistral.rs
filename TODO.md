@@ -1361,12 +1361,46 @@ so candle CUDA fixes apply to the HIP role automatically.
       ~10+ - NPU prefill is ~10x SLOWER for the 35B, and decode
       stays DDR-bound; NPU value axes remain efficiency/second-
       lane/small-model TTFT. NEXT: mistralrs-npu Rust crate (XRT
-      FFI over /opt/xilinx/xrt/lib/libxrt_core.so.2.23.0; headers
-      from XRT 2.23.0 source tag - only vaccel.h packaged), then
+      FFI over libxrt_core.so.2 (distro package libxrt2); headers
+      from /usr/include/xrt/ (distro package libxrt-dev)). Then
       kernels.mm/mv/bfp16 + kernels.quant (q4nx->bfp16ebs8)
       xclbin probes via kd.design, then GGUF->bfp16ebs8 converter
       experiment. Python/IRON is BUILD-TIME ONLY (compile xclbins);
       prod runtime path is pure Rust FFI.
+
+      ARCHITECTURE (agreed 2026-11-01):
+      - Vendor-neutral trait seam in mistralrs-npu crate (multi-backend
+        design from day one). Trait exposes: enumerate(), alloc/map/sync,
+        dispatch/wait. XRT backend first; door open for Intel (Level
+        Zero) and Qualcomm (QNN). NPU is its own backend, not Vulkan.
+        No Vulkan ICD exists for any NPU.
+      - XRT treated like ROCm/CUDA: system-installed runtime, dlopen at
+        runtime, no XRT source/headers vendored. Same pattern as cudarc:
+        soft-fail to "NPU unavailable" if lib absent.
+      - Cargo features: backend-cuda / backend-rocm / backend-npu /
+        backend-vulkan — each left out of a build entirely. CPU cannot
+        be feature-gated (candle's base layer, always present).
+      - One/many devices per backend: trait exposes enumerate() ->
+        Vec<DeviceHandle>.
+      - Strix Halo NPU has no private VRAM — shares DDR5 pool as CPU/GPU.
+        Zero-copy NpuTensor design possible.
+      - Dev: XRT from distro (libxrt2, libxrt-npu2, libxrt-dev), kernel
+        driver built into 7.2.9, firmware from linux-firmware-amd-misc.
+        IRON venv for kernel compilation only.
+
+      CURRENT STATE (2026-11-01 post-reboot):
+      - Distro stack confirmed working: amdxdna.ko from kernel tree,
+        libxrt2+libxrt-npu2+libxrt-dev+python3-xrt from Ubuntu Universe,
+        firmware from linux-firmware-amd-misc. PPA removed, custom xrt
+        packages removed, /opt/xilinx deleted.
+      - mistralrs-npu/Cargo.toml scaffold created. Need: src/lib.rs
+        (trait interface), src/ffi.rs (libloading dlopen bridge),
+        workspace wiring, mistralrs-core dependency, candle-core npu
+        feature gate, backend dispatch, dev docs.
+      - XRT C-API mapped: xrtDeviceOpen -> xrtDeviceLoadXclbinFile ->
+        xrtBOAllocate/Map/Sync -> xrtKernelArgGroupId -> xrtKernelRun ->
+        xrtRunWait. C++ mangled symbols in libxrt_core.so and
+        libxrt++.so. Next: nm -D to pin exact C entry points.
 
 ## P1. Do next — high impact, slightly more work (week)
 
