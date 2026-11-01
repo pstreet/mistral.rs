@@ -211,6 +211,24 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
         }
     }
 
+    #[cfg(feature = "npu")]
+    {
+        // Probe NPU availability via /dev/accel (shared DDR pool).
+        if std::path::Path::new("/dev/accel/accel0").exists() {
+            devices.push(DeviceInfo {
+                kind: "npu".to_string(),
+                ordinal: Some(0),
+                name: Some("AMD Ryzen AI NPU".to_string()),
+                total_memory_bytes: Some(sys.total_memory()),
+                available_memory_bytes: Some(sys.available_memory()),
+                compute_capability: None,
+                flash_attn_compatible: None,
+                flash_attn_v3_compatible: None,
+                unified_memory: Some(true),
+            });
+        }
+    }
+
     #[cfg(all(feature = "cuda", feature = "rocm"))]
     {
         let mut ord = 0;
