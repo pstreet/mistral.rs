@@ -817,8 +817,25 @@ so candle CUDA fixes apply to the HIP role automatically.
       Both: general protection fault on a NON-CANONICAL garbage
       pointer in amdgpu_ttm_tt_unpopulate <- amdgpu_gem_object_free
       (kdump vmcores /var/crash/202610140221 and 202610140232).
-      No MCE/EDAC RAM errors logged; rasdaemon not running. Could
-      be an amdgpu TTM teardown race under heavy GEM churn (both
+      STABILITY BATTERY BACKLOGGED by user 2026-11-01 (do at next
+      downtime, in this order): (1) memtester pass sharing RAM with
+      prod (ComfyUI/Chatterbox tenants down optional - fewer
+      inflight allocs, more headroom; sample GPU-adjacent upper
+      pages, ~2 hours); (2) rasdaemon + EDAC monitored across both
+      memtester and ordinary serving (rasdaemon IS running as of
+      2026-11-01 - installed 0.8.4-1ubuntu0.1, active; EDAC driver
+      support on Strix Halo to verify before trusting silence as
+      "no errors"); (3) memtest86+ USB pass in a reboot window
+      (only conclusive CPU-side RAM evidence; needs the box empty -
+      schedule around openwebui traffic, kexec/lvmdumpshadowoff
+      path verified same-day 2026-10-14 if memtest is impossible).
+      Note crashes 10-11 on 7.2.9 (Oct 29 05:15 NULL-deref 0x50 /
+      Oct 30 09:47 amdgpu isp_genpd_remove_device page fault,
+      vmcores live in /var/crash/) - driver teardown family still
+      open, and that battery is ALSO the RAM-side discriminator:
+      if memtester/memtest86+ stay clean, the evidence stays on the
+      amdgpu wild-writer lead.
+      Could be an amdgpu TTM teardown race under heavy GEM churn (both
       crashes during/around process teardown of probe instances)
       OR bad RAM (no evidence either way yet - the NaN "lottery"
       and the GPF are consistent with either). DO NOT hammer this
