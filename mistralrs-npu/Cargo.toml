@@ -1,0 +1,24 @@
+[package]
+name = "mistralrs-npu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+description = "NPU backend for mistral.rs (AMD XDNA via XRT)."
+repository.workspace = true
+license.workspace = true
+readme = "README.md"
+
+[dependencies]
+candle-core = { workspace = true, optional = true }
+half = { workspace = true, features = ["num-traits"] }
+libloading = { workspace = true }
+thiserror = { workspace = true }
+once_cell = "1"
+
+[dev-dependencies]
+candle-nn = { workspace = true }
+
+[features]
+default = []
+npu = ["dep:candle-core"]
