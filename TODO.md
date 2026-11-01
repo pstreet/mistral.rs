@@ -1402,6 +1402,76 @@ so candle CUDA fixes apply to the HIP role automatically.
         xrtRunWait. C++ mangled symbols in libxrt_core.so and
         libxrt++.so. Next: nm -D to pin exact C entry points.
 
+## Flash-attention: build feature + runtime toggle (P2 — follow-up)
+
+### Current state
+- `flash-attn` is a pure build-time feature (`const fn using_flash_attn()`).
+- `#[cfg(feature = "flash-attn")]` gates kernel compilation in
+  `mistralrs-flash-attn`. `using_flash_attn()` returns a const bool.
+- No runtime toggle: once compiled in, always used if GPU is present.
+
+### Problem
+- Flash attention is faster, but:
+  - Different GPUs in a cluster may have different FA capability (FA2 needs
+    compute >= 8.0, FA3 needs compute == 9.0)
+  - Users may want to compare eager vs FA for debugging
+  - Same binary should work across heterogeneous GPU pools
+- Build feature controls kernel compilation (size/compile time) but also
+  hard-codes usage — no way to disable FA per-request or per-model.
+
+### Design: dual-layer control
+```
+Layer 1 — build feature (compile time):
+  --features flash-attn → FA kernels compiled into binary
+  no flash-attn → no FA kernels, smaller binary, faster build
+
+Layer 2 — runtime flag (per-request/per-model):
+  Config flag (TOML: `flash_attn = true/false`, CLI: --flash-attn)
+  Runtime: using_flash_attn() && config.flash_attn
+
+Layer 3 — GPU capability probe (runtime):
+  Compute capability check (already exists in cuda_graph.rs)
+  FA2: major >= 8.0 → supported
+  FA3: major == 9 && minor == 0 → supported
+  Falls back to eager if unsupported
+```
+
+### Implementation plan
+1. Add `flash_attn: bool` to model config / inference config structs
+2. Make `using_flash_attn()` runtime-aware:
+   ```rust
+   pub fn using_flash_attn(config: &Config) -> bool {
+       cfg!(feature = "flash-attn") && config.flash_attn
+   }
+   ```
+3. Add CLI flag `--flash-attn` (default true when compiled in)
+4. Add TOML config key `flash_attn: bool` (default true when compiled in)
+5. Keep the existing `packed_varlen_flash_is_usable()` capability probe
+   as the third gate (hardware check)
+
+### Expected behavior matrix
+| Build feature | Config flag | GPU cap | Result |
+|---|---|---|---|
+| OFF | — | — | eager (no FA code) |
+| ON | OFF | any | eager |
+| ON | ON | < 8.0 (FA2) | eager |
+| ON | ON | 8.0+ (FA2) | FA2 |
+| ON | ON | 9.0 (FA3) | FA3 |
+
+### Why keep the build feature?
+- Smaller binary when FA not needed (edge builds, CI, containers)
+- Faster compile (no CUTLASS/CK kernel compilation)
+- Some users build without CUDA/ROCm toolchains installed
+- Runtime toggle only works if kernels are compiled in
+
+### Related files
+- `mistralrs-core/src/utils/mod.rs:319` — `using_flash_attn()` (const fn)
+- `mistralrs-core/src/paged_attention/layers/paged_attention.rs:901` —
+  `packed_varlen_flash_is_usable()` (capability probe)
+- `mistralrs-flash-attn/src/flash.rs` — CUDA FA2 kernels
+- Config structs in `mistralrs-core/src/pipeline/normal.rs` and
+  `mistralrs-core/src/config/`
+
 ## P1. Do next — high impact, slightly more work (week)
 
 ### Execution order (agreed 2026-10-09; state: prefix n=4 + MTP + RAG
