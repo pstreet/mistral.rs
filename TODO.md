@@ -1344,6 +1344,29 @@ so candle CUDA fixes apply to the HIP role automatically.
       Honest verdict mirrored above: GGUF formats + xclbin pipeline
       = the blocker for a native mistral.rs NPU backend; FLM-LANE
       first is both cheap and informative.
+      PHASE-1 BRING-UP DONE 2026-11-01 (ironenv=py3.13 venv at
+      scratch/npu-mlir-aie, mlir_aie==1.4.4 cp313 wheel + Peano
+      llvm-aie 22.0.0.2026092101 - the env_install.sh 3.12 hard-pin
+      is stale, cp311/312/313/314 wheels all exist; doctor green;
+      memlock: user shells need LimitMEMLOCK=infinity for pyxrt
+      64MB mmap - use systemd-run --user -p LimitMEMLOCK=infinity
+      --setenv=PATH=/opt/xilinx/xrt/bin:... --setenv=PYTHONPATH=/
+      opt/xilinx/xrt/python <venv python> <design.py>; compile
+      cache ~/.npu/cache). ON-DEVICE RESULTS (all numpy-verified
+      PASS): passthrough_dmas DMA path OK; single-core bf16 mm
+      512^3 = 79.65 GFLOPS (3.37ms NPU, ~380us host overhead);
+      whole-array 4-col bf16 = 882 GFLOPS (304us NPU, ~200us host
+      overhead); 8-col bf16 = 1286 GFLOPS; 4-col i8 = 1336 GOPS.
+      MACHINE-MATH CONFIRMED: NPU compute ~1.3 TFLOPS vs 8060S
+      ~10+ - NPU prefill is ~10x SLOWER for the 35B, and decode
+      stays DDR-bound; NPU value axes remain efficiency/second-
+      lane/small-model TTFT. NEXT: mistralrs-npu Rust crate (XRT
+      FFI over /opt/xilinx/xrt/lib/libxrt_core.so.2.23.0; headers
+      from XRT 2.23.0 source tag - only vaccel.h packaged), then
+      kernels.mm/mv/bfp16 + kernels.quant (q4nx->bfp16ebs8)
+      xclbin probes via kd.design, then GGUF->bfp16ebs8 converter
+      experiment. Python/IRON is BUILD-TIME ONLY (compile xclbins);
+      prod runtime path is pure Rust FFI.
 
 ## P1. Do next — high impact, slightly more work (week)
 
