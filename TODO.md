@@ -21,10 +21,9 @@ Earlier today (pre-fix): 854 54.4 vs ~50 / 1814 32.1 vs 49.9 / 3094 29.4
 vs 48.1. Other standing findings unchanged: MTP n=3 worse than n=2,
 Q4_0 KV slower than Q8_0 on ROCm, block size 64 infeasible (dispatcher
 8/16/32), contiguous KV rejected, fused Q8_0 dequant already in MMVQ.
-Remaining kernel-side headroom: MoE down-aggregate WIDE4 kernel built,
-validated at model level (1.296x per-call, plain decode +1.5-1.6% wall,
-commit 2f9e320d0), deployed to prod 14:53 (build-mistral.rs.sh, sha
-5e832ad1...); mmvq_q8_0_plain_cuda3 (81% roofline) is the next biggest
+Remaining kernel-side headroom: MoE down-aggregate WIDE4 kernel deployed
+(1.296x per-call); GDN clamp-in-kernel deployed (+11% with-MTP decode at
+d854); mmvq_q8_0_plain_cuda3 (81% roofline) is the next biggest
 kernel gap.
 
 ## Current status (2026-10-26, prod on the f3b2d3576 tip, dual cuda,rocm,flash-attn)
@@ -4377,6 +4376,13 @@ Re-verify after the merge in section P2.
 ## Kernel-level paged attention optimizations (from Gemini analysis, Oct 31)
 
 ### [M] Mask-op elementwise chain scales with context (2026-10-31 profile)
+- **FIXED 2026-11-01 (commit 5b055a0ba):** the bmaximum/bminimum pair was
+  the GDN recurrent-output clamp running eagerly outside the CUDA graphs;
+  now folded into all GDN kernel stores. d854 with-MTP decode +11.2%
+  (53.8 -> 59.8 t/s), d3094 +9.5%, TTFT -35 ms. Deployed to prod 00:05.
+  Residual per-step elementwise (badd/cast/is_u32 ~250 ms/pass) remains
+  but is not context-scaled the same way. The gate_up +6.7%-at-depth
+  question is moot (same L2-interference source removed with the clamps).
 - **What:** bmaximum_bf16/bminimum_bf16 masked-argmax chain (mask fix
   eb025a60a) per-call time doubles with context: 9.4 us/call at d854 ->
   19.7 at d3094 (472 ms at d3094 = 14% of captured kernel time; ~24k

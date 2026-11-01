@@ -1,3 +1,31 @@
+## Nov 1 (perf: GDN output clamp folded into kernel stores, +11% MTP decode, deployed)
+
+- Mask-chain follow-up from the Oct 31 prefill check: the -100/100
+  recurrent-output clamp ran as candle bmaximum+bminimum - a 2-kernel
+  EAGER pair (outside the CUDA graphs, hence the valid rocprof
+  timestamps) per GDN layer per step: ~24k launches/pass, ~234 ms/pass
+  at d854, 470 ms at d3094 (14% of captured kernel time), on 8KB
+  tensors. Attribution proven with a shape probe at candle's
+  binary_impl: shapes [1,1,32,128] (decode) / [1,3,32,128] (verify) =
+  the GDN recurrence output.
+- Fix (commit 5b055a0ba): all 10 GDN output-writing kernels in
+  cuda/gdn.cu clamp on store via gdn_clamp_out (fminf/fmaxf - matches
+  candle maxg semantics incl. NaN suppression and bf16 conversion
+  order); Rust-side clamp dropped for CUDA/HIP (finish_recurrence keeps
+  it for metal; CPU keeps its own). Also cfg-gated is_hip in the
+  hot-cache gates (Oct 30 regression: pure-cuda builds did not compile).
+- Release A/B (paired, 2x iterations): d854 with-MTP 53.6-53.8 -> 59.8
+  (+11.2%, TPOT 18.6 -> 16.74 ms); d854 plain 46.7 -> 47.8 (+2.4%);
+  d3094 with-MTP 52.8 -> 57.8 (+9.5%). TTFT 766 -> 731 ms (prefill
+  forwards shed 82 clamp launches). rocprof: bmaximum/bminimum kernels
+  absent from trace.
+- Deployed 00:05 via build-mistral.rs.sh (sha 845234e3...): service
+  active, health OK, probes generate cleanly, MTP accept 61.9% (len
+  2.24), journal clean. Rollback mistralrs.pre-20261031-gdnclamp (the
+  w4-only binary); superseded premoew4 rollback removed.
+- Probe artifacts: candle clamp/binary_impl probes were temporary
+  (reverted, not committed).
+
 ## Oct 31 (perf: wide4 q5_K MoE down-aggregate kernel, 1.3x, swap pending)
 
 - Winner `g2l8-wide4` (commit 2f9e320d0): 8 lanes/row (lane = superblock,
