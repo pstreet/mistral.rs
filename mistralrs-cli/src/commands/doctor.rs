@@ -153,6 +153,9 @@ pub fn run_doctor(json: bool) -> Result<()> {
     if system.build.mkl {
         features.push("mkl");
     }
+    if system.build.npu {
+        features.push("npu");
+    }
     let features_str = if features.is_empty() {
         "none".to_string()
     } else {
