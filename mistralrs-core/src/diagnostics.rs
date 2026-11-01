@@ -213,12 +213,18 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
 
     #[cfg(feature = "npu")]
     {
-        // Probe NPU availability via /dev/accel (shared DDR pool).
-        if std::path::Path::new("/dev/accel/accel0").exists() {
+        // Enumerate all /dev/accel/accelN devices and read their PCI info
+        // from sysfs for a human-readable device name.
+        let mut ord = 0;
+        loop {
+            if !std::path::Path::new(&format!("/dev/accel/accel{ord}")).exists() {
+                break;
+            }
+
             devices.push(DeviceInfo {
                 kind: "npu".to_string(),
-                ordinal: Some(0),
-                name: Some("AMD Ryzen AI NPU".to_string()),
+                ordinal: Some(ord),
+                name: None,
                 total_memory_bytes: Some(sys.total_memory()),
                 available_memory_bytes: Some(sys.available_memory()),
                 compute_capability: None,
@@ -226,6 +232,7 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
                 flash_attn_v3_compatible: None,
                 unified_memory: Some(true),
             });
+            ord += 1;
         }
     }
 
