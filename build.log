@@ -1,0 +1,174 @@
++ trap 'echo "Error on line $LINENO"' ERR
++++ dirname ../build-mistral.rs.sh
+++ cd ..
+++ pwd
++ LOCALAI_ROOT=/home/pstreet/LocalAI
++ source /home/pstreet/LocalAI/.rocm-env.sh
+++ '[' -z '' ']'
+++ '[' '!' -d /home/pstreet/LocalAI/rocm-install ']'
+++ export ROCM_PATH=/home/pstreet/LocalAI/rocm-install
+++ ROCM_PATH=/home/pstreet/LocalAI/rocm-install
+++ '[' 0 '!=' 1 ']'
+++ '[' '!' -d /home/pstreet/LocalAI/rocm-install ']'
+++ export HSA_OVERRIDE_GFX_VERSION=11.5.1
+++ HSA_OVERRIDE_GFX_VERSION=11.5.1
+++ export AMDGPU_TARGETS=gfx1151
+++ AMDGPU_TARGETS=gfx1151
+++ export HSA_ENABLE_SDMA=1
+++ HSA_ENABLE_SDMA=1
+++ export ROCM_HOME=/home/pstreet/LocalAI/rocm-install
+++ ROCM_HOME=/home/pstreet/LocalAI/rocm-install
+++ export HIP_PATH=/home/pstreet/LocalAI/rocm-install
+++ HIP_PATH=/home/pstreet/LocalAI/rocm-install
+++ export HIP_PLATFORM=amd
+++ HIP_PLATFORM=amd
+++ export PATH=/home/pstreet/LocalAI/rocm-install/bin:/home/pstreet/LocalAI/rocm-install/lib/llvm/bin:/home/pstreet/.pyenv/shims:/home/pstreet/.local/bin:/home/pstreet/.opencode/bin:/home/pstreet/.local/bin:/home/pstreet/.opencode/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/home/pstreet/.local/bin:/home/pstreet/.local/bin:/home/pstreet/.local/bin:/home/pstreet/.local/bin
+++ PATH=/home/pstreet/LocalAI/rocm-install/bin:/home/pstreet/LocalAI/rocm-install/lib/llvm/bin:/home/pstreet/.pyenv/shims:/home/pstreet/.local/bin:/home/pstreet/.opencode/bin:/home/pstreet/.local/bin:/home/pstreet/.opencode/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/home/pstreet/.local/bin:/home/pstreet/.local/bin:/home/pstreet/.local/bin:/home/pstreet/.local/bin
+++ export LD_LIBRARY_PATH=/home/pstreet/LocalAI/rocm-install/lib:
+++ LD_LIBRARY_PATH=/home/pstreet/LocalAI/rocm-install/lib:
+++ export PYTORCH_ROCM_ARCH=gfx1151
+++ PYTORCH_ROCM_ARCH=gfx1151
+++ export FBGEMM_GPU_ROCM_ARCH=gfx1151
+++ FBGEMM_GPU_ROCM_ARCH=gfx1151
+++ export ROCBLAS_USE_HIPBLASLT=1
+++ ROCBLAS_USE_HIPBLASLT=1
+++ export USE_ROCM=1
+++ USE_ROCM=1
+++ export USE_CUDA=0
+++ USE_CUDA=0
+++ export USE_RCCL=1
+++ USE_RCCL=1
+++ export TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+++ TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+++ export HIP_DEVICE_LIB_PATH=/home/pstreet/LocalAI/rocm-install/lib/llvm/amdgcn/bitcode
+++ HIP_DEVICE_LIB_PATH=/home/pstreet/LocalAI/rocm-install/lib/llvm/amdgcn/bitcode
+++ export ROCM_DEVICE_LIB_PATH=/home/pstreet/LocalAI/rocm-install/lib/llvm/amdgcn/bitcode
+++ ROCM_DEVICE_LIB_PATH=/home/pstreet/LocalAI/rocm-install/lib/llvm/amdgcn/bitcode
+++ export CMAKE_POLICY_VERSION_MINIMUM=3.5
+++ CMAKE_POLICY_VERSION_MINIMUM=3.5
+++ export CMAKE_PREFIX_PATH=/home/pstreet/LocalAI/rocm-install:/home/pstreet/LocalAI/rocm-install/lib/llvm/lib/cmake
+++ CMAKE_PREFIX_PATH=/home/pstreet/LocalAI/rocm-install:/home/pstreet/LocalAI/rocm-install/lib/llvm/lib/cmake
+++ export LLVM_ENABLE_LTO=Thin
+++ LLVM_ENABLE_LTO=Thin
+++ export LLVM_ENABLE_WERROR=OFF
+++ LLVM_ENABLE_WERROR=OFF
+++ OPT_FLAGS='-fvisibility=default -Wno-everything'
+++ export 'CMAKE_HIP_FLAGS=-fvisibility=default -Wno-everything -fvisibility-inlines-hidden'
+++ CMAKE_HIP_FLAGS='-fvisibility=default -Wno-everything -fvisibility-inlines-hidden'
+++ export 'CMAKE_CXX_FLAGS=-fvisibility=default -Wno-everything -fvisibility-inlines-hidden'
+++ CMAKE_CXX_FLAGS='-fvisibility=default -Wno-everything -fvisibility-inlines-hidden'
+++ export 'CMAKE_C_FLAGS=-fvisibility=default -Wno-everything'
+++ CMAKE_C_FLAGS='-fvisibility=default -Wno-everything'
+++ command -v mold
+++ export CMAKE_LINKER_TYPE=MOLD
+++ CMAKE_LINKER_TYPE=MOLD
+++ for _flag in CMAKE_EXE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS CMAKE_MODULE_LINKER_FLAGS
+++ case "${!_flag:-}" in
+++ export 'CMAKE_EXE_LINKER_FLAGS=-fuse-ld=mold '
+++ CMAKE_EXE_LINKER_FLAGS='-fuse-ld=mold '
+++ for _flag in CMAKE_EXE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS CMAKE_MODULE_LINKER_FLAGS
+++ case "${!_flag:-}" in
+++ export 'CMAKE_SHARED_LINKER_FLAGS=-fuse-ld=mold '
+++ CMAKE_SHARED_LINKER_FLAGS='-fuse-ld=mold '
+++ for _flag in CMAKE_EXE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS CMAKE_MODULE_LINKER_FLAGS
+++ case "${!_flag:-}" in
+++ export 'CMAKE_MODULE_LINKER_FLAGS=-fuse-ld=mold '
+++ CMAKE_MODULE_LINKER_FLAGS='-fuse-ld=mold '
+++ unset _flag
+++ command -v ccache
+++ export CCACHE_MAXSIZE=100G
+++ CCACHE_MAXSIZE=100G
+++ export CCACHE_COMPRESS=1
+++ CCACHE_COMPRESS=1
+++ export CCACHE_SLOPPINESS=include_file_ctime,include_dir_mtime,pch_defines,time_macros
+++ CCACHE_SLOPPINESS=include_file_ctime,include_dir_mtime,pch_defines,time_macros
+++ '[' -n /home/pstreet/LocalAI ']'
+++ export CCACHE_BASEDIR=/home/pstreet/LocalAI
+++ CCACHE_BASEDIR=/home/pstreet/LocalAI
+++ export CMAKE_C_COMPILER_LAUNCHER=ccache
+++ CMAKE_C_COMPILER_LAUNCHER=ccache
+++ export CMAKE_CXX_COMPILER_LAUNCHER=ccache
+++ CMAKE_CXX_COMPILER_LAUNCHER=ccache
+++ export CMAKE_HIP_COMPILER_LAUNCHER=ccache
+++ CMAKE_HIP_COMPILER_LAUNCHER=ccache
+++ ccache -M 100G
++ export CANDLE_ROCM_PATH=/home/pstreet/LocalAI/rocm-install
++ CANDLE_ROCM_PATH=/home/pstreet/LocalAI/rocm-install
++ export CANDLE_ROCM_ARCH=gfx1151
++ CANDLE_ROCM_ARCH=gfx1151
++ export MISTRALRS_CCACHE_GPU=1
++ MISTRALRS_CCACHE_GPU=1
++ export MISTRALRS_FEATURES=cuda,rocm,npu,flash-attn
++ MISTRALRS_FEATURES=cuda,rocm,npu,flash-attn
++ echo cuda,rocm,npu,flash-attn
++ grep -qw cuda
++ '[' -d /usr/local/cuda ']'
++ export CUDA_HOME=/usr/local/cuda
++ CUDA_HOME=/usr/local/cuda
++ case ":$PATH:" in
++ export PATH=/usr/local/cuda/bin:/home/pstreet/LocalAI/rocm-install/bin:/home/pstreet/LocalAI/rocm-install/lib/llvm/bin:/home/pstreet/.pyenv/shims:/home/pstreet/.local/bin:/home/pstreet/.opencode/bin:/home/pstreet/.local/bin:/home/pstreet/.opencode/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/home/pstreet/.local/bin:/home/pstreet/.local/bin:/home/pstreet/.local/bin:/home/pstreet/.local/bin
++ PATH=/usr/local/cuda/bin:/home/pstreet/LocalAI/rocm-install/bin:/home/pstreet/LocalAI/rocm-install/lib/llvm/bin:/home/pstreet/.pyenv/shims:/home/pstreet/.local/bin:/home/pstreet/.opencode/bin:/home/pstreet/.local/bin:/home/pstreet/.opencode/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/home/pstreet/.local/bin:/home/pstreet/.local/bin:/home/pstreet/.local/bin:/home/pstreet/.local/bin
++ echo cuda,rocm,npu,flash-attn
++ grep -qw cuda
++ export CUDA_COMPUTE_CAP=80
++ CUDA_COMPUTE_CAP=80
++ export CUDA_PATH=/usr/local/cuda-13.3
++ CUDA_PATH=/usr/local/cuda-13.3
++ for dir in "$LOCALAI_ROOT/mistral.rs" "$LOCALAI_ROOT/candle"
++ '[' '!' -d /home/pstreet/LocalAI/mistral.rs ']'
++ for dir in "$LOCALAI_ROOT/mistral.rs" "$LOCALAI_ROOT/candle"
++ '[' '!' -d /home/pstreet/LocalAI/candle ']'
++ cd /home/pstreet/LocalAI/mistral.rs
++ echo cuda,rocm,npu,flash-attn
++ grep -qw npu
++ echo '=== Installing NPU (AMD XDNA) distro dependencies ==='
+=== Installing NPU (AMD XDNA) distro dependencies ===
++ sudo apt-get update -qq
++ sudo apt-get install -y libxrt-dev libxrt2 libxrt-npu2 python3-xrt linux-firmware-amd-misc
+Reading package lists...
+Building dependency tree...
+Reading state information...
+libxrt-dev is already the newest version (1:2.21.75+dfsg-4).
+libxrt2 is already the newest version (1:2.21.75+dfsg-4).
+libxrt-npu2 is already the newest version (1:2.21.75+dfsg-4).
+python3-xrt is already the newest version (1:2.21.75+dfsg-4).
+python3-xrt set to manually installed.
+linux-firmware-amd-misc is already the newest version (20260319.git217ca6e4-0ubuntu1.1).
+Solving dependencies...
+0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.
++ '[' '!' -e /dev/accel/accel0 ']'
++ echo cuda,rocm,npu,flash-attn
++ grep -qw cuda
++ command -v nvcc
++ echo cuda,rocm,npu,flash-attn
++ grep -qw rocm
++ command -v hipcc
++ export CARGO_BUILD_JOBS=24
++ CARGO_BUILD_JOBS=24
++ command -v sccache
++ export RUSTC_WRAPPER=sccache
++ RUSTC_WRAPPER=sccache
++ export SCCACHE_CACHE_SIZE=100G
++ SCCACHE_CACHE_SIZE=100G
++ '[' 1 = 1 ']'
++ command -v mold
++ case "${RUSTFLAGS:-}" in
++ export 'RUSTFLAGS= -C target-cpu=native -C link-arg=-fuse-ld=mold'
++ RUSTFLAGS=' -C target-cpu=native -C link-arg=-fuse-ld=mold'
++ echo cuda,rocm,npu,flash-attn
++ grep -qw rocm
++ echo '=== Using ROCm from: /home/pstreet/LocalAI/rocm-install ==='
+=== Using ROCm from: /home/pstreet/LocalAI/rocm-install ===
++ echo '=== Features: cuda,rocm,npu,flash-attn ==='
+=== Features: cuda,rocm,npu,flash-attn ===
++ cargo --version
+cargo 1.97.1 (c980f4866 2026-06-30)
++ rustc --version
+rustc 1.97.1 (8bab26f4f 2026-07-14)
++ echo 'Building mistralrs server binary (and local candle via path deps)...'
+Building mistralrs server binary (and local candle via path deps)...
++ cargo build --release --features cuda,rocm,npu,flash-attn -p mistralrs-cli
+error: the package 'mistralrs-cli' does not contain this feature: npu
+help: there are similarly named features: mkl, nccl
+++ echo 'Error on line 144'
+Error on line 144

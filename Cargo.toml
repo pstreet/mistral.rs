@@ -16,6 +16,7 @@ members = [
     "mistralrs-macros",
     "mistralrs-code-exec",
     "mistralrs-sandbox",
+    "mistralrs-npu",
 ]
 resolver = "2"
 
@@ -199,6 +200,7 @@ mistralrs-core = { path = "mistralrs-core", version = "0.9.2" }
 mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.9.2" }
 mistralrs-metal-compile = { path = "mistralrs-metal-compile", version = "0.9.2" }
 mistralrs-flash-attn = { path = "mistralrs-flash-attn", version = "0.9.2" }
+mistralrs-npu = { path = "mistralrs-npu", version = "0.9.2" }
 mistralrs-quant = { path = "mistralrs-quant", version = "0.9.2" }
 mistralrs-vision = { path = "mistralrs-vision", version = "0.9.2" }
 mistralrs-server-core = { path = "mistralrs-server-core", version = "0.9.2" }
