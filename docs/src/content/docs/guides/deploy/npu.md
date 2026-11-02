@@ -40,8 +40,8 @@ The open-source toolchain enables writing custom AIE kernels. Install it once:
 
 ```bash
 # Create a venv (re-use an existing one if you prefer)
-python3 -m venv ~/.local/share/ironenv
-source ~/.local/share/ironenv/bin/activate
+python3 -m venv ~/.local/share/mistralrs-npu
+source ~/.local/share/mistralrs-npu/bin/activate
 pip install --upgrade pip
 
 # MLIR-AIE 1.4.4 — compiler driver, Python API, MLIR dialects
@@ -63,13 +63,11 @@ Or use the helper script:
 Verify:
 
 ```bash
-source ~/.local/share/ironenv/bin/activate
+source ~/.local/share/mistralrs-npu/bin/activate
 aiecc --version
 aiecc --help
 ```
 
-Wheels are cached in the project root (`LocalAI/mlir_aie-*.whl`,
-`LocalAI/llvm_aie-*.whl`) for builds without network access.
 
 ## Building with NPU support
 
@@ -78,7 +76,15 @@ Wheels are cached in the project root (`LocalAI/mlir_aie-*.whl`,
 The build script checks for all dependencies and fails with actionable errors:
 
 ```bash
-./build-mistral.rs.sh
+cd mistral.rs/scripts
+./build.sh
+```
+
+Set `MISTRALRS_FEATURES` to control which backends are compiled:
+
+```bash
+MISTRALRS_FEATURES=rocm ./build.sh      # ROCm only
+MISTRALRS_FEATURES=cuda,npu ./build.sh   # CUDA + NPU
 ```
 
 It sources the MLIR-AIE venv automatically when the `npu` feature is enabled.
@@ -87,7 +93,7 @@ It sources the MLIR-AIE venv automatically when the `npu` feature is enabled.
 
 ```bash
 # Source the MLIR-AIE venv (required for downstream toolchain discovery)
-source ~/.local/share/ironenv/bin/activate
+source ~/.local/share/mistralrs-npu/bin/activate
 
 # Build mistral.rs with NPU support
 cd mistral.rs
@@ -180,11 +186,11 @@ ls -la /dev/accel/accel0 /dev/dri/card0
 ### "Error: MLIR-AIE venv not found"
 
 Run the setup script or install the toolchain manually (see "MLIR-AIE + Peano"
-above). The build script expects the venv at `~/.local/share/ironenv` or a
+above). The build script expects the venv at `~/.local/share/mistralrs-npu` or a
 custom path via `NPU_VENV`:
 
 ```bash
-NPU_VENV=/custom/path ./build-mistral.rs.sh
+NPU_VENV=/custom/path ./scripts/build.sh
 ```
 
 ### Model falls back to CPU
@@ -209,8 +215,8 @@ The MLIR-AIE venv needs to be sourced. The build script does this
 automatically, but if building manually:
 
 ```bash
-source ~/.local/share/ironenv/bin/activate
-export PATH="$HOME/.local/share/ironenv/bin:$PATH"
+source ~/.local/share/mistralrs-npu/bin/activate
+export PATH="$HOME/.local/share/mistralrs-npu/bin:$PATH"
 ```
 
 ### NPU memory too small for model
@@ -229,4 +235,4 @@ CPU's working set. If the model doesn't fit:
 - [llvm-aie (Peano)](https://github.com/Xilinx/llvm-aie) — per-core AIE compiler
 - [AMD XDNA driver](https://github.com/Xilinx/xdna-driver) — kernel driver
 - [AIE_KERNEL_PLAN.md](../mistralrs-npu/AIE_KERNEL_PLAN.md) — kernel development plan
-- [build-mistral.rs.sh](../build-mistral.rs.sh) — build script with NPU checks
+- [scripts/build.sh](../scripts/build.sh) — build script with dependency checks

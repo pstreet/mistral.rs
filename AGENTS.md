@@ -61,7 +61,13 @@ Mistral.rs supports multiple model types and advanced features via dedicated cra
    cargo build --release --package mistralrs-cli --features "<features>"
    cargo install --path mistralrs-cli --features "<features>"
    ```
-5. Build profiles:
+5. Or use the all-in-one build script (handles toolchain detection, env setup, and auto-install):
+    ```bash
+    cd scripts && ./build.sh
+    MISTRALRS_FEATURES=rocm ./build.sh          # ROCm only
+    MISTRALRS_FEATURES=cuda,rocm,npu ./build.sh # multi-vendor
+    ```
+6. Build profiles:
    - `--profile fast` for iteration: parallel codegen (`codegen-units = 32`), no LTO, line-table debug info - several times faster than `release`. Use it for correctness loops, test binaries, and link debugging.
    - `--release` (thin-LTO, `codegen-units = 1`) only for the performance bar and production artifacts. Never benchmark `fast` builds.
    - Probe/debug lane (policy, 2026-10-08): diagnostic probes and load-experiments build `--profile fast` and run as a standalone server on a spare port (e.g. 1244) against a minimal TOML - never by restarting prod, never benchmarked. `release` is reserved for benches, prod swaps, and perf validation. NOTE (2026-10-22): `/v1/models/unload` now waits for the engine thread to exit and trims the device caching pool back to the driver before returning, so freed memory is reclaimable (previously it stayed parked in the pool). The older workaround of validating CUDA-role changes via prod unload+reload of the lazy alias is no longer required for memory reasons, though it remains useful for exercising the demand-load path. Probe processes and prod run identically named `mistralrs` binaries, so NEVER `pgrep`/`pkill` by process name (2026-10-17: a probe restart did exactly that, killed prod too, and since SIGTERM is a clean exit `Restart=on-failure` did not re-arm - 55 min outage). Probe launchers write `scratch/<name>.pid`; only that PID is ever signalled. Toolchain: mold links everything (`~/.cargo/config.toml` plus build.rs `.so` links), sccache (Rust + host C/C++, 100G) and ccache (hipcc/nvcc `-c` steps, 100G, opt-in `MISTRALRS_CCACHE_GPU=1`) cache compiles; nvcc must not go through sccache (phantom hits on failed compiles). Scratch `CARGO_TARGET_DIR`s for shape checks live on disk outside the repo tree (e.g. `../scratch/<shape>`; the workspace root is not a git repo, so they can never be committed), never `/tmp`: `/tmp` is tmpfs here, so multi-GB cargo artifacts eat RAM and churn swap. `mistralrs/scratch/` and `mistralrs.pre-*` rollback binaries are git-ignored as backstops against `git add -A`.
