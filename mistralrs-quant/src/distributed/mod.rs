@@ -65,32 +65,28 @@ impl BarrierLike for Barrier {
 }
 
 pub fn get_global_tp_size_from_devices() -> Result<usize> {
-    #[cfg(all(feature = "cuda", feature = "ring"))]
-    {
+    #[cfg(feature = "ring")]
+    if use_ring() {
         let config = RingConfig::load();
-        Ok(config.world_size)
-    }
-    #[cfg(all(not(feature = "cuda"), feature = "ring"))]
-    {
-        let config = RingConfig::load();
-        Ok(config.world_size)
+        return Ok(config.world_size);
     }
 
     #[cfg(all(feature = "cuda", feature = "nccl"))]
     {
-        // In case we have manual set of TP size
         if let Ok(x) = std::env::var(MISTRALRS_MN_LOCAL_WORLD_SIZE) {
             use std::str::FromStr;
-            Ok(usize::from_str(&x).expect("Not a number for MISTRALRS_MN_LOCAL_WORLD_SIZE!"))
-        } else {
+            return Ok(
+                usize::from_str(&x).expect("Not a number for MISTRALRS_MN_LOCAL_WORLD_SIZE!")
+            );
+        }
+        if unsafe { candle_core::cuda::cudarc::driver::sys::is_culib_present() } {
             use candle_core::cuda::WrapErr;
-            candle_core::cuda::cudarc::driver::result::device::get_count()
+            return candle_core::cuda::cudarc::driver::result::device::get_count()
                 .w()
-                .map(|x| x as usize)
+                .map(|x| x as usize);
         }
     }
 
-    #[cfg(all(not(feature = "ring"), not(feature = "nccl")))]
     Ok(1)
 }
 
@@ -101,7 +97,8 @@ pub fn use_nccl() -> bool {
 
     #[cfg(all(feature = "cuda", feature = "nccl"))]
     {
-        nccl_world_size().is_some_and(|world_size| world_size >= MIN_NCCL_WORLD_SIZE)
+        (unsafe { candle_core::cuda::cudarc::driver::sys::is_culib_present() })
+            && nccl_world_size().is_some_and(|world_size| world_size >= MIN_NCCL_WORLD_SIZE)
     }
 
     #[cfg(not(all(feature = "cuda", feature = "nccl")))]
@@ -151,16 +148,16 @@ impl Comm {
         rank: usize,
         world_size: usize,
     ) -> Result<Self> {
-        #[cfg(all(feature = "cuda", feature = "nccl"))]
-        if use_nccl() {
-            return Ok(Self::Nccl(nccl::NcclComm::from_device(
+        #[cfg(feature = "ring")]
+        if use_ring() {
+            return Ok(Self::Ring(ring::RingComm::from_device(
                 id, dev, rank, world_size,
             )?));
         }
 
-        #[cfg(feature = "ring")]
-        {
-            return Ok(Self::Ring(ring::RingComm::from_device(
+        #[cfg(all(feature = "cuda", feature = "nccl"))]
+        if use_nccl() {
+            return Ok(Self::Nccl(nccl::NcclComm::from_device(
                 id, dev, rank, world_size,
             )?));
         }
@@ -974,7 +971,11 @@ mod ring_ops {
             let cpu_storage = match &*storage {
                 Storage::Cpu(storage) => storage,
                 Storage::Cuda(storage) => &storage.to_cpu_storage()?,
+                #[cfg(feature = "rocm")]
+                Storage::Hip(storage) => &storage.to_cpu_storage()?,
                 Storage::Metal(storage) => &storage.to_cpu_storage()?,
+                #[cfg(feature = "npu")]
+                Storage::Npu(storage) => &storage.to_cpu_storage()?,
             };
 
             let delta = match cpu_storage {
@@ -1096,7 +1097,11 @@ mod ring_ops {
             let cpu_storage = match &*storage {
                 Storage::Cpu(s) => s,
                 Storage::Cuda(s) => &s.to_cpu_storage()?,
+                #[cfg(feature = "rocm")]
+                Storage::Hip(s) => &s.to_cpu_storage()?,
                 Storage::Metal(s) => &s.to_cpu_storage()?,
+                #[cfg(feature = "npu")]
+                Storage::Npu(s) => &s.to_cpu_storage()?,
             };
 
             match cpu_storage {

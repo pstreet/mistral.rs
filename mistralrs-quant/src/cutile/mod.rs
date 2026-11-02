@@ -2,10 +2,12 @@
 
 pub mod context;
 mod fused_moe;
+#[cfg(all(feature = "cuda", feature = "cutile", not(feature = "rocm")))]
 mod routed_lora;
 mod warmup;
 
 pub use fused_moe::{cutile_grouped_gemm, register_moe_shape};
+#[cfg(all(feature = "cuda", feature = "cutile", not(feature = "rocm")))]
 pub use routed_lora::{
     cached_cutile_routed_lora_config, cutile_routed_lora_candidate_configs,
     selected_cutile_routed_lora_config, set_cutile_routed_lora_tuned_config,
