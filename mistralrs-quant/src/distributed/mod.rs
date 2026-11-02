@@ -26,9 +26,10 @@ pub struct RingConfig {
 }
 
 impl RingConfig {
-    /// Loads the ring backend config from a path at `RING_CONFIG`
+    /// Loads the ring backend config from a path at `MISTRALRS_RING_CONFIG`
     pub fn load() -> Self {
-        let config_json = std::env::var("MISTRALRS_RING_CONFIG").expect("RING_CONFIG must be set");
+        let config_json =
+            std::env::var("MISTRALRS_RING_CONFIG").expect("MISTRALRS_RING_CONFIG must be set");
         let config: RingConfig = serde_json::from_reader(
             &File::open(config_json).expect("Could not access Ring config JSON"),
         )
