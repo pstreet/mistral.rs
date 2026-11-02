@@ -51,23 +51,20 @@ export CANDLE_ROCM_ARCH="${CANDLE_ROCM_ARCH:-$PYTORCH_ROCM_ARCH}"
 # ccache for hipcc/nvcc companion-lib compiles
 export MISTRALRS_CCACHE_GPU="${MISTRALRS_CCACHE_GPU:-1}"
 
-# Default feature set — override with MISTRALRS_FEATURES env var
-export MISTRALRS_FEATURES="${MISTRALRS_FEATURES:-cuda,rocm,npu,flash-attn}"
-
-# ── CUDA toolkit ────────────────────────────────────────────────────────────
-if echo "${MISTRALRS_FEATURES:-}" | grep -qw cuda; then
-    # Add nvcc to PATH if available
-    if [ -d "/usr/local/cuda" ]; then
-        export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
-        case ":$PATH:" in
-            *:/usr/local/cuda/bin:*) ;;
-            *) export PATH="/usr/local/cuda/bin:$PATH" ;;
-        esac
-    fi
-    # Default compute capability (override with CUDA_COMPUTE_CAP)
-    export CUDA_COMPUTE_CAP="${CUDA_COMPUTE_CAP:-80}"
-    export CUDA_PATH="${CUDA_PATH:-/usr/local/cuda}"
-fi
+# Default feature set — every feature, all activation scopes. Override with
+# MISTRALRS_FEATURES. metal/accelerate are Apple-only and dropped on Linux;
+# each feature stays enabled in every shape and only executes on the
+# devices/platforms that support it.
+case "$(uname -s)" in
+    Darwin)
+        MISTRALRS_FEATURES_DEFAULT="metal,accelerate,ring"
+        ;;
+    *)
+        MISTRALRS_FEATURES_DEFAULT="cuda,rocm,npu,cutile,nccl,cudnn,flash-attn,flash-attn-v3,ring,mkl"
+        ;;
+esac
+MISTRALRS_FEATURES_EXPLICIT="${MISTRALRS_FEATURES:+1}"
+export MISTRALRS_FEATURES="${MISTRALRS_FEATURES:-$MISTRALRS_FEATURES_DEFAULT}"
 
 # ── Validate directory layout ───────────────────────────────────────────────
 # candle is a required sibling dependency (path dep in Cargo.toml)
@@ -176,30 +173,166 @@ if echo "${MISTRALRS_FEATURES:-}" | grep -qw npu; then
     echo "=== MLIR-AIE + Peano toolchain OK ==="
 fi
 
-# ── CUDA toolkit auto-install (optional) ────────────────────────────────────
-# Only needed when cuda feature is requested and nvcc is not already available.
-if echo "${MISTRALRS_FEATURES:-}" | grep -qw cuda; then
-    if ! command -v nvcc &>/dev/null && [ -z "${CUDA_HOME:-}" ]; then
-        echo "=== CUDA feature requested but nvcc not found — installing toolkit ==="
-        sudo apt-get update -qq
-        sudo apt-get install -y cuda-toolkit
-        export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
-        export PATH="${CUDA_HOME}/bin:$PATH"
+# ── Feature dependency checks ───────────────────────────────────────────────
+# Every feature must compile in every build shape, but features that need
+# system toolchains/libraries are validated here before cargo runs. Missing
+# pieces that have a clean apt path are auto-installable; everything else
+# fails with actionable setup instructions.
+#
+# GPU_DEPS_INSTALL controls the apt auto-install consent:
+#   ask     (default: prompt only on an interactive terminal)
+#   always  (no prompt — install anything missing)
+#   never   (no install; missing deps are hard errors)
+has_feature() { echo " ${MISTRALRS_FEATURES//,/ } " | grep -q " $1 "; }
+
+apt_install() {
+    case "${GPU_DEPS_INSTALL:-}" in
+        never) return 1 ;;
+        always) ;;
+        *)
+            [ -t 0 ] || return 1
+            local reply
+            echo "Missing system dependency: $*"
+            read -r -p "Install it now via apt? [y/N] " reply || return 1
+            case "$reply" in [Yy]*) ;; *) return 1 ;; esac
+            ;;
+    esac
+    sudo apt-get update -qq
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$@"
+}
+
+fail_dep() {
+    echo "Error: $*" >&2
+    echo "  Override with MISTRALRS_FEATURES, or set GPU_DEPS_INSTALL=never and" >&2
+    echo "  install the dependency manually to keep it out of the build flow." >&2
+    exit 1
+}
+
+# ── NVIDIA toolchain (cuda, cutile, cudnn, nccl, flash-attn, flash-attn-v3) ─
+needs_nvcc() {
+    has_feature cuda || has_feature cutile || has_feature cudnn \
+        || has_feature nccl || has_feature flash-attn || has_feature flash-attn-v3
+}
+
+if needs_nvcc; then
+    nvcc_detected=""
+    if command -v nvcc &>/dev/null; then
+        nvcc_detected="$(command -v nvcc)"
+    else
+        for d in "${CUDA_HOME:-}" /etc/alternatives/cuda /usr/local/cuda /usr/local/cuda-*; do
+            [ -n "$d" ] && [ -x "$d/bin/nvcc" ] || continue
+            CUDA_HOME="$(readlink -f "$d")"
+            case ":$PATH:" in
+                *":$CUDA_HOME/bin:"*) ;;
+                *) export PATH="$CUDA_HOME/bin:$PATH" ;;
+            esac
+            nvcc_detected="$CUDA_HOME/bin/nvcc"
+            break
+        done
     fi
+    if [ -z "$nvcc_detected" ]; then
+        fail_dep "NVIDIA toolchain features are enabled but nvcc was not found.
+  Features: $MISTRALRS_FEATURES
+  Install the CUDA toolkit (https://developer.nvidia.com/cuda-downloads) or
+  point CUDA_HOME at an existing toolkit root."
+    fi
+    export CUDA_HOME="${CUDA_HOME:-$(dirname "$(dirname "$nvcc_detected")")}"
+    export CUDA_PATH="${CUDA_PATH:-$CUDA_HOME}"
+    # Target the real GPU when one is visible (nvidia-smi reports e.g. "9.0");
+    # CPU-only/buried-toolkit hosts default to sm80 compile targets.
+    if [ -z "${CUDA_COMPUTE_CAP:-}" ]; then
+        detected_cc="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ./')"
+        export CUDA_COMPUTE_CAP="${detected_cc:-80}"
+    fi
+    export CUDA_COMPUTE_CAP="${CUDA_COMPUTE_CAP:-80}"
+    # flash-attn-v3 compile is hard-gated at sm90 in candle-flash-attn-v3
+    # (Hopper kernels). When the detected target is older, drop it from the
+    # default set; an explicit request for it is a hard error instead.
+    if has_feature flash-attn-v3 && [ "${CUDA_COMPUTE_CAP:-80}" -lt 90 ]; then
+        if [ -n "${MISTRALRS_FEATURES_EXPLICIT:-}" ]; then
+            fail_dep "flash-attn-v3 needs an sm90 GPU target (CUDA_COMPUTE_CAP=90,
+  auto-detected ${detected_cc:-none}, using ${CUDA_COMPUTE_CAP:-80}). Point it at
+  an H100-class host or drop the feature."
+        fi
+        echo "Note: dropping flash-attn-v3 (needs an sm90 target; detected ${detected_cc:-none}, using sm${CUDA_COMPUTE_CAP:-80})"
+        MISTRALRS_FEATURES="$(echo " $MISTRALRS_FEATURES " | sed 's/, */ /g;s/flash-attn-v3 *//;s/^ *//;s/ *$//;s/ \+/ /g;s/ /,/g;s/,$//;s/^,//;s/,,*/,/g')"
+        export MISTRALRS_FEATURES
+    fi
+    echo "nvcc: $($nvcc_detected --version 2>/dev/null | tail -1) ($nvcc_detected)"
+    echo "CUDA_COMPUTE_CAP=${CUDA_COMPUTE_CAP:-80}"
 fi
 
-# ── ROCm toolkit auto-install (optional) ────────────────────────────────────
-# Only needed when rocm feature is requested and hipcc is not already available.
-if echo "${MISTRALRS_FEATURES:-}" | grep -qw rocm; then
-    if ! command -v hipcc &>/dev/null && [ -z "${ROCM_HOME:-}" ] && [ -z "${HIP_PATH:-}" ]; then
-        echo "=== ROCm feature requested but hipcc not found — installing toolkit ==="
-        sudo apt-get update -qq
-        sudo apt-get install -y rocm-dev hipcc
-        export ROCM_PATH="${ROCM_PATH:-/opt/rocm}"
-        export ROCM_HOME="$ROCM_PATH"
-        export HIP_PATH="$ROCM_PATH"
-        export PATH="${ROCM_PATH}/bin:${PATH}"
+# ── cuDNN ────────────────────────────────────────────────────────────────────
+cudnn_ok() {
+    local cache
+    cache="$(ldconfig -p 2>/dev/null)" || true
+    grep -q "libcudnn.so.9" <<< "$cache" && return 0
+    compgen -G "$CUDA_HOME/lib64/libcudnn.so.9" &>/dev/null && return 0
+    for d in /usr/lib/x86_64-linux-gnu /usr/local/lib; do
+        compgen -G "$d/libcudnn.so.9" &>/dev/null && return 0
+    done
+    return 1
+}
+
+if has_feature cudnn; then
+    if ! cudnn_ok; then
+        cuda_major="$($nvcc_detected --version 2>/dev/null | sed -n 's/.*release \([0-9]*\)\..*/\1/p')"
+        cuda_minor="$($nvcc_detected --version 2>/dev/null | sed -n 's/.*release [0-9]*\.\([0-9]*\).*/\1/p')"
+        for pkg in "cudnn9-cuda-${cuda_major}-${cuda_minor}" "cudnn9-cuda-${cuda_major}" cudnn9; do
+            apt-cache show "$pkg" &>/dev/null && apt_install "$pkg" && break
+        done
+        cudnn_ok || fail_dep "libcudnn.so.9 not found for the cudnn feature.
+  Installed via apt (cudnn9-cuda-*) or download from
+  https://developer.nvidia.com/cudnn-downloads and extract so that libcudnn
+  is on the linker path."
     fi
+    echo "cuDNN: OK"
+fi
+
+# ── NCCL ─────────────────────────────────────────────────────────────────────
+nccl_ok() {
+    local cache
+    cache="$(ldconfig -p 2>/dev/null)" || true
+    grep -q "libnccl.so.2" <<< "$cache"
+}
+
+if has_feature nccl; then
+    if ! nccl_ok; then
+        apt_install libnccl2 libnccl-dev
+        nccl_ok || fail_dep "libnccl.so.2 not found for the nccl feature.
+  Install from the NVIDIA CUDA repo: https://docs.nvidia.com/deeplearning/nccl
+  (packages: libnccl2 libnccl-dev)."
+    fi
+    echo "NCCL: OK"
+fi
+
+# ── ROCm toolchain (hipcc + HIP device bitcode for the kernels build) ───────
+if has_feature rocm; then
+    if ! command -v hipcc &>/dev/null; then
+        for d in "${ROCM_HOME:-${ROCM_PATH:-/opt/rocm}}" /opt/rocm /opt/rocm-*; do
+            [ -n "$d" ] && [ -x "$d/bin/hipcc" ] || continue
+            export ROCM_HOME="$(readlink -f "$d")"
+            case ":$PATH:" in
+                *":$ROCM_HOME/bin:"*) ;;
+                *) export PATH="$ROCM_HOME/bin:$PATH" ;;
+            esac
+            break
+        done
+    fi
+    command -v hipcc &>/dev/null || fail_dep "hipcc was not found for the rocm feature.
+  ROCM_PATH=$ROCM_PATH
+  Install ROCm (https://rocm.docs.amd.com/projects/install-on-linux) or source
+  the .rocm-env.sh sibling next to this script."
+    hip_bitcode="${ROCM_HOME:-$ROCM_PATH}/lib/llvm/amdgcn/bitcode"
+    [ -d "$hip_bitcode" ] || fail_dep "HIP device bitcode missing: $hip_bitcode
+  (the candle-kernels hipcc build links against the amdgcn bitcode libraries)."
+    echo "hipcc: $(hipcc --version 2>/dev/null | head -1)"
+fi
+
+# ── Apple-only features ──────────────────────────────────────────────────────
+if has_feature metal || has_feature accelerate; then
+    [ "$(uname -s)" = "Darwin" ] || fail_dep "metal/accelerate features require macOS
+  (Apple Accelerate / Metal frameworks are not available on $(uname -s))."
 fi
 
 # ── Build configuration ─────────────────────────────────────────────────────
