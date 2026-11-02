@@ -107,14 +107,14 @@ See [CPU threads and affinity](/guides/perf/throughput-tuning/#cpu-threads-and-a
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_NO_NCCL` | Disables NCCL for single-machine multi-GPU inference when set to `1`. Also set this for ring deployments when the binary includes NCCL. |
+| `MISTRALRS_NO_NCCL` | Disables NCCL for single-machine multi-GPU inference when set to `1`. NCCL is also skipped automatically when no NVIDIA driver runtime is present, so `cuda,nccl` binaries run NCCL-free on ROCm/NPU hosts. |
 | `MISTRALRS_MN_GLOBAL_WORLD_SIZE` | Total NCCL tensor-parallel world size across nodes. Presence of this variable enables multi-node NCCL mode. |
 | `MISTRALRS_MN_LOCAL_WORLD_SIZE` | Local NCCL tensor-parallel size contributed by each node. |
 | `MISTRALRS_MN_HEAD_NUM_WORKERS` | Set on the head node: number of worker nodes. |
 | `MISTRALRS_MN_HEAD_PORT` | Set on the head node: listening port for worker connections. |
 | `MISTRALRS_MN_WORKER_SERVER_ADDR` | Set on worker nodes: address of the head node. |
 | `MISTRALRS_MN_WORKER_ID` | Set on worker nodes: worker index (0-based). |
-| `RING_CONFIG` | Path to the ring backend JSON config. Setting it selects the ring backend when built with the `ring` feature. If the binary also has `nccl`, set `MISTRALRS_NO_NCCL=1` as well. |
+| `MISTRALRS_RING_CONFIG` | Path to the ring backend JSON config file. Setting it selects the ring transport for that rank when the binary is built with `ring`, taking priority over NCCL selection (no `MISTRALRS_NO_NCCL` needed). Runs on every device platform (CUDA, ROCm, NPU, CPU). |
 
 See the [distributed inference guide](/guides/perf/distributed-inference/) for use.
 

@@ -124,6 +124,16 @@ mistralrs run -f /path/to/model.gguf --device npu:0
 mistralrs serve -m <model-id> --device npu:0
 ```
 
+### Multi-rank NPU (ring transport)
+
+Tensor parallelism across NPU (or mixed NPU/ROCm) ranks uses the ring transport: build with the `ring` feature (the build script default includes it) and point each rank at its own ring config. See [distributed inference](/guides/perf/distributed-inference/) for the config schema; each rank launches with the same model and its own config:
+
+```bash
+MISTRALRS_RING_CONFIG=/path/to/rank0.json mistralrs serve -m <model-id> --device npu:0
+```
+
+`world_size` must be a power of 2, and collectives stage GPU tensors through host memory over TCP.
+
 ### Diagnostics
 
 ```bash

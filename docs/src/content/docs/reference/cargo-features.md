@@ -10,14 +10,14 @@ mistral.rs uses Cargo features to gate platform-specific and optional functional
 | Feature | Crates | Purpose |
 |---|---|---|
 | `cuda` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-server-core` | NVIDIA CUDA acceleration, including [paged attention](/guides/perf/paged-attention/). |
-| `cudnn` | as above | cuDNN-accelerated kernels. |
+| `cudnn` | as above | cuDNN-accelerated kernels (NVIDIA role only; in `cuda,rocm` multi-vendor builds the AMD role compiles the cudnn paths out). |
 | `flash-attn` | as above | Flash attention v2 (Ampere+, requires `cuda`). |
-| `flash-attn-v3` | `mistralrs-cli`, `mistralrs-core`, `mistralrs-server-core` | Flash attention v3 (Hopper, requires `cuda`). Not exposed by the top-level `mistralrs` crate. |
+| `flash-attn-v3` | `mistralrs-cli`, `mistralrs-core`, `mistralrs-server-core` | Flash attention v3 (Hopper, requires `cuda`). Kernels target sm90 or newer, and the build fails when `CUDA_COMPUTE_CAP` points below that. Not exposed by the top-level `mistralrs` crate. |
 | `cutile` | `mistralrs-cli`, `mistralrs-core` | Optional cuTile acceleration for MoE and routed LoRA. Requires CUDA >= 13.2 on Ampere/Ada and Blackwell+, CUDA >= 13.3 on Hopper, and a compatible `tileiras` installation. See [cuTile setup](/developer/moe-backends/). Not exposed by the top-level `mistralrs` crate. |
 | `metal` | as above | Apple Silicon GPU support via Metal. |
 | `accelerate` | as above | Apple Accelerate framework for CPU math. |
 | `mkl` | as above | Intel MKL for CPU math. |
-| `nccl` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-server-core` | NCCL single-machine CUDA multi-GPU support. Requires the NCCL runtime library at build and runtime. |
+| `nccl` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-server-core` | NCCL single-machine CUDA multi-GPU support. Requires the NCCL runtime library at build and runtime, and is skipped automatically at runtime when no NVIDIA driver runtime is present. |
 | `npu` | `mistralrs-cli`, `mistralrs-core`, `mistralrs-server-core` | AMD Ryzen AI NPU (Strix Halo, XDNA 2). Unified-memory backend (CPU-delegated ops, AIE kernel dispatch under development). Needs XRT NPU2 packages and the MLIR-AIE + Peano toolchain. See [deploy on NPU](/guides/deploy/npu/). |
 | `rocm` | `mistralrs-cli`, `mistralrs-core`, `mistralrs-server-core` | AMD ROCm (HIP) acceleration, including paged attention. Source build only: needs a ROCm toolkit, `CANDLE_ROCM_ARCH`, and a ROCm-capable Candle checkout. See [deploy on ROCm](/guides/deploy/rocm/). |
 
@@ -36,12 +36,14 @@ Typical combinations:
 
 For Linux CUDA multi-GPU, add `nccl` when NCCL is installed. The Linux installer and CUDA wheel builder add it automatically when they detect `libnccl`.
 
+The all-in-one `scripts/build.sh` builds the platform default in one shot (Linux: `cuda,rocm,npu,cutile,nccl,cudnn,flash-attn,flash-attn-v3,ring,mkl`; macOS: `metal,accelerate,ring`), validates each feature's toolchain and libraries, and can auto-install the apt-installable ones (`GPU_DEPS_INSTALL=ask|always|never`). It also auto-detects `CUDA_COMPUTE_CAP` from `nvidia-smi` and drops `flash-attn-v3` from the default set when the target is pre-Hopper; see `scripts/README.md`.
+
 ## Functional features
 
 | Feature | Crates | Purpose |
 |---|---|---|
 | `code-execution` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-server-core` | Python code execution tool. In `mistralrs-cli` defaults. |
-| `ring` | as above | Multi-machine ring distributed inference. |
+| `ring` | as above | Ring-topology distributed inference over plain TCP, selected per rank via `MISTRALRS_RING_CONFIG` (an explicit ring config takes priority over NCCL). Runs on every device platform - CUDA, ROCm, NPU, and CPU - with GPU tensors staged through host memory around collectives. |
 | `swagger-ui` | `mistralrs-server-core` | Mounts Swagger UI on the HTTP server. On by default in `mistralrs-server-core`. |
 
 ## Enabling features

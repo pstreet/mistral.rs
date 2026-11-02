@@ -49,12 +49,25 @@ Common per-platform flag strings:
 | CPU | (none) |
 | macOS / Metal | `metal` |
 | CUDA | `cuda flash-attn cudnn` |
-| CUDA multi-GPU | `cuda flash-attn cudnn nccl` |
+| CUDA multi-GPU / multi-node | `cuda flash-attn cudnn nccl` |
+| CUDA cluster without NCCL, or ring transport | add `ring` on any of the rows above; ring runs over TCP on CUDA, ROCm, NPU, and CPU alike and wins over NCCL when `MISTRALRS_RING_CONFIG` is set |
 | ROCm | `rocm` (needs `CANDLE_ROCM_ARCH` and a ROCm-capable Candle checkout; see [deploy on ROCm](/guides/deploy/rocm/)) |
 | AMD NPU (Strix Halo) | `npu` (needs XRT NPU2 + MLIR-AIE venv; see [deploy on NPU](/guides/deploy/npu/)) |
 | Multi-vendor | `cuda,rocm,npu,flash-attn` (four-role binary, all probe-gated) |
 
 The full flag list, per-hardware recommendations, and per-flag effects live in the [cargo features reference](/reference/cargo-features/). Add `nccl` on Linux when NCCL is installed and you want CUDA multi-GPU tensor parallelism.
+
+## One-shot build script
+
+`scripts/build.sh` wraps the manual flow for local workstations: it builds the full platform default (Linux: `cuda,rocm,npu,cutile,nccl,cudnn,flash-attn,flash-attn-v3,ring,mkl`; macOS: `metal,accelerate,ring`), checks each feature's dependency up front, and offers to install the apt-installable ones.
+
+```bash
+./scripts/build.sh                                        # all features, dependency-checked
+MISTRALRS_FEATURES=rocm ./scripts/build.sh                # single feature shape
+GPU_DEPS_INSTALL=never ./scripts/build.sh                 # no prompts; missing deps hard-fail
+```
+
+Consent control for the apt auto-install step is `GPU_DEPS_INSTALL=ask` (default, prompts on a TTY), `always`, or `never`. Set `MISTRALRS_FEATURES` for a custom shape. On GPU-less or pre-Hopper boxes the script auto-detects `CUDA_COMPUTE_CAP` via `nvidia-smi` and drops `flash-attn-v3` from the default set rather than failing the sm90 compile. The NPU toolchain venv defaults to `~/.local/share/mistralrs-npu` (`NPU_VENV` to override). See `scripts/README.md` for the full variable reference.
 
 ## Developing against a local checkout
 

@@ -12,7 +12,7 @@ mistral.rs has four ways to spread one model beyond a single GPU. They solve dif
 | NCCL tensor parallelism | One machine, multiple CUDA GPUs | NCCL collectives | You have similar local GPUs and want the default high-throughput CUDA path. |
 | Layer mapping with CUDA P2P | One machine, multiple devices | CUDA peer access when available, CPU staging otherwise | NCCL is unavailable, disabled, or the model/layout needs contiguous layer placement. |
 | Multi-node NCCL | Multiple machines, each with local CUDA GPUs | NCCL across all ranks, with mistral.rs coordinating node startup | You want tensor parallelism across machines and each node contributes one or more local CUDA ranks. |
-| Ring backend | Multiple machines | mistral.rs ring transport from `RING_CONFIG` | You explicitly want the ring backend instead of NCCL. |
+| Ring backend | Multiple machines | mistral.rs ring transport from `MISTRALRS_RING_CONFIG` | You explicitly want the ring backend instead of NCCL; also covers ROCm, NPU, and CPU clusters. |
 
 **Tensor parallelism** splits each layer across all GPUs: each GPU holds a portion of every layer's weights and computes a portion of every matrix multiply, with an all-reduce per layer combining partial results. **Layer mapping** places different contiguous layer ranges on different devices; activations move only at layer-boundary device changes.
 
@@ -24,7 +24,7 @@ With a CUDA build and no manual mapping:
 2. Multiple visible GPUs use NCCL tensor parallelism when the binary has `cuda nccl` and `MISTRALRS_NO_NCCL` is not set.
 3. If NCCL is unavailable or disabled, mistral.rs uses layer mapping. CUDA pairs use P2P when the driver allows it; otherwise transfers stage through CPU.
 4. If `MISTRALRS_MN_GLOBAL_WORLD_SIZE` is set, NCCL tensor parallelism is extended across nodes.
-5. If `RING_CONFIG` is set and the binary has `ring`, the ring backend is available. If the binary also has NCCL, set `MISTRALRS_NO_NCCL=1` to force ring.
+5. If `MISTRALRS_RING_CONFIG` is set and the binary has `ring`, the ring backend is selected; an explicit ring config takes priority over NCCL.
 
 The selected layout is printed in the startup logs at `INFO` level. When a topology file is in use, the logs list the device for each layer; `nvidia-smi` shows per-GPU memory at runtime.
 
@@ -114,7 +114,7 @@ On Apple Silicon there is no multi-GPU concept: CPU and GPU share unified memory
 
 ## Multi-node NCCL
 
-Multi-node NCCL inference extends tensor parallelism across machines. Each node contributes one or more local CUDA ranks to one global NCCL communicator. It is selected by the `MISTRALRS_MN_*` environment variables and does not use `RING_CONFIG`.
+Multi-node NCCL inference extends tensor parallelism across machines. Each node contributes one or more local CUDA ranks to one global NCCL communicator. It is selected by the `MISTRALRS_MN_*` environment variables and does not use `MISTRALRS_RING_CONFIG`.
 
 Build the same CUDA+NCCL binary on every node, and use the same model, dtype, quantization, and runtime arguments everywhere. Use `CUDA_VISIBLE_DEVICES` on each node to choose the local GPUs that participate.
 
@@ -126,7 +126,7 @@ global world size = local TP size * number of nodes
 
 The global tensor-parallel size must satisfy the same head-divisibility constraints as single-machine TP. Incompatible sizes fail at startup; mistral.rs does not automatically drop ranks.
 
-The head node distributes the NCCL id to workers over TCP, then all ranks join one communicator. The variable roles (`MISTRALRS_MN_GLOBAL_WORLD_SIZE`, `MISTRALRS_MN_LOCAL_WORLD_SIZE`, head vs worker settings) are documented in the [environment variable reference](/reference/environment-variables/). Do not set `MISTRALRS_NO_NCCL` or `RING_CONFIG` in this mode.
+The head node distributes the NCCL id to workers over TCP, then all ranks join one communicator. The variable roles (`MISTRALRS_MN_GLOBAL_WORLD_SIZE`, `MISTRALRS_MN_LOCAL_WORLD_SIZE`, head vs worker settings) are documented in the [environment variable reference](/reference/environment-variables/). Do not set `MISTRALRS_NO_NCCL` or `MISTRALRS_RING_CONFIG` in this mode.
 
 Two nodes, four GPUs per node:
 
@@ -162,7 +162,9 @@ On multi-interface machines, NCCL may pick the wrong network interface between n
 
 ## Ring backend
 
-The ring backend is a distributed transport selected by `RING_CONFIG`, available when the binary is compiled with the `ring` feature. Use it only when you intentionally want the `ring` transport; for CUDA tensor parallelism across machines, prefer multi-node NCCL.
+The ring backend is a distributed transport selected by the `MISTRALRS_RING_CONFIG` environment variable, available when the binary is compiled with the `ring` feature. An explicit ring config takes priority over NCCL selection, so no `MISTRALRS_NO_NCCL` workaround is needed when the binary also includes `nccl`.
+
+Ring works on every device platform, not just CUDA: the ranks communicate over plain TCP, and GPU-resident tensors (CUDA, ROCm, and NPU) stage through host memory around each collective - so an AMD ROCm or Strix Halo NPU cluster gets tensor parallelism without NCCL. CUDA multi-node setups designed for NCCL throughput should prefer multi-node NCCL.
 
 The `ring` feature must be compiled in:
 
@@ -170,9 +172,9 @@ The `ring` feature must be compiled in:
 cargo install mistralrs-cli --features "cuda flash-attn ring"
 ```
 
-If the binary is also built with `nccl`, set `MISTRALRS_NO_NCCL=1` when launching so the ring backend is selected.
+For ROCm, NPU, or CPU-only clusters the same feature list applies with `ring` - it needs no CUDA toolkit.
 
-The ring backend reads its configuration from a JSON file pointed to by the `RING_CONFIG` environment variable. Each participant has its own `RING_CONFIG` with rank-specific values:
+The ring backend reads its configuration from a JSON file pointed to by the `MISTRALRS_RING_CONFIG` environment variable. Each participant has its own config file with rank-specific values:
 
 ```json
 {
@@ -191,4 +193,4 @@ The ring backend reads its configuration from a JSON file pointed to by the `RIN
 ## See also
 
 - [Topology](/guides/perf/topology/): per-layer and per-tensor placement on one host.
-- [Environment variables](/reference/environment-variables/): full `MISTRALRS_MN_*`, `MISTRALRS_NO_NCCL`, and `RING_CONFIG` registry.
+- [Environment variables](/reference/environment-variables/): full `MISTRALRS_MN_*`, `MISTRALRS_NO_NCCL`, and `MISTRALRS_RING_CONFIG` registry.
