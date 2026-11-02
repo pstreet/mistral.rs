@@ -638,7 +638,7 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
 
         send_worker_ready()?;
         worker_rank + 1
-    } else if cfg!(feature = "ring") {
+    } else if use_ring() {
         id = mistralrs_quant::Id::new();
 
         let config = RingConfig::load();
