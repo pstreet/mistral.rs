@@ -18,6 +18,7 @@ mistral.rs uses Cargo features to gate platform-specific and optional functional
 | `accelerate` | as above | Apple Accelerate framework for CPU math. |
 | `mkl` | as above | Intel MKL for CPU math. |
 | `nccl` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-server-core` | NCCL single-machine CUDA multi-GPU support. Requires the NCCL runtime library at build and runtime. |
+| `npu` | `mistralrs-cli`, `mistralrs-core`, `mistralrs-server-core` | AMD Ryzen AI NPU (Strix Halo, XDNA 2). Unified-memory backend (CPU-delegated ops, AIE kernel dispatch under development). Needs XRT NPU2 packages and the MLIR-AIE + Peano toolchain. See [deploy on NPU](/guides/deploy/npu/). |
 | `rocm` | `mistralrs-cli`, `mistralrs-core`, `mistralrs-server-core` | AMD ROCm (HIP) acceleration, including paged attention. Source build only: needs a ROCm toolkit, `CANDLE_ROCM_ARCH`, and a ROCm-capable Candle checkout. See [deploy on ROCm](/guides/deploy/rocm/). |
 
 Typical combinations:
@@ -27,7 +28,9 @@ Typical combinations:
 - NVIDIA Blackwell with CUDA >= 13.2 and a compatible `tileiras`: `cuda flash-attn cudnn cutile`
 - NVIDIA older: `cuda cudnn`
 - AMD ROCm: `rocm` ([deploy on ROCm](/guides/deploy/rocm/))
-- Dual-vendor, AMD serves with NVIDIA probe-gated: `cuda,rocm` (both features together; needs the CUDA toolkit at build time; pin `CUDA_COMPUTE_CAP` on GPU-less boxes). Paged attention's FlashInfer fast paths follow each model's serving device: NVIDIA devices use FlashInfer, AMD (HIP) devices use the generic paged path.
+- AMD Ryzen AI NPU: `npu` ([deploy on NPU](/guides/deploy/npu/))
+- Multi-vendor (CUDA + ROCm): `cuda,rocm` (both features together; needs the CUDA toolkit at build time; pin `CUDA_COMPUTE_CAP` on GPU-less boxes). Paged attention's FlashInfer fast paths follow each model's serving device: NVIDIA devices use FlashInfer, AMD (HIP) devices use the generic paged path.
+- Multi-vendor (CUDA + ROCm + NPU): `cuda,rocm,npu,flash-attn` (four-role binary; all probe-gated; AIE kernel acceleration requires the MLIR-AIE + Peano toolchain installed separately).
 - Apple Silicon: `metal`
 - Intel CPU with MKL: `mkl`
 
@@ -70,4 +73,4 @@ No crate enables an accelerator feature by default. Opt in to the accelerator ma
 
 ## Feature verification
 
-`mistralrs doctor` prints a `Build features:` line listing the compiled-in accelerator features (`cuda`, `metal`, `cudnn`, `flash-attn`, `flash-attn-v3`, `cutile`, `accelerate`, `mkl`). Other features such as `nccl`, `ring`, `code-execution`, and `swagger-ui` are not shown on that line.
+`mistralrs doctor` prints a `Build features:` line listing the compiled-in accelerator features (`cuda`, `metal`, `cudnn`, `flash-attn`, `flash-attn-v3`, `cutile`, `accelerate`, `mkl`, `npu`). Other features such as `nccl`, `ring`, `code-execution`, and `swagger-ui` are not shown on that line.

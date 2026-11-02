@@ -76,6 +76,7 @@ metal = [
     "dep:mistralrs-metal-compile",
 ]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
+npu = ["candle-core/npu"]
 arm-nightly-feat = []
 ring = []
 

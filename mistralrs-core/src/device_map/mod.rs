@@ -276,6 +276,10 @@ fn mapped_device_for_ordinal(
             .ok_or_else(|| {
                 candle_core::Error::msg(format!("Could not find hip device with ordinal {ordinal}"))
             }),
+        #[cfg(feature = "npu")]
+        DeviceLocation::Npu { gpu_id } if gpu_id == ordinal => Ok(device.clone()),
+        #[cfg(feature = "npu")]
+        DeviceLocation::Npu { .. } => Device::new_npu(ordinal),
     }
 }
 
@@ -286,6 +290,8 @@ fn device_ordinal(device: &Device) -> usize {
         DeviceLocation::Metal { gpu_id } => gpu_id,
         #[cfg(feature = "rocm")]
         DeviceLocation::Hip { gpu_id } => gpu_id,
+        #[cfg(feature = "npu")]
+        DeviceLocation::Npu { gpu_id } => gpu_id,
     }
 }
 
@@ -412,6 +418,11 @@ pub fn get_all_similar_devices(base: &Device) -> Result<Vec<Device>> {
                     break;
                 }
             }
+        }
+        #[cfg(feature = "npu")]
+        Device::Npu(_) => {
+            // Strix Halo NPU is single-device (ordinal 0).
+            devices.push(Device::new_npu(0)?);
         }
     }
     Ok(devices)

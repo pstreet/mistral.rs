@@ -139,7 +139,7 @@ rocm = [
     "mistralrs-paged-attn/rocm",
     "dep:libloading",
 ]
-npu = ["dep:mistralrs-npu", "mistralrs-npu/npu"]
+npu = ["dep:mistralrs-npu", "mistralrs-npu/npu", "candle-core/npu", "mistralrs-quant/npu"]
 cudnn = ["candle-core/cudnn"]
 cutile = ["cuda", "mistralrs-quant/cutile"]
 metal = [

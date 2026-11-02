@@ -30,12 +30,17 @@ pub enum DeviceSpec {
     /// `"hip:N"` (alias `"rocm:N"`) - the HIP API (AMD role) in every
     /// build with the rocm feature. Bails in cuda-only builds.
     Hip(usize),
+    /// `"npu:N"` - the NPU API (AMD Ryzen AI / Strix Halo). Only
+    /// available when built with the `npu` feature.
+    Npu(usize),
     /// `"cuda"` - first available NVIDIA device (lowest ordinal that
     /// constructs). Redirects like an explicit ordinal in rocm-only
     /// builds.
     CudaFirst,
     /// `"hip"` (alias `"rocm"`) - first available AMD device.
     HipFirst,
+    /// `"npu"` - first available NPU device.
+    NpuFirst,
 }
 
 impl DeviceSpec {
@@ -54,6 +59,9 @@ impl DeviceSpec {
         if s.eq_ignore_ascii_case("hip") || s.eq_ignore_ascii_case("rocm") {
             return Ok(Self::HipFirst);
         }
+        if s.eq_ignore_ascii_case("npu") {
+            return Ok(Self::NpuFirst);
+        }
         let (api, idx) = s
             .rsplit_once(':')
             .and_then(|(api, idx)| Some((api, idx.parse::<usize>().ok()?)))
@@ -70,6 +78,7 @@ impl DeviceSpec {
             // Vulkan), but users reach for the ecosystem name - and the cargo
             // feature is `rocm` too. Both strings address the same device.
             "hip" | "rocm" => Self::Hip(idx),
+            "npu" => Self::Npu(idx),
             "vulkan" => {
                 return Err(candle_core::Error::msg(
                     "device \"vulkan:<idx>\" is not supported yet (the Vulkan backend is \
@@ -239,6 +248,24 @@ pub fn resolve(spec: &DeviceSpec) -> Result<Device> {
             first_available("cuda", |ord| resolve(&DeviceSpec::Cuda(ord)))
         }
         DeviceSpec::HipFirst => first_available("hip", |ord| resolve(&DeviceSpec::Hip(ord))),
+        DeviceSpec::Npu(idx) => {
+            #[cfg(not(feature = "npu"))]
+            {
+                let _ = idx;
+                candle_core::bail!("this binary has no NPU backend: use \"cpu\"");
+            }
+            #[cfg(feature = "npu")]
+            {
+                if !candle_core::npu_backend::is_npu_present() {
+                    candle_core::bail!(
+                        "device \"npu:{idx}\" was requested but no NPU runtime is present \
+                         (XRT not loadable)"
+                    );
+                }
+                Device::new_npu(*idx)
+            }
+        }
+        DeviceSpec::NpuFirst => first_available("npu", |ord| resolve(&DeviceSpec::Npu(ord))),
     }
 }
 
@@ -414,6 +441,14 @@ pub fn backend_caps(device: &Device) -> BackendCaps {
         // backend is compiled, so such a device can never be constructed.
         #[cfg(not(any(feature = "cuda", feature = "rocm")))]
         Device::Cuda(_) => unreachable!("no GPU backend compiled"),
+        #[cfg(feature = "npu")]
+        Device::Npu(_) => BackendCaps {
+            arch: None,
+            graphs: false,
+            paged_attention: true,
+            quantized_gguf: true,
+            mtp: true,
+        },
     }
 }
 
@@ -444,8 +479,10 @@ impl std::fmt::Display for DeviceSpec {
             Self::Cpu => write!(f, "cpu"),
             Self::Cuda(idx) => write!(f, "cuda:{idx}"),
             Self::Hip(idx) => write!(f, "hip:{idx}"),
+            Self::Npu(idx) => write!(f, "npu:{idx}"),
             Self::CudaFirst => write!(f, "cuda"),
             Self::HipFirst => write!(f, "hip"),
+            Self::NpuFirst => write!(f, "npu"),
         }
     }
 }

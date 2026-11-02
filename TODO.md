@@ -1350,8 +1350,9 @@ so candle CUDA fixes apply to the HIP role automatically.
       is stale, cp311/312/313/314 wheels all exist; doctor green;
       memlock: user shells need LimitMEMLOCK=infinity for pyxrt
       64MB mmap - use systemd-run --user -p LimitMEMLOCK=infinity
-      --setenv=PATH=/opt/xilinx/xrt/bin:... --setenv=PYTHONPATH=/
-      opt/xilinx/xrt/python <venv python> <design.py>; compile
+      --setenv=PATH=/opt/xilinx/xrt/bin:/usr/local/bin:/usr/bin:/bin
+      --setenv=PYTHONPATH=/opt/xilinx/xrt/python <venv python> <design.py>;
+      compile cache ~/.npu/cache).
       cache ~/.npu/cache). ON-DEVICE RESULTS (all numpy-verified
       PASS): passthrough_dmas DMA path OK; single-core bf16 mm
       512^3 = 79.65 GFLOPS (3.37ms NPU, ~380us host overhead);

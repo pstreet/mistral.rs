@@ -282,6 +282,18 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
         Device::Metal(_) => {
             return Err(Error::Msg("Metal support not compiled".to_string()));
         }
+        #[cfg(feature = "npu")]
+        Device::Npu(device) => {
+            let cpu_storage = match dtype {
+                DType::F6E2M3 => candle_core::cpu_backend::CpuStorage::F6E2M3(data.to_vec()),
+                DType::F6E3M2 => candle_core::cpu_backend::CpuStorage::F6E3M2(data.to_vec()),
+                DType::F4 => candle_core::cpu_backend::CpuStorage::F4(data.to_vec()),
+                DType::F8E8M0 => candle_core::cpu_backend::CpuStorage::F8E8M0(data.to_vec()),
+                _ => unreachable!(),
+            };
+            let storage = candle_core::NpuStorage::from_cpu_storage(cpu_storage);
+            Storage::Npu(storage)
+        }
     };
 
     Ok(Tensor::from((storage, shape)))

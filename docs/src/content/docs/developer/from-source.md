@@ -13,6 +13,7 @@ A source build needs Rust 1.94+ ([rustup](https://rustup.rs)) plus, per platform
 
 - **Linux CUDA:** an NVIDIA driver matching the target CUDA version (`nvidia-smi`), the CUDA toolkit on `PATH` (`nvcc --version`), and `libssl-dev` + `pkg-config` (`sudo apt install libssl-dev pkg-config`, or `sudo dnf install openssl-devel pkgconfig`). For a non-standard toolkit location set `CUDA_ROOT` (e.g. `export CUDA_ROOT=/opt/cuda-12.4`); for runtime libraries in non-standard directories (common on HPC module systems) add them to `LD_LIBRARY_PATH`.
 - **Linux ROCm:** a ROCm toolkit (`hipcc --version`), either distro packages under `/opt/rocm` or a local install pointed at by `ROCM_PATH`, plus `export CANDLE_ROCM_ARCH=<gfx-target>` (e.g. `gfx1151`) matching your GPU. Needs a Candle checkout with the ROCm backend next to the mistral.rs checkout. Full walkthrough: [deploy on ROCm](/guides/deploy/rocm/).
+- **Linux AMD NPU (Strix Halo / XDNA 2):** XRT NPU2 packages (`libxrt-dev libxrt2 libxrt-npu2`), the `amdxdna` kernel module loaded, and the MLIR-AIE + Peano toolchain (`aiecc` compiler + Peano clang). Full walkthrough: [deploy on NPU](/guides/deploy/npu/).
 - **macOS:** the Xcode Command Line Tools (`xcode-select --install`); a full Xcode install is not required. Apple Silicon uses `--features metal`; Intel Macs use `--features accelerate` (or `mkl` if Intel MKL is installed).
 - **Windows:** Visual Studio 2022 Build Tools (the `rustup-init.exe` installer can add these) and, for CUDA, the [CUDA toolkit](https://developer.nvidia.com/cuda-downloads). If `cargo build` fails on long paths, enable long-path support: `Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -Value 1 -Type DWord` (the registry setting, not `git config core.longpaths`). Native Windows lacks the ring-backend and some experimental features; for full parity use **WSL2** (`wsl --install -d Ubuntu`, verify `nvidia-smi` inside it, then follow the Linux steps).
 
@@ -50,6 +51,8 @@ Common per-platform flag strings:
 | CUDA | `cuda flash-attn cudnn` |
 | CUDA multi-GPU | `cuda flash-attn cudnn nccl` |
 | ROCm | `rocm` (needs `CANDLE_ROCM_ARCH` and a ROCm-capable Candle checkout; see [deploy on ROCm](/guides/deploy/rocm/)) |
+| AMD NPU (Strix Halo) | `npu` (needs XRT NPU2 + MLIR-AIE venv; see [deploy on NPU](/guides/deploy/npu/)) |
+| Multi-vendor | `cuda,rocm,npu,flash-attn` (four-role binary, all probe-gated) |
 
 The full flag list, per-hardware recommendations, and per-flag effects live in the [cargo features reference](/reference/cargo-features/). Add `nccl` on Linux when NCCL is installed and you want CUDA multi-GPU tensor parallelism.
 

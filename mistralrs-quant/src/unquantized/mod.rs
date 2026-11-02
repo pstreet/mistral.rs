@@ -213,6 +213,11 @@ impl QuantMethod for UnquantLinear {
                         matmul_result.broadcast_add(&b)
                     }
                 }
+                #[cfg(feature = "npu")]
+                DeviceLocation::Npu { .. } => {
+                    let matmul_result = a.matmul(&w.t()?)?;
+                    matmul_result.broadcast_add(&b)
+                }
             }
         } else {
             match a.device().location() {
@@ -246,6 +251,8 @@ impl QuantMethod for UnquantLinear {
                         a.matmul(&w.t()?)
                     }
                 }
+                #[cfg(feature = "npu")]
+                DeviceLocation::Npu { .. } => a.matmul(&w.t()?),
             }
         }
     }

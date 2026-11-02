@@ -167,6 +167,15 @@ impl MemoryUsage {
             Device::Metal(_) => {
                 candle_core::bail!("Cannot query memory for Metal device")
             }
+            #[cfg(feature = "npu")]
+            Device::Npu(_) => {
+                // NPU on Strix Halo: unified memory, shares system RAM.
+                let sys = System::new_all();
+                Ok(DeviceMemory::Discrete {
+                    total: usize::try_from(sys.total_memory())?,
+                    free: usize::try_from(sys.available_memory())?,
+                })
+            }
         }
     }
 

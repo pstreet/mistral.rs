@@ -14,10 +14,11 @@ Use this page to check whether a prebuilt binary exists for your accelerator. If
 | Apple Silicon (macOS arm64) | Metal | yes |
 | Linux x86_64 / aarch64, no GPU | CPU | yes |
 | Linux x86_64 + AMD GPU | ROCm (HIP) | no, [source build](/guides/deploy/rocm/) |
+| Linux x86_64 + AMD NPU (Strix Halo) | Ryzen AI NPU (XDNA 2) | no, [source build](/guides/deploy/npu/) |
 | Windows x86_64 | CPU | yes |
 | Intel Mac, unlisted GPU | source build | no |
 
-CPU inference is available in every build shape. `cuda,rocm` is a source-only dual-vendor shape (no prebuilt binaries): the AMD role serves while NVIDIA access is probe-gated (see [cargo features](/reference/cargo-features/)).
+CPU inference is available in every build shape. `cuda,rocm` is a source-only dual-vendor shape (no prebuilt binaries): the AMD role serves while NVIDIA access is probe-gated (see [cargo features](/reference/cargo-features/)). `cuda,rocm,npu` builds a four-role binary with all probe-gated.
 
 ## NVIDIA compute capabilities
 

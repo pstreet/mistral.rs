@@ -51,7 +51,7 @@ Mistral.rs supports multiple model types and advanced features via dedicated cra
 ## Building
 
 1. Install Rust via rustup (Rust 2021 edition).
-2. Choose optional features (e.g., `rocm` for AMD, `cuda`, `cuda,rocm` for dual-vendor, `flash-attn`, `cudnn`, `metal`, `mkl`, `accelerate`).
+2. Choose optional features (e.g., `rocm` for AMD, `cuda`, `cuda,rocm` for dual-vendor, `npu` for AMD Ryzen AI, `flash-attn`, `cudnn`, `metal`, `mkl`, `accelerate`).
 3. Build the entire workspace:
    ```bash
    cargo build --workspace --release --features "<features>"
@@ -86,7 +86,7 @@ You should also look for a model.safetensors.index.json file for the model at ha
   cargo test --workspace
   ```
 
-You should *always* run `cargo check`/`cargo c` before returning to make sure code compiles. If code does not compile, only make edits. For GPU-facing changes, check every shape (no features, `--features rocm`, `--features cuda`, `--features cuda,rocm`): `cargo check` never links, so also build or test the binary shape you touched.
+You should *always* run `cargo check`/`cargo c` before returning to make sure code compiles. If code does not compile, only make edits. For GPU-facing changes, check every shape (no features, `--features rocm`, `--features cuda`, `--features npu,rocm`, `--features npu,rocm,cuda`, `--features rocm,cuda,npu,flash-attn`): `cargo check` never links, so also build or test the binary shape you touched.
 
 Avoid returning TODOs.
 
@@ -144,19 +144,19 @@ The CI pipeline is defined in `.github/workflows/ci.yml` and includes:
   on `candle_core::GpuArch`, never raw compute-capability ints; the
   HIP-synthetic `cc` encoding (gfx1151 -> 1150) lives only at the kernel
   bridge where the llama.cpp-derived C launchers consume it. Supported
-  shapes: default (CPU-only), `rocm` (AMD), `cuda`
-  (NVIDIA), and any combination by plain comma separation (`cuda,rocm`
-  serves both roles, with NVIDIA access gated on cudarc's
-  `is_culib_present()` probe; a future `vulkan` backend adds
+  shapes: default (CPU-only), `rocm` (AMD dGPU), `cuda`
+  (NVIDIA), `npu` (AMD Ryzen AI Strix Halo), and any combination by plain comma separation (`cuda,rocm,npu`
+  serves all three roles; NVIDIA and NPU access gated on dlopen probes; a future `vulkan` backend adds
   `--features rocm,cuda,vulkan` with no new compounds). No compound feature
   names. The production binary on a dual-vendor host is always the dual
-  shape with flash attention (`--features cuda,rocm,flash-attn`): a
+  shape with flash attention (`--features cuda,rocm,npu,flash-attn`): a
   rocm-only build silently drops the NVIDIA role (cuda entries fall
   through to hip devices, and the binary shrinks ~25%). `flash-attn` is
-  role-agnostic: when present it enables flash attention on every GPU
+  role-agnostic on GPU roles: when present it enables flash attention on every GPU
   role in the build (Cuda role via the mistralrs-flash-attn CUTLASS
-  kernels, Hip role via the ROCm-native CK flash path); when absent no
-  GPU role gets it and all GPU attention falls back to eager.
+  kernels, Hip role via the ROCm-native CK flash path); NPU has no flash attention
+  impl and falls back to eager regardless. When absent no GPU role gets it and all
+  GPU attention falls back to eager.
   Single-vendor shapes carry it the same way (`cuda,flash-attn`,
   `rocm,flash-attn`); it never forces a role on. FlashAttention,
   PagedAttention, and MTP compose freely on GPU - their capability

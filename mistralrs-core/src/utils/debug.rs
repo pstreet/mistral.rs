@@ -79,6 +79,8 @@ impl DeviceRepr for Device {
             DeviceLocation::Metal { gpu_id } => format!("metal[{gpu_id}]"),
             #[cfg(feature = "rocm")]
             DeviceLocation::Hip { gpu_id } => format!("hip[{gpu_id}]"),
+            #[cfg(feature = "npu")]
+            DeviceLocation::Npu { gpu_id } => format!("npu[{gpu_id}]"),
         }
     }
 }
