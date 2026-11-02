@@ -67,7 +67,7 @@ GB/s figures below must be judged against 241 GB/s, not MALL/L2.
 |--------|---------|-------------|------|----------------|--------|
 | mmvq_q8_0_plain (17.4k calls) | 60.6 | 0.3% | 242 | 100% | at GTT roofline |
 | moe_gemv_gate_up (5.2k) | 124.5 | 0.7% | 125 | 52% | mem-bound |
-| moe_gemv_down_aggr (4.9k) | 91.5 | 0.5% | 183 | 76% | mem-bound |
+| moe_gemv_down_aggr (4.9k) | 91.5 | 0.5% | 217 | 96% | mem-bound (wide4 deployed) |
 | attention_paged (1.5k) | 168.6 | 1.0% | 337 | >100% (L2/MALL hits) | KV-cache-resident |
 | gdn_recurrence (12.9k) | 13.3 | 0.08% | 13 | 5% | launch/latency-bound |
 
@@ -78,7 +78,7 @@ GB/s figures below must be judged against 241 GB/s, not MALL/L2.
 | mmvq_gguf_q8_0_bf16_plain_cuda3 (MTP verify, 3 tok) | 15681 | 963 | 28.1% | 195 | 81% |
 | mmvq_gguf_q8_0_bf16_plain_cuda1 (batch 1) | 1619 | 589 | 17.2% | 212 | 88% |
 | moe_gemv_fused_gate_up_q4k_q8_1 | 4779 | 583 | 17.0% | 191 | 79% |
-| moe_gemv_down_aggregate_q5k_q8_1 | 4545 | 409 | 11.9% | 163 | 68% |
+| moe_gemv_down_aggregate_q5k_q8_1 | 4545 | 316 | 9.2% | 217 | 96% (wide4 deployed) |
 | vllm::paged_attention_v2_kernel (bf16) | 1356 | 359 | 10.5% | 273 | >100% (KV in L2/MALL) |
 | gdn_decode_recurrence_kernel (bf16) | 12299 | 176 | 5.1% | 229 | 95% |
 | mmvq_gguf_q8_0_bf16_fused_qkv_cuda3 | 1157 | 131 | 3.8% | 166 | 69% |
@@ -344,8 +344,9 @@ fixed (9fbdada2d: span scales with prompt; synthetic mod-2048 wrap was
 faking acceptance cliffs). MISTRALRS_MTP_ACCEPT_LOG=1 acceptance logging
 added (51d83d966). Eager-speculative 0% collapse bounded but not fully
 explained (never reproduces on fast profile; see Root cause closed).
-Open kernel-side lever: MoE down-aggregate at 68% of roofline (~2%
-end-to-end). Details: COMPLETED.md.
+Open kernel-side lever: mmvq plain cuda3 at 81% of roofline (28% of all
+kernel time = ~5% wall savings if fixed). MoE down-aggregate closed by wide4
+kernel (2026-10-31, ~96% of roofline). Details: COMPLETED.md.
 
 ## Perf review backlog (opened 2026-10-28, candle + mistral.rs code review)
 
