@@ -75,7 +75,7 @@ GB/s figures below must be judged against 241 GB/s, not MALL/L2.
 ### prompt 1024 / depth 854 / gen 64, workloads/bench_roc2)
 | Kernel (real name) | calls | tot ms | share | GB/s | % of 241 GTT read |
 |--------|------|--------|-------|------|-------------------|
-| mmvq_gguf_q8_0_bf16_plain_cuda3 (MTP verify, 3 tok) | 15681 | 963 | 28.1% | 195 | 81% |
+| mmvq_gguf_q8_0_bf16_plain_cuda3 (MTP verify, 3 tok) | 15681 | 963 | 28.1% | 195 | 81% (shape-specific, not a gap — sweep closed all q8_0 shapes at 209-239 GB/s) |
 | mmvq_gguf_q8_0_bf16_plain_cuda1 (batch 1) | 1619 | 589 | 17.2% | 212 | 88% |
 | moe_gemv_fused_gate_up_q4k_q8_1 | 4779 | 583 | 17.0% | 191 | 79% |
 | moe_gemv_down_aggregate_q5k_q8_1 | 4545 | 316 | 9.2% | 217 | 96% (wide4 deployed) |
@@ -344,9 +344,10 @@ fixed (9fbdada2d: span scales with prompt; synthetic mod-2048 wrap was
 faking acceptance cliffs). MISTRALRS_MTP_ACCEPT_LOG=1 acceptance logging
 added (51d83d966). Eager-speculative 0% collapse bounded but not fully
 explained (never reproduces on fast profile; see Root cause closed).
-Open kernel-side lever: mmvq plain cuda3 at 81% of roofline (28% of all
-kernel time = ~5% wall savings if fixed). MoE down-aggregate closed by wide4
-kernel (2026-10-31, ~96% of roofline). Details: COMPLETED.md.
+Open kernel-side lever: structural (fewer launches/cycle) work on
+decode-critical-path kernels. MoE down-aggregate closed by wide4 kernel
+(2026-10-31, ~96% of roofline). mmvq q8_0 sweep closed (2026-11-01, all
+shapes at 209-239 GB/s vs 226 GB/s DRAM roofline). Details: COMPLETED.md.
 
 ## Perf review backlog (opened 2026-10-28, candle + mistral.rs code review)
 
