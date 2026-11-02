@@ -1,3 +1,49 @@
+## Nov 2 (ring transport, multi-vendor build, build script, doc sweep)
+
+- Ring transport: ring backend now selected by `MISTRALRS_RING_CONFIG` env var
+  (not `RING_CONFIG` — that was a docs bug). Ring takes priority over NCCL when
+  both are compiled in (no `MISTRALRS_NO_NCCL` workaround needed). Runs on every
+  device platform — CUDA, ROCm, NPU, CPU — with GPU tensors staged through host
+  memory around collectives.
+- Ring/NCCL runtime probe-gating: `use_nccl()` now requires an NVIDIA driver
+  runtime probe (`is_culib_present()`) so `cuda,nccl` binaries run NCCL-free on
+  ROCm/NPU hosts. `Comm::from_device` checks ring first, then NCCL, then Dummy.
+  `get_global_tp_size_from_devices()` also ring-first with early returns.
+- Ring staging for Hip/Npu: ring ops `sum_all_reduce` and `all_gather` now
+  handle `Storage::Hip` and `Storage::Npu` by staging through host CPU before
+  the TCP send/recv. `get_global_tp_size_from_devices` restructured to avoid
+  overlapping bare-cfg blocks.
+- cutile gated routed_lora: `mod routed_lora` + re-exports gated to
+  `all(feature="cuda", feature="cutile", not(feature="rocm"))` since it rides
+  the CUDA-only Lora table stack dropped in dual builds. Fixed the E0432 that
+  killed dual builds.
+- Ring panic fix (prod swap): compile-time `cfg!(feature = "ring")` checks in
+  `prepare_distributed_mapper()` and `engine/mod.rs` triggered `RingConfig::load()`
+  even when `MISTRALRS_RING_CONFIG` was not set, causing a panic at startup.
+  Changed both to runtime `use_ring()` so the ring path only activates when the
+  config is actually provided. (Commit fdb624771)
+- Candle MKL hgemm_ shim: the pinned rust-mkl 2020.1 statics export sgemm_/dgemm_
+  but no hgemm_, so any binary linking the mkl feature failed at link time (f16
+  CPU matmul is the only consumer). Provide hgemm_ in candle: expand f16 to f32
+  (exact), run MKL sgemm with netlib-identical touch windows, round back. Covered
+  by hgemm_shim_matches_reference (N/N, T/N, beta=1). 109 candle-core tests green.
+- Candle role-keyed cudnn: dual cuda+rocm builds now keep the cudnn module for
+  the NVIDIA role and compile it out of the AMD role shell (cudarc-hip has no
+  cudnn surface). `as_hip_device` gets the Npu arm for exhaustive device casts.
+- Build script modernized: default feature set per platform (Linux:
+  cuda,rocm,npu,cutile,nccl,cudnn,flash-attn,flash-attn-v3,ring,mkl; macOS:
+  metal,accelerate,ring). Pre-cargo dependency checks for nvcc, cudnn, nccl,
+  hipcc+bitcode, NPU venv toolchain. `GPU_DEPS_INSTALL=ask|always|never` gates
+  apt auto-install, otherwise actionable errors. Auto-detect `CUDA_COMPUTE_CAP`
+  via nvidia-smi; drop flash-attn-v3 below sm90 (hard error when explicitly
+  requested).
+- Docs updated: `MISTRALRS_RING_CONFIG` env var (the name code reads), ring-over-
+  NCCL priority, ring platform span (CUDA/ROCm/NPU/CPU), feature annotations
+  (cudnn/flash-attn-v3/nccl/ring), ring row + one-shot build.sh section in
+  from-source, multi-rank NPU subsection, nccl runtime self-gating.
+- Prod swapped: 403 MB binary, all 13 models loaded, health OK, completion
+  verified (qwen3.6-35b-a3b on hip:0, 72 tok/s, 0.237s total).
+
 ## Nov 1 (perf: mmvq q8_0 small-projection 2-warp dispatch; sweep closed the dtype)
 
 - Follow-up to the Oct 31/Nov 1 mmvq_q8_0_plain_cuda3 "81% roofline"

@@ -7,11 +7,14 @@ candle 56 ahead / 26 behind huggingface/candle:main, mistral.rs 111 ahead /
 Legend: [ ] open, [x] done. P0 = do first, P1 = do next, P2 = merge prep,
 P3 = polish, Deferred = do not do on RDNA.
 
-## Current status (2026-10-31, post mask-fix deploy, prod on Strix Halo gfx1151, dual cuda,rocm,flash-attn)
+## Current status (2026-11-02, post ring-panic fix, prod on Strix Halo gfx1151, dual cuda,rocm,npu,flash-attn)
 
 The SpeculativeDecode capture failure root-caused and fixed (eb025a60a,
-deployed to prod + validated 99165ac08). Head-to-head vs llama.cpp (warm,
-real text, 64 tok greedy, same prompts both servers):
+deployed to prod + validated 99165ac08). Ring transport now live: `MISTRALRS_RING_CONFIG`
+takes priority over NCCL, runs on every device platform (CUDA, ROCm, NPU, CPU),
+and ring staging handles Hip/Npu storages through host memory. Ring panic from
+compile-time `cfg!` → runtime `use_ring()` fixed and deployed (fdb624771).
+Head-to-head vs llama.cpp (warm, real text, 64 tok greedy, same prompts both servers):
 - d3208: mistralrs 48.5-48.6 tok/s vs llama.cpp 49.1 (tie)
 - d4067: mistralrs 51.4 tok/s vs llama.cpp 48.2 (mistralrs wins, +6.6%)
 - d854: mistralrs 54.6 tok/s vs llama.cpp ~50 (mistralrs wins, +9%, unchanged)
