@@ -179,9 +179,6 @@ fn hip_sm_count() -> usize {
 /// `mask_type`: 0 = no mask, 1 = causal top-left, 2 = causal bottom-right
 /// (the draft geometry: queries are the trailing block of the kv context).
 /// Returns `Ok(None)` on unsupported shapes.
-///
-/// NOTE: the underlying gfx1151 splitkv instantiation memory-faults on hip
-/// (see the TODO dflash entry); nothing calls this from serving paths yet.
 #[allow(clippy::cast_possible_truncation, clippy::too_many_arguments)]
 pub(crate) fn ck_flash_attn_splitkv(
     q: &Tensor,
@@ -665,7 +662,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "the gfx1151 splitkv kernel memory-faults on hip in its base path; see TODO dflash entry"]
     fn ck_splitkv_paged_varlen_matches_reference() -> candle_core::Result<()> {
         let dev = Device::new_hip(0)?;
         // bottom-right causal, no window; kv shorter than one page

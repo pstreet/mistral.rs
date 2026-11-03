@@ -148,11 +148,6 @@ extern "C" float ck_flash_attn_splitkv_fwd(
     s.stream_id_  = reinterpret_cast<hipStream_t>(stream);
     s.time_kernel_ = false;
 
-    // NOTE: the gfx1151 splitkv instantiation memory-faults on hip in its base
-    // group-varlen path (reproduced with the standalone harness in
-    // LocalAI/scratch/splitkv-debug, independent of pages/windows/splits/
-    // masks). Do not call from serving paths until that is root-caused; see
-    // the TODO dflash entry for the evidence and remaining options.
     fmha_fwd_splitkv_oneshot_<splitkv_trait, ck_tile::gfx115_t>(s, a);
     fmha_fwd_splitkv_combine_oneshot_<splitkv_combine_trait, ck_tile::gfx115_t>(s, a);
     return 0.0f;
