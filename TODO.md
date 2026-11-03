@@ -72,14 +72,16 @@ further gated on the engine step holding exactly one decoding sequence with
 zero waiting prompts (thread-local per-step verdict set at every engine forward
 site: default-arm completion/prompt, paged submit_step, lease continuation -
 lookahead tails and chained resident replays are covered by construction since
-they run inside those windows). Mixed steps skip replay, visible in /metrics as
-dispatch reason hip_solo_gate. This keeps the ~7-10% single-session graph win
-and removes the corruption path by construction. GPU_MAX_HW_QUEUES=1 stays set
-(default 4, per ROCm docs; HIP reuses hardware queues round-robin when streams
-exceed the limit, causing queue-ordering corruption). REVISIT when a newer ROCm
-SDK ships: with HIP solo unset, re-run scratch/garble-hunt run-conc2.sh plus
-the mixed-phase singles battery; only re-enable full HIP graphs if 3/3 clean
-and the hip error 905 capture-ordering signature is gone from a fresh capture
+they run inside those windows, plus the lease continuation replay_cuda_decode_one_token
+path got an explicit solo gate added later to close a bypass where multi-sequence
+batches were replaying HIP graphs even when solo was false). Mixed steps skip
+replay, visible in /metrics as dispatch reason hip_solo_gate. This keeps the
+~7-10% single-session graph win and removes the corruption path by construction.
+GPU_MAX_HW_QUEUES=1 stays set (default 4, per ROCm docs; HIP reuses hardware
+queues round-robin when streams exceed the limit, causing queue-ordering corruption).
+REVISIT when a newer ROCm SDK ships: with HIP solo unset, re-run scratch/garble-hunt
+run-conc2.sh plus the mixed-phase singles battery; only re-enable full HIP graphs if
+3/3 clean and the hip error 905 capture-ordering signature is gone from a fresh capture
 log. Test GPU_MAX_HW_QUEUES unset (multi-queue) and also try AMD_SERIALIZE_KERNEL=3
 + AMD_SERIALIZE_COPY=3 as additional serialization mitigations (ROCm env vars
 reference: rocm.docs.amd.com/projects/HIP/en/latest/reference/env_variables.html).

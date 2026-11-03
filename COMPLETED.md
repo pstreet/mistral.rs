@@ -21,6 +21,16 @@
   `Device::Npu` match arm was not gated with `#[cfg(feature = "npu")]`, causing
   build failures in rocm-only builds.
 - Session tracked clean through 210k+ tokens post-deploy with new binary.
+- Per-role graph gating + HIP solo gate (ae26d83f4, 1abbbe227): HIP solo gate was
+  only checked in `try_cuda_decode_graph_forward` (PagedAttention path). The lease
+  continuation path (`submit_decode_tail` → `replay_cuda_decode_one_token`) bypassed
+  it entirely, causing multi-sequence batches to replay HIP decode graphs even when
+  solo was false, resulting in GPU memory faults (HSA_STATUS_ERROR_MEMORY_FAULT) and
+  garbled output in long sessions (opencode, multi-turn). Fix: added solo gate check
+  to `replay_cuda_decode_one_token` in both normal.rs and multimodal.rs, using
+  `graph_stream().is_hip()` to avoid accessing private `input_ids` field. HIP role
+  solo-gated replay; CUDA role unaffected. Validated: multi-turn recall of 3 numbers
+  across turns clean, zero new error 905/HSA faults since restart.
 
 ## Nov 2 (ring transport, multi-vendor build, build script, doc sweep)
 
