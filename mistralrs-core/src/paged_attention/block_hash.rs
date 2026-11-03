@@ -16,6 +16,11 @@ use std::{
 
 use crate::AdapterGenerationId;
 
+/// Check if prefix cache debug logging is enabled.
+pub(crate) fn debug_prefix_cache() -> bool {
+    std::env::var("MISTRALRS_DEBUG_PREFIX_CACHE").is_ok()
+}
+
 /// A hash that uniquely identifies a KV cache block by its content and position.
 ///
 /// The hash incorporates the parent block's hash (chain hashing), the tokens in the

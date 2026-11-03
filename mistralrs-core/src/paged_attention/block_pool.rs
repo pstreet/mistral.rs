@@ -20,7 +20,7 @@ use std::{
 
 use indexmap::IndexMap;
 
-use super::block_hash::{BlockHash, BlockHashWithGroupId};
+use super::block_hash::{debug_prefix_cache, BlockHash, BlockHashWithGroupId};
 
 /// Sentinel value for "no link" in the doubly-linked free list.
 const NO_LINK: usize = usize::MAX;
@@ -32,6 +32,7 @@ const RETAINED_PREFIX_PHYSICAL_BLOCKS_METRIC: &str = "mistralrs_kv_cache_blocks_
 const RETAINED_PREFIX_FREE_BLOCKS_METRIC: &str = "mistralrs_paged_prefix_retention_free_blocks";
 const ALLOCATION_PRESSURE_REASON: &str = "allocation_pressure";
 const RESET_REASON: &str = "reset";
+const PREFIX_CACHE_COLLISIONS_METRIC: &str = "mistralrs_prefix_cache_collisions_total";
 
 #[derive(Clone)]
 pub(crate) struct PrefixBlockRetention {
@@ -433,6 +434,7 @@ impl FreeKVCacheBlockQueue {
 /// a HashMap for the common single-block case.
 pub struct BlockHashToBlockMap {
     cache: HashMap<BlockHashWithGroupId, CachedBlocks>,
+    collisions: AtomicU64,
 }
 
 enum CachedBlocks {
@@ -444,6 +446,7 @@ impl BlockHashToBlockMap {
     fn new() -> Self {
         Self {
             cache: HashMap::new(),
+            collisions: AtomicU64::new(0),
         }
     }
 
@@ -486,6 +489,19 @@ impl BlockHashToBlockMap {
                 self.cache.insert(key, CachedBlocks::Single(block_id));
             }
             Some(CachedBlocks::Single(existing_id)) => {
+                if *existing_id != block_id {
+                    self.collisions.fetch_add(1, Ordering::Relaxed);
+                    metrics::counter!(PREFIX_CACHE_COLLISIONS_METRIC).increment(1);
+                    if debug_prefix_cache() {
+                        tracing::warn!(
+                            "Prefix cache collision: block_id {} and {} share hash {:?} (group {})",
+                            existing_id,
+                            block_id,
+                            key.block_hash.value(),
+                            key.group_id
+                        );
+                    }
+                }
                 let existing = *existing_id;
                 let mut map = HashMap::new();
                 map.insert(existing, existing);
@@ -493,6 +509,18 @@ impl BlockHashToBlockMap {
                 self.cache.insert(key, CachedBlocks::Multiple(map));
             }
             Some(CachedBlocks::Multiple(map)) => {
+                if !map.contains_key(&block_id) {
+                    self.collisions.fetch_add(1, Ordering::Relaxed);
+                    metrics::counter!(PREFIX_CACHE_COLLISIONS_METRIC).increment(1);
+                    if debug_prefix_cache() {
+                        tracing::warn!(
+                            "Prefix cache collision: block {} joins hash {:?} (group {})",
+                            block_id,
+                            key.block_hash.value(),
+                            key.group_id
+                        );
+                    }
+                }
                 map.insert(block_id, block_id);
             }
         }
@@ -528,6 +556,10 @@ impl BlockHashToBlockMap {
 
     fn len(&self) -> usize {
         self.cache.len()
+    }
+
+    fn collision_count(&self) -> u64 {
+        self.collisions.load(Ordering::Relaxed)
     }
 
     fn clear(&mut self) {
@@ -1083,6 +1115,11 @@ impl BlockPool {
     /// Check whether caching is enabled.
     pub fn caching_enabled(&self) -> bool {
         self.enable_caching
+    }
+
+    /// Number of hash collisions detected (two different content blocks sharing the same hash).
+    pub fn collision_count(&self) -> u64 {
+        self.cached_block_hash_to_block.collision_count()
     }
 
     /// Get the ref_cnt for a block (for debugging/testing).

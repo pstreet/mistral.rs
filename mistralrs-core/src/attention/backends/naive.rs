@@ -7,6 +7,8 @@ use mistralrs_quant::MatMul;
 
 use crate::attention::{chunked_attention, SdpaParams};
 
+const ATTENTION_SCORE_CLAMP: f64 = 10.0;
+
 /// Not *really* sure why this is necessary but it is.
 pub(crate) fn maybe_synchronize(device: &Device) -> Result<()> {
     if matches!(device, Device::Cpu) {
@@ -80,6 +82,8 @@ pub(crate) fn naive_sdpa(
         if att_dtype == candle_core::DType::BF16 || att_dtype == candle_core::DType::F16 {
             att = att.to_dtype(candle_core::DType::F32)?;
         }
+        // Clamp attention scores before softmax to prevent overflow on long sequences.
+        att = att.clamp(-ATTENTION_SCORE_CLAMP, ATTENTION_SCORE_CLAMP)?;
         att = candle_nn::ops::softmax_last_dim(&att)?;
         if att.dtype() != att_dtype {
             att = att.to_dtype(att_dtype)?;
