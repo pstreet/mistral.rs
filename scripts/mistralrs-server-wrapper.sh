@@ -56,14 +56,12 @@ export MISTRALRS_MANAGED_WEIGHTS=1
 export CANDLE_MANAGED_WEIGHTS=1
 
 # --------------- decode graphs ---------------
-# Enable CUDA/HIP decode graphs.
-export MISTRALRS_CUDA_GRAPHS=1
-
-# HIP solo gate: decode graphs replay only on solo decode steps
-# (one decoding sequence, nothing waiting). Mixed steps fall back to
-# eager. Capture limited to bucket-1 (solo) shapes. See TODO.md for
-# revisit procedure when newer ROCm SDK ships.
-export MISTRALRS_CUDA_GRAPHS_HIP_SOLO=1
+# GRAPH DISABLED 2026-11-03: single-sequence long-context garble recurs
+# under HIP graph replay. Multi-sequence fix (solo gate) was deployed and
+# validated, but single-sequence batches still corrupt. Re-enable when
+# ROCm SDK fixes capture-ordering bug.
+export MISTRALRS_CUDA_GRAPHS=0
+# export MISTRALRS_CUDA_GRAPHS_HIP_SOLO=1   # not needed when graphs=0
 
 # --------------- debug / diagnostics ---------------
 # Uncomment to enable (production: leave commented).

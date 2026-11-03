@@ -88,6 +88,14 @@ reference: rocm.docs.amd.com/projects/HIP/en/latest/reference/env_variables.html
 Also test with the legacy workaround at github.com/ROCm/legacy-rocm-build/issues/2625.
 The wrapper carries the lever and the same note.
 
+2026-11-03: graphs DISABLED in prod wrapper (MISTRALRS_CUDA_GRAPHS=0). The multi-
+sequence fix (solo gate) was validated (conc2 6/6 clean), but single-sequence long-
+context sessions still garble under HIP graph replay (reasoning model producing
+corrupted tokens like "verificationsofs", "relent test"). The garble is from graph
+replay reading corrupted KV cache during long generations. Single-sequence is
+supposed to be safe per the solo gate design, but it's not on this ROCm runtime.
+Re-enable when ROCm SDK fixes the capture-ordering bug and we re-validate.
+
 ## Current status (2026-10-26, prod on the f3b2d3576 tip, dual cuda,rocm,flash-attn)
 13 lanes configured, ALL lazy (headless boot, demand-load, per-category
 defaults: chat -> qwen3.6-35b-a3b): 35B A3B hip + cuda twins, 27B Q6_K
