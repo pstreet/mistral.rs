@@ -74,11 +74,17 @@ site: default-arm completion/prompt, paged submit_step, lease continuation -
 lookahead tails and chained resident replays are covered by construction since
 they run inside those windows). Mixed steps skip replay, visible in /metrics as
 dispatch reason hip_solo_gate. This keeps the ~7-10% single-session graph win
-and removes the corruption path by construction. REVISIT when a newer ROCm
+and removes the corruption path by construction. GPU_MAX_HW_QUEUES=1 stays set
+(default 4, per ROCm docs; HIP reuses hardware queues round-robin when streams
+exceed the limit, causing queue-ordering corruption). REVISIT when a newer ROCm
 SDK ships: with HIP solo unset, re-run scratch/garble-hunt run-conc2.sh plus
 the mixed-phase singles battery; only re-enable full HIP graphs if 3/3 clean
 and the hip error 905 capture-ordering signature is gone from a fresh capture
-log. The wrapper carries the lever and the same note.
+log. Test GPU_MAX_HW_QUEUES unset (multi-queue) and also try AMD_SERIALIZE_KERNEL=3
++ AMD_SERIALIZE_COPY=3 as additional serialization mitigations (ROCm env vars
+reference: rocm.docs.amd.com/projects/HIP/en/latest/reference/env_variables.html).
+Also test with the legacy workaround at github.com/ROCm/legacy-rocm-build/issues/2625.
+The wrapper carries the lever and the same note.
 
 ## Current status (2026-10-26, prod on the f3b2d3576 tip, dual cuda,rocm,flash-attn)
 13 lanes configured, ALL lazy (headless boot, demand-load, per-category
