@@ -37,6 +37,31 @@ Remaining kernel-side headroom: MoE down-aggregate WIDE4 kernel deployed
 d854); mmvq q8_0 closed (Nov 1: small-projection 2-warp dispatch
 deployed; all other q8_0 shapes measured at the DRAM roofline).
 
+### 2026-11-03 concurrency stress: NaN class recurs; graphs OFF in prod
+
+Reproducer in scratch/garble-hunt (build_conc2.py / run-conc2.sh): 4 short
+decodes + 2 ~30k prefills fired simultaneously. Journal shape: 6 running,
+prefill 409-849 T/s and decode 1-2 T/s mixed in the same 5s windows, MTP
+accept len 3 -> 2.25 degrading seconds before death. With graphs ON +
+GPU_MAX_HW_QUEUES=1 (the Oct 26 "single-queue safe" combo): 2/2 runs died
+within 45s - engine step errors "argmax received invalid logits" (all 4
+shorts, ~6s in) then "invalid CUDA top-1 output: max_logit=NaN" (a medium,
+36s in), followed by HSA_STATUS_ERROR_MEMORY_FAULT, GPU coredump handler
+errors, process death and systemd restart. Controls: 4-shorts-only (b=4
+decode wave, MTP on) clean; every single-request lane (90k/190k cold/warm,
+concurrent unequal prefills, prefill+decode pair) clean on both binaries.
+Trigger is mixed prefill+decode batches under graph replay, not multi-seq
+padded decode per se. With MISTRALRS_CUDA_GRAPHS=0: 3/3 runs clean, all 6
+canaries correct, b=3 multi-seq [CK FA] dispatches visible. Paged attention
+is exonerated for concurrency; the Oct 26 single-queue graph-safety rating
+only ever covered sequential single-request shapes. The 03:08 and 03:30
+incident garble windows carried exactly this mixed-phase shape (prefill
+124-1638 T/s + decode 3-6 T/s), so the "word salad" garble is plausibly the
+subcritical/partial form of this NaN corruption in replayed steps. Prod
+wrapper switches to MISTRALRS_CUDA_GRAPHS=0 (decode 34.9-35.7 tok/s on
+qwen3.6-35b w/ MTP; Oct 24 A/B puts graphs benefit at ~7-10% when working).
+MISTRALRS_DEBUG_CK/PA stay armed until a clean real-session confirmation.
+
 ## Current status (2026-10-26, prod on the f3b2d3576 tip, dual cuda,rocm,flash-attn)
 13 lanes configured, ALL lazy (headless boot, demand-load, per-category
 defaults: chat -> qwen3.6-35b-a3b): 35B A3B hip + cuda twins, 27B Q6_K
