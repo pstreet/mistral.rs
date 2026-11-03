@@ -1688,7 +1688,6 @@ impl PagedAttention {
         // the request is provably single-seq full-causal, pass CausalFlash so
         // CK mask_type=2 fires; anything else keeps the Custom tensor route.
         let fused_causal = prefix_causal
-            && query_lens.len() == 1
             && ctx.sdpa_params.sliding_window.is_none()
             && mm_prefix_ranges.is_none()
             && ctx.sdpa_params.sinks.is_none()
