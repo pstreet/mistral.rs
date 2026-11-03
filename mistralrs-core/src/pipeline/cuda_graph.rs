@@ -3753,7 +3753,7 @@ pub(crate) fn set_hip_solo_step_allowed(allowed: bool) {
 }
 
 #[cfg(feature = "rocm")]
-fn hip_solo_step_allowed() -> bool {
+pub(crate) fn hip_solo_step_allowed() -> bool {
     HIP_SOLO_STEP_ALLOWED.with(std::cell::Cell::get)
 }
 

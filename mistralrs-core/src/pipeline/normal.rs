@@ -2850,6 +2850,12 @@ impl Pipeline for NormalPipeline {
             if state.disabled() {
                 return Ok(None);
             }
+            if launch.graph_stream().is_hip()
+                && crate::perf_flags::cuda_graphs_hip_solo_enabled()
+                && !crate::pipeline::cuda_graph::hip_solo_step_allowed()
+            {
+                return Ok(None);
+            }
             state.replay_one_token(launch)
         };
         match replay {
