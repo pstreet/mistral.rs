@@ -117,6 +117,7 @@ so wrap the server in a small script that sets the ROCm environment and
 set -euo pipefail
 source "$HOME/LocalAI/.rocm-env.sh"   # ROCM_PATH, PATH, LD_LIBRARY_PATH, ...
 export HIP_VISIBLE_DEVICES=0
+export GPU_MAX_HW_QUEUES=1            # required on this ROCm runtime
 cd "$HOME/LocalAI"
 exec "$HOME/LocalAI/mistral.rs/target/release/mistralrs" from-config -f "$HOME/LocalAI/models/mistralrs.toml"
 ```
@@ -146,6 +147,10 @@ boot (GGUF `tok_model_id`), the first attempt can fail before the
 network is up; `Restart=always` covers that, and standalone GGUF models
 avoid the fetch entirely.
 
+For a complete documented example with all tuning knobs (managed weights,
+HIP solo gate, GGUF mmap tuning, etc.) see
+[scripts/mistralrs-server-wrapper.sh](../../../../../../scripts/mistralrs-server-wrapper.sh).
+
 ## ROCm runtime knobs
 
 These environment variables tune the ROCm path; the full definitions
@@ -153,10 +158,12 @@ live in the [environment variables reference](/reference/environment-variables/)
 
 | Variable | Effect |
 |---|---|
+| `GPU_MAX_HW_QUEUES=1` | Limit hardware queue count to 1 (default is 4). On this ROCm runtime, HIP reuses hardware queues round-robin when streams exceed the limit, causing queue-ordering corruption in graph replay. Set before every `cargo` invocation and in the service wrapper. See [ROCm env vars](https://rocm.docs.amd.com/projects/HIP/en/latest/reference/env_variables.html). |
 | `MISTRALRS_MANAGED_WEIGHTS=1` + `CANDLE_MANAGED_WEIGHTS=1` | HIP managed (host-visible, prefetched) weights instead of device-only allocations; the mistral.rs flag gates its loader, the candle flag gates candle's allocator, so a deployment sets both. On unified-memory APUs the device-only default keeps weights out of process RSS. |
 | `MISTRALRS_GGUF_NO_MMAP=1` | Read GGUF shards with `read()` instead of `mmap`; avoids a duplicate file-cache copy on shared-memory machines. |
 | `MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD=1` | Release host shard buffers once weights are on-device (pairs with `NO_MMAP`). |
-| `MISTRALRS_CUDA_GRAPHS=0` | Disable decode-graph capture on the ROCm path if a capture crash recurs. |
+| `MISTRALRS_CUDA_GRAPHS=1` (default) / `=0` | Enable/disable decode-graph capture. Default is on. If a capture crash recurs, set to `0` to run eager. |
+| `MISTRALRS_CUDA_GRAPHS_HIP_SOLO=1` | HIP solo gate (ROCm only, default off). Decode-graph replay runs only on solo decode steps (one decoding sequence, nothing waiting for dispatch). Mixed steps fall back to eager. Capture is limited to bucket-1 (solo) shapes. Mixed-phase corruption is blocked; single-queue remains required. See [environment variables reference](/reference/environment-variables/). |
 | `MISTRALRS_DECODE_ARENA_OVERRIDE=<bytes>` | Raise the decode-graph capture arena if capture fails with an overflow; the log prints the size actually needed. |
 | `CANDLE_LT_COMPUTE=32` | Force F32 accumulation in F16 hipBLASLt GEMMs. The F16 heuristic failures that once required this on RDNA parts no longer occur on current ROCm stacks, and F32 is performance-neutral; keep only as a fallback for old stacks. |
 | `MISTRALRS_NO_FAST_MMQ=1` | Override the per-dtype MMQ dispatch: route every supported dtype's large-batch quantized GEMMs through dequantize + hipBLASLt. By default only Q6K batches above candle's dequant-GEMM row threshold (`CANDLE_DMM_F16_MIN`, default 256) take that path (MMQ Q6K plateaus far below the dequant GEMM at large batches); Q4K/Q5K/Q8_0 and small batches use the fused MMQ kernels. |

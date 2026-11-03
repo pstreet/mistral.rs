@@ -3,7 +3,7 @@
 > **Status:** NPU device path is fully wired (device selection, tensor ops,
 > quantized weights, safetensors loading). The backend delegates to CPU via
 > unified memory. AIE kernel acceleration (GEMM, attention, RMSNorm) is under
-> active development — see [AIE_KERNEL_PLAN.md](../mistralrs-npu/AIE_KERNEL_PLAN.md).
+> active development — see [AIE_KERNEL_PLAN.md](../../../../../../mistralrs-npu/AIE_KERNEL_PLAN.md).
 
 ## Hardware requirements
 
@@ -176,7 +176,7 @@ The path to real NPU acceleration:
 4. **Load** via XRT in `mistralrs-npu`
 5. **Dispatch** kernel with tensor pointers as arguments
 
-See [AIE_KERNEL_PLAN.md](../mistralrs-npu/AIE_KERNEL_PLAN.md) for the full plan.
+See [AIE_KERNEL_PLAN.md](../../../../../../mistralrs-npu/AIE_KERNEL_PLAN.md) for the full plan.
 
 ## Troubleshooting
 
@@ -244,5 +244,5 @@ CPU's working set. If the model doesn't fit:
 - [MLIR-AIE](https://github.com/Xilinx/mlir-aie) — open-source MLIR compiler
 - [llvm-aie (Peano)](https://github.com/Xilinx/llvm-aie) — per-core AIE compiler
 - [AMD XDNA driver](https://github.com/Xilinx/xdna-driver) — kernel driver
-- [AIE_KERNEL_PLAN.md](../mistralrs-npu/AIE_KERNEL_PLAN.md) — kernel development plan
-- [scripts/build.sh](../scripts/build.sh) — build script with dependency checks
+- [AIE_KERNEL_PLAN.md](../../../../../../mistralrs-npu/AIE_KERNEL_PLAN.md) — kernel development plan
+- [scripts/build.sh](../../../../../../scripts/build.sh) — build script with dependency checks
