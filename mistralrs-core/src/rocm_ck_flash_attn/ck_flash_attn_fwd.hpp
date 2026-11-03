@@ -37,6 +37,7 @@ float ck_flash_attn_fwd(
     float scale_s,
     int32_t mask_type,  // 0=no mask, 1=causal (bottom-right)
     int32_t window_size_left,  // -1 = full attention, else causal lookback (W-1)
+    float logits_soft_cap,
     int64_t stream);
 
 #ifdef __cplusplus

@@ -41,6 +41,7 @@ float ck_flash_attn_splitkv_fwd(
     int32_t window_size_left,
     int32_t window_size_right,
     int32_t mask_type,
+    float logits_soft_cap,
     int64_t stream);
 
 #ifdef __cplusplus
