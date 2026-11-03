@@ -3748,13 +3748,20 @@ thread_local! {
     static HIP_SOLO_STEP_ALLOWED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+#[cfg(feature = "rocm")]
 pub(crate) fn set_hip_solo_step_allowed(allowed: bool) {
     HIP_SOLO_STEP_ALLOWED.with(|flag| flag.set(allowed));
 }
+#[cfg(not(feature = "rocm"))]
+pub(crate) fn set_hip_solo_step_allowed(_allowed: bool) {}
 
 #[cfg(feature = "rocm")]
 pub(crate) fn hip_solo_step_allowed() -> bool {
     HIP_SOLO_STEP_ALLOWED.with(std::cell::Cell::get)
+}
+#[cfg(not(feature = "rocm"))]
+pub(crate) fn hip_solo_step_allowed() -> bool {
+    true
 }
 
 #[cfg(feature = "rocm")]

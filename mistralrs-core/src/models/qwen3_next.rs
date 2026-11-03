@@ -118,6 +118,7 @@ pub struct Config {
     /// for the per-layer hot-expert cache of split lanes.
     #[serde(default, rename = "_mistralrs_expert_hot_cache_mb")]
     pub expert_hot_cache_mb: Option<usize>,
+    pub attn_logit_softcapping: Option<f64>,
 }
 
 impl Config {
@@ -325,7 +326,7 @@ impl FullAttention {
             paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(num_kv_heads, num_heads, comm)?,
-                softcap: None,
+                softcap: cfg.attn_logit_softcapping.map(|x| x as f32),
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window,
                 sinks: None,

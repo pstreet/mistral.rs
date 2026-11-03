@@ -69,6 +69,7 @@ pub struct Config {
     pub(crate) decoder_sparse_step: usize,
     pub(crate) norm_topk_prob: bool,
     pub(crate) num_experts_per_tok: usize,
+    pub(crate) attn_logit_softcapping: Option<f64>,
 }
 
 impl Config {
@@ -177,7 +178,7 @@ impl Attention {
                     cfg.num_attention_heads,
                     comm,
                 )?,
-                softcap: None,
+                softcap: cfg.attn_logit_softcapping.map(|x| x as f32),
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window,
                 sinks: None,

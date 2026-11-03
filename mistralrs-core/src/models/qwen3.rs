@@ -63,6 +63,7 @@ pub struct Config {
     pub(crate) tie_word_embeddings: bool,
     pub(crate) max_window_layers: usize,
     pub(crate) use_sliding_window: bool,
+    pub(crate) attn_logit_softcapping: Option<f64>,
 }
 
 impl Config {
@@ -171,7 +172,7 @@ impl Attention {
                     cfg.num_attention_heads,
                     comm,
                 )?,
-                softcap: None,
+                softcap: cfg.attn_logit_softcapping.map(|x| x as f32),
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window,
                 sinks: None,

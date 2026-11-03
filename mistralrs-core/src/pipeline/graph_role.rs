@@ -75,6 +75,8 @@ pub(crate) mod graph_driver {
         fn wait_on_event(&self, event: &GraphEvent) -> candle_core::Result<()>;
         #[cfg(feature = "rocm")]
         fn hip(&self) -> &Self;
+        fn is_hip(&self) -> bool;
+        fn is_cuda(&self) -> bool;
     }
 
     impl GraphStreamExt for GraphStream {
@@ -168,6 +170,22 @@ pub(crate) mod graph_driver {
         #[cfg(feature = "rocm")]
         fn hip(&self) -> &Self {
             self
+        }
+        #[cfg(feature = "rocm")]
+        fn is_hip(&self) -> bool {
+            true
+        }
+        #[cfg(feature = "rocm")]
+        fn is_cuda(&self) -> bool {
+            false
+        }
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+        fn is_hip(&self) -> bool {
+            false
+        }
+        #[cfg(all(feature = "cuda", not(feature = "rocm")))]
+        fn is_cuda(&self) -> bool {
+            true
         }
     }
 
