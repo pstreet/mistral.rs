@@ -62,6 +62,24 @@ wrapper switches to MISTRALRS_CUDA_GRAPHS=0 (decode 34.9-35.7 tok/s on
 qwen3.6-35b w/ MTP; Oct 24 A/B puts graphs benefit at ~7-10% when working).
 MISTRALRS_DEBUG_CK/PA stay armed until a clean real-session confirmation.
 
+Interim compromise (code in tree, deploying 2026-11-03): per-role graph gating
++ HIP solo gate. MISTRALRS_CUDA_GRAPHS=1 stays global; decoding graphs are
+re-enabled but role-separated. NVIDIA role ungated (hostile only to the
+dual-build first-cross-request launch quirk, unchanged). HIP role enters
+"MTP-safe solo mode": capture permitted only when MISTRALRS_CUDA_GRAPHS_HIP_SOLO=1
+is set, precapture limited to bucket-1 (one-sequence decode) shapes, and replay
+further gated on the engine step holding exactly one decoding sequence with
+zero waiting prompts (thread-local per-step verdict set at every engine forward
+site: default-arm completion/prompt, paged submit_step, lease continuation -
+lookahead tails and chained resident replays are covered by construction since
+they run inside those windows). Mixed steps skip replay, visible in /metrics as
+dispatch reason hip_solo_gate. This keeps the ~7-10% single-session graph win
+and removes the corruption path by construction. REVISIT when a newer ROCm
+SDK ships: with HIP solo unset, re-run scratch/garble-hunt run-conc2.sh plus
+the mixed-phase singles battery; only re-enable full HIP graphs if 3/3 clean
+and the hip error 905 capture-ordering signature is gone from a fresh capture
+log. The wrapper carries the lever and the same note.
+
 ## Current status (2026-10-26, prod on the f3b2d3576 tip, dual cuda,rocm,flash-attn)
 13 lanes configured, ALL lazy (headless boot, demand-load, per-category
 defaults: chat -> qwen3.6-35b-a3b): 35B A3B hip + cuda twins, 27B Q6_K

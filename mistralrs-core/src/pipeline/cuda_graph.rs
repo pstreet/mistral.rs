@@ -362,6 +362,7 @@ pub(crate) enum CudaGraphDispatchReason {
     CachePopulation,
     CaptureExhausted,
     Fallback,
+    HipSoloGate,
 }
 
 impl CudaGraphDispatchReason {
@@ -381,6 +382,7 @@ impl CudaGraphDispatchReason {
             Self::CachePopulation => "cache_population",
             Self::CaptureExhausted => "capture_exhausted",
             Self::Fallback => "fallback",
+            Self::HipSoloGate => "hip_solo_gate",
         }
     }
 }
@@ -3736,6 +3738,43 @@ where
 
 pub(crate) fn cuda_decode_graphs_enabled() -> bool {
     crate::perf_flags::cuda_graphs_enabled()
+}
+
+// HIP solo gate: the engine records the per-step runset verdict before every
+// forward so the dispatch can refuse graph replay on the HIP role while the
+// engine batches anything but one decoding sequence. Forwards run on the
+// engine thread (same property CudaGraphStepWindow relies on).
+thread_local! {
+    static HIP_SOLO_STEP_ALLOWED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn set_hip_solo_step_allowed(allowed: bool) {
+    HIP_SOLO_STEP_ALLOWED.with(|flag| flag.set(allowed));
+}
+
+#[cfg(feature = "rocm")]
+fn hip_solo_step_allowed() -> bool {
+    HIP_SOLO_STEP_ALLOWED.with(std::cell::Cell::get)
+}
+
+#[cfg(feature = "rocm")]
+pub(crate) fn hip_decode_graph_replay_allowed(device: &Device) -> bool {
+    device.is_hip() && crate::perf_flags::cuda_graphs_hip_solo_enabled() && hip_solo_step_allowed()
+}
+#[cfg(not(feature = "rocm"))]
+pub(crate) fn hip_decode_graph_replay_allowed(_device: &Device) -> bool {
+    true
+}
+
+/// Non-solo HIP modes capture nothing: any captured shape is replay-dead
+/// under the solo gate.
+#[cfg(feature = "rocm")]
+pub(crate) fn hip_decode_graph_capture_permitted(device: &Device) -> bool {
+    !device.is_hip() || crate::perf_flags::cuda_graphs_hip_solo_enabled()
+}
+#[cfg(not(feature = "rocm"))]
+pub(crate) fn hip_decode_graph_capture_permitted(_device: &Device) -> bool {
+    true
 }
 
 pub(crate) fn cuda_decode_graph_batch_kind_supported(kind: RecurrentBatchKind) -> bool {

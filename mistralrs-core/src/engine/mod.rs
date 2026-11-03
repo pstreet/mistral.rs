@@ -1028,6 +1028,10 @@ impl Engine {
             }
         }
 
+        let solo = rows.len() == 1
+            && allow_lookahead
+            && get_mut_arcmutex!(self.scheduler).waiting_len() == 0;
+        crate::pipeline::cuda_graph::set_hip_solo_step_allowed(solo);
         let submission = {
             // Cross-engine capture window: the leased decode step (replay,
             // sampling submission, and the unsupported-tail synchronize
@@ -1432,6 +1436,8 @@ impl Engine {
             self.free_finished_scheduler_sequences(&mut *scheduler);
             #[cfg(any(feature = "cuda", feature = "rocm"))]
             scheduler.set_waiting_prompt_preemption_enabled(waiting_prompt_preemption_enabled);
+            #[cfg(any(feature = "cuda", feature = "rocm"))]
+            let scheduler_waiting_len = scheduler.waiting_len();
             let scheduled = scheduler.schedule(&self.logger, prefix_validator);
             self.prune_revoked_paged_recurrent_prefixes();
 
@@ -1445,6 +1451,12 @@ impl Engine {
                         for seq in scheduled.completion.iter_mut() {
                             seq.start_completion_timing();
                         }
+                        #[cfg(any(feature = "cuda", feature = "rocm"))]
+                        crate::pipeline::cuda_graph::set_hip_solo_step_allowed(
+                            scheduled.prompt.is_empty()
+                                && scheduled.completion.len() == 1
+                                && scheduler_waiting_len == 0,
+                        );
                         let res = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
                             let pre_op = if !self.no_kv_cache
@@ -1509,6 +1521,8 @@ impl Engine {
                             seq.start_prompt_timing();
                         }
 
+                        #[cfg(any(feature = "cuda", feature = "rocm"))]
+                        crate::pipeline::cuda_graph::set_hip_solo_step_allowed(false);
                         let prompt_exec_time = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
@@ -1996,6 +2010,12 @@ impl Engine {
                                     "All sequences must either return raw logits, or not."
                                 );
 
+                                #[cfg(any(feature = "cuda", feature = "rocm"))]
+                                crate::pipeline::cuda_graph::set_hip_solo_step_allowed(
+                                    !is_prompt
+                                        && guards_mut.len() == 1
+                                        && scheduler_waiting_len == 0,
+                                );
                                 pipeline
                                     .submit_step(
                                         &mut guards_mut,

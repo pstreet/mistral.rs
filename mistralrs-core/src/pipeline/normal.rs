@@ -58,7 +58,8 @@ use crate::pipeline::cuda_graph::{
     capture_cuda_decode_graph, cuda_decode_graph_batch_kind_supported,
     cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled, cuda_graph_batch_bucket,
     cuda_graph_precapture_batches, cuda_graph_precapture_max_batch,
-    cuda_graph_startup_capture_allowed, hybrid_graph_slots, install_hybrid_graph_state_indices,
+    cuda_graph_startup_capture_allowed, hip_decode_graph_capture_permitted,
+    hip_decode_graph_replay_allowed, hybrid_graph_slots, install_hybrid_graph_state_indices,
     record_cuda_graph_dispatch, speculative_graph_tensor_metadata,
     target_cuda_graph_cache_capacity, validate_speculative_graph_tensor_metadata,
     CudaDecodeGraphCaptureCtx, CudaDecodeGraphCaptureError, CudaDecodeGraphKey,
@@ -1878,6 +1879,14 @@ impl NormalPipeline {
             );
             return Ok(None);
         }
+        if !hip_decode_graph_replay_allowed(&input_ids.device()) {
+            record_cuda_graph_dispatch(
+                CudaGraphComponent::Target,
+                CudaGraphDispatchMode::Skipped,
+                CudaGraphDispatchReason::HipSoloGate,
+            );
+            return Ok(None);
+        }
         if !cuda_decode_graph_batch_kind_supported(recurrent_batch_kind) {
             record_cuda_graph_dispatch(
                 CudaGraphComponent::Target,
@@ -2103,6 +2112,7 @@ impl NormalPipeline {
         let device = self.device();
         if !cuda_decode_graphs_enabled()
             || !crate::pipeline::cuda_graph::is_cuda_graph_device(&device)
+            || !hip_decode_graph_capture_permitted(&device)
             || !self.model.supports_cuda_decode_graphs()
             || !cuda_decode_graph_supported_for_model(self.metadata.model_metadata.as_deref())
         {
@@ -2156,8 +2166,13 @@ impl NormalPipeline {
         let mut captured = 0usize;
         let runtime_max_bucket =
             cuda_graph_precapture_max_batch(CudaGraphComponent::Target, 1, ctx.max_batch_size);
+        #[cfg(feature = "rocm")]
+        let solo_hip = device.is_hip();
+        #[cfg(not(feature = "rocm"))]
+        let solo_hip = false;
         let runtime_batch_shapes = cuda_graph_precapture_batches(CudaGraphComponent::Target, 1)
             .filter(|bucket| *bucket <= runtime_max_bucket)
+            .filter(|bucket| !solo_hip || *bucket == 1)
             .count();
         let startup_max_bucket = widths
             .iter()
@@ -2211,6 +2226,7 @@ impl NormalPipeline {
             );
             for bucket in cuda_graph_precapture_batches(CudaGraphComponent::Target, q_len)
                 .filter(|bucket| *bucket <= max_bucket.min(width_max_bucket))
+                .filter(|bucket| !solo_hip || *bucket == 1)
             {
                 let Some(step) = CudaGraphDecodeStep::padded(
                     inputs.step_inputs(live.as_deref(), graph_pad_slot),
