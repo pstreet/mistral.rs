@@ -163,7 +163,7 @@ extern "C" float ck_flash_attn_fwd(
     a.head_start     = 0;
 
     a.scale_s        = scale_s;
-    a.logits_soft_cap = 0.0f;
+    a.logits_soft_cap = 10.0f;  // match ATTENTION_SCORE_CLAMP in naive_sdpa
 
     a.stride_q       = stride_q;
     a.stride_k       = stride_k;
