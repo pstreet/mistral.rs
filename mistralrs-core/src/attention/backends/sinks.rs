@@ -9,7 +9,10 @@ use crate::{
 #[cfg(all(feature = "cuda", not(feature = "rocm"), target_family = "unix"))]
 use mistralrs_paged_attn::{flash_attn_sinks, flash_attn_sinks_varlen};
 #[cfg(all(feature = "cuda", feature = "rocm", target_family = "unix"))]
-use mistralrs_paged_attn::{flash_attn_sinks_auto as flash_attn_sinks, flash_attn_sinks_varlen_auto as flash_attn_sinks_varlen};
+use mistralrs_paged_attn::{
+    flash_attn_sinks_auto as flash_attn_sinks,
+    flash_attn_sinks_varlen_auto as flash_attn_sinks_varlen,
+};
 
 /// Fused attention with per-head sinks.
 ///
@@ -119,14 +122,7 @@ fn sinks_attn_regular(
 
     #[cfg(all(feature = "cuda", target_family = "unix"))]
     if q.device().is_cuda() {
-        return flash_attn_sinks(
-            q,
-            k,
-            v,
-            Some(sinks),
-            sdpa_params.softmax_scale,
-            window_size,
-        );
+        return flash_attn_sinks(q, k, v, Some(sinks), sdpa_params.softmax_scale, window_size);
     }
 
     #[cfg(feature = "metal")]

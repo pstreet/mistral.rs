@@ -330,6 +330,6 @@ impl XrtBackend {
 
     /// Open a device by index (returns the trait object for runtime dispatch).
     pub fn open(index: u32) -> Result<Arc<dyn NpuDevice>, NpuError> {
-         XrtDevice::open(index).map(|d| d as Arc<dyn NpuDevice>)
+        XrtDevice::open(index).map(|d| d as Arc<dyn NpuDevice>)
     }
 }

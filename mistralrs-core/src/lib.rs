@@ -1331,7 +1331,8 @@ impl MistralRs {
         };
         self.get_sender(requested_model.as_deref(), preferred_category.clone())?;
 
-        let model_id = self.resolve_alias_or_default(requested_model.as_deref(), preferred_category)?;
+        let model_id =
+            self.resolve_alias_or_default(requested_model.as_deref(), preferred_category)?;
         let engines = self
             .engines
             .read()
@@ -1937,11 +1938,13 @@ impl MistralRs {
             last_used: RwLock::new(HashMap::from([(id.clone(), Instant::now())])),
             router_policy,
             default_engine_id: RwLock::new(Some(id.clone())),
-            default_embedding_engine_id: RwLock::new(if seed_category == ModelCategory::Embedding {
-                Some(id.clone())
-            } else {
-                None
-            }),
+            default_embedding_engine_id: RwLock::new(
+                if seed_category == ModelCategory::Embedding {
+                    Some(id.clone())
+                } else {
+                    None
+                },
+            ),
             default_reranker_engine_id: RwLock::new(if seed_category == ModelCategory::Reranker {
                 Some(id.clone())
             } else {
@@ -2619,27 +2622,45 @@ impl MistralRs {
                     Some(ModelCategory::Reranker) => &self.default_reranker_engine_id,
                     _ => &self.default_engine_id,
                 };
-                if let Some(id) = slot.read().map_err(|_| MistralRsError::EnginePoisoned)?.clone() {
+                if let Some(id) = slot
+                    .read()
+                    .map_err(|_| MistralRsError::EnginePoisoned)?
+                    .clone()
+                {
                     return Ok(id);
                 }
                 // Scan loaded engines for a matching category.
-                let engines = self.engines.read().map_err(|_| MistralRsError::EnginePoisoned)?;
+                let engines = self
+                    .engines
+                    .read()
+                    .map_err(|_| MistralRsError::EnginePoisoned)?;
                 let scan_cat = preferred.unwrap_or(ModelCategory::Text);
                 for (id, engine) in engines.iter() {
                     if engine.category == scan_cat {
                         return Ok(id.clone());
                     }
                 }
-                let unloaded = self.unloaded_models.read().map_err(|_| MistralRsError::EnginePoisoned)?;
+                let unloaded = self
+                    .unloaded_models
+                    .read()
+                    .map_err(|_| MistralRsError::EnginePoisoned)?;
                 for (id, state) in unloaded.iter() {
-                    let cat = state.category.clone().unwrap_or_else(|| state.loader_config.model_selected.category());
+                    let cat = state
+                        .category
+                        .clone()
+                        .unwrap_or_else(|| state.loader_config.model_selected.category());
                     if cat == scan_cat {
                         return Ok(id.clone());
                     }
                 }
                 // Final fallback: global default, then first loaded engine, then
                 // first unloaded model.
-                if let Some(id) = self.default_engine_id.read().map_err(|_| MistralRsError::EnginePoisoned)?.clone() {
+                if let Some(id) = self
+                    .default_engine_id
+                    .read()
+                    .map_err(|_| MistralRsError::EnginePoisoned)?
+                    .clone()
+                {
                     return Ok(id);
                 }
                 if let Some(id) = engines.keys().next().cloned() {
@@ -2915,27 +2936,42 @@ impl MistralRs {
         // engine for embedding/rerank requests too.
         match engine_category {
             ModelCategory::Embedding => {
-                let mut lock = self.default_embedding_engine_id.write()
+                let mut lock = self
+                    .default_embedding_engine_id
+                    .write()
                     .map_err(|_| "Failed to acquire write lock on default_embedding_engine_id")?;
                 if lock.is_none() {
                     *lock = Some(model_id.clone());
-                    info!("First embedding model added, setting '{}' as default for embeddings", model_id);
+                    info!(
+                        "First embedding model added, setting '{}' as default for embeddings",
+                        model_id
+                    );
                 }
             }
             ModelCategory::Reranker => {
-                let mut lock = self.default_reranker_engine_id.write()
+                let mut lock = self
+                    .default_reranker_engine_id
+                    .write()
                     .map_err(|_| "Failed to acquire write lock on default_reranker_engine_id")?;
                 if lock.is_none() {
                     *lock = Some(model_id.clone());
-                    info!("First reranker model added, setting '{}' as default for rerank", model_id);
+                    info!(
+                        "First reranker model added, setting '{}' as default for rerank",
+                        model_id
+                    );
                 }
             }
             _ => {
-                let mut lock = self.default_engine_id.write()
+                let mut lock = self
+                    .default_engine_id
+                    .write()
                     .map_err(|_| "Failed to acquire write lock on default_engine_id")?;
                 if lock.is_none() {
                     *lock = Some(model_id.clone());
-                    info!("First text-capable model added, setting '{}' as default", model_id);
+                    info!(
+                        "First text-capable model added, setting '{}' as default",
+                        model_id
+                    );
                 }
             }
         }
@@ -3102,19 +3138,24 @@ impl MistralRs {
         // engine for embedding/rerank requests too. Lazy (unloaded) models get
         // their category slot populated on first load via add_model.
         let category = {
-            let engines = self.engines.read().map_err(|_| "Failed to acquire read lock on engines")?;
+            let engines = self
+                .engines
+                .read()
+                .map_err(|_| "Failed to acquire read lock on engines")?;
             engines.get(&resolved_model_id).map(|e| e.category.clone())
         };
         if let Some(cat) = category {
             match cat {
                 ModelCategory::Embedding => {
-                    let mut lock = self.default_embedding_engine_id.write()
-                        .map_err(|_| "Failed to acquire write lock on default_embedding_engine_id")?;
+                    let mut lock = self.default_embedding_engine_id.write().map_err(|_| {
+                        "Failed to acquire write lock on default_embedding_engine_id"
+                    })?;
                     *lock = Some(resolved_model_id.clone());
                 }
                 ModelCategory::Reranker => {
-                    let mut lock = self.default_reranker_engine_id.write()
-                        .map_err(|_| "Failed to acquire write lock on default_reranker_engine_id")?;
+                    let mut lock = self.default_reranker_engine_id.write().map_err(|_| {
+                        "Failed to acquire write lock on default_reranker_engine_id"
+                    })?;
                     *lock = Some(resolved_model_id.clone());
                 }
                 _ => {}
@@ -3554,8 +3595,7 @@ impl MistralRs {
                             .read()
                             .map(|engines| {
                                 engines.values().any(|inst| {
-                                    inst.config.device.location()
-                                        == loader_config.device.location()
+                                    inst.config.device.location() == loader_config.device.location()
                                 })
                             })
                             .unwrap_or(true);
@@ -3717,21 +3757,27 @@ impl MistralRs {
         // default for their lane once they are actually resident.
         match reloaded_category {
             ModelCategory::Embedding => {
-                let mut lock = self.default_embedding_engine_id.write()
+                let mut lock = self
+                    .default_embedding_engine_id
+                    .write()
                     .map_err(|_| MistralRsError::EnginePoisoned)?;
                 if lock.is_none() {
                     *lock = Some(model_id.to_string());
                 }
             }
             ModelCategory::Reranker => {
-                let mut lock = self.default_reranker_engine_id.write()
+                let mut lock = self
+                    .default_reranker_engine_id
+                    .write()
                     .map_err(|_| MistralRsError::EnginePoisoned)?;
                 if lock.is_none() {
                     *lock = Some(model_id.to_string());
                 }
             }
             _ => {
-                let mut lock = self.default_engine_id.write()
+                let mut lock = self
+                    .default_engine_id
+                    .write()
                     .map_err(|_| MistralRsError::EnginePoisoned)?;
                 if lock.is_none() {
                     *lock = Some(model_id.to_string());

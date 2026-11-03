@@ -20,10 +20,9 @@ pub mod stub {
 
 // Re-export key types (only when npu feature is enabled)
 #[cfg(feature = "npu")]
-pub use backend::{
-    NpuDevice, NpuError, NpuKernel, NpuTensor, NpuBackendType,
-    backend_type, is_npu_available, open_device,
-    SyncDirection, Uuid,
-};
-#[cfg(feature = "npu")]
 pub use backend::xrt::{XrtBackend, XrtDevice};
+#[cfg(feature = "npu")]
+pub use backend::{
+    backend_type, is_npu_available, open_device, NpuBackendType, NpuDevice, NpuError, NpuKernel,
+    NpuTensor, SyncDirection, Uuid,
+};

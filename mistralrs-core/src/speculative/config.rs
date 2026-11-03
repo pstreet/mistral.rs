@@ -153,11 +153,11 @@ pub fn reserve_external_mtp_memory_with_runtime(
     device: &Device,
 ) -> anyhow::Result<Option<PagedAttentionConfig>> {
     #[cfg(not(all(
-    feature = "cuda",
-    not(feature = "rocm"),
-    feature = "flash-attn",
-    target_family = "unix"
-)))]
+        feature = "cuda",
+        not(feature = "rocm"),
+        feature = "flash-attn",
+        target_family = "unix"
+    )))]
     let _ = runtime;
     let Some(cache_config) = cache_config else {
         return Ok(None);
@@ -185,11 +185,11 @@ pub fn reserve_external_mtp_memory_with_runtime(
     }
     let bytes = mtp_config.external_weight_size_in_bytes(dtype)?;
     #[cfg(all(
-    feature = "cuda",
-    not(feature = "rocm"),
-    feature = "flash-attn",
-    target_family = "unix"
-))]
+        feature = "cuda",
+        not(feature = "rocm"),
+        feature = "flash-attn",
+        target_family = "unix"
+    ))]
     let bytes = if device.is_cuda() {
         if let Some(serving_capacity) = cache_config.serving_capacity {
             let sequence_capacity = serving_capacity

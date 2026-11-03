@@ -64,11 +64,7 @@ pub trait NpuDevice: Send + Sync {
     fn open_kernel(&self, uuid: &Uuid, name: &str) -> Result<Arc<NpuKernel>, NpuError>;
 
     /// Run a kernel with the given buffer arguments.
-    fn run_kernel(
-        &self,
-        kernel: &NpuKernel,
-        buffers: &[&NpuTensor],
-    ) -> Result<(), NpuError>;
+    fn run_kernel(&self, kernel: &NpuKernel, buffers: &[&NpuTensor]) -> Result<(), NpuError>;
 }
 
 /// A compiled NPU kernel.

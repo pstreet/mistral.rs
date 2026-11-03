@@ -4,8 +4,8 @@ use clap::Subcommand;
 
 use crate::{
     pipeline::{
-        AutoDeviceMapParams, EmbeddingLoaderType, IsqOrganization, MultimodalLoaderType,
-        ModelCategory, NormalLoaderType, UqffWriteConfig,
+        AutoDeviceMapParams, EmbeddingLoaderType, IsqOrganization, ModelCategory,
+        MultimodalLoaderType, NormalLoaderType, UqffWriteConfig,
     },
     DiffusionLoaderType, LoraAdapterSpec, LoraRuntimeConfig, ModelDType, SpeechLoaderType,
 };
@@ -904,7 +904,6 @@ pub enum ModelSelected {
         hf_cache_path: Option<PathBuf>,
     },
 }
-
 
 impl ModelSelected {
     /// Coarse category of the model, used for per-category default resolution

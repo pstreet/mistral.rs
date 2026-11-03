@@ -56,10 +56,7 @@ impl MlaKvBProjection {
         matches!(self, Self::Split { .. })
     }
 
-    #[cfg(any(
-        all(feature = "cuda", target_family = "unix"),
-        test
-    ))]
+    #[cfg(any(all(feature = "cuda", target_family = "unix"), test))]
     pub fn is_dynamic_lora_active(&self) -> bool {
         match self {
             Self::Fused(projection) => projection.is_dynamic_lora_active(),

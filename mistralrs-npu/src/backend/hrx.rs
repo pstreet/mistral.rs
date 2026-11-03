@@ -16,7 +16,7 @@ use crate::backend::{NpuDevice, NpuError, NpuKernel, NpuTensor, SyncDirection, U
 // ---------------------------------------------------------------------------
 
 /// HRX backend. Currently a stub — implements `NpuDevice` with
-//! TODO: implement actual HRX FFI bindings when libhrx.so is available.
+/// TODO: implement actual HRX FFI bindings when libhrx.so is available.
 
 pub struct HrxBackend;
 
@@ -80,11 +80,7 @@ impl NpuDevice for HrxBackend {
         ))
     }
 
-    fn run_kernel(
-        &self,
-        _kernel: &NpuKernel,
-        _buffers: &[&NpuTensor],
-    ) -> Result<(), NpuError> {
+    fn run_kernel(&self, _kernel: &NpuKernel, _buffers: &[&NpuTensor]) -> Result<(), NpuError> {
         Err(NpuError::LibraryLoad(
             "HRX backend not implemented yet".to_string(),
         ))

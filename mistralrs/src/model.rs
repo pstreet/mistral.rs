@@ -323,7 +323,10 @@ impl Model {
             input_files: request.take_input_files(),
         }));
 
-        self.runner.get_sender(model_id, Some(ModelCategory::Text))?.send(request).await?;
+        self.runner
+            .get_sender(model_id, Some(ModelCategory::Text))?
+            .send(request)
+            .await?;
 
         let stream = Stream { _server: self, rx };
 
@@ -392,7 +395,10 @@ impl Model {
             input_files: request.take_input_files(),
         }));
 
-        self.runner.get_sender(model_id, Some(ModelCategory::Text))?.send(request).await?;
+        self.runner
+            .get_sender(model_id, Some(ModelCategory::Text))?
+            .send(request)
+            .await?;
 
         // The agentic loop may send AgenticToolCallProgress and File
         // events before the final Done response. Skip them; the final
@@ -479,7 +485,10 @@ impl Model {
             input_files: request.take_input_files(),
         }));
 
-        self.runner.get_sender(model_id, Some(ModelCategory::Text))?.send(request).await?;
+        self.runner
+            .get_sender(model_id, Some(ModelCategory::Text))?
+            .send(request)
+            .await?;
 
         // The agentic loop may emit progress or file events before the final Raw response.
         loop {
@@ -656,7 +665,10 @@ impl Model {
             input_files: Vec::new(),
         }));
 
-        self.runner.get_sender(model_id, Some(ModelCategory::Diffusion))?.send(request).await?;
+        self.runner
+            .get_sender(model_id, Some(ModelCategory::Diffusion))?
+            .send(request)
+            .await?;
 
         let ResponseOk::ImageGeneration(response) = rx
             .recv()
@@ -733,7 +745,10 @@ impl Model {
             input_files: Vec::new(),
         }));
 
-        self.runner.get_sender(model_id, Some(ModelCategory::Speech))?.send(request).await?;
+        self.runner
+            .get_sender(model_id, Some(ModelCategory::Speech))?
+            .send(request)
+            .await?;
 
         let ResponseOk::Speech {
             pcm,
@@ -896,7 +911,11 @@ impl Model {
     ) -> crate::error::Result<()> {
         let request = Request::ReIsq(isq_type);
 
-        Ok(self.runner.get_sender(model_id, None)?.send(request).await?)
+        Ok(self
+            .runner
+            .get_sender(model_id, None)?
+            .send(request)
+            .await?)
     }
 
     /// Begin online calibration: collect activation statistics from live traffic on every
@@ -962,7 +981,10 @@ impl Model {
             action,
             response: tx,
         });
-        self.runner.get_sender(model_id, None)?.send(request).await?;
+        self.runner
+            .get_sender(model_id, None)?
+            .send(request)
+            .await?;
 
         rx.recv()
             .await
@@ -1072,7 +1094,10 @@ impl Model {
             enable_thinking,
             reasoning_effort,
         });
-        self.runner.get_sender(model_id, None)?.send(request).await?;
+        self.runner
+            .get_sender(model_id, None)?
+            .send(request)
+            .await?;
 
         rx.recv()
             .await
@@ -1104,7 +1129,10 @@ impl Model {
             skip_special_tokens,
             response: tx,
         });
-        self.runner.get_sender(model_id, None)?.send(request).await?;
+        self.runner
+            .get_sender(model_id, None)?
+            .send(request)
+            .await?;
 
         rx.recv()
             .await
