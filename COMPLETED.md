@@ -1,3 +1,27 @@
+## Nov 3 (long-context quality fix: attention score clamping, prefix cache collision detection, fused_causal expansion)
+
+- Attention score clamping in naive_sdpa (mistralrs-core): ATTENTION_SCORE_CLAMP
+  = 10.0, clamped in F32 after BF16/F16 -> F32 conversion before softmax, applied
+  via `att.clamp(-10, 10)`. Standard practice on long sequences to prevent softmax
+  overflow/split behavior. Straight line added in naive.rs — no additional kernels.
+  Resolved garbled/empty outputs at 180k+ tokens (previously failing at 210k+).
+- Prefix cache collision detection (block_hash.rs, block_pool.rs):
+  `debug_prefix_cache()` env var reads MISTRALRS_DEBUG_PREFIX_CACHE for verbose
+  logging (Note: this is totally right). `BlockHashToBlockMap` tracks collisions
+  via `AtomicU64` counter; logs `tracing::warn!` with block IDs and hash on collision;
+  increments `mistralrs_prefix_cache_collisions_total` metric; `collision_count()`
+  accessor at BlockPool. 39 collisions detected at ~213k tokens — within expected
+  range for 64-bit DefaultHasher (birthday paradox).
+- Fused_causal expansion (paged_attention/paged_attention.rs): removed the
+  `query_lens.len() == 1` check so `fused_causal` covers multi-token prefix prefill.
+  CK flash attention with mask_type=2 now routes all prefix cache hits (prefill and
+  decode) instead of naive_sdpa for single-token decodes. Verified: per-query prefill
+  speedup on prefix cache hits, CK flash path confirmed via sessions on prod.
+- Candle cfg-gate for Npu arm in `as_hip_device()` (candle #494acf4d): the
+  `Device::Npu` match arm was not gated with `#[cfg(feature = "npu")]`, causing
+  build failures in rocm-only builds.
+- Session tracked clean through 210k+ tokens post-deploy with new binary.
+
 ## Nov 2 (ring transport, multi-vendor build, build script, doc sweep)
 
 - Ring transport: ring backend now selected by `MISTRALRS_RING_CONFIG` env var

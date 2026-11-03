@@ -7,8 +7,16 @@ candle 56 ahead / 26 behind huggingface/candle:main, mistral.rs 111 ahead /
 Legend: [ ] open, [x] done. P0 = do first, P1 = do next, P2 = merge prep,
 P3 = polish, Deferred = do not do on RDNA.
 
-## Current status (2026-11-02, post ring-panic fix, prod on Strix Halo gfx1151, dual cuda,rocm,npu,flash-attn)
+## Current status (2026-11-03, prod on Strix Halo gfx1151, dual cuda,rocm,npu,flash-attn, long-context fix deployed)
 
+Garbled output fix deployed (56cf617ea, 41a49cc77): attention score clamping in
+naive_sdpa resolved identical symptom to the OpenWebUI NaN issue (EoT-like
+sequences, GDN blowup) when context exceeds ~180k tokens. Model now stays clean
+through 210k+ in live session tracking. Prefix cache collision tracking active
+(39 expected collisions at 213k tokens for 64-bit DefaultHasher, birthday-paradox
+normal). Fused_causal expanded to multi-token prefix prefill: CK flash
+(mask_type=2) now routes all prefix cache hit prefill, not just single-token
+decode — verified via per-query prefill speedup.
 The SpeculativeDecode capture failure root-caused and fixed (eb025a60a,
 deployed to prod + validated 99165ac08). Ring transport now live: `MISTRALRS_RING_CONFIG`
 takes priority over NCCL, runs on every device platform (CUDA, ROCm, NPU, CPU),
