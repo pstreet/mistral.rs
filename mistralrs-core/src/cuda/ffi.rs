@@ -33,6 +33,7 @@ declare_kernel! {
         scale_s: f32,
         mask_type: i32,
         window_size_left: i32,
+        softcap: f32,
         stream: i64,
     ) -> f32;
 
@@ -64,6 +65,7 @@ declare_kernel! {
         window_size_left: i32,
         window_size_right: i32,
         mask_type: i32,
+        logits_soft_cap: f32,
         stream: i64,
     ) -> f32;
 

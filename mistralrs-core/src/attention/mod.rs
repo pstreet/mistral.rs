@@ -331,10 +331,10 @@ impl Sdpa {
                 && v.dtype() == DType::BF16
                 && matches!(head_dim, 128 | 256)
                 && seq_len > 1
-                && sdpa_params.softcap.is_none_or(|x| x == 1.0)
                 && sliding_ok
                 && gather_exact
             {
+                let softcap = sdpa_params.softcap.map(|x| x as f32).unwrap_or(0.0);
                 if let Some(out) = crate::rocm::ck_flash_attn(
                     q,
                     k,
@@ -342,6 +342,7 @@ impl Sdpa {
                     sdpa_params.softmax_scale as f32,
                     mask_type,
                     sdpa_params.sliding_window,
+                    softcap,
                 )? {
                     if dbg {
                         eprintln!("[CK FA] dispatch: HIT, returning output");

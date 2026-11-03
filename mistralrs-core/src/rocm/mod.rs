@@ -19,6 +19,7 @@ pub(crate) fn ck_flash_attn(
     softmax_scale: f32,
     mask_type: i32,
     sliding_window: Option<usize>,
+    softcap: f32,
 ) -> Result<Option<Tensor>> {
     let (b_sz, n_attn_heads, seq_len, head_dim) = q.dims4()?;
     let (_, n_kv_heads, kv_len, k_head_dim) = k.dims4()?;
@@ -133,6 +134,7 @@ pub(crate) fn ck_flash_attn(
             softmax_scale,
             mask_type,
             window_size_left,
+            softcap,
             stream_i64,
         );
     }
@@ -195,6 +197,7 @@ pub(crate) fn ck_flash_attn_splitkv(
     window_left: Option<usize>,
     window_right: Option<usize>,
     mask_type: i32,
+    softcap: f32,
 ) -> Result<Option<Tensor>> {
     let (total_q, nhead_q, head_dim) = q.dims3()?;
     let (num_pages, page_size, nhead_kv, k_head_dim) = key_paged.dims4()?;
@@ -380,6 +383,7 @@ pub(crate) fn ck_flash_attn_splitkv(
             window_left,
             window_right,
             mask_type,
+            softcap,
             stream_i64,
         )
     };
@@ -624,6 +628,7 @@ mod tests {
             window,
             window_right,
             mask_type,
+            0.0,
         )?
         .ok_or_else(|| candle_core::Error::msg("ck_flash_attn_splitkv returned none"))?;
 

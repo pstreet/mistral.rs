@@ -126,6 +126,7 @@ extern "C" float ck_flash_attn_fwd(
     float scale_s,
     int32_t mask_type,
     int32_t window_size_left,
+    float logits_soft_cap,
     int64_t stream)
 {
     fmha_fwd_args a;
@@ -163,7 +164,7 @@ extern "C" float ck_flash_attn_fwd(
     a.head_start     = 0;
 
     a.scale_s        = scale_s;
-    a.logits_soft_cap = 10.0f;  // match ATTENTION_SCORE_CLAMP in naive_sdpa
+    a.logits_soft_cap = logits_soft_cap;
 
     a.stride_q       = stride_q;
     a.stride_k       = stride_k;

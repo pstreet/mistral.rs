@@ -58,6 +58,7 @@ extern "C" float ck_flash_attn_splitkv_fwd(
     int32_t window_size_left,
     int32_t window_size_right,
     int32_t mask_type,
+    float logits_soft_cap,
     int64_t stream)
 {
     if(hdim != 128 || nhead_q % nhead_k != 0 || num_splits < 1 || num_splits > 16)
@@ -108,7 +109,7 @@ extern "C" float ck_flash_attn_splitkv_fwd(
     a.scale_s        = scale_s;
     a.scale_p        = 1.0f;
     a.scale_o        = 1.0f;
-    a.logits_soft_cap = 0.0f;
+    a.logits_soft_cap = logits_soft_cap;
 
     // q/o are [total_q, nhead, hdim] contiguous; k/v are [page, page_size, nhead_k, hdim].
     a.stride_q            = static_cast<ck_tile::index_t>(nhead_q) * hdim;
