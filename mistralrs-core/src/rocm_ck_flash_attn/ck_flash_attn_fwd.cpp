@@ -11,7 +11,7 @@
 // hdim=128, tile 64x64
 extern template float fmha_fwd_<
     fmha_fwd_traits_<128, FmhaFwdBf16, false, 64, 64, 32, 128, 32, 128, true,
-        ck_tile::BlockFmhaPipelineEnum::QRKSVS, false,
+        ck_tile::BlockFmhaPipelineEnum::QRKSVS, true,
         ck_tile::SimplifiedGenericAttentionMask<false>,
         ck_tile::BlockAttentionBiasEnum::NO_BIAS,
         true, false, ck_tile::BlockAttentionQuantScaleEnum::NO_SCALE,
@@ -20,7 +20,7 @@ extern template float fmha_fwd_<
 
 extern template float fmha_fwd_<
     fmha_fwd_traits_<128, FmhaFwdBf16, false, 64, 64, 32, 128, 32, 128, true,
-        ck_tile::BlockFmhaPipelineEnum::QRKSVS, false,
+        ck_tile::BlockFmhaPipelineEnum::QRKSVS, true,
         ck_tile::SimplifiedGenericAttentionMask<true>,
         ck_tile::BlockAttentionBiasEnum::NO_BIAS,
         true, false, ck_tile::BlockAttentionQuantScaleEnum::NO_SCALE,
@@ -30,7 +30,7 @@ extern template float fmha_fwd_<
 // hdim=128, tile 128x64
 extern template float fmha_fwd_<
     fmha_fwd_traits_<128, FmhaFwdBf16, false, 128, 64, 32, 128, 32, 128, true,
-        ck_tile::BlockFmhaPipelineEnum::QRKSVS, false,
+        ck_tile::BlockFmhaPipelineEnum::QRKSVS, true,
         ck_tile::SimplifiedGenericAttentionMask<false>,
         ck_tile::BlockAttentionBiasEnum::NO_BIAS,
         true, false, ck_tile::BlockAttentionQuantScaleEnum::NO_SCALE,
@@ -39,7 +39,7 @@ extern template float fmha_fwd_<
 
 extern template float fmha_fwd_<
     fmha_fwd_traits_<128, FmhaFwdBf16, false, 128, 64, 32, 128, 32, 128, true,
-        ck_tile::BlockFmhaPipelineEnum::QRKSVS, false,
+        ck_tile::BlockFmhaPipelineEnum::QRKSVS, true,
         ck_tile::SimplifiedGenericAttentionMask<true>,
         ck_tile::BlockAttentionBiasEnum::NO_BIAS,
         true, false, ck_tile::BlockAttentionQuantScaleEnum::NO_SCALE,
@@ -49,7 +49,7 @@ extern template float fmha_fwd_<
 // hdim=256, tile 128x64
 extern template float fmha_fwd_<
     fmha_fwd_traits_<256, FmhaFwdBf16, false, 128, 64, 32, 256, 32, 256, true,
-        ck_tile::BlockFmhaPipelineEnum::QRKSVS, false,
+        ck_tile::BlockFmhaPipelineEnum::QRKSVS, true,
         ck_tile::SimplifiedGenericAttentionMask<false>,
         ck_tile::BlockAttentionBiasEnum::NO_BIAS,
         true, false, ck_tile::BlockAttentionQuantScaleEnum::NO_SCALE,
@@ -58,7 +58,7 @@ extern template float fmha_fwd_<
 
 extern template float fmha_fwd_<
     fmha_fwd_traits_<256, FmhaFwdBf16, false, 128, 64, 32, 256, 32, 256, true,
-        ck_tile::BlockFmhaPipelineEnum::QRKSVS, false,
+        ck_tile::BlockFmhaPipelineEnum::QRKSVS, true,
         ck_tile::SimplifiedGenericAttentionMask<true>,
         ck_tile::BlockAttentionBiasEnum::NO_BIAS,
         true, false, ck_tile::BlockAttentionQuantScaleEnum::NO_SCALE,
@@ -86,7 +86,7 @@ static float dispatch_bf16_batch(
         M0, N0, K0, N1, K1, K0BL,
         true,  // kIsVLayoutRowMajor
         ck_tile::BlockFmhaPipelineEnum::QRKSVS,
-        false,  // kHasLogitsSoftCap
+        true,   // kHasLogitsSoftCap
         MaskType,
         ck_tile::BlockAttentionBiasEnum::NO_BIAS,
         true,   // kStoreLse
