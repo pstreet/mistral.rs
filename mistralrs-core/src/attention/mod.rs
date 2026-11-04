@@ -334,7 +334,14 @@ impl Sdpa {
                 && sliding_ok
                 && gather_exact
             {
-                let softcap = sdpa_params.softcap.map(|x| x as f32).unwrap_or(0.0);
+                // CK's logits_soft_cap operates on raw logits (before softmax_scale),
+                // while naive_sdpa's ATTENTION_SCORE_CLAMP is on scaled scores. Convert:
+                // clamp_scaled = 10.0  =>  clamp_raw = 10.0 / softmax_scale.
+                // When the model has its own softcap (Gemma), pass it through as-is.
+                let softcap = sdpa_params.softcap.map(|x| x as f32).unwrap_or_else(|| {
+                    (crate::attention::backends::naive::ATTENTION_SCORE_CLAMP as f32)
+                        / sdpa_params.softmax_scale
+                });
                 if let Some(out) = crate::rocm::ck_flash_attn(
                     q,
                     k,

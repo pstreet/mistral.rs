@@ -7,7 +7,7 @@ use mistralrs_quant::MatMul;
 
 use crate::attention::{chunked_attention, SdpaParams};
 
-const ATTENTION_SCORE_CLAMP: f64 = 10.0;
+pub(crate) const ATTENTION_SCORE_CLAMP: f64 = 10.0;
 
 /// Not *really* sure why this is necessary but it is.
 pub(crate) fn maybe_synchronize(device: &Device) -> Result<()> {
