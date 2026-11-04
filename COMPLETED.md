@@ -1,3 +1,46 @@
+## Nov 4 (long-context decode performance: paged-attention v2 streaming-K fix)
+
+- Streaming-K dot for v2 decode kernel (candle candle-core cuda/pagedattention.cuh):
+  at hdim 256 + block 32 on both ROCm and CUDA, THREAD_GROUP_SIZE collapses to 1 and the per-thread
+  `k_vecs[32]` array costs 128 registers, spilling 1392B private memory per thread
+  (vgpr=192, sgpr=128 confirmed via rocprof-compute on gfx1151). Compile-time streaming
+  dot (`if constexpr (VEC_SIZE == 8 && THREAD_GROUP_SIZE == 1 && kUseVecDequant)`)
+  eliminates the array entirely; per-vec load extracted into `load_k_vec` device lambda;
+  Q8 4-wide dequant fast path generalized to `VEC_SIZE % 4 == 0`; Q4 runtime
+  `kq4k_stream` special removed (subsumed). CUDA shape: same fix, byte-identical code
+  path. Commits: 3c2b9e342 (ROCm), 8ed4c9bc4 (CUDA).
+- A/B validation (session4, port 1244, graphs off, cache-hit 189k decode):
+  avg_compl_tok_per_sec 3.47 → 6.36 (+83.3%); 32k: 20.25 → 22.72 (+12.2%); 2k:
+  46.77 → 46.67 (neutral). Canary 37×8 → "296" exact on all rounds; contents
+  byte-identical to baseline. Sweep fit returns to linear (2k→32k 0.752 us/ctx-tok,
+  32k→189k 0.721; baseline was superlinear at 189k: 0.933 then 1.52). Effective KV
+  bandwidth: 11.7 → 15.0 GB/s (~8% of ~180 GB/s peak).
+- Counter evidence (session5, rocprof-compute dispatch analysis): main kernel
+  (vllm::paged_attention_v2_kernel<hdim256,block32>) dispatched 1028× in both runs.
+  Fixed: vgpr=192 (compiler reused freed regs), **scratch 1392→852 B (−38.7%)**,
+  lds=2592 B unchanged. The 540B private-segment drop = the k_vecs array removed.
+  Baseline counters archived rc-prof-base/; fixed in rc-prof/.
+- Remaining gap: ~1.5x vs llama.cpp (~9-10 T/s long ctx). Next levers: occupancy
+  tuning (PARTITION_SIZE or block_size=16), L2 hit rate via better KV access ordering,
+  and dequant cost reduction. CUDA-role follow-up: same streaming-K fix should be
+  enabled for the NVIDIA role (same 128-reg k_vecs at hdim256+block32); see
+  scratch/profile-v2/NOTES.md.
+- Build note: whole-workspace `cargo build --release` fails in mistralrs-pyo3 (8× E0061,
+  pre-existing drift). Server binary built via `-p mistralrs-cli` which avoids pyo3
+  entirely (not in cli dep closure).
+
+## Nov 4 (CK flash attention softcap: kHasLogitsSoftCap instantiation)
+
+- Enable kHasLogitsSoftCap in CK flash attention template for ROCm (commit d0c57f640):
+  the CK flash forward path lacked attention score soft-cap support, causing the
+  Rust-side softcap to run as a post-softmax host clamp (extra kernel, wrong numerical
+  placement). Set `kHasLogitsSoftCap=true` in the CK template so softcap applies
+  inside the CK kernel at the correct point.
+- Add softcap-enabled CK flash fwd instantiations for d128/d256 (commit 4bf5186c6):
+  explicit template instantiations with the softcap flag enabled for the two active
+  head dimensions. Closes the garble path where unclamped logits at long context
+  caused softmax overflow → degraded output quality.
+
 ## Nov 3 (long-context quality fix: attention score clamping, prefix cache collision detection, fused_causal expansion)
 
 - Attention score clamping in naive_sdpa (mistralrs-core): ATTENTION_SCORE_CLAMP

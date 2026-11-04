@@ -489,6 +489,9 @@ so candle CUDA fixes apply to the HIP role automatically.
       (849c51ef: global RwLock<ModuleStore> replaced with
       HashMap<idx, OnceLock<ModuleCache>> — cache hits lock-free,
       eliminates module store contention on every kernel launch)
+- [x] [H] cuda/pagedattention.cuh: streaming-K dot to kill v2 decode register
+      spill at hdim256+block32 (scratch 1392→852B via rocprof-compute;
+      A/B +83% at 189k cache-hit). Commit: 3c2b9e342.
 - [ ] [M] mod.rs:1710-1727 - DType re-matched (15-arm) in hot transfer paths.
 - [x] [M] mod.rs:176-179,1808 - format! kernel names per call in to_dtype.
       (9643f9f7: cast_kernel_name() pre-computed lookup replaces format!,
@@ -537,6 +540,11 @@ so candle CUDA fixes apply to the HIP role automatically.
 - [x] [H] models/qwen3_next.rs:2114 (also 2832,2932) - gdn_replay_stash Mutex per layer/token.
       (1a2e1bd81: first-wave done)
 - [ ] [H] paged_attention/block_pool.rs:912 - prefix block retention mutex per allocation.
+- [ ] [H] candle-core cuda/pagedattention.cuh: occupancy tuning — vgpr=192 still caps
+      waves/CU after streaming-K fix; try block_size=16 (reduces per-thread state)
+      or smaller PARTITION_SIZE. L2 hit rate for random KV block access across
+      ~2 GB cache is poor; study block ordering / access patterns. Q8_0 dequant
+      cost: 1.0625 B/elem DRAM read; explore wider dequant + compute overlap.
 - [ ] [M] kv_cache/hybrid_cache.rs:2244-2245 - set_state_indices host Vec + slot remap per batch.
       (production path uses set_state_indices_with_host with pre-provided host indices;
       the D2H fallback via to_vec1 is per-batch, not per-token, so low impact)
