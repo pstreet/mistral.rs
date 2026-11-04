@@ -540,11 +540,31 @@ so candle CUDA fixes apply to the HIP role automatically.
 - [x] [H] models/qwen3_next.rs:2114 (also 2832,2932) - gdn_replay_stash Mutex per layer/token.
       (1a2e1bd81: first-wave done)
 - [ ] [H] paged_attention/block_pool.rs:912 - prefix block retention mutex per allocation.
-- [ ] [H] candle-core cuda/pagedattention.cuh: occupancy tuning — vgpr=192 still caps
-      waves/CU after streaming-K fix; try block_size=16 (reduces per-thread state)
-      or smaller PARTITION_SIZE. L2 hit rate for random KV block access across
-      ~2 GB cache is poor; study block ordering / access patterns. Q8_0 dequant
-      cost: 1.0625 B/elem DRAM read; explore wider dequant + compute overlap.
+- [ ] [H] candle-core cuda/pagedattention.cuh: block_size=16 A/B — current block=32
+      gives 16 KB/K-block; block=16 halves to 8 KB, better L2 fit for the ~2 GB
+      KV working set. Kernel already instantiates hdim256,block16 (id 4035,
+      scratch=776B). One TOML change + sweep to validate.
+- [ ] [H] candle-core cuda/pagedattention.cuh: PARTITION_SIZE=256 A/B — current 512
+      → 369 partitions/layer at 189k. Halving to 256 doubles grid parallelism
+      (more SMs occupied), potentially hiding more DRAM latency. Reduce-kernel
+      overhead is negligible (1028 reduce dispatches already, doubling still tiny).
+- [ ] [H] candle-core cuda/pagedattention.cuh: vgpr reduction below 192 — streaming-K
+      removed the k_vecs spill but compiler reused freed regs; vgpr still caps
+      waves/CU. Try reducing per-thread softmax/lse accumulators to free ~32 regs.
+- [ ] [H] candle-core cuda/pagedattention.cuh: Q8_0 dequant overlap — 1.0625 B/elem
+      DRAM read feeding bf16 dot product; explore 2-vector pipeline (load next vec
+      while computing current) to hide more latency.
+- [ ] [H] paged_attention/block_pool.rs: GQA-aware block ordering — 2 kv_heads × 8
+      q_heads each; all q_heads in a GQA group read the same KV blocks. If the
+      allocator scatters blocks for a single kv_head across memory, L2 reuse is lost.
+      Keep blocks for the same kv_head in nearby memory regions.
+- [ ] [H] paged_attention/cache_engine.rs: KV cache layout coherency — 2.06 GB per-step
+      KV working set spans entire cache. Random block access across 5905 blocks → poor
+      L2 hit rate. Layout change where blocks for consecutive tokens in a kv_head are
+      physically contiguous would make streaming access patterns L2-friendly.
+- [ ] [M] mistralrs-core pipeline: weight streaming overlap with KV reads — MoE kernels
+      at 68–96% GTT roofline; overlap weight streaming (GTT regions) with KV reads to
+      improve effective bandwidth. Host-side orchestration, not kernel-level.
 - [ ] [M] kv_cache/hybrid_cache.rs:2244-2245 - set_state_indices host Vec + slot remap per batch.
       (production path uses set_state_indices_with_host with pre-provided host indices;
       the D2H fallback via to_vec1 is per-batch, not per-token, so low impact)
