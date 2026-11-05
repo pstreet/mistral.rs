@@ -134,6 +134,16 @@ the Nov 1-2 buggy session, silent on the healthy eras; glm stylistic CJK
 stays warn-level. Run it over fresh exports (deck box included) after any
 suspect session.
 
+Field validation (scratch/garble-hunt/field-test-20261105/): 7-turn driven
+session, 12k-199k tokens, greedy+sampled alternated, canary facts at depth.
+7/7 fact extractions correct incl. 154k/179k/199k; turn 6 (179k, sampled)
+thought 11.3k chars (coherent, verified) then emitted a 642-word essay
+ending in the exact code - thinking length scales with context, budget
+accordingly. Zero sentinel bails, zero HSA faults, MTP aggregate 0.65
+(healthy band), no decode death windows. scan_export.py on the transcript:
+zero hard findings. The Nov 5 degradation class did not reproduce under
+graphs-off + sentinel.
+
 ## Current status (2026-10-26, prod on the f3b2d3576 tip, dual cuda,rocm,flash-attn)
 13 lanes configured, ALL lazy (headless boot, demand-load, per-category
 defaults: chat -> qwen3.6-35b-a3b): 35B A3B hip + cuda twins, 27B Q6_K
