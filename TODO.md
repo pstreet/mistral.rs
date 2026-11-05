@@ -125,6 +125,15 @@ wrapper + toml synced from live. Post-restart canary 3x4 temp-0: 12, zero
 sentinel lines, journal clean. Open: ceiling/floor are fleet-wide consts;
 revisit when the 27B/4B lanes load - their healthy scales may differ.
 
+Client-side complement: scratch/garble-hunt/scan_export.py scans OpenCode
+session exports for the semantic garble forms the sentinel cannot see at
+decode time (phantom coined-token quotes, pseudo-syntax, markup leaks,
+reasoning-only runaways, slow-empty turns, shell-in-JS tool misuse). Tuned
+against both Nov exports: flags every incident turn in the deck session and
+the Nov 1-2 buggy session, silent on the healthy eras; glm stylistic CJK
+stays warn-level. Run it over fresh exports (deck box included) after any
+suspect session.
+
 ## Current status (2026-10-26, prod on the f3b2d3576 tip, dual cuda,rocm,flash-attn)
 13 lanes configured, ALL lazy (headless boot, demand-load, per-category
 defaults: chat -> qwen3.6-35b-a3b): 35B A3B hip + cuda twins, 27B Q6_K
