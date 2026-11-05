@@ -229,7 +229,7 @@ pub struct ModelEntry {
     pub v_cache_type: Option<PagedCacheType>,
     /// Per-entry KV context length. `None` inherits the global
     /// `[paged_attn] context_len`.
-    #[serde(default)]
+    #[serde(default, alias = "paged_ctxt_len")]
     pub context_len: Option<usize>,
     /// Per-entry KV pool size in MB. `None` inherits the global
     /// `[paged_attn] memory_mb`. Mutually exclusive with `context_len`

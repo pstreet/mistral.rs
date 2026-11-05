@@ -174,7 +174,7 @@ pub async fn run_bench(
         paged_attn,
         paged_attn_gpu_mem,
         paged_attn_gpu_mem_usage,
-        paged_ctxt_len,
+        context_len,
         paged_attn_block_size,
         paged_cache_type,
         paged_k_cache_type,
@@ -213,7 +213,7 @@ pub async fn run_bench(
         .with_in_situ_quant_optional(isq)
         .with_paged_attn_gpu_mem_optional(paged_attn_gpu_mem)
         .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
-        .with_paged_ctxt_len_optional(paged_ctxt_len)
+        .with_context_len_optional(context_len)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
         .with_fit_ctx(paged_fit_ctx)
         .with_paged_attn_cache_type(paged_cache_type)

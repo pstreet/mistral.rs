@@ -68,12 +68,13 @@ pub struct ModelConfig {
     #[serde(default)]
     pub v_cache_type: Option<PagedCacheType>,
     /// Per-model KV context length. `None` inherits the global
-    /// `[paged_attn] context_len`.
-    #[serde(default)]
-    pub paged_ctxt_len: Option<usize>,
+    /// `[paged_attn] context_len`. When set, overrides the model's
+    /// GGUF `max_seq_len` — pool may be smaller (cap) or larger (YaRN extend).
+    #[serde(default, alias = "paged_ctxt_len")]
+    pub context_len: Option<usize>,
     /// Per-model KV pool size in MB. `None` inherits the global
     /// `[paged_attn] memory_mb`. Mutually exclusive with
-    /// `paged_ctxt_len` (context wins, same as global).
+    /// `context_len` (context wins, same as global).
     #[serde(default)]
     pub paged_attn_gpu_mem: Option<usize>,
     /// Per-model shrink-to-fit. `None` inherits the global `fit_ctx`.
@@ -120,7 +121,7 @@ impl ModelConfig {
             cache_type: None,
             k_cache_type: None,
             v_cache_type: None,
-            paged_ctxt_len: None,
+            context_len: None,
             paged_attn_gpu_mem: None,
             fit_ctx: None,
             max_seqs: None,
@@ -165,8 +166,8 @@ impl ModelConfig {
         self
     }
 
-    pub fn with_paged_ctxt_len(mut self, paged_ctxt_len: usize) -> Self {
-        self.paged_ctxt_len = Some(paged_ctxt_len);
+    pub fn with_context_len(mut self, context_len: usize) -> Self {
+        self.context_len = Some(context_len);
         self
     }
 
@@ -322,7 +323,7 @@ pub mod defaults {
 ///        .with_in_situ_quant_optional(args.in_situ_quant)
 ///        .with_paged_attn_gpu_mem_optional(args.paged_attn_gpu_mem)
 ///        .with_paged_attn_gpu_mem_usage_optional(args.paged_attn_gpu_mem_usage)
-///        .with_paged_ctxt_len_optional(args.paged_ctxt_len)
+///        .with_context_len_optional(args.context_len)
 ///        .with_paged_attn_block_size_optional(args.paged_attn_block_size)
 ///        .build()
 ///        .await?;
@@ -409,10 +410,9 @@ pub struct MistralRsForServerBuilder {
     paged_attn_gpu_mem_usage: Option<f32>,
 
     /// Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
-    /// PagedAttention is supported on CUDA/ROCm and Metal. It is automatically activated on CUDA/ROCm but not on Metal.
-    /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-    /// This is the default setting, and it defaults to the `max-seq-len` specified in after the model type.
-    paged_ctxt_len: Option<usize>,
+    /// Overrides the model's native `max_seq_len` from GGUF metadata.
+    /// When unset, defaults to 90% of available VRAM.
+    context_len: Option<usize>,
 
     /// Shrink-to-fit: when the configured KV pool does not fit post-load
     /// memory, cut it (loudly) instead of refusing to load. Off by default.
@@ -509,7 +509,7 @@ impl Default for MistralRsForServerBuilder {
             in_situ_quant: defaults::IN_SITU_QUANT,
             paged_attn_gpu_mem: defaults::PAGED_ATTN_GPU_MEM,
             paged_attn_gpu_mem_usage: defaults::PAGED_ATTN_GPU_MEM_USAGE,
-            paged_ctxt_len: defaults::PAGED_CTXT_LEN,
+            context_len: defaults::PAGED_CTXT_LEN,
             fit_ctx: false,
             paged_attn_block_size: defaults::PAGED_ATTN_BLOCK_SIZE,
             paged_attn: defaults::PAGED_ATTN,
@@ -883,15 +883,16 @@ impl MistralRsForServerBuilder {
     }
 
     /// Sets the total context length for KV cache allocation.
-    pub fn with_paged_ctxt_len(mut self, paged_ctxt_len: usize) -> Self {
-        self.paged_ctxt_len = Some(paged_ctxt_len);
+    /// Overrides the model's native `max_seq_len` from GGUF metadata.
+    pub fn with_context_len(mut self, context_len: usize) -> Self {
+        self.context_len = Some(context_len);
         self
     }
 
     /// Sets the total context length for KV cache allocation if provided.
-    pub fn with_paged_ctxt_len_optional(mut self, paged_ctxt_len: Option<usize>) -> Self {
-        if let Some(paged_ctxt_len) = paged_ctxt_len {
-            self = self.with_paged_ctxt_len(paged_ctxt_len);
+    pub fn with_context_len_optional(mut self, context_len: Option<usize>) -> Self {
+        if let Some(context_len) = context_len {
+            self = self.with_context_len(context_len);
         }
         self
     }
@@ -1120,7 +1121,7 @@ impl MistralRsForServerBuilder {
                 self.paged_attn_block_size,
                 self.paged_attn_gpu_mem,
                 self.paged_attn_gpu_mem_usage,
-                self.paged_ctxt_len,
+                self.context_len,
                 self.paged_cache_type,
                 self.paged_k_cache_type,
                 self.paged_v_cache_type,
@@ -1291,7 +1292,7 @@ impl MistralRsForServerBuilder {
     /// Resolve the effective paged cache config for one entry. A per-entry
     /// `cache_type` resets side inheritance to that base; a per-entry side
     /// falls back to the global side override, else the effective base.
-    /// Per-entry `paged_ctxt_len` / `paged_attn_gpu_mem` / `fit_ctx`
+    /// Per-entry `context_len` / `paged_attn_gpu_mem` / `fit_ctx`
     /// override the corresponding globals the same way.
     fn resolve_entry_cache_config(
         &self,
@@ -1310,7 +1311,7 @@ impl MistralRsForServerBuilder {
             self.paged_attn_block_size,
             model_config.paged_attn_gpu_mem.or(self.paged_attn_gpu_mem),
             self.paged_attn_gpu_mem_usage,
-            model_config.paged_ctxt_len.or(self.paged_ctxt_len),
+            model_config.context_len.or(self.context_len),
             base_type,
             model_config.k_cache_type.or(inherit_k),
             model_config.v_cache_type.or(inherit_v),
@@ -2213,7 +2214,7 @@ fn init_cache_config(
     paged_attn_block_size: Option<usize>,
     paged_attn_gpu_mem: Option<usize>,
     paged_attn_gpu_mem_usage: Option<f32>,
-    paged_ctxt_len: Option<usize>,
+    context_len: Option<usize>,
     cache_type: PagedCacheType,
     k_cache_type: Option<PagedCacheType>,
     v_cache_type: Option<PagedCacheType>,
@@ -2228,7 +2229,7 @@ fn init_cache_config(
         paged_attn_block_size,
         paged_attn_gpu_mem,
         paged_attn_gpu_mem_usage,
-        paged_ctxt_len,
+        context_len,
         paged_attn_supported(),
         no_paged_attn,
     ) {

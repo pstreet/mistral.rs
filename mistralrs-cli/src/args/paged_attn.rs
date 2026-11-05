@@ -24,10 +24,15 @@ pub struct PagedAttentionOptions {
     #[serde(default)]
     pub mode: PagedAttnMode,
 
-    /// Allocate KV cache for this context length.
-    /// If not specified, defaults to using 90% of available VRAM.
+    /// Allocate KV cache for this context length (total tokens the KV pool can hold).
+    /// Overrides the model's native `max_seq_len` from GGUF metadata.
     #[arg(long = "pa-context-len")]
     pub context_len: Option<usize>,
+
+    /// Alias for `context_len` — matches the GGUF `max_seq_len` field name.
+    #[allow(dead_code)]
+    #[serde(alias = "max_seq_len")]
+    pub _max_seq_len_alias: Option<usize>,
 
     /// GPU memory to allocate in MBs (alternative to context-len)
     #[arg(long = "pa-memory-mb", conflicts_with = "context_len")]
@@ -68,6 +73,7 @@ impl Default for PagedAttentionOptions {
         Self {
             mode: PagedAttnMode::Auto,
             context_len: None,
+            _max_seq_len_alias: None,
             memory_mb: None,
             memory_fraction: None,
             block_size: None,
@@ -101,11 +107,14 @@ impl PagedAttentionOptions {
             PagedAttnMode::Off => Some(false),
         };
 
+        // Merge max_seq_len alias into context_len (max_seq_len wins if both set)
+        let context_len = self._max_seq_len_alias.or(self.context_len);
+
         (
             enable,
             self.memory_mb,
             self.memory_fraction,
-            self.context_len,
+            context_len,
             self.block_size,
             self.cache_type,
             self.k_cache_type,
