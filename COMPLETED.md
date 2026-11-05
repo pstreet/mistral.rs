@@ -1,3 +1,31 @@
+## Nov 5 (CUDA streaming-K validation + config naming unification)
+
+- Streaming-K dot fix validated on CUDA via Q8_0 vs Q4_0 KV A/B (RTX 3090, sm8.6, 24GB):
+  Q8_0 KV triggers the fix (block_stride=1 at hdim256+block32+bf16+Q8_0);
+  Q4_0 KV takes the fallback path (block_stride=16). Same model, same context,
+  same prompt: Q4_0 = 34.59 tok/s → Q8_0 = 60.14 tok/s (**+73.8%**) at 64k
+  context (ptok=53,379). Both canary "296" pass. This matches the ROCm A/B
+  results (+83% at 189k, +12% at 32k). The fix is the same `if constexpr`
+  code path on both backends.
+- CUDA workspace analysis: the 3090's 24GB VRAM is the hard ceiling for
+  long-context CUDA inference. Workspace peaks at ~14.6GB (92-96k context),
+  drops to ~13GB at 128k. Free memory after model+KV load is ~12.4GB at 128k.
+  Gap ~0.6GB prevents 128k+ context. Max working context: 88k with Q4_0 KV
+  (27.94 tok/s), Q8_0 KV works at 64k (60.14 tok/s). True long-context CUDA
+  A/B needs 48GB+.
+- Config naming unified (commit 867dcbe10):
+  - Global KV context: `[paged_attn].context_len` (accepts `max_seq_len` alias
+    matching GGUF metadata naming). Replaces the unrecognized `max_seq_len` key
+    and the old `paged_ctxt_len` global.
+  - Per-model KV context: `[[models]].context_len` (accepts old `paged_ctxt_len`
+    alias for backward compat). Clearly distinct from `max_model_len` which
+    caps generation length, not KV pool size.
+  - KV context length controls the KV pool size and overrides the model's
+    native `max_seq_len` from GGUF metadata. It may be smaller (cap VRAM) or
+    larger (YaRN extend past native).
+- Build note: whole-workspace build still fails in mistralrs-pyo3 (pre-existing
+  drift). Use `-p mistralrs-cli` as before.
+
 ## Nov 4 (long-context decode performance: paged-attention v2 streaming-K fix)
 
 - Streaming-K dot for v2 decode kernel (candle candle-core cuda/pagedattention.cuh):

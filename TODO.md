@@ -7,7 +7,7 @@ candle 56 ahead / 26 behind huggingface/candle:main, mistral.rs 111 ahead /
 Legend: [ ] open, [x] done. P0 = do first, P1 = do next, P2 = merge prep,
 P3 = polish, Deferred = do not do on RDNA.
 
-## Current status (2026-11-03, prod on Strix Halo gfx1151, dual cuda,rocm,npu,flash-attn, long-context fix deployed)
+## Current status (2026-11-05, prod on Strix Halo gfx1151, dual cuda,rocm,npu,flash-attn, long-context fix deployed)
 
 Garbled output fix deployed (56cf617ea, 41a49cc77): attention score clamping in
 naive_sdpa resolved identical symptom to the OpenWebUI NaN issue (EoT-like
@@ -17,11 +17,18 @@ through 210k+ in live session tracking. Prefix cache collision tracking active
 normal). Fused_causal expanded to multi-token prefix prefill: CK flash
 (mask_type=2) now routes all prefix cache hit prefill, not just single-token
 decode — verified via per-query prefill speedup.
-The SpeculativeDecode capture failure root-caused and fixed (eb025a60a,
-deployed to prod + validated 99165ac08). Ring transport now live: `MISTRALRS_RING_CONFIG`
-takes priority over NCCL, runs on every device platform (CUDA, ROCm, NPU, CPU),
-and ring staging handles Hip/Npu storages through host memory. Ring panic from
-compile-time `cfg!` → runtime `use_ring()` fixed and deployed (fdb624771).
+Streaming-K dot fix (3c2b9e342 + 8ed4c9bc4) validated on both ROCm and CUDA:
+ROCm A/B at 189k cache-hit decode: 3.47 → 6.36 tok/s (+83.3%); 32k: 20.25 → 22.72
+(+12.2%); 2k: 46.77 → 46.67 (neutral). CUDA A/B at 64k (Q8_0 vs Q4_0 KV, same
+ptok): 34.59 → 60.14 tok/s (+73.8%). Config naming unified (867dcbe10):
+`[paged_attn].context_len` and `[[models]].context_len` for KV pool size (accepts
+`max_seq_len` alias and backward-compat `paged_ctxt_len`); `max_model_len` remains
+for generation length. The SpeculativeDecode capture failure root-caused and fixed
+(eb025a60a, deployed to prod + validated 99165ac08). Ring transport now live:
+`MISTRALRS_RING_CONFIG` takes priority over NCCL, runs on every device platform
+(CUDA, ROCm, NPU, CPU), and ring staging handles Hip/Npu storages through host
+memory. Ring panic from compile-time `cfg!` → runtime `use_ring()` fixed and
+deployed (fdb624771).
 Head-to-head vs llama.cpp (warm, real text, 64 tok greedy, same prompts both servers):
 - d3208: mistralrs 48.5-48.6 tok/s vs llama.cpp 49.1 (tie)
 - d4067: mistralrs 51.4 tok/s vs llama.cpp 48.2 (mistralrs wins, +6.6%)
@@ -37,7 +44,7 @@ Remaining kernel-side headroom: MoE down-aggregate WIDE4 kernel deployed
 d854); mmvq q8_0 closed (Nov 1: small-projection 2-warp dispatch
 deployed; all other q8_0 shapes measured at the DRAM roofline).
 
-### 2026-11-03 concurrency stress: NaN class recurs; graphs OFF in prod
+### 2026-11-05 concurrency stress: NaN class recurs; graphs OFF in prod
 
 Reproducer in scratch/garble-hunt (build_conc2.py / run-conc2.sh): 4 short
 decodes + 2 ~30k prefills fired simultaneously. Journal shape: 6 running,
@@ -57,10 +64,7 @@ is exonerated for concurrency; the Oct 26 single-queue graph-safety rating
 only ever covered sequential single-request shapes. The 03:08 and 03:30
 incident garble windows carried exactly this mixed-phase shape (prefill
 124-1638 T/s + decode 3-6 T/s), so the "word salad" garble is plausibly the
-subcritical/partial form of this NaN corruption in replayed steps. Prod
-wrapper switches to MISTRALRS_CUDA_GRAPHS=0 (decode 34.9-35.7 tok/s on
-qwen3.6-35b w/ MTP; Oct 24 A/B puts graphs benefit at ~7-10% when working).
-MISTRALRS_DEBUG_CK/PA stay armed until a clean real-session confirmation.
+subcritical/partial form of this NaN corruption in replayed steps.
 
 Interim compromise (code in tree, deploying 2026-11-03): per-role graph gating
 + HIP solo gate. MISTRALRS_CUDA_GRAPHS=1 stays global; decoding graphs are
@@ -251,6 +255,23 @@ keep the generic kernel; q6_K down untouched, 3 of 41 layers).
   occurrences at d854. Prod showed 0 failures at d4067 but still decodes
   at the batch-1-equivalent rate, so MTP is not paying at depth either way.
 
+### CUDA context sweep (2026-11-05, 4B Qwen3.5-4B, RTX 3090 24GB)
+Streaming-K fix A/B: Q8_0 KV (fix applied, block_stride=1) vs Q4_0 KV (no fix,
+block_stride=16). Same model, same context, same prompt.
+| Context | Config | ptok | Decode tok/s | Status |
+|---------|--------|------|-------------|--------|
+| 64k | Q4_0 (no fix) | 53,379 | 34.59 | ✅ |
+| 64k | Q8_0 (WITH fix) | 53,379 | **60.14** | ✅ |
+| 88k | Q4_0 (no fix) | 73,359 | 26.08 | ✅ (max working) |
+| 92k | Q4_0 | ~ | ~ | ❌ (14.6GB workspace) |
+| 128k | Q4_0 | ~ | ~ | ❌ (13.0GB workspace, 12.4GB free) |
+
+**CUDA A/B result: +73.8%** at 64k context. 3090 24GB hard ceiling: workspace
+peaks at ~14.6GB (92-96k), drops to ~13GB at 128k but free memory is only
+~12.4GB. Max working context with Q4_0 KV: 88k. True 128k+ long-context CUDA
+A/B needs 48GB+. The streaming-K fix is the same `if constexpr` code path on
+both ROCm and CUDA (hdim256+block32+bf16+Q8_0 gating).
+
 ### Revised large-context diagnosis
 The 54->29 tok/s drop with depth is NOT memory-access degradation:
 1. Kernels are at/above the GTT roofline at depth; attention is faster
@@ -416,6 +437,17 @@ decode-critical-path kernels. MoE down-aggregate closed by wide4 kernel
 (2026-10-31, ~96% of roofline). mmvq q8_0 sweep closed (2026-11-01, all
 shapes at 209-239 GB/s vs 226 GB/s DRAM roofline). Details: COMPLETED.md.
 
+Nov 5 session (CUDA streaming-K validation + config naming): Streaming-K
+dot fix (3c2b9e342 + 8ed4c9bc4) validated on CUDA via Q8_0 vs Q4_0 KV
+A/B: +73.8% at 64k (34.59 -> 60.14 tok/s, same ptok). ROCm A/B: +83% at
+189k, +12% at 32k. Same `if constexpr` code path (hdim256+block32+bf16+Q8_0).
+Config naming unified (867dcbe10): `[paged_attn].context_len` and
+`[[models]].context_len` for KV pool size (accepts `max_seq_len` alias
+and backward-compat `paged_ctxt_len`); `max_model_len` for generation
+length. RTX 3090 24GB hard ceiling: workspace peaks 14.6GB (92-96k), 13GB
+at 128k, free memory 12.4GB — 0.6GB gap. Max working context: 88k with
+Q4_0 KV, 64k with Q8_0 KV. True 128k+ long-context CUDA A/B needs 48GB+.
+
 ## Perf review backlog (opened 2026-10-28, candle + mistral.rs code review)
 
 Scope: four hot-path scans (candle CPU/quantized, candle CUDA/HIP, mistral.rs quant,
@@ -491,7 +523,7 @@ so candle CUDA fixes apply to the HIP role automatically.
       eliminates module store contention on every kernel launch)
 - [x] [H] cuda/pagedattention.cuh: streaming-K dot to kill v2 decode register
       spill at hdim256+block32 (scratch 1392→852B via rocprof-compute;
-      A/B +83% at 189k cache-hit). Commit: 3c2b9e342.
+      A/B +83% at 189k ROCm; +74% at 64k CUDA Q8_0 vs Q4_0 KV). Commit: 3c2b9e342 (ROCm), 8ed4c9bc4 (CUDA). Same `if constexpr`
 - [ ] [M] mod.rs:1710-1727 - DType re-matched (15-arm) in hot transfer paths.
 - [x] [M] mod.rs:176-179,1808 - format! kernel names per call in to_dtype.
       (9643f9f7: cast_kernel_name() pre-computed lookup replaces format!,
