@@ -477,7 +477,7 @@ __device__ void paged_attention_kernel(
       // Compute dot product.
       // This includes a reduction across the threads in the same thread group.
       float qk;
-#if defined(USE_ROCM) || defined(USE_CUDA)
+#if defined(USE_ROCM)
       if constexpr (VEC_SIZE == 8 && THREAD_GROUP_SIZE == 1 &&
                     bq::kUseVecDequant<scalar_t>) {
         // Streaming dot: one K vec in flight. The array form holds
