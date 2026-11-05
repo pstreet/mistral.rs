@@ -5,6 +5,7 @@ pub(crate) mod memory_usage;
 pub(crate) mod model_config;
 pub(crate) mod normal;
 pub(crate) mod progress;
+pub(crate) mod step_sentinel;
 pub(crate) mod tiktoken;
 pub(crate) mod tokenizer;
 pub(crate) mod tokens;

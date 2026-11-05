@@ -83,6 +83,7 @@ pub(crate) fn naive_sdpa(
             att = att.to_dtype(candle_core::DType::F32)?;
         }
         // Clamp attention scores before softmax to prevent overflow on long sequences.
+        crate::utils::step_sentinel::note_clamp_call();
         att = att.clamp(-ATTENTION_SCORE_CLAMP, ATTENTION_SCORE_CLAMP)?;
         att = candle_nn::ops::softmax_last_dim(&att)?;
         if att.dtype() != att_dtype {

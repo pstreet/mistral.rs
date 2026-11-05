@@ -12,12 +12,23 @@ if [ -f "$LOCALAI_ROOT/.rocm-env.sh" ]; then
     source "$LOCALAI_ROOT/.rocm-env.sh"
 fi
 
-# Decode graphs. Two ROCm capture bugs were fixed in cuda_graph.rs; override
-# with MISTRALRS_CUDA_GRAPHS=0 if a crash recurs. A/B 2026-09-24, qwen3.8-27b
-# essay 600tok temp0.3 decode T/s, 3 trials each: on 13.89, off 12.54, on
-# retest 13.39 (third trials sag with heat soak). Verdict: ~+7-10% real; the
-# old +2.4% dated from when launches were silently zero. /metrics showed
-# 1183 replay vs 3 eager dispatches. Keep on.
+# Decode graphs. Two ROCm capture bugs were fixed in cuda_graph.rs. NaN
+# finding 2026-10-26: graph replay is safe ONLY with GPU_MAX_HW_QUEUES=1
+# (single-queue A/B: 0/10 NaN vs ~10-25% on multi-queue, 5-sync-point fix
+# in between). A/B 2026-09-24, qwen3.8-27b essay 600tok temp0.3 decode T/s,
+# 3 trials each: on 13.89, off 12.54, on retest 13.39 (third trials sag with
+# heat soak). Verdict: ~+7-10% real when replay is safe.
+# GRAPHS OFF 2026-11-05: NaN class recurred under 6-way mixed-phase
+# concurrency (2/2 repro with graphs on, solo gate armed) AND single-sequence
+# long-context sessions still garbled under HIP replay (the morning deck
+# session, 03:08/03:30 incident windows). The solo gate only closes the
+# mixed-phase form. Re-enable only after the ROCm SDK capture-ordering fix,
+# re-validated 3/3 on scratch/garble-hunt run-conc2.sh + the singles battery
+# incl. single-seq long context. Escape lever stays MISTRALRS_CUDA_GRAPHS=0.
+# (File reconciliation 2026-11-05: this wrapper previously claimed
+# "GRAPH DISABLED 2026-11-03" while still exporting =1 - the comment and the
+# export disagreed; the export is what ships, so the flag now actually reads
+# 0 per the journal decision.)
 # Server-core logs (lazy-skip warns, registration) are operationally
 # relevant: keep its target enabled alongside core.
 export RUST_LOG=mistralrs_core=info,mistralrs_server_core=info
@@ -43,66 +54,67 @@ export MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD=1
 # gets managed weights end to end.
 export MISTRALRS_MANAGED_WEIGHTS=1
 export CANDLE_MANAGED_WEIGHTS=1
-export MISTRALRS_CUDA_GRAPHS=1
+export MISTRALRS_CUDA_GRAPHS=0
+# 2026-11-05 reconciliation: the 2026-11-03 "GRAPH DISABLED" note below this
+# line described intent, not state - the export above shipped =1 all along,
+# with the solo gate carrying only the mixed-phase form. Now actually off.
+# GRAPH DISABLED 2026-11-03: single-sequence long-context garble recurs under
+# HIP graph replay (reasoning model producing corrupted tokens). Multi-sequence
+# fix (solo gate) was deployed and validated (conc2 6/6 clean), but single-
+# sequence batches still corrupt under graph replay. Re-enable when ROCm SDK
+# fixes capture-ordering bug and we re-validate single-seq + long context.
+# TEMP (capture-failure diagnostics, armed 2026-10-26): log every host upload
+# over the 4KB graph H2D cache cap (with backtraces) and append backtraces to
+# capture-path bails. The 07:47 capture failure class (>4KB upload inside the
+# capture window) will name its exact uploader here on the next occurrence.
+# Probe finding: hybrid checkpoint restores (3MB f32 + 80KB bf16 per capture
+# step) dominate the log lines; they are legal post-capture uploads. The
+# in-window culprit is expected to be something else (managed-weight page
+# fault under pool trim is the working hypothesis). Remove once named.
+#export MRS_TRACE_BIG_HTOD=1
 # TEMP (35B graphs validation window): verify entry-held VAs before first
 # launch; a moved/freed pointer becomes a loud named-buffer bail + eager
 # fallback instead of an HSA fault. Remove after the graphs deployment is
 # confirmed stable.
-export MISTRALRS_GRAPH_PTR_CENSUS=1
-# TEMP (fault hunt): driver shim interposing pool trims, VMM
-# reserve/map/unmap, and HSA executable freezes into a private log.
-# Guarded: without the .so the process starts normally (no preload).
-# Remove with the census/ledger diagnostics.
-# driver shim retired 2026-10-12: works standalone, SEGVs under the
-# service (HSA-init-thread reentrancy suspected, unproven); trim and
-# freeze evidence now comes from the Rust-side pool-trim ledger.
-# export LD_PRELOAD="$LOCALAI_ROOT/scratch/hip_shim.so"
-# export SHIM_LOG=/tmp/opencode/shim-ledger.log
-# TEMP (fault hunt): off switch for every pool trim in the process
-# (trim-vs-graph discriminator). Unset = trims behave as before.
-# export MISTRALRS_NO_POOL_TRIM=1
-# TEMP (fault hunt): host-visible alloc/free ledger; the HSA fault line names
-# a VA, this log names the buffer that lived there. Remove with the census.
-export MRS_ALLOC_TRACE=1
-# TEMP (fault hunt, armed window 2026-10-14): bounds-check every u32 index
-# tensor on the GDN gather/scatter surface before the unguarded launches; a
-# bail names the buffer + max index + rows instead of a poisoned hip context
-# (the request fails, the server keeps serving). Costs ~1/3 of decode band
-# while armed (per-gather D2H sync, measured 83.5 vs 125.2 tok/s on the 4B).
-# Remove with the census/ledger diagnostics once the fault class closes.
-export MISTRALRS_GATHER_GUARD=1
-# Decode-graph speculative-state budget: the default (largest-entry x10,
-# capped at 8% of device total) keeps only ~2 shapes resident on the 27B
-# (per-shape spec state is ~4.5GB with FullCheckpoints). 16GiB keeps the
-# single-stream + small-batch shapes resident while preserving ~25GiB free
-# for a second resident (35B weights+pool ~= 34GB); the pool is sized by
-# native context (262k -> 6.5GB) instead of 90% of free GTT.
-export MISTRALRS_CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES=17179869184
-# Route rocBLAS's own GEMMs through hipBLASLt. Serving A/B 2026-09-25
-# (35B Q4_K_XL): flat (decode profile has zero BLAS kernels; all-quantized
-# weights never reach plain rocBLAS). Microbench (lt_probe, 78 shapes/dtype)
-# says it is worth +13% f16 / +19% bf16 when GEMMs DO reach rocBLAS, e.g. a
-# dense BF16 safetensors model. No-op today, insurance for that case; keep.
+#export MISTRALRS_GRAPH_PTR_CENSUS=1
+# TEMP (Nov 3 garble+OOM hunt): trace CK flash dispatch + prefix-gather
+# prefill routing. eprintln output lands in scratch/prod-stderr.log.
+# Remove once the attention dispatch under long prefill is mapped.
+export MISTRALRS_DEBUG_CK=1
+export MISTRALRS_DEBUG_PA=1
+# Nov 3: NaN-logit class recurred under 6-way mixed-phase concurrency
+# (short decodes + ~30k prefills, 2/2 repro with graphs on): argmax
+# invalid logits + HSA_STATUS_ERROR_MEMORY_FAULT -> death/restart.
+# Root cause: graph replay corrupts under mixed prefill+decode batches;
+# single-shape steps are clean. Interim fix (deployed 2026-11-03,
+# binary-side per-role gating): NVIDIA role keeps graphs; the HIP role
+# replays only on solo decode steps (one decoding sequence, nothing
+# waiting) when MISTRALRS_CUDA_GRAPHS_HIP_SOLO=1 is set, and it captures
+# only bucket-1 shapes. Mixed steps fall back to eager; /metrics shows
+# dispatch reason hip_solo_gate on those skips. REVISIT on the next
+# ROCm SDK bump: unset HIP_SOLO, re-run scratch/garble-hunt run-conc2.sh
+# + the singles battery, and restore full HIP graphs only if 3/3 clean
+# with no hip error 905 capture-ordering signature. Escape lever remains
+# MISTRALRS_CUDA_GRAPHS=0.
+export MISTRALRS_CUDA_GRAPHS_HIP_SOLO=1
+# Step sentinel (TODO 2026-11-05): fail requests whose decode step leaves the
+# sane numeric band (greedy logit/logprob ceiling, GDN state health) instead
+# of serving the subcritical word-salad form of the NaN class. Set 0 to disarm.
+# Ceiling 64.0: healthy 35B greedy saturates ~33.5 (canary 2026-11-05); the
+# first arm at 32.0 500'd that canary and was rebuilt the same morning.
+export MISTRALRS_STEP_SENTINEL=1
 export ROCBLAS_USE_HIPBLASLT=1
-
-# Large-batch quantized GEMMs: fast_mmq on by default; the kernel dispatch is
-# per-dtype AND per-arch - on this machine (gfx1151, RDNA3.5) Q6K and Q2K hand
-# batches above candle's dequant-GEMM row threshold (CANDLE_DMM_F16_MIN,
-# default 256) to the dequant-to-F16 + hipBLASLt path (MMQ Q6K plateaus ~11
-# effective TFLOPS here vs ~30 dequantized; Q2K is pathological at every
-# batch), while keeping MMQ below it (dequant overhead dominates small
-# batches: 199 vs 82 T/s at ~112 rows) and for other dtypes at every batch
-# (35B: +15% short, tie long). Unmeasured architectures keep MMQ everywhere;
-# mistralrs-quant's mmq_dtype_bench is the harness for extending the table.
-# MISTRALRS_NO_FAST_MMQ (mistral.rs dispatch) and CANDLE_NO_FAST_MMQ
-# (candle's own fast path) remain as overrides.
-# Decode (b*m <= 8) uses the fused MMVQ kernels either way.
-# CANDLE_LT_COMPUTE removed 2026-09-25: an 80-shape hipBLASLt sweep
-# (candle-core example lt_probe; b=1 m 256-8192 k/n 2048-16384, odd shapes,
-# b 3-16 batched; 16F vs 32F compute) found zero heuristic failures on the
-# current stack and 16F is not slower (mean +1.2%). The old "COMPUTE_16F
-# fails with INTERNAL_ERROR, 32F required/faster" claim dated from the
-# pre-TheRock hipBLASLt and does not apply.
+# GPU_MAX_HW_QUEUES=1 required: solo gate blocks mixed-phase corruption
+# (Nov 3 root cause), but multi-queue still causes NaN on single-sequence
+# decode steps (Oct 26 finding, unaddressed). See TODO.md REVISIT section.
+export GPU_MAX_HW_QUEUES=1
+export ROCP_TOOL_ATTACH=1
+# Restored 2026-10-26: graphs require single-queue scheduling on this
+# runtime (multi-queue graph replay races: 0/10 NaN single-queue vs
+# ~10-25% multi-queue, sync fixes only closed the H2D->launch edge).
+# Power/heat tradeoff accepted for the ~7-10% graphs decode win.
+# TheRock#7578 (power-gating pin) remains open. If TheRock 10.2 fixes
+# the multi-queue graph race, re-test without this line.
 
 MISTRALRS="$LOCALAI_ROOT/mistral.rs/target/release/mistralrs"
 CONFIG="$LOCALAI_ROOT/models/mistralrs.toml"
@@ -124,4 +136,5 @@ cd "$LOCALAI_ROOT"
 # boot flood tonight (fault #9's ledger + even the INFO lines were dropped),
 # so stderr goes to a file instead. stdout (tracing INFO) stays on journald.
 # Remove with the census/ledger diagnostics.
-exec "$MISTRALRS" from-config -f "$CONFIG" 2>> "$LOCALAI_ROOT/scratch/prod-stderr.log"
+# EDITED 2026-11-03: re-enable journald stderr for timestamped error correlation.
+exec "$MISTRALRS" from-config -f "$CONFIG"

@@ -100,6 +100,31 @@ replay reading corrupted KV cache during long generations. Single-sequence is
 supposed to be safe per the solo gate design, but it's not on this ROCm runtime.
 Re-enable when ROCm SDK fixes the capture-ordering bug and we re-validate.
 
+### 2026-11-05 step sentinel deployed; wrapper reconciliation; graphs actually off
+
+Deck-session forensics (06:39-07:05 collapse): 14.1k-char reasoning runaway +
+bash-in-JS execute call + garbled tokens (phantom "VoidCpp" quote, CJK bleed);
+empty 228s response Oct 31 - the subcritical word-salad form. Root gap: the
+sampler bails only on hard NaN, so finite corrupted steps served clean.
+
+Step sentinel (MISTRALRS_STEP_SENTINEL=1, mistralrs-core/src/utils/
+step_sentinel.rs): greedy max_logit ceiling 64.0 (healthy 35B temp-0 canary
+measured 33.5; first arm at 32.0 500'd that canary, rebuilt same morning),
+greedy logprob floor ln(2e-7), finite checks on the sampled exits, GDN state
+abs-max every 64th flush (capture-safe, interval-gated), naive_sdpa clamp
+call counter. Trigger = clean 500 + ledger line naming the class; engine
+keeps serving.
+
+Wrapper reconciliation: the live ~/.config wrapper shipped
+MISTRALRS_CUDA_GRAPHS=1 since Nov 3 while the journal said graphs off - the
+"GRAPH DISABLED 2026-11-03" note described intent, not state, and the solo
+gate only ever closed the mixed-phase form. Now actually 0, so the
+single-sequence long-context replay class is closed by construction.
+HIP_SOLO stays armed (inert, protects a future re-enable). Repo deploy/
+wrapper + toml synced from live. Post-restart canary 3x4 temp-0: 12, zero
+sentinel lines, journal clean. Open: ceiling/floor are fleet-wide consts;
+revisit when the 27B/4B lanes load - their healthy scales may differ.
+
 ## Current status (2026-10-26, prod on the f3b2d3576 tip, dual cuda,rocm,flash-attn)
 13 lanes configured, ALL lazy (headless boot, demand-load, per-category
 defaults: chat -> qwen3.6-35b-a3b): 35B A3B hip + cuda twins, 27B Q6_K

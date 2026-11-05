@@ -1100,6 +1100,7 @@ impl Sampler {
             candle_core::bail!("invalid batched CUDA categorical output");
         }
         let next_token = token as u32;
+        crate::utils::step_sentinel::sampled(logprob, next_token)?;
         Ok(Logprobs {
             token: next_token,
             logprob,
@@ -1254,6 +1255,7 @@ impl Sampler {
         let next_token = argmax_f32(&logits.to_vec1::<f32>()?)?;
         let probs = candle_nn::ops::softmax_last_dim(&logits)?.to_vec1::<f32>()?;
         let logprob = probs[next_token as usize].ln();
+        crate::utils::step_sentinel::greedy_logprob(logprob, next_token)?;
 
         let top_logprobs = if return_logprobs {
             Some(self.get_top_logprobs(&probs)?)
@@ -1334,6 +1336,7 @@ impl Sampler {
         // Find argmax directly on the Vec (O(n) scan, no Tensor creation)
         let next_token = argmax_f32(&probs)?;
         let logprob = reporting_probs[next_token as usize].ln();
+        crate::utils::step_sentinel::sampled(logprob, next_token)?;
 
         let top_logprobs = if return_logprobs {
             Some(self.get_top_logprobs(&reporting_probs)?)
@@ -1404,6 +1407,7 @@ impl Sampler {
         let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
         let next_token = distr.sample(&mut mut_ref_rng); // "Find the first item which has a weight *higher* than the chosen weight."
         let logprob = reporting_probs[next_token].ln();
+        crate::utils::step_sentinel::sampled(logprob, next_token as u32)?;
 
         let top_logprobs = if return_logprobs {
             Some(self.get_top_logprobs(reporting_probs)?)
@@ -1678,6 +1682,7 @@ impl Sampler {
                 packed[1]
             );
         }
+        crate::utils::step_sentinel::greedy_logit(packed[0])?;
         Ok(packed[1] as u32)
     }
 

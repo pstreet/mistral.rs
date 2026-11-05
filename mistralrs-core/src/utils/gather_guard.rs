@@ -47,7 +47,7 @@ pub(crate) fn guard_u32_gather(
 
 /// True while the tensor's stream is inside a graph capture (any status
 /// other than none). Non-GPU devices never capture: fail open.
-fn is_capturing(device: &candle_core::Device) -> bool {
+pub(crate) fn is_capturing(device: &candle_core::Device) -> bool {
     #[cfg(any(feature = "cuda", feature = "rocm"))]
     {
         use crate::pipeline::graph_role::GraphStream;

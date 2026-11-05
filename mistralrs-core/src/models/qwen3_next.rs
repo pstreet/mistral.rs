@@ -2464,6 +2464,19 @@ impl Model {
         if cache.uses_gdn_deferred_state() && !self.flush_deferred_recurrent_state(&cache, None)? {
             candle_core::bail!("Qwen3Next deferred recurrent state cannot be materialized");
         }
+        self.sentinel_check_recurrent_states(&cache)
+    }
+
+    fn sentinel_check_recurrent_states(&self, cache: &HybridCache) -> Result<()> {
+        for (layer_idx, layer_type) in self.layer_types.iter().enumerate() {
+            if !matches!(layer_type, LayerType::LinearAttention) {
+                continue;
+            }
+            let Some(HybridLayerCache::Recurrent(pool)) = cache.get(layer_idx) else {
+                continue;
+            };
+            crate::utils::step_sentinel::gdn_state(&pool.recurrent_state)?;
+        }
         Ok(())
     }
 
