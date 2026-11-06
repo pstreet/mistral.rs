@@ -7,7 +7,17 @@ candle 56 ahead / 26 behind huggingface/candle:main, mistral.rs 111 ahead /
 Legend: [ ] open, [x] done. P0 = do first, P1 = do next, P2 = merge prep,
 P3 = polish, Deferred = do not do on RDNA.
 
-## Current status (2026-11-05, prod on Strix Halo gfx1151, dual cuda,rocm,npu,flash-attn, long-context fix deployed)
+## Current status (2026-11-06, prod on Strix Halo gfx1151, dual cuda,rocm,npu,flash-attn, long-context fix deployed)
+
+STANDING POSTURE (2026-11-06, all four graph configs measured): GRAPHS=0 +
+MISTRALRS_STEP_SENTINEL=1, solo gate re-armed (pid 696856). Rationale:
+graphs-off is the only config measured fully correct (7/7 canary facts to
+199k on the field drive); the graphs decode win did not reproduce at
+agentic depths (decode-dominant turns within +/-3% of graphs-off, mid
+turns 2-3x slower), so disabling costs nothing; ungated replay corrupts
+under concurrent mixed-phase load (conc2 1/3, sentinel catch) and the
+solo gate is load-bearing. There is no decision left for daily operation.
+Reopen path: the REVISIT campaign below, gated on conc2 3/3.
 
 Garbled output fix deployed (56cf617ea, 41a49cc77): attention score clamping in
 naive_sdpa resolved identical symptom to the OpenWebUI NaN issue (EoT-like
@@ -99,6 +109,12 @@ corrupted tokens like "verificationsofs", "relent test"). The garble is from gra
 replay reading corrupted KV cache during long generations. Single-sequence is
 supposed to be safe per the solo gate design, but it's not on this ROCm runtime.
 Re-enable when ROCm SDK fixes the capture-ordering bug and we re-validate.
+UPDATE 2026-11-06: the single-seq long-context garble is plausibly CLOSED by the
+score clamps, not inherent to replay - the graphs-on experiment ran a clean
+single-stream long-context drive under gated replay (7/7 to 199k, 1945 clean
+replays). The "re-enable when" language survives only for the perf question,
+which the graphs-on experiment is short of; and the gate cannot simply be unset
+(it is the arming mechanism - see the ungated-lever entry below).
 
 ### 2026-11-05 step sentinel deployed; wrapper reconciliation; graphs actually off
 
@@ -180,7 +196,65 @@ HIP_SOLO=1 re-armed, ungated unset, canary 3x4=12 OK. The ungated lever
 stays in-tree for the REVISIT campaign (gate: conc2 3/3, never prod
 traffic).
 
-## Current status (2026-10-26, prod on the f3b2d3576 tip, dual cuda,rocm,flash-attn)
+## Open investigations (2026-11-06 triage; P0 = do first, see legend)
+
+[P0] ROCm graph-replay bug report package. The mixed-phase NaN class is
+now reproducible on demand (conc2, 2 rounds bail / 1 clean under ungated
+replay) and precisely characterized: capture-ordering corruption under
+mixed prefill+decode batches; solo gate halves it (guard evidence: gated
+drive 1945 clean replays vs ungated rounds 2+3 bailout); sentinel catches
+the remainder as clean 500s; score clamps closed the single-stream form
+(gated single-stream long-context drive clean 7/7 to 199k). Include the
+03:08/03:30 incident shapes, the conc2 repro + scratch/garble-hunt
+payloads, the hip error 905 capture-ordering signature, and legacy
+reference ROCm/legacy-rocm-build#2625. This is the only path that ever
+makes "everything enabled" safe; filing unblocks upstream triage.
+
+[P1] Graphs mid-turn slowdown decomposition. Gated-replay mid turns
+(85k-155k) ran 2-3x slower wall-clock than graphs-off; NOT prefix reuse
+(573k tokens reused, 0 evictions), NOT memory (RSS 32.4GB, 62GB free),
+NOT capture cost (10ms x 24). Needs engine per-phase timings on a fixed-
+prompt (non-growing) A/B, graphs on vs off, to isolate prefill vs decode
+phase deltas. Unimportant while prod keeps graphs off, but it is the one
+unexplained result from the Nov 6 experiments and the deciding fact for
+whether gated graphs could ever serve short-context traffic.
+
+[P1] KV F16 vs Q8_0 A/B at 180k+ on this model: settles whether KV
+quantization interacts with the corruption class (KV-dtype sensitivity of
+the garble probability) and doubles as a perf/memory lever. Run it as a
+single-seq long-context sweep under sentinel-armed graphs-off, same
+field-drive shape as the Nov 5 baseline.
+
+[P2] Upstream PRs for the portable bits: step sentinel (mistralrs-core/
+src/utils/step_sentinel.rs + sampler hooks), naive_sdpa score clamps,
+prefix-cache keying. Everything else (solo gate, HIP_UNGATED lever) is
+ROCm-incident-specific and stays local.
+
+[P2] Sentinel ceilings are fleet-wide consts but were calibrated only on
+the 35B lane (healthy greedy saturates ~33.5, ceiling 64.0). Revalidate
+against 27B/4B lanes when loaded; the const may need per-model scaling.
+
+[P2] scan_export.py over fresh production session exports periodically
+(deck box included). Known residual: driver-artifact false positives are
+fixed (field_test_20261105.py now exports exact fact lines); the
+phantom-quote coined-token gate assumes filler words appear in the
+corpus, so scans should run on full (un-elided) exports.
+
+[P3] Watch for the turn-6 mis-recall signature (180k sampled: coherent
+33k-char thinking briefly mis-recalled a previous turn's ask, then burned
+max_tokens). Subcritical context mis-assembly, deck-session family. If it
+ever appears in a production export, worsens the item above to P0.
+
+[P3] mistralrs-pyo3 pre-existing no-feature-shape compile break
+(get_sender arity, util.rs:115 + lib.rs 1805/2063) predates Nov 6; blocks
+whole-workspace `--no-default-features` checks only. Fix when touching
+those call sites anyway.
+
+Deferred (do not do on RDNA): GPU_MAX_HW_QUEUES unset multi-queue
+experiment was superseded - the mixed-phase corruption is graph-replay
+specific and prod keeps graphs off; revisit only inside the REVISIT
+campaign (with AMD_SERIALIZE_KERNEL=3 / AMD_SERIALIZE_COPY=3 as fallback
+mitigations to try then).
 13 lanes configured, ALL lazy (headless boot, demand-load, per-category
 defaults: chat -> qwen3.6-35b-a3b): 35B A3B hip + cuda twins, 27B Q6_K
 + MTP n=2, 16B, 4B, gemma-4-26b, Llama-3.2-30b, Muse-30b, flash-next

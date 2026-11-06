@@ -1,3 +1,52 @@
+## Nov 6 (graphs re-enablement settled by measurement: no perf case, gate load-bearing; sentinel proved)
+
+Prod posture decided and standing: GRAPHS=0 + MISTRALRS_STEP_SENTINEL=1
+(pid 696856, canary 3x4=12 OK, wrapper + deploy copy synced). Three
+experiments closed the graphs question with data rather than doctrine:
+
+- Graphs on + solo gate + clamps (one full field drive, 815cfe65e): 7/7
+  canary facts to 199k, 24 captures ok, 1945 clean replays, 119 solo-gate
+  skips, zero sentinel bails / HSA faults / invalid logits, MTP 0.65-0.85.
+  First clean long-context single-stream graphs-on evidence since the Nov
+  3 garble - attribution to the score clamps (56cf617ea + 87067161d). But
+  NO decode win: decode-dominant turns within +/-3% of graphs-off; mid
+  turns 2-3x slower wall-clock with the standard suspects eliminated
+  (prefix reuse working: 573k tokens reused, 0 evictions; memory fine:
+  RSS 32.4GB, 62GB free). Mechanism undiagnosed -> Open investigations
+  P1 in TODO.md. One clean run is still short of the conc2 3/3 REVISIT bar.
+- Solo gate semantics discovered: unset HIP_SOLO does NOT ungat replay -
+  hip_decode_graph_replay_allowed requires cuda_graphs_hip_solo_enabled(),
+  so unsetting the gate disables HIP replay entirely (an accidental
+  "experiment 2" ran as eager-HIP: field drive 6/7 facts, turn 6 at 180k
+  finished via max_tokens with 33k chars of coherent thinking that
+  mis-recalled a prior turn's ask at the very end - subcritical context
+  mis-assembly, deck-session family worth watching; conc2 6/6 OK).
+- True ungated replay lever added (3674aeb51): MISTRALRS_CUDA_GRAPHS_HIP_UNGATED
+  (perf_flags.rs, default-off) + capture/replay conjuncts in cuda_graph.rs.
+  conc2 under it: round 1 6/6 clean, rounds 2+3 sentinel bailout
+  `argmax received invalid logits` -> clean 500s with the engine alive
+  (round 2 all six at 1.5s, round 3 five of six at 74s). 1/3 rounds =
+  decisively below the 3/3 bar: the MIXED-PHASE corruption class is ALIVE
+  and the clamps do NOT close it. The solo gate is load-bearing. Sentinel
+  caught both events (clean 500s, no garble served, no process death) -
+  the mitigation subsystem worked as designed on its first real fires.
+
+Net: the graphs perf case that motivated tolerating the corruption risk
+does not exist on this model at agentic depths, so graphs-off costs
+nothing; the sentinel converts whatever remains into clean 500s. Open
+investigations triaged P0-P3 in TODO.md (P0 = ROCm bug report package,
+with the repro + incident shapes + gate-mechanism explanation ready).
+
+Also Nov 6: scan_export.py driver false positive resolved - field_test
+driver now exports exact fact lines (elided filler made quoted filler
+words unverifiable to the coined-token gate); results.json annotated
+with verdict + known_artifacts for both graph states.
+
+Commits: c4445afda (sentinel + wrapper reconciliation), 6f4d51d24
+(scanner), e2e996e64 (validation ledger), 815cfe65e (graphs-on drive
+ledger), 3674aeb51 (ungated lever + conc2 verdict). Local on
+pstreet-rocm, not pushed.
+
 ## Nov 5 (CUDA streaming-K validation + config naming unification)
 
 - Streaming-K dot fix validated on CUDA via Q8_0 vs Q4_0 KV A/B (RTX 3090, sm8.6, 24GB):
