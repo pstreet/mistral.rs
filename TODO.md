@@ -156,6 +156,30 @@ tokens reused, 0 evictions; not memory - RSS 32.4GB). Mechanism
 undiagnosed; needs engine per-phase timings before graphs are worth
 revisiting for perf. Prod reverted to GRAPHS=0 after the drive.
 
+Ungated replay experiment (2026-11-06, reverted): added code lever
+MISTRALRS_CUDA_GRAPHS_HIP_UNGATED (perf_flags.rs, default-off; replay and
+capture conjuncts in cuda_graph.rs). Discovery first: unset HIP_SOLO does
+NOT ungat replay - the gate is the arming mechanism
+(hip_decode_graph_replay_allowed requires cuda_graphs_hip_solo_enabled()),
+so experiment 2's "gate off" run was functionally eager-HIP (3120
+hip_solo_gate skips = every decode step). That accidental config still
+carries signal: field drive 6/7 facts (turn 6 at 180k hit max_tokens with
+33k chars of COHERENT thinking that mis-recalled a previous turn's ask at
+the very end - subcritical context mis-assembly, deck-session family;
+conc2 6/6 OK). Experiment 3 = true ungated (GRAPHS=1 + HIP_UNGATED=1, solo
+never armed): conc2 round 1 6/6 clean, rounds 2+3 sentinel bailout
+`argmax received invalid logits` -> clean 500s (round 2 all six at 1.5s,
+round 3 five of six at 74s). 1/3 rounds is decisively below the 3/3
+REVISIT bar: the MIXED-PHASE corruption class is ALIVE under ungated
+replay and the clamps do NOT close it. The solo gate is load-bearing;
+experiment 1's clean single-stream run stands as evidence it closed the
+single-seq long-context form. Sentinel caught both events with the server
+alive - mitigation held (clean 500s, no garble served, no process death).
+Field drive skipped (its gate was conc2 3/3). Prod reverted: GRAPHS=0,
+HIP_SOLO=1 re-armed, ungated unset, canary 3x4=12 OK. The ungated lever
+stays in-tree for the REVISIT campaign (gate: conc2 3/3, never prod
+traffic).
+
 ## Current status (2026-10-26, prod on the f3b2d3576 tip, dual cuda,rocm,flash-attn)
 13 lanes configured, ALL lazy (headless boot, demand-load, per-category
 defaults: chat -> qwen3.6-35b-a3b): 35B A3B hip + cuda twins, 27B Q6_K

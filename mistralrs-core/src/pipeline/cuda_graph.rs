@@ -3766,7 +3766,9 @@ pub(crate) fn hip_solo_step_allowed() -> bool {
 
 #[cfg(feature = "rocm")]
 pub(crate) fn hip_decode_graph_replay_allowed(device: &Device) -> bool {
-    device.is_hip() && crate::perf_flags::cuda_graphs_hip_solo_enabled() && hip_solo_step_allowed()
+    device.is_hip()
+        && (crate::perf_flags::cuda_graphs_hip_ungated()
+            || (crate::perf_flags::cuda_graphs_hip_solo_enabled() && hip_solo_step_allowed()))
 }
 #[cfg(not(feature = "rocm"))]
 pub(crate) fn hip_decode_graph_replay_allowed(_device: &Device) -> bool {
@@ -3777,7 +3779,9 @@ pub(crate) fn hip_decode_graph_replay_allowed(_device: &Device) -> bool {
 /// under the solo gate.
 #[cfg(feature = "rocm")]
 pub(crate) fn hip_decode_graph_capture_permitted(device: &Device) -> bool {
-    !device.is_hip() || crate::perf_flags::cuda_graphs_hip_solo_enabled()
+    !device.is_hip()
+        || crate::perf_flags::cuda_graphs_hip_ungated()
+        || crate::perf_flags::cuda_graphs_hip_solo_enabled()
 }
 #[cfg(not(feature = "rocm"))]
 pub(crate) fn hip_decode_graph_capture_permitted(_device: &Device) -> bool {
