@@ -55,10 +55,6 @@ export MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD=1
 export MISTRALRS_MANAGED_WEIGHTS=1
 export CANDLE_MANAGED_WEIGHTS=1
 export MISTRALRS_CUDA_GRAPHS=0
-# 2026-11-06: paged decode clamp (default on in code) - HIP decode kernel
-# tanh-caps scores at the naive_sdpa bound when the model has no softcap,
-# closing the prefill/decode clamp asymmetry. Pin kept per convention.
-export MISTRALRS_PAGED_DECODE_CLAMP=1
 # 2026-11-06: this posture now lives in code defaults (perf_flags.rs GRAPHS
 # default off, HIP_SOLO default on, step_sentinel default on, apply_env_defaults
 # setting GPU_MAX_HW_QUEUES=1) - a bare `serve` with no env gets this config.

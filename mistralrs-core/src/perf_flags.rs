@@ -4,13 +4,11 @@ const CUDA_GRAPHS_ENV: &str = "MISTRALRS_CUDA_GRAPHS";
 const CUDA_GRAPHS_HIP_SOLO_ENV: &str = "MISTRALRS_CUDA_GRAPHS_HIP_SOLO";
 const CUDA_GRAPHS_HIP_UNGATED_ENV: &str = "MISTRALRS_CUDA_GRAPHS_HIP_UNGATED";
 const FLASHINFER_DECODE_ENV: &str = "MISTRALRS_FLASHINFER_DECODE";
-const PAGED_DECODE_CLAMP_ENV: &str = "MISTRALRS_PAGED_DECODE_CLAMP";
 
 static CUDA_GRAPHS_ENABLED: OnceLock<bool> = OnceLock::new();
 static CUDA_GRAPHS_HIP_SOLO_ENABLED: OnceLock<bool> = OnceLock::new();
 static CUDA_GRAPHS_HIP_UNGATED: OnceLock<bool> = OnceLock::new();
 static FLASHINFER_DECODE_ENABLED: OnceLock<bool> = OnceLock::new();
-static PAGED_DECODE_CLAMP_ENABLED: OnceLock<bool> = OnceLock::new();
 
 fn env_flag(name: &str, default: bool) -> bool {
     std::env::var(name)
@@ -59,11 +57,4 @@ pub fn apply_env_defaults() {
 
 pub(crate) fn flashinfer_decode_enabled() -> bool {
     *FLASHINFER_DECODE_ENABLED.get_or_init(|| env_flag(FLASHINFER_DECODE_ENV, true))
-}
-
-/// HIP paged decode tanh-caps scores at ATTENTION_SCORE_CLAMP when the model has
-/// no softcap, matching the CK prefill clamp; the CUDA reference lane stays
-/// unclamped. Set 0 to A/B the unclamped decode kernel.
-pub(crate) fn paged_decode_clamp_enabled() -> bool {
-    *PAGED_DECODE_CLAMP_ENABLED.get_or_init(|| env_flag(PAGED_DECODE_CLAMP_ENV, true))
 }
