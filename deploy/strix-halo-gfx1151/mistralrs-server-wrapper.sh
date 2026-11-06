@@ -58,6 +58,15 @@ export MISTRALRS_CUDA_GRAPHS=0
 # 2026-11-05 reconciliation: the 2026-11-03 "GRAPH DISABLED" note below this
 # line described intent, not state - the export above shipped =1 all along,
 # with the solo gate carrying only the mixed-phase form. Now actually off.
+# EXPERIMENT 2026-11-06 (one field drive, reverted): graphs on + solo gate +
+# sentinel + score clamps - 7/7 canary facts to 199k, 24 captures, 1945
+# clean replays, 119 solo-gate skips, zero sentinel bails / HSA faults /
+# invalid logits. First clean long-context single-stream graphs-on data
+# since the Nov 3 garble; the clamps plausibly closed that form. But NO
+# decode win materialized (turn 6/7 within +/-3% of graphs-off) and mid
+# turns ran 2-3x slower (mechanism undiagnosed: prefix reuse + memory were
+# fine). Prod stays off pending the full REVISIT battery + a perf
+# decomposition; see TODO 2026-11-06 entry.
 # GRAPH DISABLED 2026-11-03: single-sequence long-context garble recurs under
 # HIP graph replay (reasoning model producing corrupted tokens). Multi-sequence
 # fix (solo gate) was deployed and validated (conc2 6/6 clean), but single-

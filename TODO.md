@@ -144,6 +144,18 @@ accordingly. Zero sentinel bails, zero HSA faults, MTP aggregate 0.65
 zero hard findings. The Nov 5 degradation class did not reproduce under
 graphs-off + sentinel.
 
+Graphs-on experiment (2026-11-06, same drive, one run, reverted): clamps +
+sentinel + solo gate + GRAPHS=1. 7/7 facts to 199k, 24 captures clean,
+1945 replays clean, 119 solo-gate skips eager, zero sentinel bails / HSA
+faults / invalid logits, MTP 0.65-0.85. First clean long-context
+single-stream graphs-on data since the Nov 3 garble - the clamps
+plausibly closed that form, one run is short of the REVISIT bar. No perf
+case for re-enabling either: decode-dominant turns within +/-3% of
+graphs-off, mid turns 2-3x slower wall-clock (not prefix reuse - 573k
+tokens reused, 0 evictions; not memory - RSS 32.4GB). Mechanism
+undiagnosed; needs engine per-phase timings before graphs are worth
+revisiting for perf. Prod reverted to GRAPHS=0 after the drive.
+
 ## Current status (2026-10-26, prod on the f3b2d3576 tip, dual cuda,rocm,flash-attn)
 13 lanes configured, ALL lazy (headless boot, demand-load, per-category
 defaults: chat -> qwen3.6-35b-a3b): 35B A3B hip + cuda twins, 27B Q6_K
