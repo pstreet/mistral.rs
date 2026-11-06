@@ -42,6 +42,9 @@ pub fn initialize_mistralrs_logging(verbosity: LogVerbosity) {
 }
 
 pub fn initialize_logging_with_filter(filter: EnvFilter) {
+    // env defaults must land before first HIP init; every entry point funnels
+    // through here.
+    crate::perf_flags::apply_env_defaults();
     DEBUG.store(is_debug_env(), std::sync::atomic::Ordering::Relaxed);
     LOGGER.get_or_init(|| {
         let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();

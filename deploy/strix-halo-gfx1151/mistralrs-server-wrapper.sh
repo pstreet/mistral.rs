@@ -55,6 +55,10 @@ export MISTRALRS_GGUF_DROP_HOST_AFTER_LOAD=1
 export MISTRALRS_MANAGED_WEIGHTS=1
 export CANDLE_MANAGED_WEIGHTS=1
 export MISTRALRS_CUDA_GRAPHS=0
+# 2026-11-06: this posture now lives in code defaults (perf_flags.rs GRAPHS
+# default off, HIP_SOLO default on, step_sentinel default on, apply_env_defaults
+# setting GPU_MAX_HW_QUEUES=1) - a bare `serve` with no env gets this config.
+# The exports below are kept as pins against a future default flip.
 # EXPERIMENT 3 2026-11-06 (conc2 3 rounds, reverted): TRUE ungated replay
 # (MISTRALRS_CUDA_GRAPHS_HIP_UNGATED=1, solo gate never armed). Round 1
 # 6/6 clean; rounds 2+3 sentinel bailout `argmax received invalid logits`

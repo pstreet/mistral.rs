@@ -1,4 +1,4 @@
-//! Decode-step sentinel (MISTRALRS_STEP_SENTINEL=1). Fails a request when a
+//! Decode-step sentinel (default-on; MISTRALRS_STEP_SENTINEL=0 opts out). Fails a request when a
 //! step lands outside the sane numeric band instead of serving it, then keeps
 //! serving: the subcritical form of the NaN/garble class (TODO 2026-11-03/05)
 //! reaches the sampler as finite tokens and no existing check trips - a bail
@@ -29,7 +29,12 @@ static STATE_CHECK_STEPS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static NAIVE_CLAMP_CALLS: AtomicU64 = AtomicU64::new(0);
 
 fn enabled() -> bool {
-    *ENABLED.get_or_init(|| std::env::var("MISTRALRS_STEP_SENTINEL").as_deref() == Ok("1"))
+    *ENABLED.get_or_init(|| {
+        !matches!(
+            std::env::var("MISTRALRS_STEP_SENTINEL").as_deref(),
+            Ok("0") | Ok("false") | Ok("no") | Ok("off")
+        )
+    })
 }
 
 fn check_greedy_logit(max_logit: f32) -> Result<()> {

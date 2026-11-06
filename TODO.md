@@ -196,6 +196,30 @@ HIP_SOLO=1 re-armed, ungated unset, canary 3x4=12 OK. The ungated lever
 stays in-tree for the REVISIT campaign (gate: conc2 3/3, never prod
 traffic).
 
+### 2026-11-06 posture defaults moved into code; bare env gets the safe config
+
+The four posture variables now DEFAULT to the measured prod state, so no
+env needs exporting to get it: MISTRALRS_CUDA_GRAPHS default off
+(perf_flags.rs), MISTRALRS_CUDA_GRAPHS_HIP_SOLO default on (gate is the
+arming mechanism, semantics unchanged: =0 still disables HIP replay
+entirely; HIP_UNGATED stays default-off), MISTRALRS_STEP_SENTINEL default
+on (=0/false/no/off opts out), GPU_MAX_HW_QUEUES=1 set-if-unset by
+apply_env_defaults() hooked at initialize_logging_with_filter - the
+single funnel every entry point passes through (CLI run/serve/bench,
+server core, pyo3, library builders), before first HIP init. GPU_MAX_HW_
+QUEUES is consumed by the HIP driver, so it cannot be a code constant;
+set-if-unset respects an explicit export. Docs env table updated for all
+four (STEP_SENTINEL row was missing).
+
+Validated on the :1244 probe lane with all four vars stripped at exec
+(scratch/probe-defaults.sh, env -u x5): canary 3x4=12, metrics show
+cuda_graph_dispatch skipped/reason=disabled = 55 with zero env exports -
+the defaults, not the wrapper, carry the posture. Sentinel armed state is
+not observable at idle (ledger lines only; no metric); assumed by code
+review + the passing canary, prod keeps explicit exports regardless.
+Prod rebuilt (release) and restarted: pid 713224, same four exports as
+pins, canary 8x5=40, disabled counter 55.
+
 ## Open investigations (2026-11-06 triage; P0 = do first, see legend)
 
 [P0] ROCm graph-replay bug report package. The mixed-phase NaN class is
