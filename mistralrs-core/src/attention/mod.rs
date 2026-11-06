@@ -241,6 +241,25 @@ pub struct SdpaParams {
     pub sinks: Option<Tensor>,
 }
 
+/// Softcap for the vLLM paged decode kernel, whose softcapping applies on
+/// scaled scores (same convention as naive_sdpa), unlike CK's raw-logit cap -
+/// so the clamp passes through at its defined magnitude, not 10/scale.
+/// Models with their own softcap pass through unchanged; on HIP without one,
+/// decode rides the same clamp bound as naive_sdpa/CK prefill instead of the
+/// kernel's do-nothing 1.0. MISTRALRS_PAGED_DECODE_CLAMP=0 disables.
+pub(crate) fn paged_decode_softcap(sdpa_params: &SdpaParams, device: &Device) -> f32 {
+    if let Some(cap) = sdpa_params.softcap {
+        return cap;
+    }
+    #[cfg(feature = "rocm")]
+    {
+        if device.is_hip() && crate::perf_flags::paged_decode_clamp_enabled() {
+            return backends::naive::ATTENTION_SCORE_CLAMP as f32;
+        }
+    }
+    1.0
+}
+
 pub struct Sdpa;
 
 impl Sdpa {

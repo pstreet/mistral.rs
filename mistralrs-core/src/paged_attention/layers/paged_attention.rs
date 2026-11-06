@@ -2346,7 +2346,7 @@ impl PagedAttention {
                 ctx.input_metadata.max_context_len.unwrap()
             },
             ctx.sdpa_params.softmax_scale,
-            ctx.sdpa_params.softcap.unwrap_or(1.0f32),
+            crate::attention::paged_decode_softcap(ctx.sdpa_params, query.device()),
             ctx.sdpa_params.sinks.as_ref(),
             k_quant,
             v_quant,
