@@ -331,6 +331,25 @@ corpus, so scans should run on full (un-elided) exports.
 33k-char thinking briefly mis-recalled a previous turn's ask, then burned
 max_tokens). Subcritical context mis-assembly, deck-session family. If it
 ever appears in a production export, worsens the item above to P0.
+ESCALATED 2026-11-06 22:34: first production-export appearance, post
+decode-clamp swap. Session 8afc68fe, 162k context (prefix-cache read
+161856, 0 evictions): amendments turn derailed mid-reasoning - correct
+amendment content -> session bleed-through (Dockerfile/checksums
+fragments from the same session), 6235 chars reasoning, no text, MTP
+accept collapsed 11.5%->0% mid-turn ([mtp-fallback] 22:35:29), finished
+status=200 outcome=client_disconnected at 255s. Sentinel silent (0 bails,
+in-band logits); short-context canaries perfect before AND after
+(12/40/42/25 + perfect Bill of Rights); alphabet turn 4 min earlier at
+the same depth: perfect. scan_export verdict: GARBLE-DETECTED
+(reasoning-only-runaway). Ruled out: score blowup (sentinel), evictions
+(0), model knowledge (short-context), plain NaN. Live mechanisms:
+GDN recurrent-state drift at depth (3/4 layers, sentinel only checks
+magnitude not correctness) vs MTP verify-path KV poisoning (mask_type=2
+multi-token prefix prefill, 41a49cc77) vs Q8_0 KV fidelity. Separators:
+same-session re-ask (persist = poisoned state), MTP-off A/B at depth
+(isolates verify path), KV F16 A/B at depth (the P1). Export:
+/tmp/session-8afc68fe-0082-40d1-85cb-2b3df5244b0e.json (msg
+1b2ff57340011Q4bqn97HgE3MT).
 
 [P3] mistralrs-pyo3 pre-existing no-feature-shape compile break
 (get_sender arity, util.rs:115 + lib.rs 1805/2063) predates Nov 6; blocks
