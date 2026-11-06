@@ -30,6 +30,12 @@ using fmha_traits = ck_tile::TileFmhaFwdSplitKVTraits<
     true,  // kPadSeqLenK
     false, // kPadHeadDimQ (the working gfx1151 batched TUs pad no head dims)
     false, // kPadHeadDimV
+    // kHasLogitsSoftCap must stay false: the splitkv pipeline static-asserts
+    // softcap only under CK_TILE_FMHA_FWD_FAST_EXP2, which this repo builds
+    // with =0. A softcap DFlash reopen needs FAST_EXP2=1 for this TU (plus a
+    // per-TU define override in build.rs) or a vendored pipeline patch.
+    // The wrapper still normalizes the no-cap sentinel so the FFI contract
+    // holds when this flips.
     false, // kHasLogitsSoftCap
     ck_tile::BlockAttentionBiasEnum::NO_BIAS,
     false, // kHasBiasGrad

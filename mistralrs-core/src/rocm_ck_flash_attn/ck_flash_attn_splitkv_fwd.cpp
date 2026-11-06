@@ -109,7 +109,12 @@ extern "C" float ck_flash_attn_splitkv_fwd(
     a.scale_s        = scale_s;
     a.scale_p        = 1.0f;
     a.scale_o        = 1.0f;
-    a.logits_soft_cap = logits_soft_cap;
+    // <=1.0 is the Rust-side "no cap" sentinel; normalize to 0 so the value is
+    // well-defined whenever the kHasLogitsSoftCap trait flips on (cap <= 0 is
+    // exact passthrough in LogitsSoftCapParams). The current instantiation
+    // keeps the trait off: the splitkv pipeline asserts softcap only under
+    // FAST_EXP2, so logits_soft_cap is ignored until that reopen.
+    a.logits_soft_cap = logits_soft_cap > 1.0f ? logits_soft_cap : 0.0f;
 
     // q/o are [total_q, nhead, hdim] contiguous; k/v are [page, page_size, nhead_k, hdim].
     a.stride_q            = static_cast<ck_tile::index_t>(nhead_q) * hdim;
