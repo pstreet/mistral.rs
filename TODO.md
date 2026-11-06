@@ -271,6 +271,18 @@ Test re-ignored with the fresh verdict. 3b5198de6's "stale claim" is now
 revalidated-negative; the Oct 25 blocker record stands. The ck_flash_attn
 prefill lane is unaffected and device-verified.
 
+Prod swap (2026-11-06 22:23 UTC, pid 840177): release dual+flash build
+with the decode clamp (7m16s, sccache-warm). Rollback copy:
+target/release/mistralrs.pre-20261106-decodeclamp. Live wrapper synced
+with the MISTRALRS_PAGED_DECODE_CLAMP=1 pin (all five posture vars
+verified via /proc/PID/environ). Post-swap battery: canaries 3x4/8x5/
+7x6/12+13 = 12/40/42/25 at temp-0, metrics
+cuda_graph_dispatch{skipped,disabled} incrementing, zero sentinel bails
+/ HSA faults, MTP accept 83.3% (len 2.67) - healthy band. Journal shows
+[PA] run_decode seq_len=3 (MTP verify) hitting the clamped path. First
+real session after swap is the token-shift check (tanh cap can shift
+tokens), not a regression signal; scan_export over the next exports.
+
 ## Open investigations (2026-11-06 triage; P0 = do first, see legend)
 
 [P0] ROCm graph-replay bug report package. The mixed-phase NaN class is
