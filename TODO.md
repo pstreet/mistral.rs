@@ -221,6 +221,33 @@ Prod rebuilt (release) and restarted: pid 713224, same four exports as
 pins, canary 8x5=40, disabled counter 55.
 
 ### 2026-11-06 decode clamp hardening: the last unclamped score surface
+### ***RETRACTED 2026-11-06 23:33 - the clamp CAUSED deep-context degradation; reverted 47e0a6ff0.***
+
+Root cause of the 22:34 session-8afc68fe failure and every replay
+failure: the tanh decode clamp deployed 22:23 (c96cb6ab3). The kernel's
+softcap semantics are tanh (tanh(qk/cap)*cap), which compresses ALL
+scores (7.6% at qk=5), not just outliers - unlike naive_sdpa's hard
+clamp which passes sub-bound scores through untouched. At depth the
+compression flattened retrieval: question-binding failed, neighbor
+patterns contaminated answers, and the first-token probability
+landscape collapsed to near-uniform over wrong modes (float-atomic
+jitter then picked a different confabulation per run). Evidence:
+- clamp ON: 5/5 identical deep-context requests derailed, 5 DIFFERENT
+  confabulated asks ("same thing" / "capital of France" / "current
+  time" - none exist in the context); fresh-prefill nonce runs
+  deterministic '7' for 3*4 (mis-read as 3+4 from canary-table
+  neighbors); MTP accept collapsed to 0% mid-turn (mtp-fallback);
+- clamp OFF (env flip, same binary): 5/5 deterministic '12' at depth,
+  MTP 86-89%, decode 51-61 T/s (vs 6-15 degraded);
+- reverted binary swapped 23:41 (pid 851319): 5/5 '12' + canaries
+  12/40/42/25 + MTP 87.1%. Nov 5 field drive (7/7 to 199k) ran
+  UNCLAMPED decode - the clamp was never needed at decode.
+Lesson: kernel tanh-softcap is NOT a drop-in for naive hard clamp; the
+asymmetry is harmless at short context and catastrophic at depth. The
+prefill (CK raw-cap) and naive (hard clamp) clamps stand - they own the
+score-blowup class. Decode stays softcap-passthrough-only.
+
+Original hardening note follows for the record.
 
 Audit outcome (Gemini cross-check + code walk): after 56cf617ea the clamp
 coverage was prefill CK FA (raw-logit cap = 10/scale, attention/mod.rs) +
@@ -253,13 +280,11 @@ inert/hardware-blocked per the Oct 24-26 record).
 Validation: cargo check -p mistralrs-core on bare / rocm (CK TUs rebuilt
 through hipcc) / cuda / npu,rocm / cuda,rocm,npu,flash-attn; clippy on the
 dual+flash shape shows zero hits in touched files; ck_flash_attn device
-parity test passes. A/B path: MISTRALRS_PAGED_DECODE_CLAMP=0 under
-graphs-off + sentinel, same field-drive shape as the Nov 5 baseline,
-scan_export over exports after. Observability note: the sentinel's
-naive_sdpa clamp counter does NOT see the kernel-side softcap (no
-in-kernel counter); the positive signal is absence of sentinel bails /
-garble on the clamped lane, plus the deliberate token-shift a tanh cap
-can produce.
+parity test passes. *** VALIDATION GAP: every check ran at SHORT context;
+no long-context decode battery was run before the prod swap, and the
+clamp's depth harm (see retraction above) shipped to prod for 70 minutes.
+Any future score-clamp change must run the deep replay battery
+(session-history replay at 100k+ tokens, 5x determinism) before swap.
 
 Splitkv re-validation side-result: the test target had been broken since
 Nov 3 (stale ck_flash_attn arity at rocm/mod.rs:461 hid it from cargo
@@ -331,25 +356,15 @@ corpus, so scans should run on full (un-elided) exports.
 33k-char thinking briefly mis-recalled a previous turn's ask, then burned
 max_tokens). Subcritical context mis-assembly, deck-session family. If it
 ever appears in a production export, worsens the item above to P0.
-ESCALATED 2026-11-06 22:34: first production-export appearance, post
-decode-clamp swap. Session 8afc68fe, 162k context (prefix-cache read
-161856, 0 evictions): amendments turn derailed mid-reasoning - correct
-amendment content -> session bleed-through (Dockerfile/checksums
-fragments from the same session), 6235 chars reasoning, no text, MTP
-accept collapsed 11.5%->0% mid-turn ([mtp-fallback] 22:35:29), finished
-status=200 outcome=client_disconnected at 255s. Sentinel silent (0 bails,
-in-band logits); short-context canaries perfect before AND after
-(12/40/42/25 + perfect Bill of Rights); alphabet turn 4 min earlier at
-the same depth: perfect. scan_export verdict: GARBLE-DETECTED
-(reasoning-only-runaway). Ruled out: score blowup (sentinel), evictions
-(0), model knowledge (short-context), plain NaN. Live mechanisms:
-GDN recurrent-state drift at depth (3/4 layers, sentinel only checks
-magnitude not correctness) vs MTP verify-path KV poisoning (mask_type=2
-multi-token prefix prefill, 41a49cc77) vs Q8_0 KV fidelity. Separators:
-same-session re-ask (persist = poisoned state), MTP-off A/B at depth
-(isolates verify path), KV F16 A/B at depth (the P1). Export:
-/tmp/session-8afc68fe-0082-40d1-85cb-2b3df5244b0e.json (msg
-1b2ff57340011Q4bqn97HgE3MT).
+2026-11-06 UPDATE: the 22:34 session-8afc68fe event that triggered
+escalation was RE-ATTRIBUTED to the decode tanh clamp (deployed 22:23,
+reverted 47e0a6ff0 - see the retraction above); it was NOT this class.
+The escalation is DOWNGRADED back to P3 watch. The turn-6 signature
+itself (Nov 5-6, 180k, unclamped eager decode, 1 event, mild "briefly
+mis-recalled at the very end") remains open and unexplained; the deep
+replay battery now exists to hunt it on demand
+(/tmp/opencode/replay_e1short.json + the run/analyze loop in this
+session's history).
 
 [P3] mistralrs-pyo3 pre-existing no-feature-shape compile break
 (get_sender arity, util.rs:115 + lib.rs 1805/2063) predates Nov 6; blocks
