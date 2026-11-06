@@ -220,6 +220,57 @@ review + the passing canary, prod keeps explicit exports regardless.
 Prod rebuilt (release) and restarted: pid 713224, same four exports as
 pins, canary 8x5=40, disabled counter 55.
 
+### 2026-11-06 decode clamp hardening: the last unclamped score surface
+
+Audit outcome (Gemini cross-check + code walk): after 56cf617ea the clamp
+coverage was prefill CK FA (raw-logit cap = 10/scale, attention/mod.rs) +
+naive_sdpa (hard clamp +/-10, backends/naive.rs) + GDN in-kernel clamps -
+but the vLLM paged DECODE kernel received softcap.unwrap_or(1.0) (layers/
+paged_attention.rs run_standard_paged_decode), so full-attn decode at
+depth ran unclamped on every backend. That is the one live surface left
+for the finite-but-corrupt decode-step class the sentinel watches.
+
+Hardening deployed: paged_decode_softcap() (attention/mod.rs) feeds the
+decode kernel ATTENTION_SCORE_CLAMP (10.0) on HIP when the model has no
+softcap, gated by MISTRALRS_PAGED_DECODE_CLAMP (default on, =0 for A/B).
+Convention note: the vLLM kernel softcaps SCALED scores (qk = scale*dot
+then tanh), same as naive_sdpa, so the clamp passes at 10.0 directly -
+the raw-logit 10/scale conversion is CK-only. Model softcaps (Gemma)
+pass through unchanged; CUDA/NPU lanes untouched (reference lane).
+has_softcap dispatch inputs are NOT flipped (helper feeds the kernel arg
+only), so plan/kernel selection is byte-identical; only the kernel arg
+changes. Prefill/decode now agree on the same effective bound on HIP.
+
+CK splitkv (DFlash draft lane) audited for the same gap: kHasLogitsSoftCap
+CANNOT flip on - the splitkv pipeline static-asserts softcap only under
+CK_TILE_FMHA_FWD_FAST_EXP2 and this repo builds CK TUs with =0 (assert
+fires, verified). Constraint recorded in the TU; wrapper normalizes the
+no-cap sentinel (<=1.0 -> 0.0, exact passthrough per LogitsSoftCapParams)
+so the FFI contract holds on a future reopen (reopen = FAST_EXP2=1 for
+that TU + build.rs per-TU define, or vendored pipeline patch; lane stays
+inert/hardware-blocked per the Oct 24-26 record).
+
+Validation: cargo check -p mistralrs-core on bare / rocm (CK TUs rebuilt
+through hipcc) / cuda / npu,rocm / cuda,rocm,npu,flash-attn; clippy on the
+dual+flash shape shows zero hits in touched files; ck_flash_attn device
+parity test passes. A/B path: MISTRALRS_PAGED_DECODE_CLAMP=0 under
+graphs-off + sentinel, same field-drive shape as the Nov 5 baseline,
+scan_export over exports after. Observability note: the sentinel's
+naive_sdpa clamp counter does NOT see the kernel-side softcap (no
+in-kernel counter); the positive signal is absence of sentinel bails /
+garble on the clamped lane, plus the deliberate token-shift a tanh cap
+can produce.
+
+Splitkv re-validation side-result: the test target had been broken since
+Nov 3 (stale ck_flash_attn arity at rocm/mod.rs:461 hid it from cargo
+check), so the re-validation 3b5198de6 asked for never ran. Fixed the
+arity, ran it: the gfx1151 splitkv base-path memory fault REPRODUCED
+(FmhaFwdSplitKVKernel, addr 0x1000, SIGABRT; instantiation identical to
+pre-change - softcap trait off, so unrelated to today's wrapper edit).
+Test re-ignored with the fresh verdict. 3b5198de6's "stale claim" is now
+revalidated-negative; the Oct 25 blocker record stands. The ck_flash_attn
+prefill lane is unaffected and device-verified.
+
 ## Open investigations (2026-11-06 triage; P0 = do first, see legend)
 
 [P0] ROCm graph-replay bug report package. The mixed-phase NaN class is
