@@ -385,6 +385,22 @@ journal + replay assets now cover both eras). Practical mitigation
 until then: retire sessions past ~90% pool (~235k tokens here);
 integration-heavy turns (summarize/plan) are the sensitive class;
 retrieval-style turns survive to the limit.
+2026-11-07 (late) REFRAME - the failing input identified: pcap capture
+(lo:1235, sudo tcpdump) of a fork-driven compaction request shows the
+"summarize" turns are OPENCODE CONTEXT COMPACTION, not chat: the client
+flattens the session into one ~593k-char [User]:/[Assistant]: transcript
+(155 blocks, 6% digits, 11k colons, one 55k-char tool dump) + a strict
+structured-summary instruction, ~200k rendered tokens. The model's
+derailing reasoning ("Let me chronologically recap...") was executing
+THIS task; the salad's colon-digit fragments permute the transcript's
+numeric texture. All earlier replay batteries used the WRONG input
+(raw session histories / synthetic filler) - that is why the event
+never reproduced: the compaction rendering is the actual model input.
+Fork-driven run (opencode run --fork, real client pipeline) reproduced
+the MTP acceptance collapse (59->9% -> 0/2 -> fallback 23:03:30) on the
+true bytes; the CLI timeout killed it before output classification.
+Queued: byte-exact replay of the compaction request + depth-response
+curve (50k/100k/150k truncations) to map capability falloff vs cliff.
 
 [P3] mistralrs-pyo3 pre-existing no-feature-shape compile break
 (get_sender arity, util.rs:115 + lib.rs 1805/2063) predates Nov 6; blocks
