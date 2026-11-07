@@ -365,6 +365,26 @@ mis-recalled at the very end") remains open and unexplained; the deep
 replay battery now exists to hunt it on demand
 (/tmp/opencode/replay_e1short.json + the run/analyze loop in this
 session's history).
+2026-11-07 UPDATE: second severe instance on the CLEAN binary (post
+47e0a6ff0). Session ebb5a31c, client rendered 199,816 tokens (journal
+prompt_tokens; session ~92% of the 262k pool), summarize turn derailed
+mid-recap into multilingual token salad (4407 chars, mixed-script
+fragments + colon-digit patterns), finish=error, 419s,
+client_disconnected. MTP acceptance collapsed 18-40% -> 0% -> fallback
+at 08:50 right after the 191k morning re-prefill; summarize ran batch-1.
+Sentinel silent (in-band); scan_export HARD (reasoning-only-runaway).
+Separators run 09:2x-09:5x: synthetic filler 3/3 clean at ~220k (depth
+alone exonerated); contamination A/B (degraded history intact vs
+elided) 4/4 coherent summaries; long-budget intact 3/3 clean - the
+event did NOT reproduce in 7 replay attempts of the same content. Class
+verdict: stochastic anchor/salad failure on real content at ~200k,
+pre-existing (predates all Nov 6 clamps), roughly 1 severe event per
+heavy 200k-session-day, non-deterministic, not reachable by the replay
+harness as-built. Path to a fix: the P0 upstream package (exports +
+journal + replay assets now cover both eras). Practical mitigation
+until then: retire sessions past ~90% pool (~235k tokens here);
+integration-heavy turns (summarize/plan) are the sensitive class;
+retrieval-style turns survive to the limit.
 
 [P3] mistralrs-pyo3 pre-existing no-feature-shape compile break
 (get_sender arity, util.rs:115 + lib.rs 1805/2063) predates Nov 6; blocks
