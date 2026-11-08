@@ -466,6 +466,27 @@ fingerprinting in the sentinel. llama-server left running on :8081 as
 the reference implementation for the bisect. Proxy approach PARKED
 (~/.config/mistralrs-proxy.py kept, not wired) - fixing the fork beats
 wrapping it.
+2026-11-08 KERNEL VARIANT A/B RESULTS: default WARP kernel - degeneration
+signals in 3-4 of ~10 uncapped compaction runs (byte_run3 LOOP,
+bf16_run3 LOOP, fork-run acceptance collapse, the morning severe client
+event); CHUNKED kernel (MISTRALRS_GDN_KERNEL=chunked) - 0/3, all
+finish=stop, summaries quality-verified (5-6/8 ground-truth session
+facts covered; the 2 uncovered postdate the captured input). Also
+retired as detector false-positives: the colon-digit salad regex
+matched legitimate timestamps ("08:50:43") - the reliable signals are
+repetition-loop spans, mixed-script DENSITY (>=4 script chars per
+500-char window), and finish/empty. WORKING ROOT CAUSE: the warp GDN
+prefill recurrence kernel's rounding trajectory at ~200k enters a
+degenerate basin stochastically (upstream atomic jitter seeds it; the
+chunked kernel's different summation order stays in the stable basin;
+llama.cpp's third implementation also stable). Both kernels are f32
+per-token; the instability is trajectory-level, not a dtype bug.
+Next: 2 more warp runs to complete the rate comparison; then either
+(1) flip the default dispatch to chunked for deep prefill (one-line
+dispatch change, validated by the harness), or (2) state-trajectory
+diff instrument (warp vs chunked states after each chunk) to pin the
+exact divergence for an upstream fix. NOTE: llama-server on :8081 kept
+as the ground-truth oracle.
 
 [P3] mistralrs-pyo3 pre-existing no-feature-shape compile break
 (get_sender arity, util.rs:115 + lib.rs 1805/2063) predates Nov 6; blocks
