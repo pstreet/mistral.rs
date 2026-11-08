@@ -493,9 +493,20 @@ prefill dispatch - k-dim 64/128 shapes now use the chunked kernel
 MISTRALRS_GDN_KERNEL=warp still selects warp explicitly for debugging
 and the state-diff instrument). Warp perf parity: totals 600-716s
 (warp) vs 677s (chunked) on the same compaction request - no cliff.
-Rollback = MISTRALRS_GDN_KERNEL=warp (or git revert). Validation
-queued: 2x byte-exact compaction on the swapped binary (expect clean
-like the 3 manual chunked runs).
+Rollback = MISTRALRS_GDN_KERNEL=warp (or git revert). VALIDATION
+COMPLETE (2026-11-08 evening): the box rebooted overnight (04:25,
+tmpfs wiped - payloads lost, rebuilt from the export); canary 3*4=12;
+rebuilt compaction payload (165k tokens, structural rebuild from the
+export) on the swapped binary: CLEAN (7.8k reasoning + 3.2k summary,
+finish=stop, no loops/salad). Combined with the 3 manual chunked runs
+at the FULL failing depth (~198.7k prompt tokens): 4/4 clean with the
+fix's kernel. The original session is now past the 262,144 hard limit
+(fork compaction rejects: 'Prompt sequence length is greater than
+262144') - retired; fresh sessions required. OPEN FOLLOW-UPS: (1)
+state-trajectory diff instrument (warp vs chunked per-chunk state
+checksums) for the upstream kernel report; (2) segmented compaction in
+OpenCode as defense-in-depth for other models; (3) llama-server
+oracle: relaunch when needed (killed by the reboot).
 
 [P3] mistralrs-pyo3 pre-existing no-feature-shape compile break
 (get_sender arity, util.rs:115 + lib.rs 1805/2063) predates Nov 6; blocks
