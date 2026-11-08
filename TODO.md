@@ -401,6 +401,24 @@ the MTP acceptance collapse (59->9% -> 0/2 -> fallback 23:03:30) on the
 true bytes; the CLI timeout killed it before output classification.
 Queued: byte-exact replay of the compaction request + depth-response
 curve (50k/100k/150k truncations) to map capability falloff vs cliff.
+2026-11-08 RESULTS: byte-exact compaction replay REPRODUCES the class -
+Q8_0 KV, uncapped: 3/4 runs degraded, 1 severe (16.3k reasoning,
+colon-digit salad, 7293-token runaway at 39.6 min), 1/4 clean-ish.
+Failure fingerprint: coherent recap -> test-result conflation ->
+repetition-loop degeneration ("the clamp was removed" x5) -> "wait,
+let's re-read" recovery attempts -> dissolution into transcript-texture
+soup. Non-deterministic on identical bytes (collapsed landscape +
+atomic jitter). Depth curve at max_tokens=2000: 50k/100k/150k all
+coherent (no degeneration within the capped budget; TEMPLATE-MODE flag
+retired - it is the model's natural compaction style, not degradation).
+=> degeneration requires BOTH extreme depth AND long uncapped
+generation. Prime suspect: Q8_0 KV quantization error accumulating over
+~200k tokens (retrieval tolerates the blur; full-context integration
+compounds it per generated token). KV F16 variant does not exist in the
+TOML schema (Auto/BF16/F8E4M3/Q8_0/Q4_0); A/B armed with BF16
+(unquantized). DECIDER: BF16 3x byte-exact vs Q8_0 3/4 degraded. If
+clean -> root cause = KV quantization fidelity at extreme depth; if
+identical -> GDN state precision / kernel path, bisect next.
 
 [P3] mistralrs-pyo3 pre-existing no-feature-shape compile break
 (get_sender arity, util.rs:115 + lib.rs 1805/2063) predates Nov 6; blocks
