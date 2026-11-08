@@ -444,6 +444,28 @@ context. PRACTICAL FIX (works under both candidates): segmented
 compaction - summarize in ~50k segments then summarize the summaries
 (the 50k curve point was clean with margin); retire sessions past ~90%
 pool. Prod restored to Q8_0 (pid 946198).
+2026-11-08 (late) DECISIVE CROSS-BACKEND A/B - the user's llama.cpp
+observation confirmed and made rigorous: the byte-exact compaction
+request (620,457 bytes, ~198.7k tokens, same GGUF, same gfx1151) run
+through llama.cpp 0.7.0-dev/7894e8b (GGML HIP kernels, its own GDN/KV
+management, -c 262144 -ngl 99 -fa on) completes CLEAN: coherent 4,493
++ 5,428 chars, zero loops, zero salad, finish=stop, 568s. mistral.rs on
+the IDENTICAL bytes: 3/4 degraded (1 severe salad + 7293-token
+runaway). => The corruption is IN mistral.rs's serving stack - model,
+OpenCode, and ROCm itself exonerated (ggml HIP handles the same
+compute). llama.cpp reimplements exactly the components mistral.rs
+does differently: GDN/linear-attention recurrent-state handling
+(prefill chunking + per-token decode), hybrid-arch KV management, and
+the candle HIP kernels. PRIME SUSPECT: the GDN recurrent-state path at
+extreme depth (chunked prefill state updates at 100+ chunk boundaries
+or per-token decode state drift). Bisect levers queued: (1)
+MISTRALRS_GDN_KERNEL=warp|chunked|tiled prefill kernel variant A/B
+(different recurrence code path entirely), (2) max_prefill_chunk_tokens
+2048->4096/1024 boundary A/B, (3) per-layer GDN state checksum
+fingerprinting in the sentinel. llama-server left running on :8081 as
+the reference implementation for the bisect. Proxy approach PARKED
+(~/.config/mistralrs-proxy.py kept, not wired) - fixing the fork beats
+wrapping it.
 
 [P3] mistralrs-pyo3 pre-existing no-feature-shape compile break
 (get_sender arity, util.rs:115 + lib.rs 1805/2063) predates Nov 6; blocks
