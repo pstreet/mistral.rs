@@ -419,6 +419,31 @@ TOML schema (Auto/BF16/F8E4M3/Q8_0/Q4_0); A/B armed with BF16
 (unquantized). DECIDER: BF16 3x byte-exact vs Q8_0 3/4 degraded. If
 clean -> root cause = KV quantization fidelity at extreme depth; if
 identical -> GDN state precision / kernel path, bisect next.
+2026-11-08 BF16 VERDICT: KV quantization EXONERATED. BF16 3x byte-exact:
+0/3 severe (no salad, no runaway), 1/3 mild repetition-loop episode
+("a loss of the loss of the..." in reasoning, RECOVERED, finish=stop),
+2/3 clean - statistically the same rate as Q8_0 (1/3 severe, 2/3
+clean) with n=3. The degeneration survives unquantized KV -> it enters
+before/at the attention-state level, not in KV storage. Sentinel GDN
+magnitude checks stayed silent through degenerating generations (state
+numerically in-band; content-level corruption invisible to it).
+Cross-backend discriminator impossible on this hardware (3090 lane caps
+at 88k). FINAL ROOT-CAUSE POSITION: progressive long-context
+degeneration at ~92% of the trained context window on the single
+hardest task (chronological integration of a 200k dense transcript),
+stochastic (collapsed landscape + atomic jitter), present on
+unquantized KV, GDN magnitude clean. Remaining candidates: (1) model
+long-context integration envelope - repetition-loop degeneration at
+extreme depth is a known LLM failure mode and the event rate fits a
+marginal-stability regime; (2) GDN recurrent-state content drift at
+depth - not excluded (magnitude-invisible). Discriminator requires
+either state-content fingerprinting (sentinel extension: per-layer
+state checksums at depth, catch a drifting layer red-handed) or an
+upstream/model-author answer on qwen3.6 hybrid-GDN behavior at >90%
+context. PRACTICAL FIX (works under both candidates): segmented
+compaction - summarize in ~50k segments then summarize the summaries
+(the 50k curve point was clean with margin); retire sessions past ~90%
+pool. Prod restored to Q8_0 (pid 946198).
 
 [P3] mistralrs-pyo3 pre-existing no-feature-shape compile break
 (get_sender arity, util.rs:115 + lib.rs 1805/2063) predates Nov 6; blocks
