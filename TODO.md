@@ -487,6 +487,15 @@ dispatch change, validated by the harness), or (2) state-trajectory
 diff instrument (warp vs chunked states after each chunk) to pin the
 exact divergence for an upstream fix. NOTE: llama-server on :8081 kept
 as the ground-truth oracle.
+FIX DEPLOYED (2026-11-08): the warp kernel removed from the auto GDN
+prefill dispatch - k-dim 64/128 shapes now use the chunked kernel
+(gdn/backend.rs, both dispatch sites; dead duplicate selector deleted;
+MISTRALRS_GDN_KERNEL=warp still selects warp explicitly for debugging
+and the state-diff instrument). Warp perf parity: totals 600-716s
+(warp) vs 677s (chunked) on the same compaction request - no cliff.
+Rollback = MISTRALRS_GDN_KERNEL=warp (or git revert). Validation
+queued: 2x byte-exact compaction on the swapped binary (expect clean
+like the 3 manual chunked runs).
 
 [P3] mistralrs-pyo3 pre-existing no-feature-shape compile break
 (get_sender arity, util.rs:115 + lib.rs 1805/2063) predates Nov 6; blocks

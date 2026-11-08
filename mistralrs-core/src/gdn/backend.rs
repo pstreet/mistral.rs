@@ -75,42 +75,6 @@ impl From<FusedPrefillOutput> for RecurrenceOutput {
     }
 }
 
-#[cfg(any(feature = "cuda", feature = "rocm"))]
-fn use_warp_prefill_recurrence(dims: &GdnDims) -> bool {
-    matches!(dims.head_k_dim, 64 | 128)
-}
-
-#[cfg(any(feature = "cuda", feature = "rocm"))]
-#[derive(Clone, Copy, PartialEq)]
-enum PrefillRecurrenceKernel {
-    Warp,
-    Chunked,
-    Tiled,
-}
-
-#[cfg(any(feature = "cuda", feature = "rocm"))]
-fn select_prefill_recurrence_kernel(dims: &GdnDims, seq_len: usize) -> PrefillRecurrenceKernel {
-    // MRS_GDN_KERNEL=warp|chunked|tiled overrides auto dispatch for tuning
-    static KERNEL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    match KERNEL
-        .get_or_init(|| {
-            std::env::var("MISTRALRS_GDN_KERNEL")
-                .ok()
-                .filter(|s| !s.is_empty())
-        })
-        .as_deref()
-    {
-        Some("warp") => PrefillRecurrenceKernel::Warp,
-        Some("chunked") => PrefillRecurrenceKernel::Chunked,
-        Some("tiled") => PrefillRecurrenceKernel::Tiled,
-        _ if seq_len >= RECURRENCE_CHUNK_THRESHOLD && use_warp_prefill_recurrence(dims) => {
-            PrefillRecurrenceKernel::Warp
-        }
-        _ if seq_len >= RECURRENCE_CHUNK_THRESHOLD => PrefillRecurrenceKernel::Chunked,
-        _ => PrefillRecurrenceKernel::Tiled,
-    }
-}
-
 pub fn l2_norm(x: &Tensor, eps: f64) -> Result<Tensor> {
     let inv_norm = x
         .sqr()?
@@ -621,15 +585,15 @@ fn recurrence_cuda_from_convolved(
                         dtype,
                     )?,
                 )
-            } else if seq_len >= RECURRENCE_CHUNK_THRESHOLD && use_warp_prefill_recurrence(dims) {
-                RecurrenceOutput::BatchHeadMajor(
-                    crate::cuda::gdn::warp_gated_delta_rule_recurrence_cuda(
-                        inputs,
-                        &mut state_flat,
-                        slots,
-                    )?,
-                )
             } else if seq_len >= RECURRENCE_CHUNK_THRESHOLD {
+                // k-dim 64/128 shapes used to dispatch to the warp kernel here.
+                // The warp kernel's f32 rounding trajectory destabilizes over
+                // long prefills: at ~200k cumulative tokens the carried state
+                // enters repetition-attractor degeneration (~40% of long
+                // compaction generations; llama.cpp is clean on identical
+                // bytes). The chunked kernel's summation order stays in the
+                // stable basin (0/3 vs 3-4/10). MISTRALRS_GDN_KERNEL=warp
+                // still selects it explicitly for debugging.
                 RecurrenceOutput::BatchHeadMajor(
                     crate::cuda::gdn::chunked_gated_delta_rule_recurrence_cuda(
                         inputs,
@@ -727,9 +691,11 @@ fn recurrence_cuda(
             slots,
             dtype,
         )?
-    } else if seq_len >= RECURRENCE_CHUNK_THRESHOLD && use_warp_prefill_recurrence(dims) {
-        crate::cuda::gdn::warp_gated_delta_rule_recurrence_cuda(inputs, &mut state_flat, slots)?
     } else if seq_len >= RECURRENCE_CHUNK_THRESHOLD {
+        // The warp kernel (the previous dispatch for k-dim 64/128) is not in
+        // the auto set: its rounding trajectory destabilizes over long
+        // prefills at ~200k cumulative tokens. MISTRALRS_GDN_KERNEL=warp
+        // selects it explicitly for debugging.
         crate::cuda::gdn::chunked_gated_delta_rule_recurrence_cuda(inputs, &mut state_flat, slots)?
     } else {
         crate::cuda::gdn::gated_delta_rule_recurrence_cuda(inputs, &mut state_flat, slots)?
