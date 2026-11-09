@@ -1802,3 +1802,66 @@ Shallow-context lead (54.6 vs ~50 at d854) unchanged.
    ~85% of roofline: ~2% wall clock. Highest remaining kernel-side
    lever but small end-to-end payoff; needs a dedicated session with
    correctness harness (NaN gate) and per-config benchmarking.
+
+
+## 2026-11-06/08 - Deep-context degradation root-caused: warp GDN prefill kernel trajectory instability (fixed, 2772cd4ed)
+
+The intermittent long-session garble class (deck-session family: the Nov 5
+turn-6 mis-recall, the Nov 7 severe salad) is root-caused to the warp GDN
+prefill recurrence kernel and fixed by removing it from the auto dispatch
+(2772cd4ed). Evidence chain, in order:
+
+1. INPUT IDENTIFIED (pcap, sudo tcpdump on lo:1235): the failing turns are
+   OpenCode context-compaction requests - a 593k-char [User]:/[Assistant]:
+   flattened transcript + strict summary instruction, ~198.7k rendered
+   tokens. All earlier replay batteries used the wrong input (raw session
+   histories) and could not reproduce.
+2. ATTRIBUTION (llama.cpp oracle): the byte-exact request through
+   llama.cpp 0.7.0-dev/7894e8b (same GGUF, same gfx1151, -c 262144
+   -ngl 99 -fa on) completes CLEAN (coherent 4,493 + 5,428 chars, 568s)
+   while mistral.rs degenerates 3/4 on identical bytes (1 severe salad,
+   7293-token runaway at 39.6 min). Model, OpenCode, and ROCm exonerated;
+   the defect is in this fork's serving stack.
+3. EXONERATIONS WITH DATA: the decode tanh clamp (an own-regression from
+   the Nov 6 hardening, reproduced 5/5 and reverted, 47e0a6ff0); KV
+   quantization (BF16 A/B, same failure rate); state dtype (F32 verified
+   end-to-end: GdnStateDType default, GGUF declares no override); depth
+   alone (220k synthetic clean); history contamination (A/B 4/4 clean);
+   MTP verify (failures occur batch-1 post-fallback); evictions (0);
+   sentinel magnitude checks (silent through degeneration - the state
+   stays numerically in-band).
+4. LOCUS (kernel-variant A/B): MISTRALRS_GDN_KERNEL=chunked - 0/3 clean;
+   default warp - 3-4/10 degeneration signals across uncapped compaction
+   runs (2 repetition-loop events + the fork-run acceptance collapse + the
+   morning severe event). The warp kernel's f32 rounding trajectory
+   destabilizes over ~100 chunk launches at ~200k cumulative tokens; the
+   chunked kernel's different summation order stays in the stable basin.
+   No discrete kernel bug exists (equivalent math, arguably better-
+   conditioned tree reductions) - the instability is trajectory-level.
+5. FIX: warp removed from the auto GDN prefill dispatch (both dispatch
+   sites in gdn/backend.rs; dead duplicate selector deleted). Chunked is
+   the default for k-dim 64/128 above 64 tokens; warp remains selectable
+   via MISTRALRS_GDN_KERNEL=warp for debugging. Perf parity: 600-716s
+   (warp) vs 677s (chunked) on the identical request. Prod swapped
+   (pid 23124 -> 946198 post-reboot) with rollback copy
+   mistralrs.pre-20261108-gdnfix.
+6. VALIDATION: 4/4 clean at the failing depth (3 manual chunked runs at
+   ~198.7k prompt tokens + 1 rebuilt 165k payload on the swapped binary),
+   canary 12, docs env table updated, BF16 curve + A/B data in the dated
+   TODO entries.
+
+Detector notes for future hunts: colon-digit salad regexes false-positive
+on timestamps ("08:50:43") - use repetition-loop spans (25-80 char spans
+repeated 3x) and mixed-script DENSITY (>=4 script chars per 500-char
+window). The step sentinel cannot catch this class (in-band logits
+throughout); scan_export.py catches it post-hoc (reasoning-only-runaway,
+GARBLE-DETECTED). The box rebooted overnight Nov 8 (04:25, tmpfs wiped -
+payloads rebuilt from ~/session-*.json exports; exports survive in ~).
+OPEN: state-trajectory diff instrument (warp-vs-chunked per-chunk state
+checksums) for the upstream kernel report; segmented compaction in
+OpenCode as defense-in-depth; warp kernel's instability is worth an
+upstream report to both projects. Assets: ~/session-ebb5a31c-*.json
+(session export), the harness recipes in the TODO dated entries,
+llama-server relaunch: llama.cpp/build/bin/llama-server -m
+models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
+-c 262144 -ngl 99 -fa on --port 8081.

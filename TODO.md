@@ -7,9 +7,9 @@ candle 56 ahead / 26 behind huggingface/candle:main, mistral.rs 111 ahead /
 Legend: [ ] open, [x] done. P0 = do first, P1 = do next, P2 = merge prep,
 P3 = polish, Deferred = do not do on RDNA.
 
-## Current status (2026-11-06, prod on Strix Halo gfx1151, dual cuda,rocm,npu,flash-attn, long-context fix deployed)
+## Current status (2026-11-09, prod on Strix Halo gfx1151, dual cuda,rocm,npu,flash-attn, deep-context degradation ROOT-CAUSED and fixed)
 
-STANDING POSTURE (2026-11-06, all four graph configs measured): GRAPHS=0 +
+STANDING POSTURE (2026-11-08, all four graph configs measured): GRAPHS=0 +
 MISTRALRS_STEP_SENTINEL=1, solo gate re-armed (pid 696856). Rationale:
 graphs-off is the only config measured fully correct (7/7 canary facts to
 199k on the field drive); the graphs decode win did not reproduce at
@@ -18,6 +18,27 @@ turns 2-3x slower), so disabling costs nothing; ungated replay corrupts
 under concurrent mixed-phase load (conc2 1/3, sentinel catch) and the
 solo gate is load-bearing. There is no decision left for daily operation.
 Reopen path: the REVISIT campaign below, gated on conc2 3/3.
+
+DEEP-CONTEXT DEGRADATION ROOT-CAUSED AND FIXED (2026-11-08, commit
+2772cd4ed): the intermittent long-session garble/salad class (the
+deck-session family) is the WARP GDN prefill recurrence kernel's f32
+rounding trajectory destabilizing over long prefills - at ~200k
+cumulative tokens the carried state enters repetition-attractor
+degeneration and the model dissolves into transcript-texture salad.
+Proven by: byte-exact capture of the failing input (OpenCode compaction,
+a 593k-char flattened transcript at ~198.7k tokens), a llama.cpp oracle
+on identical bytes + weights + GPU (clean, 0/1 vs mistral.rs 3/4
+degraded), a kernel-variant A/B (chunked 0/3 clean vs warp 3-4/10
+degeneration signals), and exonerations with data (decode clamp - an
+own-regression, reverted same-day; KV quantization via BF16 A/B; state
+dtype f32; depth alone; contamination; MTP; evictions; sentinel
+magnitude checks). Fix: warp removed from the auto GDN prefill dispatch -
+k-dim 64/128 prefill now uses the chunked kernel (perf parity: 600-716s
+vs 677s on the identical request); MISTRALRS_GDN_KERNEL=warp still
+selects it for debugging. Validated 4/4 clean at the failing depth.
+Full evidence chain: the dated entries below + COMPLETED.md. The
+original 262k-token session that hosted the investigation is retired
+(past the hard limit).
 
 Garbled output fix deployed (56cf617ea, 41a49cc77): attention score clamping in
 naive_sdpa resolved identical symptom to the OpenWebUI NaN issue (EoT-like
@@ -352,39 +373,21 @@ fixed (field_test_20261105.py now exports exact fact lines); the
 phantom-quote coined-token gate assumes filler words appear in the
 corpus, so scans should run on full (un-elided) exports.
 
-[P3] Watch for the turn-6 mis-recall signature (180k sampled: coherent
-33k-char thinking briefly mis-recalled a previous turn's ask, then burned
-max_tokens). Subcritical context mis-assembly, deck-session family. If it
-ever appears in a production export, worsens the item above to P0.
-2026-11-06 UPDATE: the 22:34 session-8afc68fe event that triggered
-escalation was RE-ATTRIBUTED to the decode tanh clamp (deployed 22:23,
-reverted 47e0a6ff0 - see the retraction above); it was NOT this class.
-The escalation is DOWNGRADED back to P3 watch. The turn-6 signature
-itself (Nov 5-6, 180k, unclamped eager decode, 1 event, mild "briefly
-mis-recalled at the very end") remains open and unexplained; the deep
-replay battery now exists to hunt it on demand
-(/tmp/opencode/replay_e1short.json + the run/analyze loop in this
-session's history).
-2026-11-07 UPDATE: second severe instance on the CLEAN binary (post
-47e0a6ff0). Session ebb5a31c, client rendered 199,816 tokens (journal
-prompt_tokens; session ~92% of the 262k pool), summarize turn derailed
-mid-recap into multilingual token salad (4407 chars, mixed-script
-fragments + colon-digit patterns), finish=error, 419s,
-client_disconnected. MTP acceptance collapsed 18-40% -> 0% -> fallback
-at 08:50 right after the 191k morning re-prefill; summarize ran batch-1.
-Sentinel silent (in-band); scan_export HARD (reasoning-only-runaway).
-Separators run 09:2x-09:5x: synthetic filler 3/3 clean at ~220k (depth
-alone exonerated); contamination A/B (degraded history intact vs
-elided) 4/4 coherent summaries; long-budget intact 3/3 clean - the
-event did NOT reproduce in 7 replay attempts of the same content. Class
-verdict: stochastic anchor/salad failure on real content at ~200k,
-pre-existing (predates all Nov 6 clamps), roughly 1 severe event per
-heavy 200k-session-day, non-deterministic, not reachable by the replay
-harness as-built. Path to a fix: the P0 upstream package (exports +
-journal + replay assets now cover both eras). Practical mitigation
-until then: retire sessions past ~90% pool (~235k tokens here);
-integration-heavy turns (summarize/plan) are the sensitive class;
-retrieval-style turns survive to the limit.
+[P3 -> CLOSED 2026-11-08] The turn-6 mis-recall signature and the Nov 7
+severe salad event are ROOT-CAUSED to the warp GDN prefill recurrence
+kernel's trajectory instability at ~200k (see the Current status entry
++ the dated evidence below). Both events ran the warp kernel in the
+prefill path. The dispatch flip (2772cd4ed) removes the unstable kernel
+from the path; the class should not recur. Watch item downgraded to a
+REGRESSION SIGNAL: if any mixed-script salad or mid-generation
+degeneration appears on the chunked kernel at depth, reopen as P0 with
+the state-trajectory diff instrument (warp-forced vs chunked per-chunk
+state checksums) as the first diagnostic. The full harness survives in
+this session's history + /tmp/opencode payloads (tmpfs - rebuild recipes
+in the dated entries; session exports in ~). The P0 upstream package
+option remains: the warp kernel's instability at 200k is worth reporting
+to mistral.rs upstream (and the llama.cpp folks have the healthy
+reference implementation).
 2026-11-07 (late) REFRAME - the failing input identified: pcap capture
 (lo:1235, sudo tcpdump) of a fork-driven compaction request shows the
 "summarize" turns are OPENCODE CONTEXT COMPACTION, not chat: the client
