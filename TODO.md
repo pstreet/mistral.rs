@@ -40,6 +40,27 @@ Full evidence chain: the dated entries below + COMPLETED.md. The
 original 262k-token session that hosted the investigation is retired
 (past the hard limit).
 
+FEATURE-STACK EXPANSION (2026-11-09, prod swap): an RTX 3090 (sm86,
+24GB) is now also attached to the box; per request the release build
+now enables every arguably-workable feature: cuda,rocm,npu,flash-attn
++ nccl (libnccl present; cudarc/nccl through the vendored cudarc-nvidia
+fork), mkl (mkl-static-lp64-iomp flavor; Ubuntu intel-mkl 2020.4
+installed, libiomp5.so present; intel-mkl-src 0.8.1 probe order =
+pkg-config -> MKLROOT -> /opt/intel -> ocipkg static download; Ubuntu
+ships only DYNAMIC .pc files so the static flavor resolves via the
+ocipkg fallback), cutile, cudnn (cudarc cudnn-09021 ABI vs installed
+libcudnn.so.9), utoipa (new forwarding feature added to
+mistralrs-cli/Cargo.toml - core-only, server-core's utoipa dep is
+unconditional), ring. Already-on by default: code-execution,
+swagger-ui (server-core default). EXCLUDED with reasons:
+flash-attn-v3 (CUTLASS FA3 is sm90/Hopper-only; the 3090 is sm86 -
+cannot run; the plain flash-attn feature already covers the 3090 with
+FA2), metal + accelerate (macOS-only). Rollback copy:
+mistralrs.pre-20261109-featstack (= the 4/4-validated GDN-fixed
+binary). Validation: canary 12 + one 165k compaction replay on the
+swapped binary (feature changes can alter compute-path selection:
+cudnn/mkl/cutile).
+
 Garbled output fix deployed (56cf617ea, 41a49cc77): attention score clamping in
 naive_sdpa resolved identical symptom to the OpenWebUI NaN issue (EoT-like
 sequences, GDN blowup) when context exceeds ~180k tokens. Model now stays clean
