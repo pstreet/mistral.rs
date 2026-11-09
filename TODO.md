@@ -7,7 +7,7 @@ candle 56 ahead / 26 behind huggingface/candle:main, mistral.rs 111 ahead /
 Legend: [ ] open, [x] done. P0 = do first, P1 = do next, P2 = merge prep,
 P3 = polish, Deferred = do not do on RDNA.
 
-## Current status (2026-11-09, prod on Strix Halo gfx1151, dual cuda,rocm,npu,flash-attn, deep-context degradation ROOT-CAUSED and fixed)
+## Current status (2026-11-09, prod on Strix Halo gfx1151 + RTX 3090, dual cuda,rocm,npu,flash-attn + nccl,mkl,cutile,cudnn,utoipa,ring, deep-context degradation ROOT-CAUSED and fixed)
 
 STANDING POSTURE (2026-11-08, all four graph configs measured): GRAPHS=0 +
 MISTRALRS_STEP_SENTINEL=1, solo gate re-armed (pid 696856). Rationale:
@@ -57,9 +57,13 @@ flash-attn-v3 (CUTLASS FA3 is sm90/Hopper-only; the 3090 is sm86 -
 cannot run; the plain flash-attn feature already covers the 3090 with
 FA2), metal + accelerate (macOS-only). Rollback copy:
 mistralrs.pre-20261109-featstack (= the 4/4-validated GDN-fixed
-binary). Validation: canary 12 + one 165k compaction replay on the
-swapped binary (feature changes can alter compute-path selection:
-cudnn/mkl/cutile).
+binary). VALIDATION COMPLETE (2026-11-09): canary 12; 165k compaction
+replay on the swapped binary CLEAN (finish=stop, 7.6k reasoning +
+2.9k summary, no loops/salad, accurate Objective section; 1063s vs
+1077s on the previous binary - no perf cliff from the added features).
+MKL resolved via the ocipkg static route (~/.local/share/ocipkg, 679M
+cache) - the binary is self-contained, no runtime dep on the Ubuntu
+MKL libs. New binary 422MB vs 380MB previous.
 
 Garbled output fix deployed (56cf617ea, 41a49cc77): attention score clamping in
 naive_sdpa resolved identical symptom to the OpenWebUI NaN issue (EoT-like
