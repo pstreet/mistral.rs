@@ -21,3 +21,6 @@ out/
 /mistralrs.pre-*
 /mistralrs.build*
 /scratch/
+
+# Build logs - artifacts belong in CI, never in version control
+build.log
