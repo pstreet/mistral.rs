@@ -87,14 +87,21 @@ cd "$MISTRALRS_ROOT"
 # bindings — all from Ubuntu Universe or the kernel tree. No custom build
 # needed; the Rust crate dlopens libxrt_core.so.2 at runtime.
 if echo "${MISTRALRS_FEATURES:-}" | grep -qw npu; then
-    echo "=== Installing NPU (AMD XDNA) distro dependencies ==="
-    sudo apt-get update -qq
-    sudo apt-get install -y \
-        libxrt-dev \
-        libxrt2 \
-        libxrt-npu2 \
-        python3-xrt \
-        linux-firmware-amd-misc
+    # Idempotent: skip apt when the distro XRT stack is already present, so
+    # re-runs never touch sudo (unattended shells have no password prompt).
+    if dpkg -s libxrt2 >/dev/null 2>&1 && dpkg -s libxrt-dev >/dev/null 2>&1 \
+        && dpkg -s libxrt-npu2 >/dev/null 2>&1 && dpkg -s python3-xrt >/dev/null 2>&1; then
+        echo "=== NPU (AMD XDNA) distro dependencies already installed ==="
+    else
+        echo "=== Installing NPU (AMD XDNA) distro dependencies ==="
+        sudo apt-get update -qq
+        sudo apt-get install -y \
+            libxrt-dev \
+            libxrt2 \
+            libxrt-npu2 \
+            python3-xrt \
+            linux-firmware-amd-misc
+    fi
     # Verify NPU device is visible
     if [ ! -e /dev/accel/accel0 ]; then
         echo "Warning: /dev/accel/accel0 not found — NPU not available on this host" >&2
@@ -364,11 +371,17 @@ echo "=== Features: $MISTRALRS_FEATURES ==="
 cargo --version
 rustc --version
 
+# Privileged phase ends here (NPU XRT / cuDNN / NCCL apt installs above).
+# Invalidate any cached sudo credentials so the build itself (cargo, sccache,
+# linker) can never elevate; harmless no-op if sudo was never used.
+sudo -k
+
 echo "Building mistralrs server binary (and candle via path deps)..."
 cargo build --release --features "$MISTRALRS_FEATURES" -p mistralrs-cli
 
 echo "Verifying binary..."
 ./target/release/mistralrs --help >/dev/null
+echo "  version: $(./target/release/mistralrs --version 2>/dev/null | head -1)"
 ls -la ./target/release/mistralrs
 
 echo ""
